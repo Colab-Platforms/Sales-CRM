@@ -1,0 +1,49 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "lib": [
+      "esnext"
+    ],
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "types": ["node"],
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ],
+      "@root/*": [
+        "./*"
+      ],
+      "@prisma": [
+        "./prisma"
+      ],
+      "@utils/*": [
+        "./src/utils/*"
+      ],
+      "@modules/*": [
+        "./src/modules/*"
+      ],
+      "@validators/*": [
+        "./src/validators/*"
+      ]
+    }
+  },
+  "include": [
+    "./src/**/*.ts",
+    "./src/types/**/*.ts",
+    "./src",
+    "./prisma/**/*.ts",
+    "./*.ts"
+  ],
+  "ts-node": {
+    "transpileOnly": true,
+    "esm": true
+  }
+}
