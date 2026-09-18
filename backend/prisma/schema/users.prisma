@@ -1,0 +1,87 @@
+model User {
+  id String @id @default(uuid()) @db.Uuid
+
+  name  String  @map("name") @db.VarChar(150)
+  email String  @unique @map("email") @db.VarChar(255)
+  phone String? @map("phone") @db.VarChar(20)
+
+  passwordHash String? @map("password_hash") @db.VarChar(255)
+
+  role   Role       @map("role")
+  status UserStatus @default(ACTIVE) @map("status")
+
+  lastLoginAt DateTime? @map("last_login_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  groupsManaged Group[] @relation("GroupManager")
+
+  groupMemberships GroupMember[] @relation("GroupMemberUser")
+
+  leadsOwned Lead[] @relation("LeadOwner")
+
+  leadAssignmentsMade       LeadAssignment[] @relation("LeadAssignmentUser")
+  leadAssignmentsAssignedBy LeadAssignment[] @relation("LeadAssignmentAssignedBy")
+
+  groupAssignmentConfigsLastAssigned GroupAssignmentConfig[] @relation("GroupAssignmentConfigLastAssignedUser")
+
+  callsAsAgent Call[] @relation("CallAgent")
+
+  tasksAssignedToMe Task[] @relation("TaskAssignedTo")
+  tasksCreatedByMe  Task[] @relation("TaskCreatedBy")
+
+  interestedPeriodsQualified InterestedLeadPeriod[] @relation("InterestedLeadPeriodQualifiedBy")
+
+  ordersCreated Order[] @relation("OrderCreatedBy")
+
+  recoveryActionsPerformed RecoveryAction[] @relation("RecoveryActionPerformedBy")
+
+  activitiesAsActor Activity[] @relation("ActivityActor")
+
+  @@index([role])
+  @@index([status])
+  @@map("users")
+}
+
+model Group {
+  id String @id @default(uuid()) @db.Uuid
+
+  name        String  @map("name") @db.VarChar(150)
+  description String? @map("description")
+
+  managerId String @map("manager_id") @db.Uuid
+  manager   User   @relation("GroupManager", fields: [managerId], references: [id])
+
+  status GroupStatus @default(ACTIVE) @map("status")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  members               GroupMember[]
+  leads                 Lead[]
+  leadAssignments       LeadAssignment[]
+  groupAssignmentConfig GroupAssignmentConfig?
+  virtualNumbers        VirtualNumber[]
+
+  @@index([managerId])
+  @@index([status])
+  @@map("groups")
+}
+
+model GroupMember {
+  id String @id @default(uuid()) @db.Uuid
+
+  groupId String @map("group_id") @db.Uuid
+  group   Group  @relation(fields: [groupId], references: [id])
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation("GroupMemberUser", fields: [userId], references: [id])
+
+  joinedAt DateTime @map("joined_at")
+  isActive Boolean  @default(true) @map("is_active")
+
+  @@unique([groupId, userId])
+  @@index([userId])
+  @@map("group_members")
+}

@@ -1,0 +1,128 @@
+model Lead {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadNumber String @unique @map("lead_number") @db.VarChar(50)
+
+  firstName String  @map("first_name") @db.VarChar(100)
+  lastName  String? @map("last_name") @db.VarChar(100)
+
+  mobile           String? @map("mobile") @db.VarChar(20)
+  normalizedMobile String? @map("normalized_mobile") @db.VarChar(20)
+
+  email           String? @map("email") @db.VarChar(255)
+  normalizedEmail String? @map("normalized_email") @db.VarChar(255)
+
+  requirement String? @map("requirement")
+  location    String? @map("location") @db.VarChar(255)
+
+  sourceId String? @map("source_id") @db.Uuid
+  source   Source? @relation(fields: [sourceId], references: [id])
+
+  interestedProductId String?  @map("interested_product_id") @db.Uuid
+  interestedProduct   Product? @relation(fields: [interestedProductId], references: [id])
+
+  ownerId String? @map("owner_id") @db.Uuid
+  owner   User?   @relation("LeadOwner", fields: [ownerId], references: [id])
+
+  groupId String? @map("group_id") @db.Uuid
+  group   Group?  @relation(fields: [groupId], references: [id])
+
+  workingStatus LeadWorkingStatus @default(NEW) @map("working_status")
+  priority      LeadPriority      @default(MEDIUM) @map("priority")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  lastContactedAt DateTime? @map("last_contacted_at")
+  lastActivityAt  DateTime? @map("last_activity_at")
+
+  assignments              LeadAssignment[]
+  communicationPreferences CommunicationPreference[]
+  calls                    Call[]
+  tasks                    Task[]
+  interestedPeriods        InterestedLeadPeriod[]
+  orders                   Order[]
+  abandonments             Abandonment[]
+  recoveryActions          RecoveryAction[]
+  activities               Activity[]
+
+  @@index([normalizedMobile])
+  @@index([normalizedEmail])
+  @@index([sourceId])
+  @@index([ownerId])
+  @@index([groupId])
+  @@index([workingStatus])
+  @@index([priority])
+  @@index([createdAt])
+  @@map("leads")
+}
+
+model LeadAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation("LeadAssignmentUser", fields: [userId], references: [id])
+
+  groupId String? @map("group_id") @db.Uuid
+  group   Group?  @relation(fields: [groupId], references: [id])
+
+  assignmentType AssignmentType @map("assignment_type")
+
+  assignedById String? @map("assigned_by_id") @db.Uuid
+  assignedBy   User?   @relation("LeadAssignmentAssignedBy", fields: [assignedById], references: [id])
+
+  assignedAt   DateTime  @map("assigned_at")
+  unassignedAt DateTime? @map("unassigned_at")
+
+  isCurrent Boolean @default(true) @map("is_current")
+
+  @@index([leadId])
+  @@index([userId])
+  @@index([groupId])
+  @@index([assignedAt])
+  @@index([isCurrent])
+  @@map("lead_assignments")
+}
+
+model GroupAssignmentConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  groupId String @unique @map("group_id") @db.Uuid
+  group   Group  @relation(fields: [groupId], references: [id])
+
+  strategy String @default("ROUND_ROBIN") @map("strategy") @db.VarChar(50)
+
+  lastAssignedUserId String? @map("last_assigned_user_id") @db.Uuid
+  lastAssignedUser   User?   @relation("GroupAssignmentConfigLastAssignedUser", fields: [lastAssignedUserId], references: [id])
+
+  isActive Boolean @default(true) @map("is_active")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("group_assignment_configs")
+}
+
+model CommunicationPreference {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  channel CommunicationChannel @map("channel")
+
+  status CommunicationPreferenceStatus @default(UNKNOWN) @map("status")
+
+  source String? @map("source") @db.VarChar(100)
+
+  consentAt  DateTime? @map("consent_at")
+  optedOutAt DateTime? @map("opted_out_at")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([leadId, channel])
+  @@index([status])
+  @@map("communication_preferences")
+}

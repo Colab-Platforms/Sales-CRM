@@ -1,0 +1,25 @@
+model WebhookEvent {
+  id String @id @default(uuid()) @db.Uuid
+
+  provider String @map("provider") @db.VarChar(100)
+
+  eventType String @map("event_type") @db.VarChar(150)
+
+  externalEventId String? @map("external_event_id") @db.VarChar(255)
+
+  payload Json @map("payload")
+
+  status WebhookStatus @default(RECEIVED) @map("status")
+
+  errorMessage String? @map("error_message")
+
+  receivedAt  DateTime  @map("received_at")
+  processedAt DateTime? @map("processed_at")
+
+  @@index([provider])
+  @@index([eventType])
+  @@index([externalEventId])
+  @@index([status])
+  @@index([receivedAt])
+  @@map("webhook_events")
+}

@@ -1,0 +1,47 @@
+model Product {
+  id String @id @default(uuid()) @db.Uuid
+
+  name        String  @map("name") @db.VarChar(200)
+  description String? @map("description")
+
+  type   ProductType   @map("type")
+  status ProductStatus @default(ACTIVE) @map("status")
+
+  basePrice Decimal? @map("base_price") @db.Decimal(12, 2)
+
+  sku String? @unique @map("sku") @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  variants   ProductVariant[]
+  leads      Lead[]
+  orderItems OrderItem[]
+
+  @@index([status])
+  @@index([type])
+  @@map("products")
+}
+
+model ProductVariant {
+  id String @id @default(uuid()) @db.Uuid
+
+  productId String  @map("product_id") @db.Uuid
+  product   Product @relation(fields: [productId], references: [id])
+
+  name String  @map("name") @db.VarChar(150)
+  sku  String? @map("sku") @db.VarChar(100)
+
+  price Decimal? @map("price") @db.Decimal(12, 2)
+
+  status ProductStatus @default(ACTIVE) @map("status")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  orderItems OrderItem[]
+
+  @@index([productId])
+  @@index([status])
+  @@map("product_variants")
+}

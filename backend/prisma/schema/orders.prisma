@@ -1,0 +1,113 @@
+model Order {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderNumber String @unique @map("order_number") @db.VarChar(50)
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("OrderCreatedBy", fields: [createdById], references: [id])
+
+  source OrderSource @map("source")
+
+  status OrderStatus @default(DRAFT) @map("status")
+
+  currency String @default("INR") @map("currency") @db.VarChar(10)
+
+  subtotal       Decimal @default(0) @map("subtotal") @db.Decimal(12, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+  shippingAmount Decimal @default(0) @map("shipping_amount") @db.Decimal(12, 2)
+  totalAmount    Decimal @default(0) @map("total_amount") @db.Decimal(12, 2)
+
+  discountReason String? @map("discount_reason")
+
+  placedAt    DateTime? @map("placed_at")
+  confirmedAt DateTime? @map("confirmed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items    OrderItem[]
+  payments Payment[]
+
+  @@index([leadId])
+  @@index([createdById])
+  @@index([status])
+  @@index([source])
+  @@index([placedAt])
+  @@map("orders")
+}
+
+model OrderItem {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @map("order_id") @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  productId String?  @map("product_id") @db.Uuid
+  product   Product? @relation(fields: [productId], references: [id])
+
+  variantId String?         @map("variant_id") @db.Uuid
+  variant   ProductVariant? @relation(fields: [variantId], references: [id])
+
+  productNameSnapshot String  @map("product_name_snapshot") @db.VarChar(200)
+  variantNameSnapshot String? @map("variant_name_snapshot") @db.VarChar(200)
+
+  skuSnapshot String? @map("sku_snapshot") @db.VarChar(100)
+
+  quantity Int @map("quantity")
+
+  unitPrice Decimal @map("unit_price") @db.Decimal(12, 2)
+
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(12, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(12, 2)
+
+  totalPrice Decimal @map("total_price") @db.Decimal(12, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("order_items")
+}
+
+model Payment {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @map("order_id") @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  provider String? @map("provider") @db.VarChar(100)
+
+  providerPaymentId String? @map("provider_payment_id") @db.VarChar(255)
+  providerOrderId   String? @map("provider_order_id") @db.VarChar(255)
+
+  amount Decimal @map("amount") @db.Decimal(12, 2)
+
+  currency String @default("INR") @map("currency") @db.VarChar(10)
+
+  method PaymentMethod? @map("method")
+
+  status PaymentStatus @default(PENDING) @map("status")
+
+  transactionReference String? @map("transaction_reference") @db.VarChar(255)
+
+  paidAt     DateTime? @map("paid_at")
+  failedAt   DateTime? @map("failed_at")
+  refundedAt DateTime? @map("refunded_at")
+
+  failureReason String? @map("failure_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([orderId])
+  @@index([providerPaymentId])
+  @@index([providerOrderId])
+  @@index([status])
+  @@map("payments")
+}

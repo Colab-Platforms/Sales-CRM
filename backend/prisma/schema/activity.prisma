@@ -1,0 +1,26 @@
+model Activity {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  actorId String? @map("actor_id") @db.Uuid
+  actor   User?   @relation("ActivityActor", fields: [actorId], references: [id])
+
+  type ActivityType @map("type")
+
+  // App-enforced polymorphic reference; no DB-level FK by design.
+  referenceType String? @map("reference_type") @db.VarChar(100)
+  referenceId   String? @map("reference_id") @db.VarChar(255)
+
+  title       String? @map("title") @db.VarChar(255)
+  description String? @map("description")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([leadId])
+  @@index([actorId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("activities")
+}

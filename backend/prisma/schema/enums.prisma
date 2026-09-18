@@ -1,0 +1,270 @@
+enum Role {
+  ADMIN
+  MANAGER
+  SALESPERSON
+
+  @@map("role")
+}
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("user_status")
+}
+
+enum GroupStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("group_status")
+}
+
+enum LeadWorkingStatus {
+  NEW
+  ASSIGNED
+  WORKING
+  INTERESTED
+  EXPIRED
+  CONVERTED
+  CLOSED
+
+  @@map("lead_working_status")
+}
+
+enum LeadPriority {
+  LOW
+  MEDIUM
+  HIGH
+
+  @@map("lead_priority")
+}
+
+enum AssignmentType {
+  ROUND_ROBIN
+  MANUAL
+  REASSIGNMENT
+
+  @@map("assignment_type")
+}
+
+enum InterestedPeriodStatus {
+  ACTIVE
+  CONVERTED
+  EXPIRED
+  CANCELLED
+
+  @@map("interested_period_status")
+}
+
+enum CallDirection {
+  INBOUND
+  OUTBOUND
+
+  @@map("call_direction")
+}
+
+enum CallStatus {
+  INITIATED
+  RINGING_AGENT
+  AGENT_ANSWERED
+  RINGING_CUSTOMER
+  CONNECTED
+  COMPLETED
+  NO_ANSWER
+  BUSY
+  NOT_REACHABLE
+  FAILED
+
+  @@map("call_status")
+}
+
+enum CallOutcomeCategory {
+  CONNECTED
+  NOT_CONNECTED
+  FOLLOW_UP
+  INTERESTED
+  NOT_INTERESTED
+  OTHER
+
+  @@map("call_outcome_category")
+}
+
+enum TaskType {
+  CALL
+  CALLBACK
+  FOLLOW_UP
+  OTHER
+
+  @@map("task_type")
+}
+
+enum TaskStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+  OVERDUE
+
+  @@map("task_status")
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+
+  @@map("task_priority")
+}
+
+enum CommunicationChannel {
+  CALL
+  WHATSAPP
+  SMS
+  EMAIL
+
+  @@map("communication_channel")
+}
+
+enum CommunicationPreferenceStatus {
+  OPTED_IN
+  OPTED_OUT
+  UNKNOWN
+
+  @@map("communication_preference_status")
+}
+
+enum ProductType {
+  PRODUCT
+  SERVICE
+
+  @@map("product_type")
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("product_status")
+}
+
+enum SourceStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("source_status")
+}
+
+enum VirtualNumberStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("virtual_number_status")
+}
+
+enum OrderStatus {
+  DRAFT
+  PENDING_PAYMENT
+  CONFIRMED
+  PROCESSING
+  CANCELLED
+  RETURNED
+  REFUNDED
+
+  @@map("order_status")
+}
+
+enum OrderSource {
+  SALESPERSON
+  WEBSITE
+  API
+
+  @@map("order_source")
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+
+  @@map("payment_status")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  UPI
+  NET_BANKING
+  WALLET
+  PAYMENT_LINK
+  OTHER
+
+  @@map("payment_method")
+}
+
+enum AbandonmentType {
+  CHECKOUT
+  PAYMENT
+  SALES
+
+  @@map("abandonment_type")
+}
+
+enum AbandonmentStatus {
+  ACTIVE
+  IN_PROGRESS
+  RECOVERED
+  NOT_RECOVERED
+  EXPIRED
+
+  @@map("abandonment_status")
+}
+
+enum RecoveryActionType {
+  CALL
+  CALLBACK
+  CONTINUE_ORDER
+
+  @@map("recovery_action_type")
+}
+
+enum RecoveryActionStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  FAILED
+
+  @@map("recovery_action_status")
+}
+
+enum ActivityType {
+  LEAD_CREATED
+  LEAD_UPDATED
+  ASSIGNMENT
+  REASSIGNMENT
+  CALL
+  NOTE
+  STATUS_CHANGE
+  INTERESTED
+  INTERESTED_EXPIRED
+  ORDER_CREATED
+  ORDER_CONFIRMED
+  PAYMENT
+  ABANDONMENT
+  RECOVERY
+  TASK
+
+  @@map("activity_type")
+}
+
+enum WebhookStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  IGNORED
+
+  @@map("webhook_status")
+}

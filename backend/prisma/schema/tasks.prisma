@@ -1,0 +1,34 @@
+model Task {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  assignedToId String @map("assigned_to_id") @db.Uuid
+  assignedTo   User   @relation("TaskAssignedTo", fields: [assignedToId], references: [id])
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("TaskCreatedBy", fields: [createdById], references: [id])
+
+  type TaskType @map("type")
+
+  status   TaskStatus   @default(PENDING) @map("status")
+  priority TaskPriority @default(MEDIUM) @map("priority")
+
+  title       String  @map("title") @db.VarChar(200)
+  description String? @map("description")
+
+  scheduledAt DateTime? @map("scheduled_at")
+  completedAt DateTime? @map("completed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  recoveryActions RecoveryAction[]
+
+  @@index([leadId])
+  @@index([assignedToId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("tasks")
+}

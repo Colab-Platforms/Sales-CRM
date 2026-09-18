@@ -1,0 +1,71 @@
+model Abandonment {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  type AbandonmentType @map("type")
+
+  sourceId String? @map("source_id") @db.Uuid
+  source   Source? @relation(fields: [sourceId], references: [id])
+
+  // App-enforced polymorphic reference; no DB-level FK by design.
+  referenceType String? @map("reference_type") @db.VarChar(100)
+  referenceId   String? @map("reference_id") @db.VarChar(255)
+
+  detectedAt DateTime @map("detected_at")
+
+  status AbandonmentStatus @default(ACTIVE) @map("status")
+
+  priorityScore  Decimal? @map("priority_score") @db.Decimal(5, 2)
+  priorityReason String?  @map("priority_reason")
+
+  recoveredAt DateTime? @map("recovered_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  recoveryActions RecoveryAction[]
+
+  @@index([leadId])
+  @@index([sourceId])
+  @@index([type])
+  @@index([status])
+  @@index([detectedAt])
+  @@index([status, priorityScore])
+  @@map("abandonments")
+}
+
+model RecoveryAction {
+  id String @id @default(uuid()) @db.Uuid
+
+  abandonmentId String      @map("abandonment_id") @db.Uuid
+  abandonment   Abandonment @relation(fields: [abandonmentId], references: [id])
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  type RecoveryActionType @map("type")
+
+  status RecoveryActionStatus @default(PENDING) @map("status")
+
+  performedById String? @map("performed_by_id") @db.Uuid
+  performedBy   User?   @relation("RecoveryActionPerformedBy", fields: [performedById], references: [id])
+
+  callId String? @map("call_id") @db.Uuid
+  call   Call?   @relation(fields: [callId], references: [id])
+
+  taskId String? @map("task_id") @db.Uuid
+  task   Task?   @relation(fields: [taskId], references: [id])
+
+  notes String? @map("notes")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@index([abandonmentId])
+  @@index([leadId])
+  @@index([type])
+  @@index([status])
+  @@map("recovery_actions")
+}
