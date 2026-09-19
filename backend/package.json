@@ -12,7 +12,9 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "test": "tsx --test src/**/*.test.ts",
-    "db:seed:dev-orders": "tsx prisma/seed-dev-orders.ts"
+    "test:db": "tsx --test src/**/*.db-test.ts",
+    "db:seed:dev-orders": "tsx prisma/seed-dev-orders.ts",
+    "shopify:sync": "tsx src/scripts/shopify-sync.ts"
   },
   "keywords": [],
   "author": "",

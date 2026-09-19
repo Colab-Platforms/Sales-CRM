@@ -13,12 +13,17 @@ model WebhookEvent {
 
   errorMessage String? @map("error_message")
 
+  attempts      Int       @default(0) @map("attempts")
+  nextAttemptAt DateTime? @map("next_attempt_at")
+
   receivedAt  DateTime  @map("received_at")
   processedAt DateTime? @map("processed_at")
 
+  @@unique([provider, externalEventId])
   @@index([provider])
   @@index([eventType])
   @@index([externalEventId])
+  @@index([status, nextAttemptAt])
   @@index([status])
   @@index([receivedAt])
   @@map("webhook_events")

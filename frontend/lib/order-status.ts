@@ -2,6 +2,7 @@ import type {
   OrderSource,
   OrderStatus,
   PaymentMethod,
+  PaymentMode,
   PaymentStatus,
 } from "./api-client/types/orders.types";
 
@@ -13,6 +14,9 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CANCELLED: "Cancelled",
   RETURNED: "Returned",
   REFUNDED: "Refunded",
+  SHIPPED: "Shipped",
+  OUT_FOR_DELIVERY: "Out for delivery",
+  DELIVERED: "Delivered",
 };
 
 export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
@@ -23,13 +27,20 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
   CANCELLED: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
   RETURNED: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
   REFUNDED: "bg-fuchsia-500/10 text-fuchsia-600 dark:text-fuchsia-400",
+  SHIPPED: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  OUT_FOR_DELIVERY: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
+  DELIVERED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
 };
 
+// Listed in the order an order normally moves through them.
 export const ORDER_STATUS_ORDER: OrderStatus[] = [
   "DRAFT",
   "PENDING_PAYMENT",
   "CONFIRMED",
   "PROCESSING",
+  "SHIPPED",
+  "OUT_FOR_DELIVERY",
+  "DELIVERED",
   "CANCELLED",
   "RETURNED",
   "REFUNDED",
@@ -69,9 +80,10 @@ export const ORDER_SOURCE_LABELS: Record<OrderSource, string> = {
   SALESPERSON: "Salesperson",
   WEBSITE: "Website",
   API: "API",
+  SHOPIFY: "Shopify",
 };
 
-export const ORDER_SOURCE_ORDER: OrderSource[] = ["SALESPERSON", "WEBSITE", "API"];
+export const ORDER_SOURCE_ORDER: OrderSource[] = ["SALESPERSON", "WEBSITE", "API", "SHOPIFY"];
 
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   CASH: "Cash",
@@ -81,6 +93,12 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   WALLET: "Wallet",
   PAYMENT_LINK: "Payment link",
   OTHER: "Other",
+  COD: "Cash on delivery",
+};
+
+export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
+  COD: "COD",
+  PREPAID: "Prepaid",
 };
 
 // Amounts arrive as decimal strings; they are only converted for display.

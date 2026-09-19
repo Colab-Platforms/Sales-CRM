@@ -1,6 +1,6 @@
-import { PaymentStatus } from "../../../generated/prisma/enums.js";
+import { PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { NO_PAYMENT, type ListOrdersQuery, type PaymentStatusFilter } from "./orders.types.js";
+import { NO_PAYMENT, type ListOrdersQuery, type PaymentMode, type PaymentStatusFilter } from "./orders.types.js";
 
 // An order can carry several payment attempts. Its single "payment status" is the most
 // conclusive outcome among them, so a failed attempt followed by a successful retry reads
@@ -17,6 +17,12 @@ export const PAYMENT_STATUS_PRECEDENCE: PaymentStatus[] = [
 
 export function derivePaymentStatus(payments: { status: PaymentStatus }[]): PaymentStatus | null {
   return PAYMENT_STATUS_PRECEDENCE.find((status) => payments.some((p) => p.status === status)) ?? null;
+}
+
+// Cash on delivery if any payment is COD; otherwise prepaid if any payment has a known method; otherwise unknown.
+export function derivePaymentMode(payments: { method: PaymentMethod | null }[]): PaymentMode | null {
+  if (payments.some((p) => p.method === PaymentMethod.COD)) return "COD";
+  return payments.some((p) => p.method !== null) ? "PREPAID" : null;
 }
 
 // Database-side equivalent of derivePaymentStatus().
@@ -45,6 +51,7 @@ export function searchWhere(search: string): Prisma.OrderWhereInput {
       return {
         OR: [
           { orderNumber: contains },
+          { externalNumber: contains },
           { lead: { leadNumber: contains } },
           { lead: { firstName: contains } },
           { lead: { lastName: contains } },

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { ORDER_SOURCE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
+import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import { OrderStatusBadge } from "./order-status-badge";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import type { OrderListItem } from "@/lib/api-client/types/orders.types";
@@ -94,6 +94,9 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
             <TableCell className="text-right tabular-nums">{formatMoney(order.totalAmount, order.currency)}</TableCell>
             <TableCell>
               <PaymentStatusBadge status={order.paymentStatus} />
+              {order.paymentMode ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">{PAYMENT_MODE_LABELS[order.paymentMode]}</div>
+              ) : null}
             </TableCell>
             <TableCell>
               <OrderStatusBadge status={order.status} />

@@ -5,7 +5,7 @@ import { ActivityType, Role, UserStatus } from "../../../generated/prisma/enums.
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, getManagerTeam, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
-import { buildOrderWhere, derivePaymentStatus, fullName, scopedOrderWhere } from "./orders.filters.js";
+import { buildOrderWhere, derivePaymentMode, derivePaymentStatus, fullName, scopedOrderWhere } from "./orders.filters.js";
 import {
   ORDER_REFERENCE_TYPE,
   type ListOrdersQuery,
@@ -23,6 +23,7 @@ const LIST_SELECT = {
   source: true,
   currency: true,
   totalAmount: true,
+  externalNumber: true,
   createdAt: true,
   createdBy: { select: { id: true, name: true } },
   lead: {
@@ -35,7 +36,7 @@ const LIST_SELECT = {
       owner: { select: { id: true, name: true } },
     },
   },
-  payments: { select: { status: true } },
+  payments: { select: { status: true, method: true } },
   _count: { select: { items: true } },
 } satisfies Prisma.OrderSelect;
 
@@ -51,6 +52,10 @@ const DETAIL_SELECT = {
   shippingAmount: true,
   totalAmount: true,
   discountReason: true,
+  externalNumber: true,
+  shippingAddress: true,
+  shippingPincode: true,
+  cancelReason: true,
   createdAt: true,
   placedAt: true,
   confirmedAt: true,
@@ -111,6 +116,8 @@ class OrdersService {
           totalAmount: order.totalAmount.toString(),
           itemCount: order._count.items,
           paymentStatus: derivePaymentStatus(order.payments),
+          paymentMode: derivePaymentMode(order.payments),
+          externalNumber: order.externalNumber,
           createdAt: order.createdAt,
           customer: {
             leadId: order.lead.id,
@@ -156,11 +163,16 @@ class OrdersService {
       shippingAmount: money(order.shippingAmount),
       totalAmount: money(order.totalAmount),
       discountReason: order.discountReason,
+      externalNumber: order.externalNumber,
+      shippingAddress: (order.shippingAddress as Record<string, string | null> | null) ?? null,
+      shippingPincode: order.shippingPincode,
+      cancelReason: order.cancelReason,
       createdAt: order.createdAt,
       placedAt: order.placedAt,
       confirmedAt: order.confirmedAt,
       cancelledAt: order.cancelledAt,
       paymentStatus: derivePaymentStatus(order.payments),
+      paymentMode: derivePaymentMode(order.payments),
       customer: {
         leadId: order.lead.id,
         leadNumber: order.lead.leadNumber,
@@ -196,6 +208,7 @@ class OrdersService {
         paidAt: payment.paidAt,
         failedAt: payment.failedAt,
         refundedAt: payment.refundedAt,
+        refundedAmount: payment.refundedAmount ? money(payment.refundedAmount) : null,
         failureReason: payment.failureReason,
         createdAt: payment.createdAt,
       })),

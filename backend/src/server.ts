@@ -6,6 +6,7 @@ import routes from "./routes.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { notFoundHandler } from "./middlewares/notFoundHandler.js";
 import sanitizeMiddleware from "./middlewares/sanitize.js";
+import shopifyWebhookRoutes, { startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
 
 const app = express();
 
@@ -31,6 +32,10 @@ app.use(
 );
 app.use(helmet());
 app.use(compression());
+// Shopify signs the exact bytes it sends, so this route reads the raw body. It must stay ahead of the JSON parser
+// and the sanitizer, which would otherwise change what the signature is checked against.
+app.use("/api/webhooks/shopify", express.raw({ type: "*/*", limit: "5mb" }), shopifyWebhookRoutes);
+
 app.use(
   express.json({
     verify: (req: any, _res, buf) => {
@@ -48,4 +53,5 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  startShopifyWebhookWorker();
 });

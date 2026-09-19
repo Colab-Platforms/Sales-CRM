@@ -5,9 +5,15 @@ export type OrderStatus =
   | "PROCESSING"
   | "CANCELLED"
   | "RETURNED"
-  | "REFUNDED";
+  | "REFUNDED"
+  | "SHIPPED"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED";
 
-export type OrderSource = "SALESPERSON" | "WEBSITE" | "API";
+export type OrderSource = "SALESPERSON" | "WEBSITE" | "API" | "SHOPIFY";
+
+// Cash on delivery, or paid up front. Null when the payment method is not known.
+export type PaymentMode = "COD" | "PREPAID";
 
 export type PaymentStatus =
   | "PENDING"
@@ -27,7 +33,8 @@ export type PaymentMethod =
   | "NET_BANKING"
   | "WALLET"
   | "PAYMENT_LINK"
-  | "OTHER";
+  | "OTHER"
+  | "COD";
 
 export interface OrdersListParams {
   page: number;
@@ -52,6 +59,8 @@ export interface OrderListItem {
   totalAmount: string;
   itemCount: number;
   paymentStatus: PaymentStatus | null;
+  paymentMode: PaymentMode | null;
+  externalNumber: string | null;
   createdAt: string;
   customer: { leadId: string; leadNumber: string; name: string };
   salesperson: { id: string; name: string } | null;
@@ -96,6 +105,7 @@ export interface PaymentDetail {
   paidAt: string | null;
   failedAt: string | null;
   refundedAt: string | null;
+  refundedAmount: string | null;
   failureReason: string | null;
   createdAt: string;
 }
@@ -112,11 +122,16 @@ export interface OrderDetail {
   shippingAmount: string;
   totalAmount: string;
   discountReason: string | null;
+  externalNumber: string | null;
+  shippingAddress: Record<string, string | null> | null;
+  shippingPincode: string | null;
+  cancelReason: string | null;
   createdAt: string;
   placedAt: string | null;
   confirmedAt: string | null;
   cancelledAt: string | null;
   paymentStatus: PaymentStatus | null;
+  paymentMode: PaymentMode | null;
   customer: {
     leadId: string;
     leadNumber: string;

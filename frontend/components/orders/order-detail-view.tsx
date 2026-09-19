@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { ArrowLeft } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -10,6 +11,7 @@ import { useOrder } from "@/hooks/useOrders";
 import {
   ORDER_SOURCE_LABELS,
   PAYMENT_METHOD_LABELS,
+  PAYMENT_MODE_LABELS,
   formatDate,
   formatDateTime,
   formatMoney,
@@ -21,6 +23,13 @@ import { PaymentStatusBadge } from "./payment-status-badge";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
 
 const ORDERS_HREF = "/dashboard/orders";
+
+// The stored address is a loose set of parts; show the ones that are present, in reading order.
+function formatAddress(address: Record<string, string | null>): string {
+  return [address.name, address.address1, address.address2, address.city, address.province, address.zip, address.country]
+    .filter(Boolean)
+    .join(", ");
+}
 
 function BackLink() {
   return (
@@ -62,6 +71,7 @@ function PaymentCard({ payment, currency }: { payment: PaymentDetail; currency: 
         {payment.paidAt ? <DetailField label="Paid on">{formatDateTime(payment.paidAt)}</DetailField> : null}
         {payment.failedAt ? <DetailField label="Failed on">{formatDateTime(payment.failedAt)}</DetailField> : null}
         {payment.refundedAt ? <DetailField label="Refunded on">{formatDateTime(payment.refundedAt)}</DetailField> : null}
+        {payment.refundedAmount ? <DetailField label="Refunded amount">{formatMoney(payment.refundedAmount, payment.currency || currency)}</DetailField> : null}
         {payment.failureReason ? <DetailField label="Failure reason">{payment.failureReason}</DetailField> : null}
       </DetailGrid>
     </div>
@@ -80,6 +90,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           <h1 className="text-2xl font-semibold tracking-tight">Order {order.orderNumber}</h1>
           <OrderStatusBadge status={order.status} />
           <PaymentStatusBadge status={order.paymentStatus} />
+          {order.paymentMode ? <Badge variant="outline">{PAYMENT_MODE_LABELS[order.paymentMode]}</Badge> : null}
         </div>
         <p className="text-sm text-muted-foreground">Placed on {formatDateTime(order.placedAt ?? order.createdAt)}</p>
       </div>
@@ -111,7 +122,16 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
             <DetailField label="Salesperson">{salesperson?.name ?? "—"}</DetailField>
             {ownerDiffers ? <DetailField label="Current lead owner">{order.leadOwner?.name}</DetailField> : null}
             <DetailField label="Currency">{order.currency}</DetailField>
+            {order.externalNumber ? <DetailField label="Shopify order">{order.externalNumber}</DetailField> : null}
+            <DetailField label="Payment mode">{order.paymentMode ? PAYMENT_MODE_LABELS[order.paymentMode] : "—"}</DetailField>
+            {order.shippingPincode ? <DetailField label="Shipping pincode">{order.shippingPincode}</DetailField> : null}
+            {order.cancelReason ? <DetailField label="Cancel reason">{order.cancelReason}</DetailField> : null}
           </DetailGrid>
+          {order.shippingAddress ? (
+            <p className="text-sm text-muted-foreground">
+              <span className="font-medium text-foreground">Ship to:</span> {formatAddress(order.shippingAddress)}
+            </p>
+          ) : null}
 
           <dl className="ml-auto w-full max-w-xs space-y-1.5 border-t pt-4 text-sm">
             <div className="flex justify-between gap-4">

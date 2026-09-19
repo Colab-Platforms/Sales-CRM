@@ -23,6 +23,21 @@ model Order {
 
   discountReason String? @map("discount_reason")
 
+  // Identity in an external system (Shopify). Null for records created inside the CRM.
+  externalSource    ExternalSource? @map("external_source")
+  externalId        String?         @map("external_id") @db.VarChar(100)
+  externalUpdatedAt DateTime?       @map("external_updated_at")
+  // Order number as shown in the external system (e.g. "#TST1002").
+  externalNumber    String?         @map("external_number") @db.VarChar(100)
+
+  shippingAddress Json?   @map("shipping_address")
+  shippingPincode String? @map("shipping_pincode") @db.VarChar(12)
+
+  cancelReason String? @map("cancel_reason")
+
+  // Raw external statuses and reconciliation notes, kept so nothing from the source is silently lost.
+  metadata Json? @map("metadata")
+
   placedAt    DateTime? @map("placed_at")
   confirmedAt DateTime? @map("confirmed_at")
   cancelledAt DateTime? @map("cancelled_at")
@@ -33,11 +48,13 @@ model Order {
   items    OrderItem[]
   payments Payment[]
 
+  @@unique([externalSource, externalId])
   @@index([leadId])
   @@index([createdById])
   @@index([status])
   @@index([source])
   @@index([placedAt])
+  @@index([shippingPincode])
   @@map("orders")
 }
 
@@ -102,9 +119,16 @@ model Payment {
 
   failureReason String? @map("failure_reason")
 
+  refundedAmount Decimal? @map("refunded_amount") @db.Decimal(12, 2)
+
+  // Identity in an external system (Shopify transaction). Null for payments created inside the CRM.
+  externalSource ExternalSource? @map("external_source")
+  externalId     String?         @map("external_id") @db.VarChar(100)
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@unique([externalSource, externalId])
   @@index([orderId])
   @@index([providerPaymentId])
   @@index([providerOrderId])

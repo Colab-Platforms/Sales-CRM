@@ -1,5 +1,8 @@
 import type { OrderSource, OrderStatus, PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
 
+// How the customer pays: cash on delivery, or up front by any other method. Null when the method is not known.
+export type PaymentMode = "COD" | "PREPAID";
+
 // Filter value for orders that have no payment record yet.
 export const NO_PAYMENT = "NONE" as const;
 export type PaymentStatusFilter = PaymentStatus | typeof NO_PAYMENT;
@@ -31,6 +34,9 @@ export interface OrderListItem {
   totalAmount: Money;
   itemCount: number;
   paymentStatus: PaymentStatus | null;
+  paymentMode: PaymentMode | null;
+  // Order number in the external system (e.g. Shopify's "#TST1002"); null for CRM-created orders.
+  externalNumber: string | null;
   createdAt: Date;
   customer: { leadId: string; leadNumber: string; name: string };
   salesperson: { id: string; name: string } | null;
@@ -61,11 +67,16 @@ export interface OrderDetail {
   shippingAmount: Money;
   totalAmount: Money;
   discountReason: string | null;
+  externalNumber: string | null;
+  shippingAddress: Record<string, string | null> | null;
+  shippingPincode: string | null;
+  cancelReason: string | null;
   createdAt: Date;
   placedAt: Date | null;
   confirmedAt: Date | null;
   cancelledAt: Date | null;
   paymentStatus: PaymentStatus | null;
+  paymentMode: PaymentMode | null;
   customer: {
     leadId: string;
     leadNumber: string;
@@ -108,6 +119,7 @@ export interface PaymentDetail {
   paidAt: Date | null;
   failedAt: Date | null;
   refundedAt: Date | null;
+  refundedAmount: Money | null;
   failureReason: string | null;
   createdAt: Date;
 }

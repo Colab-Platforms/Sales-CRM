@@ -1,10 +1,11 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { OrderSource, OrderStatus, PaymentStatus, Role } from "../../../generated/prisma/enums.js";
+import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, Role } from "../../../generated/prisma/enums.js";
 import { buildLeadScope } from "@/lib/leadScope.js";
 import {
   PAYMENT_STATUS_PRECEDENCE,
   buildOrderWhere,
+  derivePaymentMode,
   derivePaymentStatus,
   paymentStatusWhere,
   salespersonWhere,
@@ -73,11 +74,31 @@ describe("searchWhere", () => {
     assert.equal((where.AND as unknown[]).length, 5);
   });
 
-  it("searches order number, customer fields and payment reference case-insensitively", () => {
+  it("searches order number, external order number, customer fields and payment reference case-insensitively", () => {
     const [term] = searchWhere("Priya").AND as { OR: Record<string, unknown>[] }[];
-    assert.equal(term.OR.length, 7);
+    assert.equal(term.OR.length, 8);
     assert.deepEqual(term.OR[0], { orderNumber: { contains: "Priya", mode: "insensitive" } });
-    assert.deepEqual(term.OR[6], { payments: { some: { transactionReference: { contains: "Priya", mode: "insensitive" } } } });
+    assert.deepEqual(term.OR[1], { externalNumber: { contains: "Priya", mode: "insensitive" } });
+    assert.deepEqual(term.OR[7], { payments: { some: { transactionReference: { contains: "Priya", mode: "insensitive" } } } });
+  });
+});
+
+describe("derivePaymentMode", () => {
+  const mode = (...methods: (PaymentMethod | null)[]) => derivePaymentMode(methods.map((method) => ({ method })));
+
+  it("is COD when any payment is cash on delivery", () => {
+    assert.equal(mode(PaymentMethod.COD), "COD");
+    assert.equal(mode(PaymentMethod.UPI, PaymentMethod.COD), "COD");
+  });
+
+  it("is prepaid when payments have a known non-COD method", () => {
+    assert.equal(mode(PaymentMethod.UPI), "PREPAID");
+    assert.equal(mode(PaymentMethod.OTHER), "PREPAID");
+  });
+
+  it("is unknown when there are no payments or their method is not known", () => {
+    assert.equal(mode(), null);
+    assert.equal(mode(null), null);
   });
 });
 
@@ -172,6 +193,13 @@ describe("validateListOrdersQuery", () => {
     assert.equal(validateListOrdersQuery({ search: "  priya  " }).value.search, "priya");
   });
 
+  it("accepts the fulfilment statuses and the Shopify source", () => {
+    for (const status of ["SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED"]) {
+      assert.equal(validateListOrdersQuery({ status }).value.status, status);
+    }
+    assert.equal(validateListOrdersQuery({ source: "SHOPIFY" }).value.source, OrderSource.SHOPIFY);
+  });
+
   it("accepts the NONE payment filter", () => {
     assert.equal(validateListOrdersQuery({ paymentStatus: "NONE" }).value.paymentStatus, "NONE");
   });
@@ -190,9 +218,9 @@ describe("validateListOrdersQuery", () => {
     ["page 0", { page: "0" }],
     ["non-numeric page", { page: "abc" }],
     ["pageSize above 100", { pageSize: "101" }],
-    ["unknown status", { status: "SHIPPED" }],
+    ["unknown status", { status: "LOST_IN_POST" }],
     ["unknown payment status", { paymentStatus: "PAID" }],
-    ["unknown source", { source: "SHOPIFY" }],
+    ["unknown source", { source: "AMAZON" }],
     ["non-uuid salesperson", { salespersonId: "not-a-uuid" }],
     ["date without time", { dateFrom: "2026-09-01" }],
     ["dateFrom after dateTo", { dateFrom: "2026-10-01T00:00:00.000Z", dateTo: "2026-09-01T00:00:00.000Z" }],
