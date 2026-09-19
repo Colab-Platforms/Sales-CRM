@@ -38,14 +38,14 @@ interface NavItem {
 const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
   SALESPERSON: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { title: "My Leads", icon: Users },
+    { title: "My Leads", href: "/dashboard/leads", icon: Users },
     { title: "Interested Leads", icon: Target },
     { title: "Orders", icon: ShoppingCart },
   ],
   MANAGER: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { title: "Team", href: "/dashboard/team", icon: UsersRound },
-    { title: "Leads", icon: Users },
+    { title: "Leads", href: "/dashboard/leads", icon: Users },
     { title: "Orders", icon: ShoppingCart },
     { title: "Reports", icon: BarChart3 },
   ],
@@ -53,7 +53,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { title: "Users", href: "/dashboard/users", icon: UserCog },
     { title: "Groups", icon: Building2 },
-    { title: "Leads", icon: Users },
+    { title: "Leads", href: "/dashboard/leads", icon: Users },
     { title: "Orders", icon: ShoppingCart },
     { title: "Reports", icon: BarChart3 },
   ],

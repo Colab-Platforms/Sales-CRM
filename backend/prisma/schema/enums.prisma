@@ -268,3 +268,11 @@ enum WebhookStatus {
 
   @@map("webhook_status")
 }
+
+enum ImportBatchStatus {
+  DRAFT
+  COMMITTED
+  FAILED
+
+  @@map("import_batch_status")
+}
