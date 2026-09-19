@@ -1,4 +1,5 @@
-import type { PreviewOrder, SyncReport } from "./shopify.sync.js";
+import type { Estimate, PreviewOrder, SyncReport } from "./shopify.sync.js";
+import { formatInZone } from "./shopify.window.js";
 
 // Terminal output for the dry run. Personal data is masked, and nothing here can see the access
 // token: the config and client are not passed in.
@@ -62,7 +63,36 @@ const counts = (c: { created: number; updated: number; skipped: number; failed: 
 
 const RELEVANT_SCOPES = ["read_orders", "read_customers", "read_products", "read_all_orders"];
 
-export function renderReport(report: SyncReport, apiVersion: string, storeDomain: string): string[] {
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+const estimateText = (e: Estimate) => `${e.kind === "upTo" ? "up to " : e.exact ? "" : "at least "}${e.count}${e.kind === "matching" && e.exact ? " (exact)" : ""}`;
+
+function windowLines(report: SyncReport, limit: number | null): string[] {
+  const { window } = report;
+  if (!window) return [];
+  const zone = window.timeZone;
+  const lines = [
+    `Window: orders created ${formatInZone(window.createdFrom, zone)} -> ${formatInZone(window.createdTo, zone)} (${zone})`,
+    `        = ${window.createdFrom.toISOString()} -> ${window.createdTo.toISOString()}`,
+  ];
+  if (window.updatedSince) lines.push(`Incremental: only records changed in Shopify since ${formatInZone(window.updatedSince, zone)} (${zone})`);
+
+  const { estimate } = report;
+  const parts = [
+    estimate.orders && `Orders ${estimateText(estimate.orders)}`,
+    estimate.customers && `Customers ${estimateText(estimate.customers)}`,
+    estimate.products && `Products ${estimateText(estimate.products)}`,
+  ].filter(Boolean);
+  if (parts.length > 0) lines.push(`Matching in Shopify: ${parts.join(" | ")}`);
+  if (estimate.orders?.kind === "matching") {
+    const total = estimate.orders.count;
+    const thisRun = limit === null ? total : Math.min(limit, total);
+    lines.push(`This run: ${plural(thisRun, "order")}${limit === null ? " (--all)" : ` (--limit ${limit})`}; ${total - thisRun} more in the window${total - thisRun > 0 ? " - add --all to import them" : ""}`);
+  }
+  return lines;
+}
+
+export function renderReport(report: SyncReport, apiVersion: string, storeDomain: string, limit: number | null = null): string[] {
   const lines: string[] = [];
   const mode = report.dryRun ? "dry run (nothing is written)" : "sync";
 
@@ -81,6 +111,8 @@ export function renderReport(report: SyncReport, apiVersion: string, storeDomain
     }
   }
 
+  lines.push(...windowLines(report, limit));
+
   if (report.error) {
     lines.push("", "Result: FAIL");
     lines.push(...report.error.message.split("\n").map((line, i) => (i === 0 ? `Reason: ${line}` : line)));
@@ -98,6 +130,7 @@ export function renderReport(report: SyncReport, apiVersion: string, storeDomain
     lines.push(`Payments:  created ${report.payments.created} | updated ${report.payments.updated} | removed ${report.payments.deleted}`);
   }
   lines.push(`Database writes: ${report.databaseWrites}`);
+  if (report.connection) lines.push(`Elapsed: ${(report.elapsedMs / 1000).toFixed(1)}s`);
 
   if (report.failures.length > 0) {
     lines.push("", `Failures (${report.failures.length}):`);

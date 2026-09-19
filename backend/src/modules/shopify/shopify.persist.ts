@@ -121,8 +121,26 @@ export async function resolveLead(
   return { leadId: created.id, action: "created", matchedBy: null };
 }
 
-/** A Shopify customer record (customers/create|update): make sure the lead exists and is linked. */
-export async function upsertCustomerLead(tx: Db, identity: MappedLeadIdentity & { externalUpdatedAt: Date }): Promise<LeadResolution> {
+/**
+ * A Shopify customer record (customers/create|update): make sure the lead exists and is linked.
+ * With `createIfMissing: false` an unknown customer is left alone and null is returned: that is how a customer from
+ * before the sync start date is handled, so an edit in Shopify updates a lead the CRM already has but never imports
+ * the historical customer base.
+ */
+export async function upsertCustomerLead(
+  tx: Db,
+  identity: MappedLeadIdentity & { externalUpdatedAt: Date },
+  opts: { createIfMissing?: boolean } = {},
+): Promise<LeadResolution | null> {
+  if (opts.createIfMissing === false) {
+    const mobile = normalizeMobile(identity.phone);
+    const email = normalizeEmail(identity.email);
+    const alternatives: Prisma.LeadWhereInput[] = [];
+    if (identity.externalId) alternatives.push({ externalSource: SOURCE, externalId: identity.externalId });
+    if (mobile) alternatives.push({ normalizedMobile: mobile });
+    if (email) alternatives.push({ normalizedEmail: email });
+    if (alternatives.length === 0 || !(await tx.lead.findFirst({ where: { OR: alternatives }, select: { id: true } }))) return null;
+  }
   return resolveLead(tx, identity, { converted: false, fallbackKey: identity.externalId ?? "unknown", activityAt: identity.externalUpdatedAt });
 }
 

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ShopifyApiError, type ShopifyClient } from "./shopify.client.js";
-import { CONNECTION_QUERY, ORDER_BY_ID_QUERY, ORDER_REFS_QUERY } from "./shopify.queries.js";
+import { CONNECTION_QUERY, countQuery, ORDER_BY_ID_QUERY, ORDER_REFS_QUERY, type CountField } from "./shopify.queries.js";
 
 // ---- Shopify response shapes (only what we read) ----
 
@@ -105,7 +105,7 @@ const refsResponse = (field: string) =>
   });
 
 const connectionResponseSchema = z.object({
-  shop: z.object({ name: z.string(), myshopifyDomain: z.string(), currencyCode: z.string() }),
+  shop: z.object({ name: z.string(), myshopifyDomain: z.string(), currencyCode: z.string(), ianaTimezone: z.string().nullish() }),
   currentAppInstallation: z.object({ accessScopes: z.array(z.object({ handle: z.string() })) }),
 });
 
@@ -211,7 +211,15 @@ export interface ConnectionInfo {
   shopName: string;
   storeDomain: string;
   currency: string;
+  /** The store's IANA time zone (e.g. "Asia/Kolkata"); calendar days in a sync window are read in it. */
+  timeZone: string | null;
   scopes: string[];
+}
+
+export interface RecordCount {
+  count: number;
+  /** false when Shopify only knows a lower bound. */
+  exact: boolean;
 }
 
 export interface RecordRef {
@@ -331,33 +339,53 @@ export async function checkConnection(client: ShopifyClient): Promise<Connection
     shopName: data.shop.name,
     storeDomain: data.shop.myshopifyDomain,
     currency: data.shop.currencyCode,
+    timeZone: data.shop.ianaTimezone ?? null,
     scopes: data.currentAppInstallation.accessScopes.map((s) => s.handle).sort(),
   };
 }
 
-/** One page of light order references, newest-updated first. `since` limits to orders updated on or after it. */
-export async function listOrderRefs(
-  client: ShopifyClient,
-  params: { first: number; after?: string | null; since?: Date },
-): Promise<RefsPage> {
+export interface ListParams {
+  first: number;
+  after?: string | null;
+  /** Shopify search syntax, e.g. from windowSearch(). */
+  search?: string | null;
+  /** Default CREATED_AT. The walk is always oldest-first. */
+  sortKey?: "CREATED_AT" | "UPDATED_AT";
+}
+
+/** One page of light order references, oldest first. */
+export async function listOrderRefs(client: ShopifyClient, params: ListParams): Promise<RefsPage> {
   return listRefs(client, ORDER_REFS_QUERY, "orders", params);
 }
 
 export async function listRefs(
   client: ShopifyClient,
   document: string,
-  field: "orders" | "products" | "customers",
-  params: { first: number; after?: string | null; since?: Date },
+  field: CountField,
+  params: ListParams,
 ): Promise<RefsPage> {
-  const query = params.since ? `updated_at:>='${params.since.toISOString()}'` : null;
   const data = parseOrFail(
     refsResponse(field),
-    await client.query<unknown>(document, { first: params.first, after: params.after ?? null, query }),
+    await client.query<unknown>(document, {
+      first: params.first,
+      after: params.after ?? null,
+      query: params.search ?? null,
+      sortKey: params.sortKey ?? "CREATED_AT",
+      reverse: false,
+    }),
     `the ${field} list`,
   ) as Record<string, { pageInfo: { hasNextPage: boolean; endCursor?: string | null }; nodes: RecordRef[] }>;
 
   const page = data[field];
   return { refs: page.nodes, hasNextPage: page.pageInfo.hasNextPage, endCursor: page.pageInfo.endCursor ?? null };
+}
+
+const countResponse = z.object({ result: z.object({ count: z.number(), precision: z.string() }) });
+
+/** How many records match a search. One cheap request; nothing is downloaded. */
+export async function countRecords(client: ShopifyClient, field: CountField, search: string | null): Promise<RecordCount> {
+  const data = parseOrFail(countResponse, await client.query<unknown>(countQuery(field), { query: search }), `the ${field} count`);
+  return { count: data.result.count, exact: data.result.precision === "EXACT" };
 }
 
 /** The full order, or null if Shopify no longer has it. */

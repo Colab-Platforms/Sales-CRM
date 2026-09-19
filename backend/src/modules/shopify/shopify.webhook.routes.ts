@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma.js";
 import { logger } from "@/utils/logger.js";
 import { ShopifyClient } from "./shopify.client.js";
 import { loadShopifyConfig, loadWebhookConfig } from "./shopify.config.js";
+import { checkConnection } from "./shopify.orders.js";
 import { syncCustomerById, syncOrderById, syncProductById, type SyncDeps } from "./shopify.sync.js";
+import { isValidTimeZone, startFloor } from "./shopify.window.js";
 import { handleShopifyWebhook } from "./shopify.webhook.handler.js";
 import { processWebhookEvent } from "./shopify.webhook.processor.js";
 import { createPrismaWebhookStore } from "./shopify.webhook.store.js";
@@ -17,14 +19,35 @@ const store = createPrismaWebhookStore(prisma);
 // Built per event so the current environment is always used, and a misconfiguration surfaces as a recorded failure.
 const syncDeps = (): SyncDeps => ({ client: new ShopifyClient(loadShopifyConfig()), runner: prisma });
 
+// The CRM keeps orders from SHOPIFY_SYNC_START_DATE onwards. Editing an old order in Shopify must not pull it in, so
+// webhook processing ignores anything created before that day. The store's time zone (one query, then remembered)
+// decides where the day starts.
+let floor: Promise<Date> | null = null;
+const syncFloor = () =>
+  (floor ??= (async () => {
+    const config = loadShopifyConfig();
+    const { timeZone } = await checkConnection(new ShopifyClient(config));
+    return startFloor(config.syncStartDate, timeZone && isValidTimeZone(timeZone) ? timeZone : "UTC");
+  })().catch((error) => {
+    floor = null;
+    throw error;
+  }));
+
 async function process(eventId: string) {
   try {
+    // "notFound" below also means "deliberately not imported" (older than the start date): either way the event is ignored.
     return await processWebhookEvent(eventId, {
       store,
       sync: {
-        order: (id) => syncOrderById(syncDeps(), id),
+        order: async (id) => {
+          const outcome = await syncOrderById(syncDeps(), id, { notBefore: await syncFloor() });
+          return { notFound: outcome.notFound || outcome.outOfWindow };
+        },
         product: (id) => syncProductById(syncDeps(), id),
-        customer: (id) => syncCustomerById(syncDeps(), id),
+        customer: async (id) => {
+          const outcome = await syncCustomerById(syncDeps(), id, { notBefore: await syncFloor() });
+          return { notFound: outcome.notFound || outcome.result === null };
+        },
       },
     });
   } catch (error) {

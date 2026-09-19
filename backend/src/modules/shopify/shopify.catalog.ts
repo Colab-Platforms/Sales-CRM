@@ -69,6 +69,7 @@ export interface NormalizedShopifyCustomer {
   lastName: string | null;
   email: string | null;
   phone: string | null;
+  createdAt: string | null;
   updatedAt: string;
   city: string | null;
   province: string | null;
@@ -118,6 +119,7 @@ export async function fetchCustomer(client: ShopifyClient, gid: string): Promise
     lastName: c.lastName ?? null,
     email: c.email ?? null,
     phone: c.phone ?? null,
+    createdAt: c.createdAt ?? null,
     updatedAt: c.updatedAt,
     city: c.defaultAddress?.city ?? null,
     province: c.defaultAddress?.province ?? null,

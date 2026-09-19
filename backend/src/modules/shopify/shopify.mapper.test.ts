@@ -204,6 +204,59 @@ describe("payment mapping", () => {
     assert.equal(captured[0].amount, "640.0");
   });
 
+  it("marks a delivered cash-on-delivery order paid: a PENDING sale plus a successful capture is SUCCESS, not PENDING", () => {
+    const sale = rawTransaction({ id: "gid://shopify/OrderTransaction/20", kind: "SALE", status: "PENDING", gateway: "Cash on Delivery (COD)", amountSet: money("698.0"), processedAt: "2026-01-01T02:00:00Z" });
+    const capture = rawTransaction({
+      id: "gid://shopify/OrderTransaction/21", kind: "CAPTURE", status: "SUCCESS", gateway: "Cash on Delivery (COD)", amountSet: money("698.0"),
+      parentTransaction: { id: "gid://shopify/OrderTransaction/20" }, processedAt: "2026-01-06T09:30:00Z",
+    });
+    const paid = payments(codOrderNode({ displayFinancialStatus: "PAID", transactions: [sale, capture] }));
+    assert.equal(paid.length, 1, "the capture is part of the sale, not a second payment");
+    assert.equal(paid[0].status, PaymentStatus.SUCCESS);
+    assert.equal(paid[0].method, PaymentMethod.COD);
+    assert.equal(paid[0].amount, "698.0");
+    assert.equal(paid[0].paidAt?.toISOString(), "2026-01-06T09:30:00.000Z", "paid when the cash was collected");
+
+    // Until the capture exists it is still pending.
+    assert.equal(payments(codOrderNode({ transactions: [sale] }))[0].status, PaymentStatus.PENDING);
+
+    // A refund of a collected COD payment is attributed to it.
+    const refund = rawTransaction({ id: "gid://shopify/OrderTransaction/22", kind: "REFUND", status: "SUCCESS", gateway: "Cash on Delivery (COD)", amountSet: money("698.0"), parentTransaction: { id: "gid://shopify/OrderTransaction/21" }, processedAt: "2026-01-10T00:00:00Z" });
+    const refunded = payments(codOrderNode({ displayFinancialStatus: "REFUNDED", transactions: [sale, capture, refund] }));
+    assert.equal(refunded[0].status, PaymentStatus.REFUNDED);
+    assert.equal(refunded[0].refundedAmount, "698.00");
+  });
+
+  it("treats a follow-up SALE that names the pending COD sale as its parent as that sale being marked paid, not a second payment", () => {
+    // The most common real shape: about a quarter of this store's orders are COD orders the courier marked as paid.
+    const pending = rawTransaction({ id: "gid://shopify/OrderTransaction/30", kind: "SALE", status: "PENDING", gateway: "Cash on Delivery (COD)", amountSet: money("698.0") });
+    const settled = rawTransaction({
+      id: "gid://shopify/OrderTransaction/31", kind: "SALE", status: "SUCCESS", gateway: "Cash on Delivery (COD)", amountSet: money("698.0"),
+      parentTransaction: { id: "gid://shopify/OrderTransaction/30" }, processedAt: "2026-04-20T08:00:00Z",
+    });
+    const result = payments(codOrderNode({ displayFinancialStatus: "PAID", transactions: [pending, settled] }));
+    assert.equal(result.length, 1);
+    assert.equal(result[0].status, PaymentStatus.SUCCESS);
+    assert.equal(result[0].externalId, "30", "still identified by the original sale, so re-syncing updates it in place");
+    assert.equal(result[0].method, PaymentMethod.COD);
+    assert.equal(result[0].paidAt?.toISOString(), "2026-04-20T08:00:00.000Z");
+  });
+
+  it("keeps a genuine split (an online payment plus a settled COD balance) as two payments", () => {
+    const cod = rawTransaction({ id: "gid://shopify/OrderTransaction/40", kind: "SALE", status: "PENDING", gateway: "Cash on Delivery (COD)", amountSet: money("500.0") });
+    const codPaid = rawTransaction({ id: "gid://shopify/OrderTransaction/41", kind: "SALE", status: "SUCCESS", gateway: "Cash on Delivery (COD)", amountSet: money("500.0"), parentTransaction: { id: "gid://shopify/OrderTransaction/40" } });
+    const online = rawTransaction({ id: "gid://shopify/OrderTransaction/42", kind: "SALE", status: "SUCCESS", gateway: "Cashfree", amountSet: money("199.0") });
+    const result = payments(codOrderNode({ displayFinancialStatus: "PAID", transactions: [cod, online, codPaid] }));
+    assert.deepEqual(result.map((p) => [p.externalId, p.status, p.amount]), [["40", PaymentStatus.SUCCESS, "500.0"], ["42", PaymentStatus.SUCCESS, "199.0"]]);
+  });
+
+  it("keeps an unpaid COD balance pending next to a part payment", () => {
+    const online = rawTransaction({ id: "gid://shopify/OrderTransaction/50", kind: "SALE", status: "SUCCESS", gateway: "shopflo", amountSet: money("100.0") });
+    const cod = rawTransaction({ id: "gid://shopify/OrderTransaction/51", kind: "SALE", status: "PENDING", gateway: "Cash on Delivery (COD)", amountSet: money("598.0") });
+    const result = payments(codOrderNode({ displayFinancialStatus: "PARTIALLY_PAID", transactions: [online, cod] }));
+    assert.deepEqual(result.map((p) => p.status), [PaymentStatus.SUCCESS, PaymentStatus.PENDING]);
+  });
+
   it("marks a voided authorization as failed", () => {
     const authorization = rawTransaction({ id: "gid://shopify/OrderTransaction/10", kind: "AUTHORIZATION", status: "SUCCESS" });
     const voided = rawTransaction({ id: "gid://shopify/OrderTransaction/12", kind: "VOID", status: "SUCCESS", parentTransaction: { id: "gid://shopify/OrderTransaction/10" } });
@@ -394,7 +447,7 @@ describe("product and customer mapping", () => {
   });
 
   it("maps a customer, including a location from the default address", () => {
-    const c = mapCustomer({ id: "gid://shopify/Customer/77", firstName: "Asha", lastName: "Verma", email: "a@example.com", phone: "+919811122334", updatedAt: "2026-09-19T00:00:00Z", city: "Pune", province: "Maharashtra" });
+    const c = mapCustomer({ id: "gid://shopify/Customer/77", firstName: "Asha", lastName: "Verma", email: "a@example.com", phone: "+919811122334", createdAt: "2026-01-05T00:00:00Z", updatedAt: "2026-09-19T00:00:00Z", city: "Pune", province: "Maharashtra" });
     assert.equal(c.externalId, "77");
     assert.equal(c.location, "Pune, Maharashtra");
     assert.equal(c.externalUpdatedAt.toISOString(), "2026-09-19T00:00:00.000Z");

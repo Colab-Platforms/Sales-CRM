@@ -2,28 +2,46 @@ import { ShopifyApiError, ShopifyGraphQLError, type ShopifyClient } from "./shop
 import { fetchCustomer, fetchProduct } from "./shopify.catalog.js";
 import { mapCustomer, mapOrder, mapProduct, type MappedOrder } from "./shopify.mapper.js";
 import { gidToId, toGid } from "./shopify.money.js";
-import { checkConnection, fetchOrder, listRefs, type ConnectionInfo, type NormalizedOrder } from "./shopify.orders.js";
+import { checkConnection, countRecords, fetchOrder, listRefs, type ConnectionInfo, type NormalizedOrder, type RecordCount } from "./shopify.orders.js";
 import {
   knownProductIds, knownVersions, upsertCustomerLead, upsertOrder, upsertProduct,
   type Action, type LeadResolution, type OrderResult, type ProductResult, type TxRunner,
 } from "./shopify.persist.js";
-import { CUSTOMER_REFS_QUERY, ORDER_REFS_QUERY, PRODUCT_REFS_QUERY } from "./shopify.queries.js";
+import { CUSTOMER_REFS_QUERY, ORDER_REFS_QUERY, PRODUCT_REFS_QUERY, type CountField } from "./shopify.queries.js";
+import {
+  DEFAULT_START_DATE, isValidTimeZone, resolveWindow, startOfDay, windowSearch, type SyncWindow, type WindowSpec,
+} from "./shopify.window.js";
 
 // Pipeline:  Shopify fetch  ->  map  ->  persist.
 // With dryRun the persist step is never reached and no TxRunner is needed, so a dry run cannot touch the database.
 
 export type Resource = "orders" | "products" | "customers";
 
+export interface ProgressEvent {
+  resource: Resource;
+  /** Records looked at so far in this resource. */
+  visited: number;
+  /** How many the window holds in Shopify, when known. */
+  total: number | null;
+}
+
 export interface SyncDeps {
   client: ShopifyClient;
   /** Absent for a dry run. */
   runner?: TxRunner;
+  /** First day of the window when --since is not given (SHOPIFY_SYNC_START_DATE). */
+  defaultStart?: string;
+  /** The clock; the end of the window is fixed to it when the run starts. */
+  now?: () => Date;
+  /** Called after each page, so a long backfill can show it is alive. */
+  onProgress?: (event: ProgressEvent) => void;
 }
 
 export interface SyncOptions {
-  /** Maximum records per resource; null means everything (an explicit --all). */
+  /** Maximum records per resource; null means everything in the window (an explicit --all). */
   limit: number | null;
-  since: Date | null;
+  /** Which records: orders created in [from, to), or (with updatedSince) changed recently. */
+  window: WindowSpec;
   only: Resource[];
   force: boolean;
   dryRun: boolean;
@@ -47,10 +65,21 @@ export interface PreviewOrder {
   mapped: MappedOrder;
 }
 
+/** What Shopify says the run could touch. "matching" is an exact count of the window; "upTo" is a ceiling. */
+export interface Estimate extends RecordCount {
+  kind: "matching" | "upTo";
+}
+
 export interface SyncReport {
   dryRun: boolean;
   connection: ConnectionInfo | null;
   scopes: ScopeReport | null;
+  /** The resolved date range; null if the run stopped before it could be worked out. */
+  window: SyncWindow | null;
+  estimate: Partial<Record<Resource, Estimate>>;
+  /** Records looked at per resource (whatever happened to them). */
+  visited: Record<Resource, number>;
+  elapsedMs: number;
   counts: Record<Resource, Counts>;
   leads: { created: number; matched: number; updated: number };
   variants: { created: number; updated: number; skipped: number };
@@ -116,17 +145,26 @@ function requireRunner(deps: SyncDeps): TxRunner {
 
 export interface OrderSyncOutcome {
   notFound: boolean;
+  /** The order exists but was created before `notBefore`, so it was not imported. */
+  outOfWindow: boolean;
   mapped: MappedOrder | null;
   result: OrderResult | null;
   productsSynced: number;
   productResults: ProductResult[];
 }
 
-/** Fetches one order from Shopify in full and stores it. Products it references are fetched first if unknown. */
-export async function syncOrderById(deps: SyncDeps, orderGid: string, opts: { force?: boolean } = {}): Promise<OrderSyncOutcome> {
+/**
+ * Fetches one order from Shopify in full and stores it. Products it references are fetched first if unknown.
+ * `notBefore` (the sync start date) makes an older order a no-op; the CLI leaves it out because a --since that
+ * reaches further back is an explicit request.
+ */
+export async function syncOrderById(deps: SyncDeps, orderGid: string, opts: { force?: boolean; notBefore?: Date } = {}): Promise<OrderSyncOutcome> {
   const runner = requireRunner(deps);
   const raw = await fetchOrder(deps.client, toGid("Order", orderGid));
-  if (!raw) return { notFound: true, mapped: null, result: null, productsSynced: 0, productResults: [] };
+  if (!raw) return { notFound: true, outOfWindow: false, mapped: null, result: null, productsSynced: 0, productResults: [] };
+  if (opts.notBefore && new Date(raw.createdAt) < opts.notBefore) {
+    return { notFound: false, outOfWindow: true, mapped: null, result: null, productsSynced: 0, productResults: [] };
+  }
   const mapped = mapOrder(raw);
 
   const wanted = [...new Set(raw.items.map((i) => i.productId).filter((id): id is string => !!id))];
@@ -138,7 +176,7 @@ export async function syncOrderById(deps: SyncDeps, orderGid: string, opts: { fo
   }
 
   const result = await withConflictRetry(() => runner.$transaction((tx) => upsertOrder(tx, mapped, opts), TX_OPTIONS));
-  return { notFound: false, mapped, result, productsSynced: productResults.length, productResults };
+  return { notFound: false, outOfWindow: false, mapped, result, productsSynced: productResults.length, productResults };
 }
 
 export async function syncProductById(
@@ -154,12 +192,23 @@ export async function syncProductById(
   return { notFound: false, result };
 }
 
-export async function syncCustomerById(deps: SyncDeps, customerGid: string): Promise<{ notFound: boolean; result: LeadResolution | null }> {
+/**
+ * With `notBefore`, a customer created before it only updates a lead the CRM already has; it never creates one.
+ * `result` is null when the customer was left alone for that reason.
+ */
+export async function syncCustomerById(
+  deps: SyncDeps,
+  customerGid: string,
+  opts: { notBefore?: Date } = {},
+): Promise<{ notFound: boolean; result: LeadResolution | null }> {
   const runner = requireRunner(deps);
   const raw = await fetchCustomer(deps.client, toGid("Customer", customerGid));
   if (!raw) return { notFound: true, result: null };
   const mapped = mapCustomer(raw);
-  const result = await withConflictRetry(() => runner.$transaction((tx) => upsertCustomerLead(tx, mapped), TX_OPTIONS));
+  const historical = !!opts.notBefore && !!raw.createdAt && new Date(raw.createdAt) < opts.notBefore;
+  const result = await withConflictRetry(() =>
+    runner.$transaction((tx) => upsertCustomerLead(tx, mapped, { createIfMissing: !historical }), TX_OPTIONS),
+  );
   return { notFound: false, result };
 }
 
@@ -179,10 +228,15 @@ const reasonOf = (error: unknown) => (error instanceof Error ? error.message.spl
 const bump = (counts: Counts, action: Action) => void (counts[action === "created" ? "created" : action === "updated" ? "updated" : "skipped"]++);
 
 export async function runSync(deps: SyncDeps, options: SyncOptions): Promise<SyncReport> {
+  const startedAt = performance.now();
   const report: SyncReport = {
     dryRun: options.dryRun,
     connection: null,
     scopes: null,
+    window: null,
+    estimate: {},
+    visited: { orders: 0, products: 0, customers: 0 },
+    elapsedMs: 0,
     counts: { orders: emptyCounts(), products: emptyCounts(), customers: emptyCounts() },
     leads: { created: 0, matched: 0, updated: 0 },
     variants: { created: 0, updated: 0, skipped: 0 },
@@ -199,10 +253,28 @@ export async function runSync(deps: SyncDeps, options: SyncOptions): Promise<Syn
     report.scopes = analyseScopes(report.connection.scopes);
   } catch (error) {
     report.error = error as Error;
+    report.elapsedMs = performance.now() - startedAt;
     return report;
   }
 
+  // Calendar days are read in the store's own time zone; UTC only if Shopify gave none we can use.
+  const zone = report.connection.timeZone;
+  const timeZone = zone && isValidTimeZone(zone) ? zone : "UTC";
+  if (timeZone !== zone) report.warnings.push("Could not read the store time zone from Shopify; dates in the window are read as UTC.");
+  const defaultStart = deps.defaultStart ?? DEFAULT_START_DATE;
   try {
+    report.window = resolveWindow(options.window, defaultStart, timeZone, (deps.now ?? (() => new Date()))());
+  } catch (error) {
+    report.error = error as Error;
+    report.elapsedMs = performance.now() - startedAt;
+    return report;
+  }
+  if (options.window.from && report.window.createdFrom < startOfDay(defaultStart, timeZone)) {
+    report.warnings.push(`The window starts before the configured start date (${defaultStart}); orders older than that are imported because --since asked for them.`);
+  }
+
+  try {
+    await estimate(deps, options, report.window, report);
     if (options.only.includes("products")) await syncProducts(deps, options, report);
     if (options.only.includes("customers")) await syncCustomers(deps, options, report);
     if (options.only.includes("orders")) await syncOrders(deps, options, report);
@@ -217,24 +289,62 @@ export async function runSync(deps: SyncDeps, options: SyncOptions): Promise<Syn
     : c.orders.created + c.orders.updated + c.products.created + c.products.updated + c.customers.created + c.customers.updated +
       report.leads.created + report.leads.updated + report.variants.created + report.variants.updated +
       report.payments.created + report.payments.updated + report.payments.deleted;
+  report.elapsedMs = performance.now() - startedAt;
   return report;
 }
 
-/** Walks a Shopify list page by page until `limit` records have been visited. */
+/**
+ * Asks Shopify how many records the window holds, so a dry run (and the top of a real run) can say how big the job is
+ * before it starts. Failing to count is only a warning; a missing scope stops the run like any other read.
+ */
+async function estimate(deps: SyncDeps, options: SyncOptions, window: SyncWindow, report: SyncReport): Promise<void> {
+  const search = windowSearch(window);
+  const count = async (field: CountField, kind: Estimate["kind"], query: string | null) => {
+    try {
+      report.estimate[field] = { ...(await countRecords(deps.client, field, query)), kind };
+    } catch (error) {
+      if (isFatal(error)) throw error;
+      report.warnings.push(`Could not count ${field} in Shopify: ${reasonOf(error)}`);
+    }
+  };
+
+  if (options.only.includes("orders")) {
+    await count("orders", "matching", search);
+    // Orders pull in their customers and products; each is at most one per order / the whole catalogue.
+    const orders = report.estimate.orders;
+    if (orders && !options.only.includes("customers")) report.estimate.customers = { count: orders.count, exact: false, kind: "upTo" };
+    if (!options.only.includes("products")) await count("products", "upTo", null);
+  }
+  if (options.only.includes("products")) await count("products", "matching", search);
+  if (options.only.includes("customers")) await count("customers", "matching", search);
+}
+
+/**
+ * Walks the window page by page, oldest first, until `limit` records have been visited. Oldest-first by creation
+ * time is stable while the walk runs; with an updatedSince filter the walk is by update time instead, where an
+ * edit only moves a record later, never past the cursor.
+ */
 async function walk(
   deps: SyncDeps,
   document: string,
-  field: "orders" | "products" | "customers",
+  field: Resource,
   options: SyncOptions,
+  report: SyncReport,
   visit: (refs: { id: string; updatedAt: string }[]) => Promise<void>,
 ): Promise<void> {
+  const window = report.window!;
+  const search = windowSearch(window);
+  const sortKey = window.updatedSince ? "UPDATED_AT" : "CREATED_AT";
   let remaining = options.limit ?? Number.POSITIVE_INFINITY;
   let cursor: string | null = null;
   let more = true;
   while (more && remaining > 0) {
-    const page = await listRefs(deps.client, document, field, { first: Math.min(remaining, PAGE_SIZE), after: cursor, since: options.since ?? undefined });
+    const page = await listRefs(deps.client, document, field, { first: Math.min(remaining, PAGE_SIZE), after: cursor, search, sortKey });
     remaining -= page.refs.length;
     await visit(page.refs);
+    report.visited[field] += page.refs.length;
+    const total = report.estimate[field];
+    deps.onProgress?.({ resource: field, visited: report.visited[field], total: total?.kind === "matching" ? total.count : null });
     cursor = page.endCursor;
     more = page.hasNextPage && page.refs.length > 0;
   }
@@ -243,7 +353,7 @@ async function walk(
 async function syncOrders(deps: SyncDeps, options: SyncOptions, report: SyncReport): Promise<void> {
   const counts = report.counts.orders;
 
-  await walk(deps, ORDER_REFS_QUERY, "orders", options, async (refs) => {
+  await walk(deps, ORDER_REFS_QUERY, "orders", options, report, async (refs) => {
     const known = options.dryRun || !deps.runner
       ? new Map<string, Date>()
       : await deps.runner.$transaction((tx) => knownVersions(tx, "order", refs.map((r) => gidToId(r.id))), TX_OPTIONS);
@@ -293,7 +403,7 @@ async function syncOrders(deps: SyncDeps, options: SyncOptions, report: SyncRepo
 
 async function syncProducts(deps: SyncDeps, options: SyncOptions, report: SyncReport): Promise<void> {
   const counts = report.counts.products;
-  await walk(deps, PRODUCT_REFS_QUERY, "products", options, async (refs) => {
+  await walk(deps, PRODUCT_REFS_QUERY, "products", options, report, async (refs) => {
     const known = options.dryRun || !deps.runner
       ? new Map<string, Date>()
       : await deps.runner.$transaction((tx) => knownVersions(tx, "product", refs.map((r) => gidToId(r.id))), TX_OPTIONS);
@@ -330,13 +440,14 @@ async function syncProducts(deps: SyncDeps, options: SyncOptions, report: SyncRe
 
 async function syncCustomers(deps: SyncDeps, options: SyncOptions, report: SyncReport): Promise<void> {
   const counts = report.counts.customers;
-  await walk(deps, CUSTOMER_REFS_QUERY, "customers", options, async (refs) => {
+  await walk(deps, CUSTOMER_REFS_QUERY, "customers", options, report, async (refs) => {
     for (const ref of refs) {
       try {
         if (options.dryRun) {
           counts.skipped++;
           continue;
         }
+        // No start-date floor here: the window already limits which customers this walk visits.
         const outcome = await syncCustomerById(deps, ref.id);
         if (!outcome.result) {
           counts.skipped++;

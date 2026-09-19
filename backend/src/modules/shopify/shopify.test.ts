@@ -5,10 +5,10 @@ import { inspect } from "node:util";
 import { join } from "node:path";
 import { ShopifyClient, ShopifyApiError, ShopifyGraphQLError } from "./shopify.client.js";
 import { loadShopifyConfig, ShopifyConfigError } from "./shopify.config.js";
-import { fetchOrder, listOrderRefs, normalizeOrder, orderNodeSchema } from "./shopify.orders.js";
+import { countRecords, fetchOrder, listOrderRefs, normalizeOrder, orderNodeSchema } from "./shopify.orders.js";
 import * as queries from "./shopify.queries.js";
 import { maskEmail, maskName, maskPhone } from "./shopify.report.js";
-import { analyseScopes } from "./shopify.sync.js";
+import { analyseScopes, runSync } from "./shopify.sync.js";
 import { CliUsageError, parseCliArgs, runCli } from "./shopify.cli.js";
 import { codOrderNode, ENV, orderNode, TOKEN } from "./shopify.fixtures.js";
 import type { TxRunner } from "./shopify.persist.js";
@@ -39,16 +39,20 @@ function fakeFetch(...responses: Array<Response | Error | ((call: Call) => Respo
 }
 
 const connectionData = (scopes = ["read_customers", "read_orders", "read_products"]) => ({
-  shop: { name: "Demo Store", myshopifyDomain: "demo-store.myshopify.com", currencyCode: "INR" },
+  shop: { name: "Demo Store", myshopifyDomain: "demo-store.myshopify.com", currencyCode: "INR", ianaTimezone: "Asia/Kolkata" },
   currentAppInstallation: { accessScopes: scopes.map((handle) => ({ handle })) },
 });
 
-/** Answers ConnectionCheck, OrderRefs and OrderById the way Shopify would. */
-function shopifyFake(opts: { orders?: Array<Record<string, unknown>>; scopes?: string[]; orderError?: Response } = {}) {
+/** Answers ConnectionCheck, Count, OrderRefs and OrderById the way Shopify would. `windowTotal` is what the window holds. */
+function shopifyFake(opts: { orders?: Array<Record<string, unknown>>; scopes?: string[]; orderError?: Response; windowTotal?: number } = {}) {
   const orders = opts.orders ?? [orderNode()];
   return fakeFetch((call) => {
     const { query, variables } = JSON.parse(String(call.init.body)) as { query: string; variables: { id?: string; first?: number } };
     if (query.includes("ConnectionCheck")) return json({ data: connectionData(opts.scopes) });
+    if (query.includes("query Count")) {
+      const count = query.includes("ordersCount") ? (opts.windowTotal ?? orders.length) : query.includes("productsCount") ? 24 : 7;
+      return json({ data: { result: { count, precision: "EXACT" } } });
+    }
     if (query.includes("OrderRefs")) {
       const page = orders.slice(0, variables.first ?? orders.length);
       return json({ data: { orders: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: page.map((o) => ({ id: o.id, updatedAt: o.updatedAt })) } } });
@@ -82,9 +86,18 @@ describe("request construction", () => {
   });
 
   it("only ever sends queries, never mutations", () => {
-    const documents: string[] = Object.values(queries);
+    const documents: string[] = Object.values<unknown>(queries).filter((v): v is string => typeof v === "string");
     assert.equal(documents.length, 7);
+    for (const field of ["orders", "products", "customers"] as const) documents.push(queries.countQuery(field));
     for (const document of documents) assert.doesNotMatch(document, /\bmutation\b/i);
+  });
+
+  it("lists oldest-first with a caller-chosen sort, so a walk is stable while records change", () => {
+    for (const document of [queries.ORDER_REFS_QUERY, queries.PRODUCT_REFS_QUERY, queries.CUSTOMER_REFS_QUERY]) {
+      assert.match(document, /\$sortKey: \w+SortKeys!/);
+      assert.match(document, /sortKey: \$sortKey, reverse: \$reverse/);
+      assert.doesNotMatch(document, /reverse: true/);
+    }
   });
 
   it("asks for the order, customer, money, payment, shipment and line-item fields the CRM mapping needs", () => {
@@ -165,13 +178,30 @@ describe("response parsing", () => {
 
   it("lists light order references for a page and asks for the requested number", async () => {
     const fake = shopifyFake({ orders: [orderNode(), orderNode({ id: "gid://shopify/Order/2" })] });
-    const page = await listOrderRefs(new ShopifyClient(config(), { fetchImpl: fake.impl }), { first: 5, since: new Date("2026-09-01T00:00:00Z") });
+    const page = await listOrderRefs(new ShopifyClient(config(), { fetchImpl: fake.impl }), { first: 5, search: "created_at:>='2026-01-01T00:00:00.000Z'" });
 
     assert.equal(page.refs.length, 2);
     assert.equal(page.hasNextPage, false);
     const sent = JSON.parse(String(fake.calls[0].init.body)).variables;
     assert.equal(sent.first, 5);
-    assert.equal(sent.query, "updated_at:>='2026-09-01T00:00:00.000Z'");
+    assert.equal(sent.query, "created_at:>='2026-01-01T00:00:00.000Z'");
+    assert.equal(sent.sortKey, "CREATED_AT");
+    assert.equal(sent.reverse, false);
+  });
+
+  it("counts the records matching a search exactly, in one request", async () => {
+    const fake = shopifyFake({ windowTotal: 51602 });
+    const client = new ShopifyClient(config(), { fetchImpl: fake.impl });
+    assert.deepEqual(await countRecords(client, "orders", "created_at:>='2026-01-01T00:00:00.000Z'"), { count: 51602, exact: true });
+    assert.equal(fake.calls.length, 1);
+    const sent = JSON.parse(String(fake.calls[0].init.body));
+    assert.match(sent.query, /ordersCount\(query: \$query, limit: null\)/);
+    assert.equal(sent.variables.query, "created_at:>='2026-01-01T00:00:00.000Z'");
+  });
+
+  it("reports a count Shopify only knows a lower bound for as not exact", async () => {
+    const fake = fakeFetch(json({ data: { result: { count: 10000, precision: "AT_LEAST" } } }));
+    assert.deepEqual(await countRecords(new ShopifyClient(config(), { fetchImpl: fake.impl }), "orders", null), { count: 10000, exact: false });
   });
 
   it("fetches one order in full by id, and returns null when Shopify no longer has it", async () => {
@@ -314,6 +344,15 @@ describe("environment configuration", () => {
     assert.equal(loadShopifyConfig({ ...ENV, SHOPIFY_STORE_DOMAIN: "123456-ab.myshopify.com" }).storeDomain, "123456-ab.myshopify.com");
   });
 
+  it("reads SHOPIFY_SYNC_START_DATE, defaulting to 2026-01-01, and rejects anything that is not a real day", () => {
+    assert.equal(loadShopifyConfig(ENV).syncStartDate, "2026-01-01");
+    assert.equal(loadShopifyConfig({ ...ENV, SHOPIFY_SYNC_START_DATE: "2026-04-01" }).syncStartDate, "2026-04-01");
+    assert.equal(loadShopifyConfig({ ...ENV, SHOPIFY_SYNC_START_DATE: "  " }).syncStartDate, "2026-01-01");
+    for (const bad of ["2026-13-01", "2026-02-30", "last year", "01/01/2026"]) {
+      assert.throws(() => loadShopifyConfig({ ...ENV, SHOPIFY_SYNC_START_DATE: bad }), /SHOPIFY_SYNC_START_DATE/, bad);
+    }
+  });
+
   it("reads SHOPIFY_SYNC_ENABLED", () => {
     assert.equal(loadShopifyConfig({ ...ENV, SHOPIFY_SYNC_ENABLED: "true" }).syncEnabled, true);
     assert.throws(() => loadShopifyConfig({ ...ENV, SHOPIFY_SYNC_ENABLED: "yes" }), /SHOPIFY_SYNC_ENABLED/);
@@ -365,23 +404,39 @@ describe("errors never contain the access token", () => {
 
 describe("command line", () => {
   it("defaults: a dry run reads 5, a real sync 50, orders only", () => {
-    assert.deepEqual(parseCliArgs(["--dry-run"]), { limit: 5, since: null, only: ["orders"], force: false, dryRun: true });
-    assert.deepEqual(parseCliArgs([]), { limit: 50, since: null, only: ["orders"], force: false, dryRun: false });
+    const noWindow = { from: null, to: null, updatedSince: null };
+    assert.deepEqual(parseCliArgs(["--dry-run"]), { limit: 5, window: noWindow, only: ["orders"], force: false, dryRun: true });
+    assert.deepEqual(parseCliArgs([]), { limit: 50, window: noWindow, only: ["orders"], force: false, dryRun: false });
   });
 
-  it("reads --limit, --all, --since, --only and --force", () => {
+  it("reads --limit, --all, --only and --force", () => {
     assert.equal(parseCliArgs(["--limit", "100"]).limit, 100);
     assert.equal(parseCliArgs(["--all"]).limit, null);
-    assert.equal(parseCliArgs(["--since", "2026-09-01"]).since?.toISOString(), "2026-09-01T00:00:00.000Z");
-    assert.equal(parseCliArgs(["--since", "2026-09-01T10:30:00Z"]).since?.toISOString(), "2026-09-01T10:30:00.000Z");
     assert.deepEqual(parseCliArgs(["--only", "products,orders,products"]).only, ["products", "orders"]);
     assert.equal(parseCliArgs(["--force"]).force, true);
+  });
+
+  it("reads the window: --since and --until as days or exact moments, --updated-since also as 24h / 7d", () => {
+    const now = new Date("2026-09-19T12:00:00Z");
+    assert.deepEqual(parseCliArgs(["--since", "2026-01-01"], now).window.from, { kind: "day", ymd: "2026-01-01" });
+    assert.deepEqual(parseCliArgs(["--until", "2026-03-31"], now).window.to, { kind: "day", ymd: "2026-03-31" });
+    assert.deepEqual(parseCliArgs(["--since", "2026-09-01T10:30:00+05:30"], now).window.from, { kind: "instant", at: new Date("2026-09-01T05:00:00Z") });
+    assert.deepEqual(parseCliArgs(["--updated-since", "24h"], now).window.updatedSince, { kind: "instant", at: new Date("2026-09-18T12:00:00Z") });
+    assert.deepEqual(parseCliArgs(["--updated-since", "7d"], now).window.updatedSince, { kind: "instant", at: new Date("2026-09-12T12:00:00Z") });
+    assert.deepEqual(parseCliArgs(["--updated-since", "2026-09-18"], now).window.updatedSince, { kind: "day", ymd: "2026-09-18" });
+  });
+
+  it("keeps --limit working together with a window", () => {
+    const options = parseCliArgs(["--since", "2026-01-01", "--limit", "5"]);
+    assert.equal(options.limit, 5);
+    assert.deepEqual(options.window.from, { kind: "day", ymd: "2026-01-01" });
   });
 
   it("rejects bad input", () => {
     for (const argv of [
       ["--limit", "0"], ["--limit", "1001"], ["--limit", "abc"], ["--dry-run", "--limit", "26"], ["--all", "--limit", "5"], ["--dry-run", "--all"],
       ["--dry-run", "--force"], ["--since", "yesterday"], ["--only", "orders,carts"], ["--only", ""], ["--sync"], ["orders"],
+      ["--since", "2026-02-31"], ["--since", "2026-01-01T00:00:00"], ["--until", "soon"], ["--updated-since", "0h"], ["--updated-since", "3w"],
     ]) {
       assert.throws(() => parseCliArgs(argv), CliUsageError, argv.join(" "));
     }
@@ -427,7 +482,78 @@ describe("dry run", () => {
     const fake = shopifyFake({ orders: [orderNode(), codOrderNode()] });
     await run(fake);
     const names = fake.calls.map((c) => (JSON.parse(String(c.init.body)).query as string).match(/query (\w+)/)![1]);
-    assert.deepEqual(names, ["ConnectionCheck", "OrderRefs", "OrderById", "OrderById"]);
+    assert.deepEqual(names, ["ConnectionCheck", "Count", "Count", "OrderRefs", "OrderById", "OrderById"]);
+  });
+
+  it("shows the window and how many orders it holds before anything is imported", async () => {
+    const fake = shopifyFake({ orders: [orderNode(), codOrderNode()], windowTotal: 51602 });
+    const { code, text } = await run(fake, ["--dry-run", "--limit", "2", "--since", "2026-01-01"]);
+
+    assert.equal(code, 0);
+    assert.match(text, /Window: orders created 2026-01-01 00:00 -> \d{4}-\d{2}-\d{2} \d{2}:\d{2} \(Asia\/Kolkata\)/);
+    assert.match(text, /= 2025-12-31T18:30:00\.000Z -> /, "1 January starts at midnight IST, not midnight UTC");
+    assert.match(text, /Matching in Shopify: Orders 51602 \(exact\) \| Customers up to 51602 \| Products up to 24/);
+    assert.match(text, /This run: 2 orders \(--limit 2\); 51600 more in the window - add --all to import them/);
+    assert.match(text, /Orders fetched: 2/);
+    assert.match(text, /Database writes: 0/);
+  });
+
+  it("sends the window to Shopify as a created_at search, oldest first", async () => {
+    const fake = shopifyFake({ orders: [orderNode()] });
+    await run(fake, ["--dry-run", "--limit", "1", "--since", "2026-01-01", "--until", "2026-01-31"]);
+    const refs = fake.calls.map((c) => JSON.parse(String(c.init.body))).find((b) => b.query.includes("query OrderRefs"))!;
+    assert.equal(refs.variables.query, "created_at:>='2025-12-31T18:30:00.000Z' created_at:<'2026-01-31T18:30:00.000Z'");
+    assert.equal(refs.variables.sortKey, "CREATED_AT");
+    assert.equal(refs.variables.reverse, false);
+    const count = fake.calls.map((c) => JSON.parse(String(c.init.body))).find((b) => b.query.includes("ordersCount"))!;
+    assert.equal(count.variables.query, refs.variables.query, "the estimate counts exactly what the run would read");
+  });
+
+  it("uses the configured start date when --since is not given, and lets the environment change it", async () => {
+    const fake = shopifyFake({ orders: [orderNode()] });
+    await run(fake, ["--dry-run", "--limit", "1"], { ...ENV, SHOPIFY_SYNC_START_DATE: "2026-03-01" });
+    const refs = fake.calls.map((c) => JSON.parse(String(c.init.body))).find((b) => b.query.includes("query OrderRefs"))!;
+    assert.match(refs.variables.query, /^created_at:>='2026-02-28T18:30:00\.000Z' created_at:</);
+
+    const other = shopifyFake({ orders: [orderNode()] });
+    await run(other, ["--dry-run", "--limit", "1"]);
+    const usual = other.calls.map((c) => JSON.parse(String(c.init.body))).find((b) => b.query.includes("query OrderRefs"))!;
+    assert.match(usual.variables.query, /^created_at:>='2025-12-31T18:30:00\.000Z' created_at:</, "2026-01-01 by default");
+  });
+
+  it("--updated-since adds an updated_at filter (still inside the created window) and walks by update time", async () => {
+    const fake = shopifyFake({ orders: [orderNode()] });
+    await run(fake, ["--dry-run", "--limit", "1", "--updated-since", "2026-09-18"]);
+    const refs = fake.calls.map((c) => JSON.parse(String(c.init.body))).find((b) => b.query.includes("query OrderRefs"))!;
+    assert.match(refs.variables.query, /^created_at:>='2025-12-31T18:30:00\.000Z' created_at:<'[^']+' updated_at:>='2026-09-17T18:30:00\.000Z'$/);
+    assert.equal(refs.variables.sortKey, "UPDATED_AT");
+  });
+
+  it("warns when --since reaches back before the configured start date", async () => {
+    const { text } = await run(shopifyFake({ orders: [orderNode()] }), ["--dry-run", "--limit", "1", "--since", "2025-06-01"]);
+    assert.match(text, /window starts before the configured start date \(2026-01-01\)/);
+    const plain = await run(shopifyFake({ orders: [orderNode()] }), ["--dry-run", "--limit", "1", "--since", "2026-02-01"]);
+    assert.doesNotMatch(plain.text, /before the configured start date/);
+  });
+
+  it("rejects an empty window without importing anything", async () => {
+    const fake = shopifyFake({ orders: [orderNode()] });
+    const { code, text } = await run(fake, ["--dry-run", "--since", "2026-06-01", "--until", "2026-05-01"]);
+    assert.equal(code, 1);
+    assert.match(text, /The window is empty/);
+    assert.equal(fake.calls.filter((c) => JSON.parse(String(c.init.body)).query.includes("OrderById")).length, 0);
+  });
+
+  it("still finishes when Shopify can not count, with a warning", async () => {
+    const base = shopifyFake({ orders: [orderNode()] });
+    const flaky = fakeFetch((call) => {
+      const { query } = JSON.parse(String(call.init.body));
+      return query.includes("query Count") ? json({ errors: [{ message: "Internal error" }] }) : base.impl(call.url, call.init);
+    });
+    const { code, text } = await run({ impl: flaky.impl, calls: flaky.calls });
+    assert.equal(code, 0);
+    assert.match(text, /Could not count orders in Shopify/);
+    assert.match(text, /Orders fetched: 1/);
   });
 
   it("does not treat zero orders as a failure", async () => {
@@ -514,6 +640,69 @@ describe("dry run", () => {
     const script = readFileSync(join(dir, "../../scripts/shopify-sync.ts"), "utf8");
     assert.doesNotMatch(script, /^\s*import\b.*prisma/im, "the script must not import Prisma at the top level");
     assert.match(script, /await import\("\.\.\/lib\/prisma\.js"\)/, "Prisma is loaded lazily");
+  });
+});
+
+// ---- walking a large window ----
+
+describe("walking the window", () => {
+  const TOTAL = 120;
+  const all = Array.from({ length: TOTAL }, (_, i) => orderNode({ id: `gid://shopify/Order/${1000 + i}`, name: `#TST${1000 + i}` }));
+
+  /** A paged Shopify: hands out the orders in creation order, `first` at a time, following the cursor. */
+  const paged = () => {
+    const pages: Array<{ first: number; after: string | null; query: string; sortKey: string }> = [];
+    const fake = fakeFetch((call) => {
+      const { query, variables } = JSON.parse(String(call.init.body)) as { query: string; variables: Record<string, any> };
+      if (query.includes("ConnectionCheck")) return json({ data: connectionData() });
+      if (query.includes("query Count")) return json({ data: { result: { count: query.includes("ordersCount") ? TOTAL : 24, precision: "EXACT" } } });
+      if (query.includes("OrderRefs")) {
+        pages.push({ first: variables.first, after: variables.after, query: variables.query, sortKey: variables.sortKey });
+        const start = variables.after ? Number(variables.after) : 0;
+        const nodes = all.slice(start, start + variables.first).map((o) => ({ id: o.id, updatedAt: o.updatedAt }));
+        const next = start + nodes.length;
+        return json({ data: { orders: { pageInfo: { hasNextPage: next < TOTAL, endCursor: String(next) }, nodes } } });
+      }
+      return json({ data: { order: all.find((o) => o.id === variables.id) ?? null } });
+    });
+    return { ...fake, pages };
+  };
+
+  const dry = (limit: number | null) => ({ limit, window: { from: null, to: null, updatedSince: null }, only: ["orders" as const], force: false, dryRun: true });
+
+  it("follows the cursor page by page until the window is exhausted, without repeating or skipping a record", async () => {
+    const fake = paged();
+    const events: number[] = [];
+    const report = await runSync(
+      { client: new ShopifyClient(config(), { fetchImpl: fake.impl }), onProgress: (e) => events.push(e.visited) },
+      dry(null),
+    );
+    assert.equal(report.error, null);
+    assert.equal(report.visited.orders, TOTAL);
+    assert.equal(report.preview.length, TOTAL);
+    assert.deepEqual(new Set(report.preview.map((p) => p.raw.id)).size, TOTAL, "no record is read twice");
+    assert.deepEqual(fake.pages.map((p) => [p.first, p.after]), [[50, null], [50, "50"], [50, "100"]]);
+    assert.deepEqual(events, [50, 100, 120]);
+    assert.ok(fake.pages.every((p) => p.sortKey === "CREATED_AT" && p.query === fake.pages[0].query), "one fixed window for the whole walk");
+  });
+
+  it("stops at --limit even though the window holds more, and says how many are left", async () => {
+    const fake = paged();
+    const report = await runSync({ client: new ShopifyClient(config(), { fetchImpl: fake.impl }) }, dry(60));
+    assert.equal(report.visited.orders, 60);
+    assert.deepEqual(fake.pages.map((p) => p.first), [50, 10], "the last page asks only for what is still allowed");
+    assert.equal(report.estimate.orders?.count, TOTAL);
+    const text = (await import("./shopify.report.js")).renderReport(report, "2026-01-01", "demo-store.myshopify.com", 60).join("\n");
+    assert.match(text, /This run: 60 orders \(--limit 60\); 60 more in the window - add --all to import them/);
+  });
+
+  it("keeps the window's upper edge fixed at the moment the run started, however long it takes", async () => {
+    const fake = paged();
+    let tick = 0;
+    const clock = () => new Date(Date.UTC(2026, 8, 19, 11, 0, tick++)); // every reading is a second later
+    await runSync({ client: new ShopifyClient(config(), { fetchImpl: fake.impl }), now: clock }, dry(null));
+    assert.equal(new Set(fake.pages.map((p) => p.query)).size, 1);
+    assert.equal(tick, 1, "the clock is read once, when the window is worked out");
   });
 });
 

@@ -7,6 +7,7 @@ export const CONNECTION_QUERY = /* GraphQL */ `
       name
       myshopifyDomain
       currencyCode
+      ianaTimezone
     }
     currentAppInstallation {
       accessScopes {
@@ -17,10 +18,12 @@ export const CONNECTION_QUERY = /* GraphQL */ `
 `;
 
 // ---- Listing: light references only, so a page is cheap and unchanged records can be skipped ----
+// The caller picks the sort. A backfill walks oldest-first by creation time, which never changes, so records
+// created or edited while the walk is running can not shift a page boundary and hide a record.
 
 export const ORDER_REFS_QUERY = /* GraphQL */ `
-  query OrderRefs($first: Int!, $after: String, $query: String) {
-    orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: true) {
+  query OrderRefs($first: Int!, $after: String, $query: String, $sortKey: OrderSortKeys!, $reverse: Boolean) {
+    orders(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
       pageInfo {
         hasNextPage
         endCursor
@@ -34,8 +37,8 @@ export const ORDER_REFS_QUERY = /* GraphQL */ `
 `;
 
 export const PRODUCT_REFS_QUERY = /* GraphQL */ `
-  query ProductRefs($first: Int!, $after: String, $query: String) {
-    products(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: true) {
+  query ProductRefs($first: Int!, $after: String, $query: String, $sortKey: ProductSortKeys!, $reverse: Boolean) {
+    products(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
       pageInfo {
         hasNextPage
         endCursor
@@ -49,8 +52,8 @@ export const PRODUCT_REFS_QUERY = /* GraphQL */ `
 `;
 
 export const CUSTOMER_REFS_QUERY = /* GraphQL */ `
-  query CustomerRefs($first: Int!, $after: String, $query: String) {
-    customers(first: $first, after: $after, query: $query, sortKey: UPDATED_AT, reverse: true) {
+  query CustomerRefs($first: Int!, $after: String, $query: String, $sortKey: CustomerSortKeys!, $reverse: Boolean) {
+    customers(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
       pageInfo {
         hasNextPage
         endCursor
@@ -59,6 +62,19 @@ export const CUSTOMER_REFS_QUERY = /* GraphQL */ `
         id
         updatedAt
       }
+    }
+  }
+`;
+
+// ---- Counts: how many records match a search, without reading them. `limit: null` asks for the exact number. ----
+
+export type CountField = "orders" | "products" | "customers";
+
+export const countQuery = (field: CountField) => /* GraphQL */ `
+  query Count($query: String) {
+    result: ${field}Count(query: $query, limit: null) {
+      count
+      precision
     }
   }
 `;

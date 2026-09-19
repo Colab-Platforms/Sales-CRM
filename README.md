@@ -112,3 +112,101 @@ cd frontend && npm install && npm run dev
 - **Port already in use:** change `PORT` in `backend/.env`, or stop the process using it. For the frontend, run `npx next dev -p 3001` and update `FRONTEND_URL` in `backend/.env` to match, otherwise CORS will block requests.
 - **`Cannot find module '../../generated/prisma/client.js'`:** run `npm run db:generate` in `backend`.
 - **CORS error in the browser:** `FRONTEND_URL` in `backend/.env` must exactly match the frontend origin.
+Your complete home workflow
+
+1. Clone
+
+git clone "GIT_URL"
+cd "PROJECT_FOLDER"
+
+2. Switch to your branch
+
+git checkout dev-vishwa
+
+3. Backend setup
+
+cd backend
+npm i
+npx prisma generate
+npm run dev
+
+Keep backend running.
+
+4. Frontend — open a second VS Code terminal
+
+cd frontend
+npm i
+npm run dev
+
+5. Do your E6 implementation/testing
+
+Make all your changes on dev-vishwa.
+
+6. Before you finish your work
+
+First check what changed:
+
+git status
+
+Then:
+
+git fetch origin
+git merge origin main
+
+This brings the latest main changes into your dev-vishwa branch.
+
+7. If merge has NO conflicts
+
+Check:
+
+git status
+
+Then test the application again:
+
+cd backend
+npm run dev
+
+and in another terminal:
+
+cd frontend
+npm run dev
+
+Run the relevant tests/typecheck if your implementation requires them.
+
+8. Commit your work
+git add .
+git commit -m "feat(e6): <short description>"
+
+Do NOT push to main.
+
+If your developer wants you to push your branch:
+
+git push origin dev-vishwa
+
+Otherwise, stop after the commit and tell your developer that E6 changes are committed on dev-vishwa.
+
+⚠️ Important for your current E6 work
+
+Because your developer specifically told you to merge main before finishing:
+
+Do the merge BEFORE your final commit, not after:
+
+dev-vishwa
+   ↓
+make E6 changes
+   ↓
+git fetch origin
+   ↓
+git merge origin main
+   ↓
+resolve conflicts if any
+   ↓
+test E6
+   ↓
+git add .
+   ↓
+git commit
+   ↓
+developer reviews/merges to main
+
+If the merge gives you a conflict, don't randomly choose "ours" or "theirs". Send me the conflict output and I'll tell you exactly what to do.

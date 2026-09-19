@@ -114,6 +114,8 @@ function methodFor(gateway: string | null, order: Pick<NormalizedOrder, "tags" |
 
 function rootStatus(tx: NormalizedTransaction, captured: boolean, voided: boolean): PaymentStatus {
   if (voided) return PaymentStatus.FAILED;
+  // Cash on delivery: the sale stays PENDING and the money arrives later as a successful capture on it.
+  if (captured) return PaymentStatus.SUCCESS;
   if (tx.status === "FAILURE" || tx.status === "ERROR") return PaymentStatus.FAILED;
   if (tx.status === "SUCCESS") return tx.kind === "SALE" || captured ? PaymentStatus.SUCCESS : PaymentStatus.PROCESSING; // authorized, not yet captured
   if (tx.status === "AWAITING_RESPONSE") return PaymentStatus.PROCESSING;
@@ -124,21 +126,27 @@ export function mapPayments(order: NormalizedOrder): MappedPayment[] {
   const cod = isCodOrder(order);
   const orderId = gidToId(order.id);
   const currency = order.currency;
-  const roots = order.transactions.filter((t) => SALE_KINDS.has(t.kind));
+  // A payment is a root sale/authorization. A SALE or CAPTURE that names another transaction as its parent does not
+  // start a new payment, it settles that one: an authorization being captured, or a cash-on-delivery sale (left
+  // PENDING by Shopify) being marked paid once the courier collected the cash.
+  const known = new Set(order.transactions.map((t) => t.id));
+  const roots = order.transactions.filter((t) => SALE_KINDS.has(t.kind) && !(t.parentId && known.has(t.parentId)));
 
   if (roots.length === 0) return synthesizePayment(order, cod, orderId);
 
   const successfulRefunds = order.transactions.filter((t) => t.kind === "REFUND" && t.status === "SUCCESS");
-  const firstPaid = roots.find((t) => t.status === "SUCCESS" && (t.kind === "SALE" || hasCapture(order, t.id)));
+  const firstPaid = roots.find((t) => settlementOf(order, t.id) || (t.status === "SUCCESS" && t.kind === "SALE"));
 
   return roots.map((root) => {
-    const capture = order.transactions.find((t) => t.kind === "CAPTURE" && t.status === "SUCCESS" && t.parentId === root.id);
+    const capture = settlementOf(order, root.id);
     const voided = order.transactions.some((t) => t.kind === "VOID" && t.status === "SUCCESS" && t.parentId === root.id);
     let status = rootStatus(root, !!capture, voided);
     const amount = capture?.amount ?? root.amount ?? "0";
 
-    // Refunds belong to the payment they name; a refund with no known parent goes to the first paid payment.
-    const refunds = successfulRefunds.filter((r) => (r.parentId ? r.parentId === root.id : firstPaid?.id === root.id));
+    // Refunds belong to the payment they name, and Shopify names either the sale or its capture. A refund with no
+    // known parent goes to the first paid payment.
+    const ownIds = new Set([root.id, ...(capture ? [capture.id] : [])]);
+    const refunds = successfulRefunds.filter((r) => (r.parentId ? ownIds.has(r.parentId) : firstPaid?.id === root.id));
     const refundedCents = sumCents(refunds.map((r) => r.amount));
     let refundedAt: Date | null = null;
     if (refundedCents > 0 && status === PaymentStatus.SUCCESS) {
@@ -165,8 +173,9 @@ export function mapPayments(order: NormalizedOrder): MappedPayment[] {
   });
 }
 
-const hasCapture = (order: NormalizedOrder, rootId: string) =>
-  order.transactions.some((t) => t.kind === "CAPTURE" && t.status === "SUCCESS" && t.parentId === rootId);
+/** The successful transaction that settled this payment (a capture, or a follow-up sale marking it paid), if any. */
+const settlementOf = (order: NormalizedOrder, rootId: string): NormalizedTransaction | undefined =>
+  order.transactions.find((t) => (t.kind === "CAPTURE" || t.kind === "SALE") && t.status === "SUCCESS" && t.parentId === rootId);
 
 // Orders with no gateway transaction (typical for cash on delivery, or a payment not yet started) still need a
 // payment record so payment status and COD/prepaid are visible. It is replaced once a real transaction appears.

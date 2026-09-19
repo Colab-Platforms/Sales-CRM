@@ -11,9 +11,10 @@ import { ShopifyClient } from "./shopify.client.js";
 import { loadShopifyConfig } from "./shopify.config.js";
 import { codOrderNode, ENV, money, normalized, orderNode, rawFulfillment, rawLineItem, rawTransaction } from "./shopify.fixtures.js";
 import { mapOrder, mapProduct } from "./shopify.mapper.js";
-import { resolveLead, upsertOrder, upsertProduct, type Db, type TxRunner } from "./shopify.persist.js";
+import { resolveLead, upsertCustomerLead, upsertOrder, upsertProduct, type Db, type TxRunner } from "./shopify.persist.js";
 import { runSync, syncOrderById } from "./shopify.sync.js";
 import { createPrismaWebhookStore } from "./shopify.webhook.store.js";
+import { EMPTY_WINDOW, startOfDay } from "./shopify.window.js";
 import OrdersService from "../orders/orders.service.js";
 
 class Rollback extends Error {}
@@ -600,7 +601,8 @@ describe("the sync orchestration (with a fake Shopify)", () => {
       const name = query.match(/query (\w+)/)![1];
       calls.push(`${name}${variables.id ? `:${variables.id.split("/").pop()}` : ""}`);
       const ok = (data: unknown) => new Response(JSON.stringify({ data }), { status: 200 });
-      if (name === "ConnectionCheck") return ok({ shop: { name: "S", myshopifyDomain: "demo-store.myshopify.com", currencyCode: "INR" }, currentAppInstallation: { accessScopes: [{ handle: "read_orders" }, { handle: "read_customers" }, { handle: "read_products" }] } });
+      if (name === "ConnectionCheck") return ok({ shop: { name: "S", myshopifyDomain: "demo-store.myshopify.com", currencyCode: "INR", ianaTimezone: "Asia/Kolkata" }, currentAppInstallation: { accessScopes: [{ handle: "read_orders" }, { handle: "read_customers" }, { handle: "read_products" }] } });
+      if (name === "Count") return ok({ result: { count: orders.length, precision: "EXACT" } });
       if (name === "OrderRefs") return ok({ orders: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: orders.slice(0, variables.first).map((o) => ({ id: o.id, updatedAt: o.updatedAt })) } });
       if (name === "OrderById") return ok({ order: orders.find((o) => o.id === variables.id) ?? null });
       if (name === "ProductById") return ok({ product: products[variables.id!] ?? null });
@@ -641,7 +643,7 @@ describe("the sync orchestration (with a fake Shopify)", () => {
       const broken = { ...make().node, name: 12345 }; // malformed: name must be a string
       const products = Object.fromEntries([good1, good2].map((o) => [`gid://shopify/Product/${o.productId}`, productNode(o.productId, o.variantId)]));
       const { calls, shopify } = client([good1.node, broken, good2.node], products);
-      const options = { limit: 10, since: null, only: ["orders" as const], force: false, dryRun: false };
+      const options = { limit: 10, window: EMPTY_WINDOW, only: ["orders" as const], force: false, dryRun: false };
 
       const first = await runSync({ client: shopify, runner }, options);
       assert.equal(first.error, null);
@@ -666,9 +668,79 @@ describe("the sync orchestration (with a fake Shopify)", () => {
   it("a dry run reads and maps but writes nothing and needs no database", async () => {
     const o = make();
     const { shopify } = client([o.node]);
-    const report = await runSync({ client: shopify }, { limit: 5, since: null, only: ["orders"], force: false, dryRun: true });
+    const report = await runSync({ client: shopify }, { limit: 5, window: EMPTY_WINDOW, only: ["orders"], force: false, dryRun: true });
     assert.equal(report.databaseWrites, 0);
     assert.equal(report.preview.length, 1);
     assert.equal(report.preview[0].mapped.orderNumber, o.mapped.orderNumber);
+  });
+
+  it("reports the window and the exact count in a real run too, and how long it took", async () => {
+    await inRollback(async (_tx, runner) => {
+      const o = make();
+      const { shopify } = client([o.node], { [`gid://shopify/Product/${o.productId}`]: productNode(o.productId, o.variantId) });
+      const report = await runSync({ client: shopify, runner }, { limit: 10, window: EMPTY_WINDOW, only: ["orders"], force: false, dryRun: false });
+      assert.equal(report.window?.timeZone, "Asia/Kolkata");
+      assert.equal(report.window?.createdFrom.toISOString(), "2025-12-31T18:30:00.000Z");
+      assert.deepEqual(report.estimate.orders, { count: 1, exact: true, kind: "matching" });
+      assert.equal(report.visited.orders, 1);
+      assert.ok(report.elapsedMs >= 0);
+    });
+  });
+
+  it("does not import an order created before the start date when a webhook asks for it", async () => {
+    await inRollback(async (tx, runner) => {
+      const old = make({ updatedAt: "2026-09-18T10:00:00Z", node: { createdAt: "2025-12-31T10:00:00Z" } });
+      const { shopify } = client([old.node]);
+      const floor = startOfDay("2026-01-01", "Asia/Kolkata");
+
+      const outcome = await syncOrderById({ client: shopify, runner }, `gid://shopify/Order/${old.id}`, { notBefore: floor });
+      assert.equal(outcome.outOfWindow, true);
+      assert.equal(outcome.result, null);
+      assert.equal(await tx.order.count({ where: { ...ext, externalId: old.id } }), 0);
+      assert.equal(await tx.lead.count({ where: { externalId: old.customerId } }), 0, "no lead is created for it either");
+    });
+  });
+
+  it("imports an order created on 1 January IST even though it is still 31 December in UTC", async () => {
+    await inRollback(async (tx, runner) => {
+      const first = make({ node: { createdAt: "2025-12-31T19:46:18Z" } });
+      const { shopify } = client([first.node], { [`gid://shopify/Product/${first.productId}`]: productNode(first.productId, first.variantId) });
+      const outcome = await syncOrderById({ client: shopify, runner }, `gid://shopify/Order/${first.id}`, { notBefore: startOfDay("2026-01-01", "Asia/Kolkata") });
+      assert.equal(outcome.result?.action, "created");
+      assert.equal(await tx.order.count({ where: { ...ext, externalId: first.id } }), 1);
+    });
+  });
+
+  it("an explicit earlier --since (no notBefore) still imports an old order", async () => {
+    await inRollback(async (tx, runner) => {
+      const old = make({ node: { createdAt: "2025-06-01T10:00:00Z" } });
+      const { shopify } = client([old.node], { [`gid://shopify/Product/${old.productId}`]: productNode(old.productId, old.variantId) });
+      const outcome = await syncOrderById({ client: shopify, runner }, `gid://shopify/Order/${old.id}`);
+      assert.equal(outcome.result?.action, "created");
+      assert.equal(await tx.order.count({ where: { ...ext, externalId: old.id } }), 1);
+    });
+  });
+});
+
+describe("customers from before the start date", () => {
+  const identity = (externalId: string, over: Partial<{ email: string | null; phone: string | null }> = {}) => ({
+    externalId, firstName: "Old", lastName: "Customer", email: over.email ?? null, phone: over.phone ?? null, location: null,
+    externalUpdatedAt: new Date("2026-09-18T00:00:00Z"),
+  });
+
+  it("are not created, but an existing lead is still updated", async () => {
+    await inRollback(async (tx) => {
+      const id = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+      const skipped = await upsertCustomerLead(tx, identity(id, { email: `old-${id}@example.invalid` }), { createIfMissing: false });
+      assert.equal(skipped, null);
+      assert.equal(await tx.lead.count({ where: { externalId: id } }), 0);
+
+      const created = await upsertCustomerLead(tx, identity(id, { email: `old-${id}@example.invalid` }));
+      assert.equal(created?.action, "created");
+
+      const again = await upsertCustomerLead(tx, identity(id, { email: `old-${id}@example.invalid`, phone: "+919811122334" }), { createIfMissing: false });
+      assert.equal(again?.leadId, created?.leadId);
+      assert.equal(again?.action, "updated");
+    });
   });
 });
