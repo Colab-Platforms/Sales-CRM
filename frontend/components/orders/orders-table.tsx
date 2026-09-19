@@ -26,6 +26,10 @@ export function orderDetailHref(id: string) {
   return `/dashboard/orders/${id}`;
 }
 
+export function customerDetailHref(leadId: string) {
+  return `/dashboard/customers/${leadId}`;
+}
+
 function OrdersTableHeader() {
   return (
     <TableHeader>
@@ -85,7 +89,13 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
               </div>
             </TableCell>
             <TableCell>
-              <div className="font-medium">{order.customer.name}</div>
+              <Link
+                href={customerDetailHref(order.customer.leadId)}
+                onClick={(e) => e.stopPropagation()}
+                className="font-medium hover:underline"
+              >
+                {order.customer.name}
+              </Link>
               <div className="text-xs text-muted-foreground">{order.customer.leadNumber}</div>
             </TableCell>
             <TableCell>{order.salesperson?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>

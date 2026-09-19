@@ -17,6 +17,7 @@ import {
   formatMoney,
 } from "@/lib/order-status";
 import { DetailField, DetailGrid } from "./detail-field";
+import { customerDetailHref } from "./orders-table";
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { PaymentStatusBadge } from "./payment-status-badge";
@@ -97,7 +98,12 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
 
       <Card>
         <CardHeader>
-          <CardTitle>Customer</CardTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <CardTitle>Customer</CardTitle>
+            <Link href={customerDetailHref(order.customer.leadId)} className="text-sm font-medium text-primary hover:underline">
+              View customer profile
+            </Link>
+          </div>
         </CardHeader>
         <CardContent>
           <DetailGrid>

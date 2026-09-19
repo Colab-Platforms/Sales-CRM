@@ -13,7 +13,11 @@ function DashboardShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   if (!user) return null;
 
-  const title = pathname.startsWith("/dashboard/orders") ? "Orders" : "Dashboard";
+  const title = pathname.startsWith("/dashboard/orders")
+    ? "Orders"
+    : pathname.startsWith("/dashboard/customers")
+      ? "Customers"
+      : "Dashboard";
 
   return (
     <SidebarProvider>
