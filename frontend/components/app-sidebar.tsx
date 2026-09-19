@@ -44,14 +44,14 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
   ],
   MANAGER: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { title: "Team", icon: UsersRound },
+    { title: "Team", href: "/dashboard/team", icon: UsersRound },
     { title: "Leads", icon: Users },
     { title: "Orders", icon: ShoppingCart },
     { title: "Reports", icon: BarChart3 },
   ],
   ADMIN: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { title: "Users", icon: UserCog },
+    { title: "Users", href: "/dashboard/users", icon: UserCog },
     { title: "Groups", icon: Building2 },
     { title: "Leads", icon: Users },
     { title: "Orders", icon: ShoppingCart },
