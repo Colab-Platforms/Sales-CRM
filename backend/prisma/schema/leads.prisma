@@ -27,6 +27,12 @@ model Lead {
   groupId String? @map("group_id") @db.Uuid
   group   Group?  @relation(fields: [groupId], references: [id])
 
+  assignedManagerId String? @map("assigned_manager_id") @db.Uuid
+  assignedManager   User?   @relation("LeadAssignedManager", fields: [assignedManagerId], references: [id])
+
+  importBatchId String?         @map("import_batch_id") @db.Uuid
+  importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id])
+
   workingStatus LeadWorkingStatus @default(NEW) @map("working_status")
   priority      LeadPriority      @default(MEDIUM) @map("priority")
 
@@ -57,6 +63,8 @@ model Lead {
   @@index([sourceId])
   @@index([ownerId])
   @@index([groupId])
+  @@index([assignedManagerId])
+  @@index([importBatchId])
   @@index([workingStatus])
   @@index([priority])
   @@index([createdAt])
@@ -109,6 +117,47 @@ model GroupAssignmentConfig {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("group_assignment_configs")
+}
+
+model LeadImportBatch {
+  id String @id @default(uuid()) @db.Uuid
+
+  fileName String @map("file_name") @db.VarChar(255)
+
+  uploadedById String @map("uploaded_by_id") @db.Uuid
+  uploadedBy   User   @relation("LeadImportBatchUploadedBy", fields: [uploadedById], references: [id])
+
+  status ImportBatchStatus @default(DRAFT) @map("status")
+
+  totalRows     Int @default(0) @map("total_rows")
+  validRows     Int @default(0) @map("valid_rows")
+  duplicateRows Int @default(0) @map("duplicate_rows")
+  invalidRows   Int @default(0) @map("invalid_rows")
+
+  columnMapping Json  @map("column_mapping")
+  parsedRows    Json? @map("parsed_rows")
+  errorRows     Json? @map("error_rows")
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  committedAt DateTime? @map("committed_at")
+
+  leads Lead[]
+
+  @@index([uploadedById])
+  @@index([status])
+  @@index([createdAt])
+  @@map("lead_import_batches")
+}
+
+model ManagerAssignmentRoundRobin {
+  id String @id @default(uuid()) @db.Uuid
+
+  lastAssignedManagerId String? @map("last_assigned_manager_id") @db.Uuid
+  lastAssignedManager   User?   @relation("ManagerAssignmentRoundRobinLastAssignedManager", fields: [lastAssignedManagerId], references: [id])
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("manager_assignment_round_robin")
 }
 
 model CommunicationPreference {

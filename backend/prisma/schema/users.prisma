@@ -19,12 +19,16 @@ model User {
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
-  leadsOwned Lead[] @relation("LeadOwner")
+  leadsOwned          Lead[] @relation("LeadOwner")
+  leadsAssignedAsManager Lead[] @relation("LeadAssignedManager")
 
   leadAssignmentsMade       LeadAssignment[] @relation("LeadAssignmentUser")
   leadAssignmentsAssignedBy LeadAssignment[] @relation("LeadAssignmentAssignedBy")
 
   groupAssignmentConfigsLastAssigned GroupAssignmentConfig[] @relation("GroupAssignmentConfigLastAssignedUser")
+
+  importBatchesUploaded         LeadImportBatch[]             @relation("LeadImportBatchUploadedBy")
+  managerRoundRobinLastAssigned ManagerAssignmentRoundRobin[] @relation("ManagerAssignmentRoundRobinLastAssignedManager")
 
   callsAsAgent Call[] @relation("CallAgent")
 

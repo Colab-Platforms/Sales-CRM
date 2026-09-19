@@ -21,19 +21,9 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Plus, Users } from "lucide-react";
-import { toast } from "sonner";
 import type { Group, GroupMember } from "@/lib/api-client/types/manager.types";
 
-function CreateGroupModalContent({ onDone }: { onDone: () => void }) {
+function CreateGroupForm() {
   const createGroup = useCreateGroupMutation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -42,71 +32,38 @@ function CreateGroupModalContent({ onDone }: { onDone: () => void }) {
     e.preventDefault();
     createGroup.mutate(
       { name, description: description || undefined },
-      {
-        onSuccess: () => {
-          toast.success("Group created successfully.");
-          onDone();
-        },
-      },
+      { onSuccess: () => { setName(""); setDescription(""); } },
     );
   }
 
   return (
-    <DialogContent className="sm:max-w-[460px]">
-      <DialogHeader>
-        <DialogTitle>Create New Group</DialogTitle>
-        <DialogDescription>
-          Create a new sales team group to organize representatives and track performance.
-        </DialogDescription>
-      </DialogHeader>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="group-name">Group Name</Label>
-          <Input
-            id="group-name"
-            placeholder="e.g. Enterprise Sales"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            required
-            autoFocus
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="group-description">Description</Label>
-            <span className="text-xs text-muted-foreground">Optional</span>
+    <Card>
+      <CardHeader>
+        <CardTitle>Create group</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="group-name">Group name</Label>
+            <Input id="group-name" value={name} onChange={(e) => setName(e.target.value)} required />
           </div>
-          <Input
-            id="group-description"
-            placeholder="e.g. Handles enterprise-tier client accounts"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-        </div>
-
-        {createGroup.error ? (
-          <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2.5 text-sm text-destructive">
-            {getErrorMessage(createGroup.error, "Failed to create group.")}
+          <div className="space-y-1.5">
+            <Label htmlFor="group-description">Description (optional)</Label>
+            <Input id="group-description" value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
-        ) : null}
-
-        <DialogFooter className="gap-2 pt-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onDone}
-            disabled={createGroup.isPending}
-          >
-            Cancel
-          </Button>
-          <Button type="submit" disabled={createGroup.isPending}>
-            {createGroup.isPending ? "Creating..." : "Create Group"}
-          </Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
+          {createGroup.error ? (
+            <p className="text-sm text-destructive sm:col-span-2">
+              {getErrorMessage(createGroup.error, "Failed to create group.")}
+            </p>
+          ) : null}
+          <div className="sm:col-span-2">
+            <Button type="submit" disabled={createGroup.isPending}>
+              {createGroup.isPending ? "Creating..." : "Create group"}
+            </Button>
+          </div>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -474,56 +431,22 @@ function GroupCard({ group }: { group: Group }) {
 
 export default function TeamPage() {
   const { data: groups, isPending, error } = useQuery(groupsQueryOptions());
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
-          <p className="text-sm text-muted-foreground">Create groups and add salespeople to your team.</p>
-        </div>
-        <Button onClick={() => setIsCreateOpen(true)} className="gap-2 sm:self-center">
-          <Plus className="size-4" />
-          Create Group
-        </Button>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
+        <p className="text-sm text-muted-foreground">Create groups and add salespeople to your team.</p>
       </div>
 
-      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
-        {isCreateOpen ? (
-          <CreateGroupModalContent onDone={() => setIsCreateOpen(false)} />
-        ) : null}
-      </Dialog>
+      <CreateGroupForm />
 
       {isPending ? (
-        <div className="space-y-4">
-          <Skeleton className="h-40 w-full rounded-xl" />
-          <Skeleton className="h-40 w-full rounded-xl" />
-        </div>
+        <Skeleton className="h-40" />
       ) : error ? (
-        <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
-          {getErrorMessage(error, "Failed to load groups.")}
-        </div>
+        <p className="text-sm text-destructive">{getErrorMessage(error, "Failed to load groups.")}</p>
       ) : groups && groups.length === 0 ? (
-        <Card>
-          <CardContent className="py-12 text-center">
-            <div className="flex flex-col items-center justify-center gap-2">
-              <Users className="size-8 text-muted-foreground/50" />
-              <p className="font-medium text-foreground">No groups yet</p>
-              <p className="text-sm text-muted-foreground">
-                Get started by creating your first sales group to organize your team.
-              </p>
-              <Button
-                size="sm"
-                className="mt-2 gap-1.5"
-                onClick={() => setIsCreateOpen(true)}
-              >
-                <Plus className="size-3.5" />
-                Create Group
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <p className="text-sm text-muted-foreground">No groups yet. Create one above.</p>
       ) : (
         <div className="space-y-4">
           {groups?.map((group) => (
