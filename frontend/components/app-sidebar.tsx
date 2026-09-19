@@ -40,13 +40,13 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { title: "My Leads", icon: Users },
     { title: "Interested Leads", icon: Target },
-    { title: "Orders", icon: ShoppingCart },
+    { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
   ],
   MANAGER: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { title: "Team", icon: UsersRound },
     { title: "Leads", icon: Users },
-    { title: "Orders", icon: ShoppingCart },
+    { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
     { title: "Reports", icon: BarChart3 },
   ],
   ADMIN: [
@@ -54,10 +54,16 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Users", icon: UserCog },
     { title: "Groups", icon: Building2 },
     { title: "Leads", icon: Users },
-    { title: "Orders", icon: ShoppingCart },
+    { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
     { title: "Reports", icon: BarChart3 },
   ],
 };
+
+// "/dashboard" is the root of every page here, so it only matches exactly; other items
+// also stay highlighted on their nested pages (e.g. an order's detail page).
+function isActivePath(pathname: string, href: string) {
+  return href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+}
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
@@ -85,7 +91,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
                   {item.href ? (
                     <SidebarMenuButton
                       render={<Link href={item.href} />}
-                      isActive={pathname === item.href}
+                      isActive={isActivePath(pathname, item.href)}
                       tooltip={item.title}
                     >
                       <item.icon />

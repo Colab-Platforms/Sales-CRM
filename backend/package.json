@@ -10,7 +10,9 @@
     "start": "node dist/src/server.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:deploy": "prisma migrate deploy"
+    "db:deploy": "prisma migrate deploy",
+    "test": "tsx --test src/**/*.test.ts",
+    "db:seed:dev-orders": "tsx prisma/seed-dev-orders.ts"
   },
   "keywords": [],
   "author": "",
