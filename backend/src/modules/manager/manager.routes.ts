@@ -5,6 +5,7 @@ import {
   getGroup,
   updateGroup,
   deleteGroup,
+  listSalespersons,
   addNewSalesperson,
   addExistingSalesperson,
   updateSalesperson,
@@ -20,6 +21,7 @@ router.use(requireAuth, requireRole(Role.MANAGER));
 router.post("/groups", createGroup);
 router.get("/groups", listMyGroups);
 router.get("/groups/:groupId", getGroup);
+router.get("/salespersons", listSalespersons);
 router.patch("/groups/:groupId", updateGroup);
 router.delete("/groups/:groupId", deleteGroup);
 router.post("/groups/:groupId/members", addNewSalesperson);

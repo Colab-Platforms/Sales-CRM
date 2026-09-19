@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { groupsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { groupsQueryOptions, salespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import {
   useAddExistingSalespersonMutation,
   useAddSalespersonMutation,
@@ -190,33 +190,64 @@ function AddSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () =
   );
 }
 
-function AddExistingSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () => void }) {
+function AddExistingSalespersonForm({
+  groupId,
+  currentMemberIds,
+  onDone,
+}: {
+  groupId: string;
+  currentMemberIds: string[];
+  onDone: () => void;
+}) {
   const addExisting = useAddExistingSalespersonMutation();
+  const { data: salespersons, isPending, error } = useQuery(salespersonsQueryOptions());
   const [userId, setUserId] = useState("");
+
+  const options = (salespersons ?? []).filter((sp) => !currentMemberIds.includes(sp.id));
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     addExisting.mutate({ groupId, payload: { userId } }, { onSuccess: onDone });
   }
 
+  if (isPending) {
+    return <Skeleton className="h-16" />;
+  }
+
+  if (error) {
+    return <p className="text-sm text-destructive">{getErrorMessage(error, "Failed to load salespersons.")}</p>;
+  }
+
   return (
     <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 rounded-lg border p-4">
-      <div className="space-y-1.5">
-        <Label htmlFor={`existing-userid-${groupId}`}>Existing salesperson user ID</Label>
-        <Input
+      <div className="min-w-64 space-y-1.5">
+        <Label htmlFor={`existing-userid-${groupId}`}>Existing salesperson</Label>
+        <select
           id={`existing-userid-${groupId}`}
           value={userId}
           onChange={(e) => setUserId(e.target.value)}
-          placeholder="Paste user ID"
+          className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
           required
-        />
+        >
+          <option value="" disabled>
+            Select a salesperson
+          </option>
+          {options.map((sp) => (
+            <option key={sp.id} value={sp.id}>
+              {sp.name} ({sp.email}){sp.currentGroup ? ` — currently in ${sp.currentGroup.name}` : ""}
+            </option>
+          ))}
+        </select>
+        {options.length === 0 ? (
+          <p className="text-xs text-muted-foreground">No other salespersons available to add.</p>
+        ) : null}
       </div>
       {addExisting.error ? (
         <p className="w-full text-sm text-destructive">
           {getErrorMessage(addExisting.error, "Failed to add salesperson.")}
         </p>
       ) : null}
-      <Button type="submit" size="sm" disabled={addExisting.isPending}>
+      <Button type="submit" size="sm" disabled={addExisting.isPending || !userId}>
         {addExisting.isPending ? "Adding..." : "Add"}
       </Button>
       <Button type="button" size="sm" variant="ghost" onClick={onDone}>
@@ -378,7 +409,11 @@ function GroupCard({ group }: { group: Group }) {
         {addingNew ? (
           <AddSalespersonForm groupId={group.id} onDone={() => setAddingNew(false)} />
         ) : addingExisting ? (
-          <AddExistingSalespersonForm groupId={group.id} onDone={() => setAddingExisting(false)} />
+          <AddExistingSalespersonForm
+            groupId={group.id}
+            currentMemberIds={activeMembers.map((m) => m.userId)}
+            onDone={() => setAddingExisting(false)}
+          />
         ) : (
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => setAddingNew(true)}>

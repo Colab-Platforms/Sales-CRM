@@ -61,3 +61,7 @@ export interface UpdateSalespersonPayload {
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";
 }
+
+export interface SalespersonWithGroup extends SalespersonUser {
+  currentGroup: { id: string; name: string } | null;
+}

@@ -51,6 +51,7 @@ export function useAddSalespersonMutation() {
     mutationFn: ({ groupId, payload }) => managerApi.addSalesperson(groupId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
     },
   });
 }
@@ -62,6 +63,7 @@ export function useAddExistingSalespersonMutation() {
     mutationFn: ({ groupId, payload }) => managerApi.addExistingSalesperson(groupId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
     },
   });
 }
@@ -88,6 +90,7 @@ export function useRemoveSalespersonMutation() {
     mutationFn: ({ groupId, userId }) => managerApi.removeSalesperson(groupId, userId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
     },
   });
 }

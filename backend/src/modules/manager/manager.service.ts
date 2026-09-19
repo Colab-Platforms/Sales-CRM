@@ -113,6 +113,24 @@ class ManagerService {
     return toPublicUser(salesperson);
   }
 
+  async listAllSalespersons() {
+    const salespersons = await prisma.user.findMany({
+      where: { role: Role.SALESPERSON },
+      include: {
+        groupMemberships: {
+          where: { isActive: true },
+          include: { group: { select: { id: true, name: true } } },
+        },
+      },
+      orderBy: { name: "asc" },
+    });
+
+    return salespersons.map((sp) => ({
+      ...toPublicUser(sp),
+      currentGroup: sp.groupMemberships[0]?.group ?? null,
+    }));
+  }
+
   async addExistingSalesperson(managerId: string, groupId: string, data: AddExistingMemberBody) {
     const group = await this.getOwnedGroup(managerId, groupId);
 

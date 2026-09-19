@@ -70,6 +70,15 @@ export const deleteGroup = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+export const listSalespersons = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await managerService.listAllSalespersons();
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const addNewSalesperson = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateAddSalespersonSchema(req.body);
