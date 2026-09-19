@@ -1,4 +1,3 @@
-import dotenv from "dotenv";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -7,8 +6,6 @@ import routes from "./routes.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { notFoundHandler } from "./middlewares/notFoundHandler.js";
 import sanitizeMiddleware from "./middlewares/sanitize.js";
-
-dotenv.config();
 
 const app = express();
 
