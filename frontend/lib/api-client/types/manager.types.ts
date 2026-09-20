@@ -65,3 +65,13 @@ export interface UpdateSalespersonPayload {
 export interface SalespersonWithGroup extends SalespersonUser {
   currentGroup: { id: string; name: string } | null;
 }
+
+export interface MySalesperson {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  status: string;
+  groupId: string;
+  groupName: string;
+}

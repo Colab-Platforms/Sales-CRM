@@ -67,7 +67,7 @@ export default function LeadsPage() {
           </p>
         </div>
         <div className="flex gap-2">
-          {isAdmin ? (
+          {isAdmin || isManager ? (
             <Button variant="outline" onClick={() => setImportOpen(true)} className="gap-2">
               <Upload className="size-4" />
               Import CSV
@@ -134,7 +134,12 @@ export default function LeadsPage() {
           clearSelection();
         }}
       />
-      <ImportLeadsDialog open={importOpen} onOpenChange={setImportOpen} onDone={() => setImportOpen(false)} />
+      <ImportLeadsDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onDone={() => setImportOpen(false)}
+        isManager={isManager}
+      />
       <CreateLeadDialog open={createOpen} onOpenChange={setCreateOpen} onDone={() => setCreateOpen(false)} />
     </div>
   );

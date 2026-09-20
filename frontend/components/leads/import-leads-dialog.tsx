@@ -30,10 +30,12 @@ export function ImportLeadsDialog({
   open,
   onOpenChange,
   onDone,
+  isManager,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onDone: () => void;
+  isManager?: boolean;
 }) {
   const previewImport = usePreviewImportMutation();
   const confirmImport = useConfirmImportMutation();
@@ -94,6 +96,12 @@ export function ImportLeadsDialog({
           </DialogHeader>
 
           <div className="space-y-4">
+            {isManager ? (
+              <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+                Imported leads go to Admin&apos;s unassigned pool for distribution — they won&apos;t appear in your
+                own lead list until Admin assigns them to you.
+              </p>
+            ) : null}
             <div className="space-y-1.5">
               <Label>CSV file</Label>
               <Input type="file" accept=".csv,text/csv" onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)} />

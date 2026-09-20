@@ -5,6 +5,7 @@ import type {
   AddSalespersonPayload,
   AddExistingMemberPayload,
   Group,
+  MySalesperson,
   SalespersonUser,
   SalespersonWithGroup,
   UpdateGroupPayload,
@@ -19,6 +20,11 @@ export const managerApi = {
 
   async listSalespersons(): Promise<SalespersonWithGroup[]> {
     const res = await apiClient.get<ApiEnvelope<SalespersonWithGroup[]>>("/manager/salespersons");
+    return res.data.data;
+  },
+
+  async listMySalespersons(): Promise<MySalesperson[]> {
+    const res = await apiClient.get<ApiEnvelope<MySalesperson[]>>("/manager/salespersons/mine");
     return res.data.data;
   },
 

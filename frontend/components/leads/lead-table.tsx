@@ -130,7 +130,14 @@ export function LeadTable({
                     <div>{lead.mobile ?? "—"}</div>
                     <div className="text-xs text-muted-foreground">{lead.email ?? ""}</div>
                   </TableCell>
-                  <TableCell>{lead.source?.name ?? "—"}</TableCell>
+                  <TableCell>
+                    <div>{lead.source?.name ?? "—"}</div>
+                    {lead.importBatch ? (
+                      <div className="text-xs text-muted-foreground">
+                        via {lead.importBatch.uploadedBy.name} ({lead.importBatch.uploadedBy.role})
+                      </div>
+                    ) : null}
+                  </TableCell>
                   <TableCell>
                     {role === "SALESPERSON" ? <LeadStatusSelect lead={lead} /> : <StatusBadge status={lead.workingStatus} />}
                   </TableCell>

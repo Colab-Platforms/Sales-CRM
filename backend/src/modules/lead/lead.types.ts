@@ -46,7 +46,6 @@ export interface BulkAssignManagerBody {
 export interface BulkAssignSalespersonBody {
   leadIds: string[];
   method: "MANUAL" | "ROUND_ROBIN";
-  groupId: string;
   salespersonId?: string;
   salespersonIds?: string[];
 }

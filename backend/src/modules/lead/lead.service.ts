@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { parse } from "csv-parse/sync";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
@@ -46,6 +47,7 @@ const leadListInclude = {
   owner: { select: { id: true, name: true, email: true } },
   assignedManager: { select: { id: true, name: true, email: true } },
   group: { select: { id: true, name: true } },
+  importBatch: { select: { fileName: true, uploadedBy: { select: { id: true, name: true, role: true } } } },
 } satisfies Prisma.LeadInclude;
 
 class LeadService {
@@ -248,79 +250,102 @@ class LeadService {
 
   // ---------- Assignment engine ----------
 
-  private async assignLeadToManager(
+  // Bulk-assigns a batch of leads to managers in as few round trips as possible.
+  // `assignments` may pair different leads with different managers (round robin) or
+  // all leads with the same manager (manual) — either way this stays O(distinct
+  // managers) queries instead of O(leads), which is what kept the interactive
+  // transaction under Prisma's 5s timeout for anything more than a couple of leads.
+  private async bulkAssignLeadsToManager(
     tx: TxClient,
-    lead: Lead,
-    manager: User,
+    assignments: { lead: Lead; manager: User }[],
     assignedById: string,
     method: typeof AssignmentType.MANUAL | typeof AssignmentType.ROUND_ROBIN,
   ): Promise<void> {
-    const isReassignment = lead.assignedManagerId !== null && lead.assignedManagerId !== manager.id;
     const now = new Date();
+    const leadIds = assignments.map((a) => a.lead.id);
 
     await tx.leadAssignment.updateMany({
-      where: { leadId: lead.id, isCurrent: true },
+      where: { leadId: { in: leadIds }, isCurrent: true },
       data: { isCurrent: false, unassignedAt: now },
     });
 
-    await tx.lead.update({
-      where: { id: lead.id },
-      data: isReassignment
-        ? { assignedManagerId: manager.id, ownerId: null, groupId: null }
-        : { assignedManagerId: manager.id },
-    });
+    const freshByManager = new Map<string, string[]>();
+    const reassignByManager = new Map<string, string[]>();
+    const assignmentRows: Prisma.LeadAssignmentCreateManyInput[] = [];
+    const activityRows: Prisma.ActivityCreateManyInput[] = [];
 
-    const assignment = await tx.leadAssignment.create({
-      data: {
+    for (const { lead, manager } of assignments) {
+      const isReassignment = lead.assignedManagerId !== null && lead.assignedManagerId !== manager.id;
+      const bucket = isReassignment ? reassignByManager : freshByManager;
+      const ids = bucket.get(manager.id) ?? [];
+      ids.push(lead.id);
+      bucket.set(manager.id, ids);
+
+      const assignmentId = randomUUID();
+      assignmentRows.push({
+        id: assignmentId,
         leadId: lead.id,
         userId: manager.id,
         assignmentType: isReassignment ? AssignmentType.REASSIGNMENT : method,
         assignedById,
         assignedAt: now,
         isCurrent: true,
-      },
-    });
-
-    await tx.activity.create({
-      data: {
+      });
+      activityRows.push({
         leadId: lead.id,
         actorId: assignedById,
         type: isReassignment ? ActivityType.REASSIGNMENT : ActivityType.ASSIGNMENT,
         referenceType: "LeadAssignment",
-        referenceId: assignment.id,
+        referenceId: assignmentId,
         title: `${isReassignment ? "Reassigned" : "Assigned"} to manager ${manager.name}`,
         description: `Method: ${method}`,
-      },
-    });
+      });
+    }
+
+    for (const [managerId, ids] of freshByManager) {
+      await tx.lead.updateMany({ where: { id: { in: ids } }, data: { assignedManagerId: managerId } });
+    }
+    for (const [managerId, ids] of reassignByManager) {
+      await tx.lead.updateMany({
+        where: { id: { in: ids } },
+        data: { assignedManagerId: managerId, ownerId: null, groupId: null },
+      });
+    }
+
+    await tx.leadAssignment.createMany({ data: assignmentRows });
+    await tx.activity.createMany({ data: activityRows });
   }
 
-  private async assignLeadToSalesperson(
+  // Same batching strategy as bulkAssignLeadsToManager, for Manager -> Salesperson assignment.
+  private async bulkAssignLeadsToSalesperson(
     tx: TxClient,
-    lead: Lead,
-    salesperson: User,
-    groupId: string,
+    assignments: { lead: Lead; salesperson: User; groupId: string }[],
     assignedById: string,
     method: typeof AssignmentType.MANUAL | typeof AssignmentType.ROUND_ROBIN,
   ): Promise<void> {
-    const isReassignment = lead.ownerId !== null && lead.ownerId !== salesperson.id;
     const now = new Date();
+    const leadIds = assignments.map((a) => a.lead.id);
 
     await tx.leadAssignment.updateMany({
-      where: { leadId: lead.id, isCurrent: true },
+      where: { leadId: { in: leadIds }, isCurrent: true },
       data: { isCurrent: false, unassignedAt: now },
     });
 
-    await tx.lead.update({
-      where: { id: lead.id },
-      data: {
-        ownerId: salesperson.id,
-        groupId,
-        workingStatus: lead.workingStatus === "NEW" ? "ASSIGNED" : lead.workingStatus,
-      },
-    });
+    const bySalesperson = new Map<string, { ids: string[]; groupId: string }>();
+    const newLeadIds: string[] = [];
+    const assignmentRows: Prisma.LeadAssignmentCreateManyInput[] = [];
+    const activityRows: Prisma.ActivityCreateManyInput[] = [];
 
-    const assignment = await tx.leadAssignment.create({
-      data: {
+    for (const { lead, salesperson, groupId } of assignments) {
+      const isReassignment = lead.ownerId !== null && lead.ownerId !== salesperson.id;
+      const bucket = bySalesperson.get(salesperson.id) ?? { ids: [], groupId };
+      bucket.ids.push(lead.id);
+      bySalesperson.set(salesperson.id, bucket);
+      if (lead.workingStatus === "NEW") newLeadIds.push(lead.id);
+
+      const assignmentId = randomUUID();
+      assignmentRows.push({
+        id: assignmentId,
         leadId: lead.id,
         userId: salesperson.id,
         groupId,
@@ -328,20 +353,27 @@ class LeadService {
         assignedById,
         assignedAt: now,
         isCurrent: true,
-      },
-    });
-
-    await tx.activity.create({
-      data: {
+      });
+      activityRows.push({
         leadId: lead.id,
         actorId: assignedById,
         type: isReassignment ? ActivityType.REASSIGNMENT : ActivityType.ASSIGNMENT,
         referenceType: "LeadAssignment",
-        referenceId: assignment.id,
+        referenceId: assignmentId,
         title: `${isReassignment ? "Reassigned" : "Assigned"} to salesperson ${salesperson.name}`,
         description: `Method: ${method}`,
-      },
-    });
+      });
+    }
+
+    for (const [salespersonId, { ids, groupId }] of bySalesperson) {
+      await tx.lead.updateMany({ where: { id: { in: ids } }, data: { ownerId: salespersonId, groupId } });
+    }
+    if (newLeadIds.length) {
+      await tx.lead.updateMany({ where: { id: { in: newLeadIds } }, data: { workingStatus: "ASSIGNED" } });
+    }
+
+    await tx.leadAssignment.createMany({ data: assignmentRows });
+    await tx.activity.createMany({ data: activityRows });
   }
 
   private async fetchLeadsOrThrow(tx: TxClient, leadIds: string[]) {
@@ -358,13 +390,19 @@ class LeadService {
       if (!manager || manager.role !== Role.MANAGER || manager.status !== UserStatus.ACTIVE) {
         throw new ApiError("Invalid or inactive manager", STATUS_CODES.BAD_REQUEST);
       }
-      return prisma.$transaction(async (tx) => {
-        const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
-        for (const lead of leads) {
-          await this.assignLeadToManager(tx, lead, manager, adminId, AssignmentType.MANUAL);
-        }
-        return { assignedCount: leads.length };
-      });
+      return prisma.$transaction(
+        async (tx) => {
+          const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
+          await this.bulkAssignLeadsToManager(
+            tx,
+            leads.map((lead) => ({ lead, manager })),
+            adminId,
+            AssignmentType.MANUAL,
+          );
+          return { assignedCount: leads.length };
+        },
+        { timeout: 20000, maxWait: 10000 },
+      );
     }
 
     const managers = await prisma.user.findMany({
@@ -375,123 +413,133 @@ class LeadService {
     }
     const orderedManagers = body.managerIds!.map((id) => managers.find((m) => m.id === id)!);
 
-    return prisma.$transaction(async (tx) => {
-      const cursorRows = await tx.$queryRaw<{ id: string; lastAssignedManagerId: string | null }[]>`
+    return prisma.$transaction(
+      async (tx) => {
+        const cursorRows = await tx.$queryRaw<{ id: string; lastAssignedManagerId: string | null }[]>`
         SELECT id, last_assigned_manager_id AS "lastAssignedManagerId"
         FROM manager_assignment_round_robin
         LIMIT 1
         FOR UPDATE
       `;
 
-      let cursor = cursorRows[0];
-      if (!cursor) {
-        const created = await tx.managerAssignmentRoundRobin.create({ data: {} });
-        cursor = { id: created.id, lastAssignedManagerId: created.lastAssignedManagerId };
-      }
+        let cursor = cursorRows[0];
+        if (!cursor) {
+          const created = await tx.managerAssignmentRoundRobin.create({ data: {} });
+          cursor = { id: created.id, lastAssignedManagerId: created.lastAssignedManagerId };
+        }
 
-      const managerIds = orderedManagers.map((m) => m.id);
-      let position = 0;
-      if (cursor.lastAssignedManagerId) {
-        const idx = managerIds.indexOf(cursor.lastAssignedManagerId);
-        position = idx === -1 ? 0 : (idx + 1) % managerIds.length;
-      }
+        const managerIds = orderedManagers.map((m) => m.id);
+        let position = 0;
+        if (cursor.lastAssignedManagerId) {
+          const idx = managerIds.indexOf(cursor.lastAssignedManagerId);
+          position = idx === -1 ? 0 : (idx + 1) % managerIds.length;
+        }
 
-      const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
-      let lastUsedManagerId = cursor.lastAssignedManagerId;
+        const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
+        const assignments = leads.map((lead) => ({ lead, manager: orderedManagers[position++ % managerIds.length]! }));
+        const lastUsedManagerId = assignments.length ? assignments[assignments.length - 1]!.manager.id : cursor.lastAssignedManagerId;
 
-      for (const lead of leads) {
-        const manager = orderedManagers[position % managerIds.length]!;
-        await this.assignLeadToManager(tx, lead, manager, adminId, AssignmentType.ROUND_ROBIN);
-        lastUsedManagerId = manager.id;
-        position++;
-      }
+        await this.bulkAssignLeadsToManager(tx, assignments, adminId, AssignmentType.ROUND_ROBIN);
 
-      await tx.managerAssignmentRoundRobin.update({
-        where: { id: cursor.id },
-        data: { lastAssignedManagerId: lastUsedManagerId },
-      });
+        await tx.managerAssignmentRoundRobin.update({
+          where: { id: cursor.id },
+          data: { lastAssignedManagerId: lastUsedManagerId },
+        });
 
-      return { assignedCount: leads.length };
+        return { assignedCount: leads.length };
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
+  }
+
+  // Resolves a salesperson id to their active group membership under THIS manager.
+  // The manager picks a person, not a group — the group is implicit, and a
+  // salesperson who isn't currently on this manager's active team is rejected.
+  private async resolveTeamMember(managerId: string, salespersonId: string) {
+    const membership = await prisma.groupMember.findFirst({
+      where: { userId: salespersonId, isActive: true, group: { managerId, status: "ACTIVE" } },
+      include: { user: true },
     });
+    if (!membership || membership.user.role !== Role.SALESPERSON || membership.user.status !== UserStatus.ACTIVE) {
+      throw new ApiError("Salesperson is not part of your active team", STATUS_CODES.BAD_REQUEST);
+    }
+    return { user: membership.user, groupId: membership.groupId };
   }
 
   async bulkAssignSalespersons(managerId: string, body: BulkAssignSalespersonBody) {
-    const group = await prisma.group.findUnique({ where: { id: body.groupId } });
-    if (!group || group.managerId !== managerId) {
-      throw new ApiError("Group not found", STATUS_CODES.NOT_FOUND);
+    if (body.method === "MANUAL") {
+      const { user: salesperson, groupId } = await this.resolveTeamMember(managerId, body.salespersonId!);
+
+      return prisma.$transaction(
+        async (tx) => {
+          const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
+          if (leads.some((lead) => lead.assignedManagerId !== managerId)) {
+            throw new ApiError("One or more leads are not assigned to you", STATUS_CODES.FORBIDDEN);
+          }
+          await this.bulkAssignLeadsToSalesperson(
+            tx,
+            leads.map((lead) => ({ lead, salesperson, groupId })),
+            managerId,
+            AssignmentType.MANUAL,
+          );
+          return { assignedCount: leads.length };
+        },
+        { timeout: 20000, maxWait: 10000 },
+      );
     }
 
-    if (body.method === "MANUAL") {
-      const salesperson = await prisma.user.findUnique({ where: { id: body.salespersonId! } });
-      if (!salesperson || salesperson.role !== Role.SALESPERSON || salesperson.status !== UserStatus.ACTIVE) {
-        throw new ApiError("Invalid or inactive salesperson", STATUS_CODES.BAD_REQUEST);
-      }
-      const membership = await prisma.groupMember.findUnique({
-        where: { groupId_userId: { groupId: body.groupId, userId: salesperson.id } },
-      });
-      if (!membership?.isActive) {
-        throw new ApiError("Salesperson is not an active member of this group", STATUS_CODES.BAD_REQUEST);
-      }
+    const resolvedMembers = await Promise.all(
+      body.salespersonIds!.map((id) => this.resolveTeamMember(managerId, id)),
+    );
+    const groupBySalesperson = new Map(resolvedMembers.map((m) => [m.user.id, m.groupId]));
+    const orderedSalespeople = resolvedMembers.map((m) => m.user);
 
-      return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(
+      async (tx) => {
+        const cursorRows = await tx.$queryRaw<{ id: string; lastAssignedSalespersonId: string | null }[]>`
+        SELECT id, last_assigned_salesperson_id AS "lastAssignedSalespersonId"
+        FROM salesperson_assignment_round_robin
+        WHERE manager_id = ${managerId}::uuid
+        FOR UPDATE
+      `;
+
+        let cursor = cursorRows[0];
+        if (!cursor) {
+          const created = await tx.salespersonAssignmentRoundRobin.create({ data: { managerId } });
+          cursor = { id: created.id, lastAssignedSalespersonId: created.lastAssignedSalespersonId };
+        }
+
+        const salespersonIds = orderedSalespeople.map((s) => s.id);
+        let position = 0;
+        if (cursor.lastAssignedSalespersonId) {
+          const idx = salespersonIds.indexOf(cursor.lastAssignedSalespersonId);
+          position = idx === -1 ? 0 : (idx + 1) % salespersonIds.length;
+        }
+
         const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
         if (leads.some((lead) => lead.assignedManagerId !== managerId)) {
           throw new ApiError("One or more leads are not assigned to you", STATUS_CODES.FORBIDDEN);
         }
-        for (const lead of leads) {
-          await this.assignLeadToSalesperson(tx, lead, salesperson, body.groupId, managerId, AssignmentType.MANUAL);
-        }
+
+        const assignments = leads.map((lead) => {
+          const salesperson = orderedSalespeople[position++ % salespersonIds.length]!;
+          return { lead, salesperson, groupId: groupBySalesperson.get(salesperson.id)! };
+        });
+        const lastUsedSalespersonId = assignments.length
+          ? assignments[assignments.length - 1]!.salesperson.id
+          : cursor.lastAssignedSalespersonId;
+
+        await this.bulkAssignLeadsToSalesperson(tx, assignments, managerId, AssignmentType.ROUND_ROBIN);
+
+        await tx.salespersonAssignmentRoundRobin.update({
+          where: { id: cursor.id },
+          data: { lastAssignedSalespersonId: lastUsedSalespersonId },
+        });
+
         return { assignedCount: leads.length };
-      });
-    }
-
-    const members = await prisma.groupMember.findMany({
-      where: { groupId: body.groupId, isActive: true, userId: { in: body.salespersonIds! } },
-      include: { user: true },
-    });
-    if (members.length !== body.salespersonIds!.length) {
-      throw new ApiError("One or more salespeople are not active members of this group", STATUS_CODES.BAD_REQUEST);
-    }
-    const orderedSalespeople = body.salespersonIds!.map((id) => members.find((m) => m.userId === id)!.user);
-
-    return prisma.$transaction(async (tx) => {
-      const configRows = await tx.$queryRaw<{ id: string; lastAssignedUserId: string | null }[]>`
-        SELECT id, last_assigned_user_id AS "lastAssignedUserId"
-        FROM group_assignment_configs
-        WHERE group_id = ${body.groupId}::uuid
-        FOR UPDATE
-      `;
-
-      let config = configRows[0];
-      if (!config) {
-        const created = await tx.groupAssignmentConfig.create({ data: { groupId: body.groupId, strategy: "ROUND_ROBIN" } });
-        config = { id: created.id, lastAssignedUserId: created.lastAssignedUserId };
-      }
-
-      const salespersonIds = orderedSalespeople.map((s) => s.id);
-      let position = 0;
-      if (config.lastAssignedUserId) {
-        const idx = salespersonIds.indexOf(config.lastAssignedUserId);
-        position = idx === -1 ? 0 : (idx + 1) % salespersonIds.length;
-      }
-
-      const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
-      if (leads.some((lead) => lead.assignedManagerId !== managerId)) {
-        throw new ApiError("One or more leads are not assigned to you", STATUS_CODES.FORBIDDEN);
-      }
-
-      let lastUsedUserId = config.lastAssignedUserId;
-      for (const lead of leads) {
-        const salesperson = orderedSalespeople[position % salespersonIds.length]!;
-        await this.assignLeadToSalesperson(tx, lead, salesperson, body.groupId, managerId, AssignmentType.ROUND_ROBIN);
-        lastUsedUserId = salesperson.id;
-        position++;
-      }
-
-      await tx.groupAssignmentConfig.update({ where: { id: config.id }, data: { lastAssignedUserId: lastUsedUserId } });
-
-      return { assignedCount: leads.length };
-    });
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
   }
 
   // ---------- CSV import ----------
@@ -600,9 +648,18 @@ class LeadService {
     };
   }
 
-  async confirmImport(_user: AuthUser, batchId: string) {
+  // A manager may only act on their own import batches — not an admin's or another
+  // manager's. Reported as 404 (not 403) so batch existence isn't leaked cross-account.
+  private assertBatchOwnership(user: AuthUser, batch: { uploadedById: string }): void {
+    if (user.role === Role.MANAGER && batch.uploadedById !== user.id) {
+      throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
+    }
+  }
+
+  async confirmImport(user: AuthUser, batchId: string) {
     const batch = await prisma.leadImportBatch.findUnique({ where: { id: batchId } });
     if (!batch) throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
+    this.assertBatchOwnership(user, batch);
     if (batch.status !== ImportBatchStatus.DRAFT) {
       throw new ApiError("Import batch already processed", STATUS_CODES.CONFLICT);
     }
@@ -612,54 +669,65 @@ class LeadService {
       throw new ApiError("No valid rows to import", STATUS_CODES.BAD_REQUEST);
     }
 
+    // Resolve every distinct source name up front (outside any transaction) so the
+    // per-row work inside the transaction is pure inserts with no network round trips
+    // to look up/upsert sources — that per-row upsert was what pushed large imports
+    // past Prisma's 5s interactive-transaction timeout.
     const sourceCache = new Map<string, string>();
-    const resolveSourceId = async (name: string | undefined): Promise<string | undefined> => {
-      const sourceName = name?.trim() || "CSV Import";
-      if (sourceCache.has(sourceName)) return sourceCache.get(sourceName);
+    const distinctSourceNames = new Set(rows.map((r) => r.sourceName?.trim() || "CSV Import"));
+    for (const sourceName of distinctSourceNames) {
       const source = await prisma.source.upsert({
         where: { code: sourceName.toUpperCase().replace(/\s+/g, "_") },
         update: {},
         create: { name: sourceName, code: sourceName.toUpperCase().replace(/\s+/g, "_") },
       });
       sourceCache.set(sourceName, source.id);
-      return source.id;
-    };
+    }
 
     const chunkSize = 200;
     let createdCount = 0;
+    const usedLeadNumbers = new Set<string>();
+
+    const uniqueLeadNumber = (): string => {
+      let leadNumber = generateLeadNumber();
+      while (usedLeadNumbers.has(leadNumber)) leadNumber = generateLeadNumber();
+      usedLeadNumbers.add(leadNumber);
+      return leadNumber;
+    };
 
     for (let i = 0; i < rows.length; i += chunkSize) {
       const chunk = rows.slice(i, i + chunkSize);
-      await prisma.$transaction(async (tx) => {
-        for (const row of chunk) {
-          const sourceId = await resolveSourceId(row.sourceName);
-          const lead = await this.createLeadWithUniqueNumber(
-            {
-              firstName: row.firstName,
-              lastName: row.lastName,
-              mobile: row.mobile,
-              normalizedMobile: row.normalizedMobile,
-              email: row.email,
-              normalizedEmail: row.normalizedEmail,
-              requirement: row.requirement,
-              location: row.location,
-              sourceId,
-              importBatchId: batch.id,
-            },
-            tx,
-          );
-          await tx.activity.create({
-            data: {
+      const leadRows = chunk.map((row) => ({
+        id: randomUUID(),
+        leadNumber: uniqueLeadNumber(),
+        firstName: row.firstName,
+        lastName: row.lastName,
+        mobile: row.mobile,
+        normalizedMobile: row.normalizedMobile,
+        email: row.email,
+        normalizedEmail: row.normalizedEmail,
+        requirement: row.requirement,
+        location: row.location,
+        sourceId: sourceCache.get(row.sourceName?.trim() || "CSV Import"),
+        importBatchId: batch.id,
+      }));
+
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.lead.createMany({ data: leadRows });
+          await tx.activity.createMany({
+            data: leadRows.map((lead) => ({
               leadId: lead.id,
               type: ActivityType.LEAD_CREATED,
               referenceType: "LeadImportBatch",
               referenceId: batch.id,
               title: "Lead created via CSV import",
-            },
+            })),
           });
-          createdCount++;
-        }
-      });
+        },
+        { timeout: 30000, maxWait: 10000 },
+      );
+      createdCount += leadRows.length;
     }
 
     await prisma.leadImportBatch.update({
@@ -670,7 +738,7 @@ class LeadService {
     return { batchId: batch.id, createdCount };
   }
 
-  async getImportBatch(_user: AuthUser, batchId: string) {
+  async getImportBatch(user: AuthUser, batchId: string) {
     const batch = await prisma.leadImportBatch.findUnique({
       where: { id: batchId },
       select: {
@@ -684,10 +752,13 @@ class LeadService {
         errorRows: true,
         createdAt: true,
         committedAt: true,
+        uploadedById: true,
       },
     });
     if (!batch) throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
-    return batch;
+    this.assertBatchOwnership(user, batch);
+    const { uploadedById: _uploadedById, ...publicBatch } = batch;
+    return publicBatch;
   }
 }
 

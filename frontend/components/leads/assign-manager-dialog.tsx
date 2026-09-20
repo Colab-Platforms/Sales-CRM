@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
@@ -28,6 +28,17 @@ export function AssignManagerDialog({
   const [managerIds, setManagerIds] = useState<Set<string>>(new Set());
 
   const activeManagers = (managers ?? []).filter((m) => m.status === "ACTIVE");
+
+  // This dialog stays mounted between opens (only its content is conditionally
+  // rendered), so without this reset a stale manager selection from a previous
+  // batch could silently carry over into a new one.
+  useEffect(() => {
+    if (open) {
+      setMethod("MANUAL");
+      setManagerId("");
+      setManagerIds(new Set());
+    }
+  }, [open]);
 
   function toggleManager(id: string, checked: boolean) {
     setManagerIds((prev) => {

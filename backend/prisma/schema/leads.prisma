@@ -154,6 +154,20 @@ model ManagerAssignmentRoundRobin {
   @@map("manager_assignment_round_robin")
 }
 
+model SalespersonAssignmentRoundRobin {
+  id String @id @default(uuid()) @db.Uuid
+
+  managerId String @unique @map("manager_id") @db.Uuid
+  manager   User   @relation("SalespersonAssignmentRoundRobinManager", fields: [managerId], references: [id])
+
+  lastAssignedSalespersonId String? @map("last_assigned_salesperson_id") @db.Uuid
+  lastAssignedSalesperson   User?   @relation("SalespersonAssignmentRoundRobinLastAssigned", fields: [lastAssignedSalespersonId], references: [id])
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("salesperson_assignment_round_robin")
+}
+
 model CommunicationPreference {
   id String @id @default(uuid()) @db.Uuid
 

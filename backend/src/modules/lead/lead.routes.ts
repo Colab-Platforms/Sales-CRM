@@ -28,8 +28,13 @@ router.patch("/leads/:id", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSO
 router.post("/leads/bulk/assign-manager", requireRole(Role.ADMIN), bulkAssignManager);
 router.post("/leads/bulk/assign-salesperson", requireRole(Role.MANAGER), bulkAssignSalesperson);
 
-router.post("/leads/import/preview", requireRole(Role.ADMIN), csvUpload.single("file"), previewImport);
-router.post("/leads/import/:batchId/confirm", requireRole(Role.ADMIN), confirmImport);
-router.get("/leads/import/:batchId", requireRole(Role.ADMIN), getImportBatch);
+router.post(
+  "/leads/import/preview",
+  requireRole(Role.ADMIN, Role.MANAGER),
+  csvUpload.single("file"),
+  previewImport,
+);
+router.post("/leads/import/:batchId/confirm", requireRole(Role.ADMIN, Role.MANAGER), confirmImport);
+router.get("/leads/import/:batchId", requireRole(Role.ADMIN, Role.MANAGER), getImportBatch);
 
 export default router;
