@@ -15,6 +15,8 @@ import {
   Wallet,
   History,
   Contact,
+  MessageCircle,
+  FileText,
 } from "lucide-react";
 import {
   Sidebar,
@@ -36,6 +38,11 @@ interface NavItem {
   title: string;
   href?: string;
   icon: ComponentType<{ className?: string }>;
+  // Only-ever-exact match: for a route that is itself a literal path-prefix of a sibling nav
+  // item's href (WhatsApp Status vs. WhatsApp Templates), so viewing Templates doesn't also light
+  // up Status. Every other item keeps the default prefix match, which is what lets e.g. viewing an
+  // order's detail page still highlight "Orders".
+  exact?: boolean;
 }
 
 const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
@@ -46,6 +53,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
     { title: "Customers", href: "/dashboard/customers", icon: Contact },
     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
+    { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
   ],
   MANAGER: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -55,6 +63,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Customers", href: "/dashboard/customers", icon: Contact },
     { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
+    { title: "WhatsApp Status", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
+    { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
     { title: "Reports", icon: BarChart3 },
   ],
   ADMIN: [
@@ -66,14 +76,16 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Customers", href: "/dashboard/customers", icon: Contact },
     { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
+    { title: "WhatsApp Status", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
+    { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
     { title: "Reports", icon: BarChart3 },
   ],
 };
 
 // "/dashboard" is the root of every page here, so it only matches exactly; other items
-// also stay highlighted on their nested pages (e.g. an order's detail page).
-function isActivePath(pathname: string, href: string) {
-  return href === "/dashboard" ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
+// also stay highlighted on their nested pages (e.g. an order's detail page) unless marked exact.
+function isActivePath(pathname: string, href: string, exact = false) {
+  return href === "/dashboard" || exact ? pathname === href : pathname === href || pathname.startsWith(`${href}/`);
 }
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
@@ -102,7 +114,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
                   {item.href ? (
                     <SidebarMenuButton
                       render={<Link href={item.href} />}
-                      isActive={isActivePath(pathname, item.href)}
+                      isActive={isActivePath(pathname, item.href, item.exact)}
                       tooltip={item.title}
                     >
                       <item.icon />

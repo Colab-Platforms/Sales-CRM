@@ -1,10 +1,13 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, MessageCircle } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCustomer360 } from "@/hooks/useCustomers";
+import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
+import { WhatsAppConversation } from "@/components/whatsapp/conversation/whatsapp-conversation";
 import { CustomerProfileCard } from "./customer-profile-card";
 import { CustomerSegmentCard } from "./customer-segment-card";
 import { NextBestActionCard } from "./next-best-action-card";
@@ -36,6 +39,7 @@ function Customer360Skeleton() {
 
 export function Customer360View({ leadId }: { leadId: string }) {
   const { data, isLoading, error, refetch } = useCustomer360(leadId);
+  const [sendOpen, setSendOpen] = useState(false);
 
   if (isLoading) return <Customer360Skeleton />;
 
@@ -57,18 +61,26 @@ export function Customer360View({ leadId }: { leadId: string }) {
 
   return (
     <div className="space-y-6">
-      <BackLink />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <BackLink />
+        <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data.profile.mobile}>
+          <MessageCircle data-icon="inline-start" />
+          Send WhatsApp
+        </Button>
+      </div>
       <CustomerProfileCard customer={data} />
       <CustomerSegmentCard segment={data.segment} currency={currency} />
       <NextBestActionCard nba={data.nextBestAction} />
       <CustomerPaymentSummaryCard summary={data.paymentSummary} currency={currency} />
       <CustomerOrdersList orders={data.orders} />
+      <WhatsAppConversation leadId={leadId} />
       <CustomerTimeline leadId={leadId} />
       <div>
         <Link href={`/dashboard/audit?leadId=${leadId}`} className="text-sm text-primary hover:underline">
           View full audit trail for this customer
         </Link>
       </div>
+      <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={data.profile.name} orders={data.orders} />
     </div>
   );
 }

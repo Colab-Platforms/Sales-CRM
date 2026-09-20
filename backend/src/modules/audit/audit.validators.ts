@@ -17,7 +17,7 @@ const pageSize = z.coerce
 
 // Entity types an audit row's referenceType can hold. Kept as a plain list (rather than a Prisma
 // enum) since referenceType is an app-enforced polymorphic string, not a DB enum.
-const REFERENCE_TYPES = ["Order", "Payment", "Shipment", "LeadAssignment", "LeadImportBatch"] as const;
+const REFERENCE_TYPES = ["Order", "Payment", "Shipment", "LeadAssignment", "LeadImportBatch", "WhatsAppMessage", "WhatsAppTemplate"] as const;
 
 const listAuditQuerySchema = z
   .object({

@@ -31,7 +31,8 @@ export interface AuditEntry {
   // for events that only ever concerned the lead itself (e.g. LEAD_CREATED, LEAD_UPDATED).
   entityType: string | null;
   entityId: string | null;
-  leadId: string;
+  // Null for an E7.2 template event (create/update/status change/sync) - not about any one customer.
+  leadId: string | null;
   customer: { leadId: string; leadNumber: string; name: string } | null;
   order: { id: string; orderNumber: string; externalNumber: string | null } | null;
   title: string | null;

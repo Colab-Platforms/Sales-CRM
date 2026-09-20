@@ -6,6 +6,7 @@ import managerRoutes from "@modules/manager/manager.routes.js";
 import ordersRoutes from "@modules/orders/orders.routes.js";
 import customersRoutes from "@modules/customers/customers.routes.js";
 import auditRoutes from "@modules/audit/audit.routes.js";
+import whatsappRoutes from "@modules/whatsapp/whatsapp.routes.js";
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use("/manager", managerRoutes);
 router.use("/orders", ordersRoutes);
 router.use("/customers", customersRoutes);
 router.use("/audit", auditRoutes);
+router.use("/whatsapp", whatsappRoutes);
 
 export default router;

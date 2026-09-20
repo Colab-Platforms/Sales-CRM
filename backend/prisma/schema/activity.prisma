@@ -1,8 +1,16 @@
 model Activity {
   id String @id @default(uuid()) @db.Uuid
 
-  leadId String @map("lead_id") @db.Uuid
-  lead   Lead   @relation(fields: [leadId], references: [id])
+  // Nullable since E7.2: a WhatsApp template action (create/update/status change/sync) is not
+  // about any one customer, so it has no lead to attach to. Every event before E7.2 always had a
+  // real lead, and every lead-scoped read (buildAuditWhere's lead-scope filter, getCustomerAudit's
+  // `{leadId}` query) already naturally excludes a null-leadId row for anyone but ADMIN, since a
+  // relation filter or an equality match against a real id never matches NULL.
+  leadId String? @map("lead_id") @db.Uuid
+  // onDelete explicitly kept as RESTRICT (Prisma's own original behavior here, before this
+  // relation became optional) so a lead with audit history still cannot be deleted - only making
+  // the column nullable should change, never the existing delete-safety guarantee.
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: Restrict)
 
   actorId String? @map("actor_id") @db.Uuid
   actor   User?   @relation("ActivityActor", fields: [actorId], references: [id])

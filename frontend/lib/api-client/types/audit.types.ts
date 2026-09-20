@@ -24,9 +24,18 @@ export type ActivityType =
   | "SHIPMENT_CREATED"
   | "SHIPMENT_STATUS_CHANGED"
   | "TRACKING_UPDATED"
-  | "DISCOUNT_CHANGED";
+  | "DISCOUNT_CHANGED"
+  | "WHATSAPP_MESSAGE_SENT"
+  | "WHATSAPP_MESSAGE_RECEIVED"
+  | "WHATSAPP_DELIVERED"
+  | "WHATSAPP_READ"
+  | "WHATSAPP_FAILED"
+  | "WHATSAPP_TEMPLATE_CREATED"
+  | "WHATSAPP_TEMPLATE_UPDATED"
+  | "WHATSAPP_TEMPLATE_STATUS_CHANGED"
+  | "WHATSAPP_TEMPLATE_SYNCED";
 
-export type ActivitySource = "USER" | "SHOPIFY_SYNC" | "SHOPIFY_WEBHOOK" | "SYSTEM";
+export type ActivitySource = "USER" | "SHOPIFY_SYNC" | "SHOPIFY_WEBHOOK" | "SYSTEM" | "WHATSAPP_WEBHOOK";
 
 export type AuditRole = "ADMIN" | "MANAGER" | "SALESPERSON";
 
@@ -58,7 +67,8 @@ export interface AuditEntry {
   type: ActivityType;
   entityType: string | null;
   entityId: string | null;
-  leadId: string;
+  // Null for a template event (create/update/status change/sync) - not about any one customer.
+  leadId: string | null;
   customer: { leadId: string; leadNumber: string; name: string } | null;
   order: { id: string; orderNumber: string; externalNumber: string | null } | null;
   title: string | null;

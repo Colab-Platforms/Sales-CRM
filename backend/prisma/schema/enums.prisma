@@ -297,6 +297,21 @@ enum ActivityType {
   TRACKING_UPDATED
   DISCOUNT_CHANGED
 
+  // E7.1 WhatsApp Provider Integration: recorded for real message sends/receipts/status
+  // transitions only - never invented for a message that was not actually sent/received.
+  WHATSAPP_MESSAGE_SENT
+  WHATSAPP_MESSAGE_RECEIVED
+  WHATSAPP_DELIVERED
+  WHATSAPP_READ
+  WHATSAPP_FAILED
+
+  // E7.2 Template Management: not tied to any one customer, so these are the only ActivityType
+  // values ever written with a null leadId.
+  WHATSAPP_TEMPLATE_CREATED
+  WHATSAPP_TEMPLATE_UPDATED
+  WHATSAPP_TEMPLATE_STATUS_CHANGED
+  WHATSAPP_TEMPLATE_SYNCED
+
   @@map("activity_type")
 }
 
@@ -306,8 +321,70 @@ enum ActivitySource {
   SHOPIFY_SYNC
   SHOPIFY_WEBHOOK
   SYSTEM
+  // A WhatsApp BSP webhook delivery (inbound message, or an async status update for an outbound
+  // one) - mirrors SHOPIFY_WEBHOOK. An actual outbound send triggered by a signed-in user is
+  // recorded with source USER instead, same as any other user-initiated write.
+  WHATSAPP_WEBHOOK
 
   @@map("activity_source")
+}
+
+// Which WhatsApp Business Solution Provider sent/received a message. Kept separate from
+// ExternalSource (which identifies where a CRM record like a Lead originated) since a WhatsApp
+// message is not a synced copy of an external record - it is its own event.
+enum WhatsAppProviderName {
+  AISENSY
+  GUPSHUP
+
+  @@map("whatsapp_provider_name")
+}
+
+enum WhatsAppDirection {
+  INBOUND
+  OUTBOUND
+
+  @@map("whatsapp_direction")
+}
+
+// Only the shapes the CRM actually understands and stores. An inbound message the parser cannot
+// classify (e.g. an unsupported media/interactive payload from the provider) is stored as OTHER
+// rather than guessed at or dropped.
+enum WhatsAppMessageType {
+  TEXT
+  TEMPLATE
+  MEDIA
+  INTERACTIVE
+  OTHER
+
+  @@map("whatsapp_message_type")
+}
+
+// Outbound messages progress QUEUED -> SENT -> DELIVERED -> READ, or to FAILED at any point.
+// Inbound messages are recorded as RECEIVED and never change status (WhatsApp gives no further
+// lifecycle for a message the business received).
+enum WhatsAppMessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+
+  @@map("whatsapp_message_status")
+}
+
+// E7.2 Template Management. DRAFT: created locally, never sent to the provider. PENDING/APPROVED/
+// REJECTED: the provider's own review states (only reachable via a real sync). DISABLED: the CRM
+// (or a provider sync that saw a paused/unrecognised provider status) has marked it unusable -
+// never selectable for sending, prepared for E7.3.
+enum WhatsAppTemplateStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  DISABLED
+
+  @@map("whatsapp_template_status")
 }
 
 enum WebhookStatus {

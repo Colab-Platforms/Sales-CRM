@@ -26,6 +26,15 @@ export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
   SHIPMENT_STATUS_CHANGED: "Shipment status changed",
   TRACKING_UPDATED: "Tracking updated",
   DISCOUNT_CHANGED: "Discount changed",
+  WHATSAPP_MESSAGE_SENT: "WhatsApp message sent",
+  WHATSAPP_MESSAGE_RECEIVED: "WhatsApp message received",
+  WHATSAPP_DELIVERED: "WhatsApp message delivered",
+  WHATSAPP_READ: "WhatsApp message read",
+  WHATSAPP_FAILED: "WhatsApp message failed",
+  WHATSAPP_TEMPLATE_CREATED: "WhatsApp template created",
+  WHATSAPP_TEMPLATE_UPDATED: "WhatsApp template updated",
+  WHATSAPP_TEMPLATE_STATUS_CHANGED: "WhatsApp template status changed",
+  WHATSAPP_TEMPLATE_SYNCED: "WhatsApp templates synced",
 };
 
 // Only the types the E6.6 Audit Trail actually writes going forward are offered as filter options;
@@ -47,6 +56,15 @@ export const AUDIT_FILTERABLE_TYPES: ActivityType[] = [
   "SHIPMENT_STATUS_CHANGED",
   "TRACKING_UPDATED",
   "DISCOUNT_CHANGED",
+  "WHATSAPP_MESSAGE_SENT",
+  "WHATSAPP_MESSAGE_RECEIVED",
+  "WHATSAPP_DELIVERED",
+  "WHATSAPP_READ",
+  "WHATSAPP_FAILED",
+  "WHATSAPP_TEMPLATE_CREATED",
+  "WHATSAPP_TEMPLATE_UPDATED",
+  "WHATSAPP_TEMPLATE_STATUS_CHANGED",
+  "WHATSAPP_TEMPLATE_SYNCED",
 ];
 
 export const ACTIVITY_TYPE_COLORS: Record<ActivityType, string> = {
@@ -75,6 +93,15 @@ export const ACTIVITY_TYPE_COLORS: Record<ActivityType, string> = {
   SHIPMENT_STATUS_CHANGED: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
   TRACKING_UPDATED: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
   DISCOUNT_CHANGED: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  WHATSAPP_MESSAGE_SENT: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  WHATSAPP_MESSAGE_RECEIVED: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  WHATSAPP_DELIVERED: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  WHATSAPP_READ: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  WHATSAPP_FAILED: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  WHATSAPP_TEMPLATE_CREATED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  WHATSAPP_TEMPLATE_UPDATED: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  WHATSAPP_TEMPLATE_STATUS_CHANGED: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  WHATSAPP_TEMPLATE_SYNCED: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
 };
 
 export const ACTIVITY_SOURCE_LABELS: Record<ActivitySource, string> = {
@@ -82,6 +109,7 @@ export const ACTIVITY_SOURCE_LABELS: Record<ActivitySource, string> = {
   SHOPIFY_SYNC: "Shopify sync",
   SHOPIFY_WEBHOOK: "Shopify webhook",
   SYSTEM: "System",
+  WHATSAPP_WEBHOOK: "WhatsApp webhook",
 };
 
-export const ACTIVITY_SOURCE_ORDER: ActivitySource[] = ["USER", "SHOPIFY_SYNC", "SHOPIFY_WEBHOOK", "SYSTEM"];
+export const ACTIVITY_SOURCE_ORDER: ActivitySource[] = ["USER", "SHOPIFY_SYNC", "SHOPIFY_WEBHOOK", "WHATSAPP_WEBHOOK", "SYSTEM"];

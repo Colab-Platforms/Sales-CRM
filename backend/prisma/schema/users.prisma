@@ -43,6 +43,9 @@ model User {
 
   activitiesAsActor Activity[] @relation("ActivityActor")
 
+  whatsAppMessagesSent WhatsAppMessage[] @relation("WhatsAppMessageSentBy")
+  whatsAppTemplatesCreated WhatsAppTemplate[] @relation("WhatsAppTemplateCreatedBy")
+
   @@index([role])
   @@index([status])
   @@map("users")

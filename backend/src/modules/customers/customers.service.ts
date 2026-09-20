@@ -24,6 +24,7 @@ import {
   buildOrderEntries,
   buildRecoveryEntries,
   buildTaskEntries,
+  buildWhatsAppEntries,
   sortTimelineDesc,
 } from "./customers.timeline.js";
 import type {
@@ -183,6 +184,23 @@ const RECOVERY_SELECT = {
   performedBy: { select: { id: true, name: true } },
 } satisfies Prisma.RecoveryActionSelect;
 
+// E7.1/E7.3: same shape whatsapp.service.ts's MESSAGE_SELECT uses for its own reads, trimmed to
+// just what buildWhatsAppEntries needs.
+const WHATSAPP_SELECT = {
+  id: true,
+  direction: true,
+  provider: true,
+  templateName: true,
+  body: true,
+  errorMessage: true,
+  sentAt: true,
+  deliveredAt: true,
+  readAt: true,
+  failedAt: true,
+  receivedAt: true,
+  sentBy: { select: { id: true, name: true } },
+} satisfies Prisma.WhatsAppMessageSelect;
+
 class CustomersService {
   constructor(private readonly db: DbClient = prisma) {}
 
@@ -293,7 +311,7 @@ class CustomersService {
 
     // One indexed query per source table, none of them scaling with how much data the rest of
     // the database holds - safe to run while the Shopify backfill keeps inserting elsewhere.
-    const [activities, orders, assignments, calls, interestedPeriods, tasks, abandonments, recoveryActions] =
+    const [activities, orders, assignments, calls, interestedPeriods, tasks, abandonments, recoveryActions, whatsAppMessages] =
       await Promise.all([
         this.db.activity.findMany({ where: { leadId }, select: ACTIVITY_SELECT }),
         this.db.order.findMany({ where: { leadId }, select: ORDER_MILESTONE_SELECT }),
@@ -303,6 +321,7 @@ class CustomersService {
         this.db.task.findMany({ where: { leadId }, select: TASK_SELECT }),
         this.db.abandonment.findMany({ where: { leadId }, select: ABANDONMENT_SELECT }),
         this.db.recoveryAction.findMany({ where: { leadId }, select: RECOVERY_SELECT }),
+        this.db.whatsAppMessage.findMany({ where: { leadId }, select: WHATSAPP_SELECT }),
       ]);
 
     const entries = sortTimelineDesc([
@@ -314,6 +333,7 @@ class CustomersService {
       ...buildAbandonmentEntries(abandonments),
       ...buildRecoveryEntries(recoveryActions),
       ...buildOrderEntries(orders, activities),
+      ...buildWhatsAppEntries(whatsAppMessages),
     ]);
 
     const totalItems = entries.length;

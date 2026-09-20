@@ -7,6 +7,7 @@ import { errorHandler } from "./middlewares/errorHandler.js";
 import { notFoundHandler } from "./middlewares/notFoundHandler.js";
 import sanitizeMiddleware from "./middlewares/sanitize.js";
 import shopifyWebhookRoutes, { startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
+import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
 
 const app = express();
 
@@ -35,6 +36,8 @@ app.use(compression());
 // Shopify signs the exact bytes it sends, so this route reads the raw body. It must stay ahead of the JSON parser
 // and the sanitizer, which would otherwise change what the signature is checked against.
 app.use("/api/webhooks/shopify", express.raw({ type: "*/*", limit: "5mb" }), shopifyWebhookRoutes);
+// AiSensy/Gupshup sign or token-authenticate the exact bytes they sent, same reason as Shopify above.
+app.use("/api/webhooks/whatsapp", express.raw({ type: "*/*", limit: "5mb" }), whatsappWebhookRoutes);
 
 app.use(
   express.json({
@@ -54,4 +57,5 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   startShopifyWebhookWorker();
+  startWhatsAppWebhookWorker();
 });

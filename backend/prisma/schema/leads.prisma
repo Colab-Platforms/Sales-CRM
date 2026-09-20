@@ -56,6 +56,7 @@ model Lead {
   abandonments             Abandonment[]
   recoveryActions          RecoveryAction[]
   activities               Activity[]
+  whatsAppMessages         WhatsAppMessage[]
 
   @@unique([externalSource, externalId])
   @@index([normalizedMobile])

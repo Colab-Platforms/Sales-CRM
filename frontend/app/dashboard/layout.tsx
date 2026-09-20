@@ -21,7 +21,11 @@ function DashboardShell({ children }: { children: ReactNode }) {
         ? "Reconciliation"
         : pathname.startsWith("/dashboard/audit")
           ? "Audit Trail"
-          : "Dashboard";
+          : pathname.startsWith("/dashboard/whatsapp/templates")
+            ? "WhatsApp Templates"
+            : pathname.startsWith("/dashboard/whatsapp")
+              ? "WhatsApp"
+              : "Dashboard";
 
   return (
     <SidebarProvider>

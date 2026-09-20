@@ -115,7 +115,12 @@ export type TimelineEventType =
   | "SHIPMENT_RETURNED"
   | "ABANDONMENT"
   | "ABANDONMENT_RECOVERED"
-  | "RECOVERY_ACTION";
+  | "RECOVERY_ACTION"
+  | "WHATSAPP_MESSAGE_SENT"
+  | "WHATSAPP_MESSAGE_RECEIVED"
+  | "WHATSAPP_DELIVERED"
+  | "WHATSAPP_READ"
+  | "WHATSAPP_FAILED";
 
 export interface TimelineEntry {
   id: string;

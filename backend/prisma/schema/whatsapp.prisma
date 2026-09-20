@@ -1,0 +1,143 @@
+// E7.1 WhatsApp Provider Integration foundation. One table for every WhatsApp message the CRM
+// knows about, inbound or outbound, regardless of which BSP (AiSensy/Gupshup) handled it - the
+// rest of the CRM (Customer 360, Audit Trail) reads this table, never a provider-specific shape.
+//
+// Webhook delivery idempotency reuses the existing WebhookEvent model (webhooks.prisma) with a
+// new `provider` value ("AISENSY"/"GUPSHUP") rather than a second webhook-events table. This
+// model adds a second, message-level idempotency key (provider + providerMessageId) because one
+// webhook delivery can carry several message/status events, and because AiSensy/Gupshup may
+// resend the same event under a new delivery id.
+model WhatsAppMessage {
+  id String @id @default(uuid()) @db.Uuid
+
+  provider          WhatsAppProviderName @map("provider")
+  providerMessageId String?              @map("provider_message_id") @db.VarChar(255)
+
+  direction   WhatsAppDirection      @map("direction")
+  messageType WhatsAppMessageType    @default(TEXT) @map("message_type")
+  status      WhatsAppMessageStatus  @map("status")
+
+  // The customer side of the conversation, once matched (see whatsapp.matching.ts). Null when an
+  // inbound sender could not be matched to any existing lead - the message is still kept, just
+  // unresolved; the CRM never invents a lead to attach it to.
+  leadId String? @map("lead_id") @db.Uuid
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  // Raw numbers exactly as given by the provider, plus the normalized customer-side number used
+  // for matching (lib/leadIdentity.ts's normalizeMobile) regardless of direction.
+  fromNumber       String? @map("from_number") @db.VarChar(32)
+  toNumber         String? @map("to_number") @db.VarChar(32)
+  normalizedContact String? @map("normalized_contact") @db.VarChar(20)
+
+  // Snapshot of the template's own name at send time, kept even if the WhatsAppTemplate row is
+  // later renamed or removed - independent of templateId below, the same way toNumber is kept
+  // independent of the Lead relation.
+  templateName String? @map("template_name") @db.VarChar(150)
+  // E7.3: which structured template this OUTBOUND message actually used, when sent through the
+  // template-based flow (whatsapp.messaging.service.ts) rather than E7.1's raw send. Null for a
+  // raw/legacy send, and always null for INBOUND. onDelete SetNull: message history must survive a
+  // template being disabled or removed later.
+  templateId String?           @map("template_id") @db.Uuid
+  template   WhatsAppTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  // E7.3: the order whose data (order number, amount, tracking...) was used to resolve this
+  // message's variables, when the template needed one. Same onDelete rationale as templateId.
+  orderId String? @map("order_id") @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  // Actual text content only - never a placeholder/guessed value. Null for a non-text message
+  // whose content this foundation does not model in depth (messageType MEDIA/INTERACTIVE/OTHER).
+  body         String? @map("body")
+
+  errorCode    String? @map("error_code") @db.VarChar(100)
+  errorMessage String? @map("error_message")
+
+  // Which authenticated CRM user triggered an outbound send; null for inbound messages and for
+  // any automation, since E7.1 has none - every OUTBOUND row today has a real sentById.
+  sentById String? @map("sent_by_id") @db.Uuid
+  sentBy   User?   @relation("WhatsAppMessageSentBy", fields: [sentById], references: [id])
+
+  sentAt      DateTime? @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+  failedAt    DateTime? @map("failed_at")
+  receivedAt  DateTime? @map("received_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Nulls are not considered equal by Postgres, so this only rejects a genuine repeat of the same
+  // provider message id - it does not block multiple provider-id-less rows.
+  @@unique([provider, providerMessageId])
+  @@index([leadId])
+  @@index([direction])
+  @@index([status])
+  @@index([normalizedContact])
+  @@index([createdAt])
+  @@index([templateId])
+  @@index([orderId])
+  @@map("whatsapp_messages")
+}
+
+// E7.2 Template Management. A row is either a local DRAFT the CRM created (never sent to the
+// provider - providerTemplateId/externalId are null) or a copy of a real provider template
+// brought in by a sync (provider is the source of truth for status/category/quality going
+// forward; see whatsapp.template.service.ts). E7.3 links WhatsAppMessage rows sent through it.
+model WhatsAppTemplate {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The CRM's own name for this template - what a user picks when composing a message (E7.3).
+  // For a synced template this is set to the provider's elementName/campaign name so the two stay
+  // recognisably the same template; it is NOT necessarily unique across providers, only per-provider.
+  name String @map("name") @db.VarChar(150)
+
+  provider WhatsAppProviderName @map("provider")
+
+  // Gupshup: the template's own UUID (its Partner API `id`). AiSensy: null - AiSensy's Campaign API
+  // has no public template-listing endpoint (dashboard-only), so an AiSensy row is always a local
+  // DRAFT record the CRM never received an id for.
+  providerTemplateId String? @map("provider_template_id") @db.VarChar(255)
+  // Meta's own WhatsApp template id, when the provider exposes it (Gupshup's `externalId`).
+  externalId String? @map("external_id") @db.VarChar(255)
+
+  // Provider-defined category (e.g. MARKETING, UTILITY, AUTHENTICATION) - kept as a plain string,
+  // not an enum, since it is defined by Meta/the provider and this module must not invent or
+  // constrain values it does not control.
+  category String? @map("category") @db.VarChar(50)
+  language String  @default("en") @map("language") @db.VarChar(10)
+
+  // The CRM's own canonical body, using named placeholders like {{customer_name}} (never
+  // provider-specific positional {{1}}/{{2}} syntax) - see whatsapp.template.variables.ts. Mapping
+  // named -> positional for an actual send is E7.3's job, not this module's.
+  body String @map("body")
+  // Structured, ordered, de-duplicated variable names extracted from body at write time - e.g.
+  // ["customer_name","order_number"]. Never executed; used only to display and, later, validate a
+  // send has a value for every placeholder.
+  variables Json @map("variables")
+
+  status WhatsAppTemplateStatus @default(DRAFT) @map("status")
+  // Provider's own quality rating (e.g. Gupshup's UNKNOWN/HIGH), informational only.
+  quality String? @map("quality") @db.VarChar(50)
+
+  // Null for a pure local draft never synced; set to the sync time on every successful sync,
+  // including one that changed nothing.
+  lastSyncedAt DateTime? @map("last_synced_at")
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("WhatsAppTemplateCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  messages WhatsAppMessage[]
+
+  // A template name is only unique per provider AND language, since WhatsApp legitimately allows
+  // the same template name translated into more than one language.
+  @@unique([provider, name, language])
+  // Nulls are not equal in Postgres, so this only rejects a genuine repeat of the same provider id.
+  @@unique([provider, providerTemplateId])
+  @@index([status])
+  @@index([category])
+  @@index([language])
+  @@index([provider])
+  @@map("whatsapp_templates")
+}

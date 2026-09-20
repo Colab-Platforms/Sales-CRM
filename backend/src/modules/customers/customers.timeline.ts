@@ -361,6 +361,49 @@ export function buildOrderEntries(orders: OrderRow[], activities: ActivityRow[])
   return entries;
 }
 
+// ---- WhatsApp (E7.1). Built directly from whatsapp_messages, the same way shipment milestones are
+// built directly from the shipments table: every entry traces back to a real timestamp already on
+// the row. WhatsApp Activity rows (WHATSAPP_*) are deliberately NOT also mapped here, for the same
+// reason shipment/cancellation Activity rows aren't - it would show every fact twice. The Audit
+// Trail (a different view) still shows those Activity rows. ----
+
+export interface WhatsAppMessageRow {
+  id: string;
+  direction: "INBOUND" | "OUTBOUND";
+  provider: string;
+  templateName: string | null;
+  body: string | null;
+  errorMessage: string | null;
+  sentAt: Date | null;
+  deliveredAt: Date | null;
+  readAt: Date | null;
+  failedAt: Date | null;
+  receivedAt: Date | null;
+  // E7.3: who actually clicked "Send" - null is never invented for a real send, only genuinely
+  // absent (there is none for an inbound message, which is why the field is optional here).
+  sentBy?: { id: string; name: string } | null;
+}
+
+export function buildWhatsAppEntries(messages: WhatsAppMessageRow[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  for (const m of messages) {
+    const milestone = (suffix: string, type: TimelineEntry["type"], title: string, description: string | null, occurredAt: Date | null, actor: TimelineEntry["actor"] = null) => {
+      if (!occurredAt) return;
+      entries.push({ id: `whatsapp:${m.id}:${suffix}`, type, title, description, occurredAt, actor, order: null, source: "RECORD" });
+    };
+
+    if (m.direction === "OUTBOUND") {
+      milestone("SENT", "WHATSAPP_MESSAGE_SENT", `WhatsApp template sent${m.templateName ? ` — ${m.templateName}` : ""} (via ${m.provider})`, null, m.sentAt, m.sentBy ?? null);
+      milestone("DELIVERED", "WHATSAPP_DELIVERED", "WhatsApp message delivered", null, m.deliveredAt);
+      milestone("READ", "WHATSAPP_READ", "WhatsApp message read", null, m.readAt);
+      milestone("FAILED", "WHATSAPP_FAILED", "WhatsApp message failed", m.errorMessage, m.failedAt, m.sentBy ?? null);
+    } else {
+      milestone("RECEIVED", "WHATSAPP_MESSAGE_RECEIVED", "WhatsApp message received", m.body, m.receivedAt);
+    }
+  }
+  return entries;
+}
+
 // Most recent first: a customer relationship can span years of orders and calls, so a paginated
 // feed is far more useful read newest-to-oldest than the single order's status history (which
 // stays small and reads oldest-to-newest like a receipt).

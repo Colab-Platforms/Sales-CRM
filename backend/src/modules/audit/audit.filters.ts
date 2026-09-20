@@ -46,7 +46,7 @@ export interface AuditActivityInput {
   type: ActivityType;
   referenceType: string | null;
   referenceId: string | null;
-  leadId: string;
+  leadId: string | null;
   title: string | null;
   description: string | null;
   oldValue: Prisma.JsonValue;
