@@ -17,6 +17,8 @@ import {
   Contact,
   MessageCircle,
   FileText,
+  Workflow,
+  Send,
 } from "lucide-react";
 import {
   Sidebar,
@@ -65,6 +67,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
     { title: "WhatsApp Status", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
     { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
+    { title: "WhatsApp Campaigns", href: "/dashboard/whatsapp/campaigns", icon: Send },
     { title: "Reports", icon: BarChart3 },
   ],
   ADMIN: [
@@ -78,6 +81,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
     { title: "WhatsApp Status", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
     { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
+    { title: "WhatsApp Automations", href: "/dashboard/whatsapp/automations", icon: Workflow },
+    { title: "WhatsApp Campaigns", href: "/dashboard/whatsapp/campaigns", icon: Send },
     { title: "Reports", icon: BarChart3 },
   ],
 };
