@@ -87,11 +87,21 @@ const DETAIL_SELECT = {
   shipments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
 } satisfies Prisma.OrderSelect;
 
-const HISTORY_ACTIVITY_TYPES = [ActivityType.ORDER_CREATED, ActivityType.ORDER_CONFIRMED, ActivityType.STATUS_CHANGE];
+// ORDER_STATUS_CHANGED is the more specific type the E6.6 Audit Trail now writes for order status
+// transitions going forward; STATUS_CHANGE is kept so historical rows still render. ORDER_CANCELLED
+// is deliberately NOT included: cancellation already has its own unconditional RECORD milestone
+// below (from order.cancelledAt), so mapping it here would show every cancellation twice.
+const HISTORY_ACTIVITY_TYPES = [
+  ActivityType.ORDER_CREATED,
+  ActivityType.ORDER_CONFIRMED,
+  ActivityType.STATUS_CHANGE,
+  ActivityType.ORDER_STATUS_CHANGED,
+];
 
 const ACTIVITY_EVENT = {
   [ActivityType.ORDER_CREATED]: { event: "CREATED", title: "Order created" },
   [ActivityType.ORDER_CONFIRMED]: { event: "CONFIRMED", title: "Order confirmed" },
+  [ActivityType.ORDER_STATUS_CHANGED]: { event: "STATUS_CHANGE", title: "Status changed" },
   [ActivityType.STATUS_CHANGE]: { event: "STATUS_CHANGE", title: "Status changed" },
 } as const;
 

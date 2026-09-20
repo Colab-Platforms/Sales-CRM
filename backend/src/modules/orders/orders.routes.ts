@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
+import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders } from "./orders.controller.js";
 
@@ -14,5 +15,6 @@ router.get("/reconciliation", requireAuth, requireRole(Role.ADMIN, Role.MANAGER)
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);
+router.get("/:id/audit", requireAuth, getOrderAudit);
 
 export default router;

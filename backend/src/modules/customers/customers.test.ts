@@ -264,6 +264,7 @@ describe("buildOrderEntries", () => {
           type: ActivityType.ORDER_CREATED,
           referenceType: "Order",
           referenceId: UUID,
+          orderId: null,
           title: "Shopify order #1001 placed",
           description: null,
           createdAt: orderRow.createdAt,
@@ -285,6 +286,7 @@ describe("buildOrderEntries", () => {
           type: ActivityType.PAYMENT,
           referenceType: "Order",
           referenceId: "some-other-order",
+          orderId: null,
           title: "Payment success",
           description: null,
           createdAt: new Date(),
@@ -293,6 +295,65 @@ describe("buildOrderEntries", () => {
       ],
     );
     assert.ok(!entries.some((e) => e.id === "act1"));
+  });
+
+  it("matches a new-style entity-specific activity (referenceType Payment) via orderId, and maps the new payment types", () => {
+    for (const [type, expectedTitle] of [
+      [ActivityType.PAYMENT_CREATED, "Payment recorded"],
+      [ActivityType.PAYMENT_STATUS_CHANGED, "Payment status changed"],
+      [ActivityType.PAYMENT_REFUNDED, "Payment refunded"],
+    ] as const) {
+      const entries = buildOrderEntries(
+        [orderRow],
+        [
+          {
+            id: `act-${type}`,
+            type,
+            referenceType: "Payment",
+            referenceId: "payment-1",
+            orderId: UUID,
+            title: null,
+            description: null,
+            createdAt: new Date("2026-01-01T12:00:00.000Z"),
+            actor: null,
+          },
+        ],
+      );
+      const entry = entries.find((e) => e.id === `act-${type}`);
+      assert.ok(entry, `expected a timeline entry for ${type}`);
+      assert.equal(entry!.type, "PAYMENT");
+      assert.equal(entry!.title, expectedTitle);
+      assert.equal(entry!.source, "ACTIVITY");
+    }
+  });
+
+  it("does not surface a new-style shipment/discount/cancellation Activity row a second time (already shown as a RECORD milestone)", () => {
+    for (const type of [
+      ActivityType.SHIPMENT_CREATED,
+      ActivityType.SHIPMENT_STATUS_CHANGED,
+      ActivityType.TRACKING_UPDATED,
+      ActivityType.DISCOUNT_CHANGED,
+      ActivityType.ORDER_CANCELLED,
+      ActivityType.PAYMENT_MISMATCH_DETECTED,
+    ]) {
+      const entries = buildOrderEntries(
+        [orderRow],
+        [
+          {
+            id: `act-${type}`,
+            type,
+            referenceType: "Shipment",
+            referenceId: "shipment-1",
+            orderId: UUID,
+            title: null,
+            description: null,
+            createdAt: new Date("2026-01-01T12:00:00.000Z"),
+            actor: null,
+          },
+        ],
+      );
+      assert.ok(!entries.some((e) => e.id === `act-${type}`), `${type} should not appear in the Customer 360 timeline`);
+    }
   });
 
   it("adds a shipped and delivered milestone for each real shipment timestamp", () => {

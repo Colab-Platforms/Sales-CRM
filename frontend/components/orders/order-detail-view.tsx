@@ -17,6 +17,7 @@ import {
   formatMoney,
 } from "@/lib/order-status";
 import { DetailField, DetailGrid } from "./detail-field";
+import { OrderAuditHistory } from "./order-audit-history";
 import { customerDetailHref } from "./orders-table";
 import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderStatusBadge } from "./order-status-badge";
@@ -287,6 +288,8 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           </div>
         </CardContent>
       </Card>
+
+      <OrderAuditHistory orderId={order.id} />
     </div>
   );
 }

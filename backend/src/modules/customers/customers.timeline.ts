@@ -28,6 +28,9 @@ export interface ActivityRow {
   type: ActivityType;
   referenceType: string | null;
   referenceId: string | null;
+  // Direct order pointer (E6.6 Audit Trail); null on rows written before this column existed, in
+  // which case referenceType/referenceId (checked below) still identify the order.
+  orderId: string | null;
   title: string | null;
   description: string | null;
   createdAt: Date;
@@ -295,11 +298,22 @@ function shipmentEntries(orderLink: TimelineEntry["order"], shipments: ShipmentM
   return entries;
 }
 
+// Historical rows (written before the E6.6 Audit Trail added orderId/specific types) used the generic
+// STATUS_CHANGE/PAYMENT types with referenceType="Order"; new rows use more specific types (and, for
+// payments/shipments, a more specific referenceType) but always set orderId. Both keep rendering as
+// the same timeline entry type here, so nothing already shown in Customer 360 changes or duplicates.
+// Shipment/discount/mismatch/cancellation events are deliberately NOT mapped: shipments already have
+// their own RECORD-sourced milestones below, and order cancellation already has its own RECORD
+// milestone too - mapping their Activity rows here as well would show every one of those facts twice.
 const ORDER_ACTIVITY_EVENT: Partial<Record<ActivityType, { type: TimelineEntry["type"]; fallbackTitle: string }>> = {
   [ActivityType.ORDER_CREATED]: { type: "ORDER_CREATED", fallbackTitle: "Order created" },
   [ActivityType.ORDER_CONFIRMED]: { type: "ORDER_CONFIRMED", fallbackTitle: "Order confirmed" },
   [ActivityType.STATUS_CHANGE]: { type: "ORDER_STATUS_CHANGE", fallbackTitle: "Order status changed" },
+  [ActivityType.ORDER_STATUS_CHANGED]: { type: "ORDER_STATUS_CHANGE", fallbackTitle: "Order status changed" },
   [ActivityType.PAYMENT]: { type: "PAYMENT", fallbackTitle: "Payment update" },
+  [ActivityType.PAYMENT_CREATED]: { type: "PAYMENT", fallbackTitle: "Payment recorded" },
+  [ActivityType.PAYMENT_STATUS_CHANGED]: { type: "PAYMENT", fallbackTitle: "Payment status changed" },
+  [ActivityType.PAYMENT_REFUNDED]: { type: "PAYMENT", fallbackTitle: "Payment refunded" },
 };
 
 export function buildOrderEntries(orders: OrderRow[], activities: ActivityRow[]): TimelineEntry[] {
@@ -308,7 +322,7 @@ export function buildOrderEntries(orders: OrderRow[], activities: ActivityRow[])
   for (const order of orders) {
     const orderLink = { id: order.id, orderNumber: order.orderNumber, externalNumber: order.externalNumber };
     const orderActivities = activities.filter(
-      (a) => a.referenceType === ORDER_REFERENCE_TYPE && a.referenceId === order.id,
+      (a) => a.orderId === order.id || (a.referenceType === ORDER_REFERENCE_TYPE && a.referenceId === order.id),
     );
 
     for (const activity of orderActivities) {

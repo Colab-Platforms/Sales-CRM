@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { prisma } from "@/lib/prisma.js";
 import { logger } from "@/utils/logger.js";
+import { ActivitySource } from "../../../generated/prisma/enums.js";
 import { ShopifyClient } from "./shopify.client.js";
 import { loadShopifyConfig, loadWebhookConfig } from "./shopify.config.js";
 import { checkConnection } from "./shopify.orders.js";
@@ -40,7 +41,7 @@ async function process(eventId: string) {
       store,
       sync: {
         order: async (id) => {
-          const outcome = await syncOrderById(syncDeps(), id, { notBefore: await syncFloor() });
+          const outcome = await syncOrderById(syncDeps(), id, { notBefore: await syncFloor(), source: ActivitySource.SHOPIFY_WEBHOOK });
           return { notFound: outcome.notFound || outcome.outOfWindow };
         },
         product: (id) => syncProductById(syncDeps(), id),

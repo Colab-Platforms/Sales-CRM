@@ -45,9 +45,10 @@ model Order {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  items     OrderItem[]
-  payments  Payment[]
-  shipments Shipment[]
+  items      OrderItem[]
+  payments   Payment[]
+  shipments  Shipment[]
+  activities Activity[]
 
   @@unique([externalSource, externalId])
   @@index([leadId])

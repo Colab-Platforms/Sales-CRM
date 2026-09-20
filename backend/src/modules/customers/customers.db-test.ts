@@ -256,3 +256,263 @@ describe("Customer 360", () => {
     });
   });
 });
+
+describe("Customer list (E6.7)", () => {
+  it("derives each customer's segment and post-sale state, filters by segment, and paginates", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      // Every seeded lead shares this token in its last name, so every query below is scoped by
+      // `search` to just these 4 rows - an ADMIN's otherwise-unfiltered query would scan the whole
+      // live/shared database (real Shopify-synced customers included), which is both slow and makes
+      // "page 1 of 20" nondeterministic against this test's own rows.
+      const token = `Seg${uid().slice(0, 8)}`;
+      const named = (first: string) => ({ firstName: first, lastName: token });
+
+      // NEW: no orders at all.
+      const fresh = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Fresh") } });
+
+      // HOT: no orders, but marked INTERESTED.
+      const hot = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Hot"), workingStatus: "INTERESTED" } });
+
+      // REPEAT: two successful orders.
+      const repeat = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Repeat") } });
+      for (let i = 0; i < 2; i++) {
+        const order = await tx.order.create({
+          data: { orderNumber: `ORD-${uid()}`, leadId: repeat.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" },
+        });
+        await tx.payment.create({ data: { orderId: order.id, amount: "500.00", method: PaymentMethod.UPI, status: PaymentStatus.SUCCESS } });
+      }
+
+      // DORMANT: one successful order 200 days ago.
+      const dormant = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Dormant") } });
+      const dormantOrder = await tx.order.create({
+        data: {
+          orderNumber: `ORD-${uid()}`,
+          leadId: dormant.id,
+          source: OrderSource.WEBSITE,
+          status: OrderStatus.DELIVERED,
+          totalAmount: "300.00",
+          createdAt: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000),
+        },
+      });
+      await tx.payment.create({ data: { orderId: dormantOrder.id, amount: "300.00", method: PaymentMethod.CARD, status: PaymentStatus.SUCCESS } });
+
+      const svc = new CustomersService(tx);
+
+      const all = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token });
+      assert.equal(all.pagination.totalItems, 4, "only the 4 seeded leads match this token");
+      const byLeadId = new Map(all.items.map((c) => [c.leadId, c]));
+      assert.equal(byLeadId.get(fresh.id)?.segment, "NEW");
+      assert.equal(byLeadId.get(hot.id)?.segment, "HOT");
+      assert.equal(byLeadId.get(repeat.id)?.segment, "REPEAT");
+      assert.equal(byLeadId.get(repeat.id)?.orderCount, 2);
+      assert.equal(byLeadId.get(repeat.id)?.totalPaid, "1000.00");
+      assert.equal(byLeadId.get(dormant.id)?.segment, "DORMANT");
+      assert.equal(byLeadId.get(dormant.id)?.currentOrderStatus, OrderStatus.DELIVERED);
+      assert.equal(byLeadId.get(dormant.id)?.currentPaymentStatus, PaymentStatus.SUCCESS);
+
+      const repeatOnly = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, segment: "REPEAT" });
+      assert.equal(repeatOnly.pagination.totalItems, 1);
+      assert.equal(repeatOnly.items[0]?.leadId, repeat.id);
+
+      const withOrders = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, hasOrders: true });
+      assert.equal(withOrders.pagination.totalItems, 2, "repeat and dormant have orders; fresh and hot do not");
+      assert.ok(!withOrders.items.some((c) => c.leadId === fresh.id), "the customer with no orders is excluded");
+      assert.ok(!withOrders.items.some((c) => c.leadId === hot.id));
+
+      const noOrdersOnly = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, hasOrders: false });
+      assert.equal(noOrdersOnly.pagination.totalItems, 2);
+      assert.ok(noOrdersOnly.items.some((c) => c.leadId === fresh.id));
+      assert.ok(!noOrdersOnly.items.some((c) => c.leadId === repeat.id));
+
+      // Pagination over just these 4 seeded leads.
+      const page1 = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 2, search: token });
+      const page2 = await svc.listCustomers(as(admin, Role.ADMIN), { page: 2, pageSize: 2, search: token });
+      assert.equal(page1.items.length, 2);
+      assert.equal(page2.items.length, 2);
+      assert.equal(page1.pagination.totalPages, 2);
+      const pagedIds = [...page1.items, ...page2.items].map((c) => c.leadId);
+      assert.equal(new Set(pagedIds).size, 4, "two pages of 2 cover all 4 seeded leads with no repeats");
+    });
+  });
+
+  it("filters by owner and search, and supports the payment/shipment post-sale filters", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const owner = await tx.user.create({ data: { name: "Rep One", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const otherOwner = await tx.user.create({ data: { name: "Rep Two", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+
+      const searchToken = `Zephyr${uid().slice(0, 8)}`;
+      const owned = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: searchToken, lastName: "Owned", ownerId: owner.id } });
+      await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Someone", lastName: "Else", ownerId: otherOwner.id } });
+
+      const order = await tx.order.create({
+        data: { orderNumber: `ORD-${uid()}`, leadId: owned.id, source: OrderSource.WEBSITE, status: OrderStatus.OUT_FOR_DELIVERY, totalAmount: "400.00" },
+      });
+      await tx.payment.create({ data: { orderId: order.id, amount: "400.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
+      await tx.shipment.create({ data: { orderId: order.id, status: "OUT_FOR_DELIVERY", courier: "Delhivery" } });
+
+      const svc = new CustomersService(tx);
+
+      const byOwner = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, ownerId: owner.id });
+      assert.equal(byOwner.pagination.totalItems, 1);
+      assert.equal(byOwner.items[0].leadId, owned.id);
+
+      const bySearch = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: searchToken });
+      assert.equal(bySearch.pagination.totalItems, 1);
+      assert.equal(bySearch.items[0].leadId, owned.id);
+
+      const pendingPayment = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: searchToken, paymentStatus: PaymentStatus.PENDING });
+      assert.equal(pendingPayment.items.length, 1);
+
+      const wrongPayment = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: searchToken, paymentStatus: PaymentStatus.SUCCESS });
+      assert.equal(wrongPayment.items.length, 0);
+
+      const outForDelivery = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: searchToken, shipmentStatus: "OUT_FOR_DELIVERY" as any });
+      assert.equal(outForDelivery.items.length, 1);
+      assert.equal(outForDelivery.items[0].currentShipmentStatus, "OUT_FOR_DELIVERY");
+    });
+  });
+
+  it("respects lead-based role scoping: a salesperson only sees customers for leads they own", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id } });
+      await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id } });
+
+      const svc = new CustomersService(tx);
+      const result = await svc.listCustomers(as(rep, Role.SALESPERSON), { page: 1, pageSize: 20 });
+      assert.equal(result.items.length, 1);
+      assert.equal(result.items[0].leadId, ownLead.id);
+    });
+  });
+});
+
+describe("Next Best Action (E6.8)", () => {
+  it("recommends FOLLOW_UP_PAYMENT for an order with an outstanding balance, on Customer 360, the dedicated endpoint, and the list, in agreement", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Unpaid", lastName: "Customer" } });
+      const order = await tx.order.create({
+        data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.PENDING_PAYMENT, totalAmount: "1200.00" },
+      });
+      await tx.payment.create({ data: { orderId: order.id, amount: "1200.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
+
+      const svc = new CustomersService(tx);
+      const c360 = await svc.getCustomer360(as(admin, Role.ADMIN), lead.id);
+      assert.equal(c360.nextBestAction.action, "FOLLOW_UP_PAYMENT");
+      assert.equal(c360.nextBestAction.priority, "HIGH");
+      assert.equal(c360.nextBestAction.recommendedChannel, "CALL");
+      assert.equal(c360.nextBestAction.relatedOrderId, order.id);
+      assert.match(c360.nextBestAction.reason, /1200\.00/);
+
+      const dedicated = await svc.getNextBestAction(as(admin, Role.ADMIN), lead.id);
+      assert.deepEqual(dedicated, c360.nextBestAction, "the dedicated endpoint must agree exactly with Customer 360");
+
+      const list = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: "Unpaid" });
+      assert.equal(list.items[0]?.nbaAction, "FOLLOW_UP_PAYMENT");
+      assert.equal(list.items[0]?.nbaPriority, "HIGH");
+    });
+  });
+
+  it("recommends FOLLOW_UP_DELIVERY for an out-for-delivery shipment, and HANDLE_RETURN for a returned one", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+
+      const ofdLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "OutForDelivery" } });
+      const ofdOrder = await tx.order.create({
+        data: { orderNumber: `ORD-${uid()}`, leadId: ofdLead.id, source: OrderSource.WEBSITE, status: OrderStatus.OUT_FOR_DELIVERY, totalAmount: "500.00" },
+      });
+      await tx.payment.create({ data: { orderId: ofdOrder.id, amount: "500.00", method: PaymentMethod.UPI, status: PaymentStatus.SUCCESS } });
+      await tx.shipment.create({ data: { orderId: ofdOrder.id, status: "OUT_FOR_DELIVERY", courier: "Delhivery" } });
+
+      const returnedLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Returned" } });
+      const returnedOrder = await tx.order.create({
+        data: { orderNumber: `ORD-${uid()}`, leadId: returnedLead.id, source: OrderSource.WEBSITE, status: OrderStatus.RETURNED, totalAmount: "300.00" },
+      });
+      await tx.payment.create({ data: { orderId: returnedOrder.id, amount: "300.00", method: PaymentMethod.UPI, status: PaymentStatus.SUCCESS } });
+      await tx.shipment.create({ data: { orderId: returnedOrder.id, status: "RETURNED", courier: "Bluedart" } });
+
+      const svc = new CustomersService(tx);
+      const ofd = await svc.getNextBestAction(as(admin, Role.ADMIN), ofdLead.id);
+      assert.equal(ofd.action, "FOLLOW_UP_DELIVERY");
+      assert.equal(ofd.relatedOrderId, ofdOrder.id);
+
+      const returned = await svc.getNextBestAction(as(admin, Role.ADMIN), returnedLead.id);
+      assert.equal(returned.action, "HANDLE_RETURN");
+      assert.equal(returned.relatedOrderId, returnedOrder.id);
+    });
+  });
+
+  it("recommends INTERESTED_LEAD_FOLLOW_UP, RETENTION_FOLLOW_UP, REPEAT_PURCHASE_FOLLOW_UP and HIGH_VALUE_CUSTOMER_FOLLOW_UP matching each segment", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const svc = new CustomersService(tx);
+
+      const hotLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Interested", workingStatus: "INTERESTED" } });
+      assert.equal((await svc.getNextBestAction(as(admin, Role.ADMIN), hotLead.id)).action, "INTERESTED_LEAD_FOLLOW_UP");
+
+      const dormantLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Dormant" } });
+      const dormantOrder = await tx.order.create({
+        data: { orderNumber: `ORD-${uid()}`, leadId: dormantLead.id, source: OrderSource.WEBSITE, status: OrderStatus.DELIVERED, totalAmount: "300.00", createdAt: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000) },
+      });
+      await tx.payment.create({ data: { orderId: dormantOrder.id, amount: "300.00", method: PaymentMethod.CARD, status: PaymentStatus.SUCCESS } });
+      const dormantNba = await svc.getNextBestAction(as(admin, Role.ADMIN), dormantLead.id);
+      assert.equal(dormantNba.action, "RETENTION_FOLLOW_UP");
+      assert.equal(dormantNba.priority, "LOW");
+
+      const repeatLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Repeat" } });
+      for (let i = 0; i < 2; i++) {
+        const o = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: repeatLead.id, source: OrderSource.WEBSITE, status: OrderStatus.DELIVERED, totalAmount: "200.00" } });
+        await tx.payment.create({ data: { orderId: o.id, amount: "200.00", method: PaymentMethod.UPI, status: PaymentStatus.SUCCESS } });
+      }
+      assert.equal((await svc.getNextBestAction(as(admin, Role.ADMIN), repeatLead.id)).action, "REPEAT_PURCHASE_FOLLOW_UP");
+
+      const vipLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Vip" } });
+      const vipOrder = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: vipLead.id, source: OrderSource.WEBSITE, status: OrderStatus.DELIVERED, totalAmount: "20000.00" } });
+      await tx.payment.create({ data: { orderId: vipOrder.id, amount: "20000.00", method: PaymentMethod.CARD, status: PaymentStatus.SUCCESS } });
+      const vipNba = await svc.getNextBestAction(as(admin, Role.ADMIN), vipLead.id);
+      assert.equal(vipNba.action, "HIGH_VALUE_CUSTOMER_FOLLOW_UP");
+      assert.match(vipNba.reason, /VIP/);
+    });
+  });
+
+  it("filters the customer list by NBA action and priority", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const token = `Nba${uid().slice(0, 8)}`;
+
+      const unpaidLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Unpaid" } });
+      const unpaidOrder = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: unpaidLead.id, source: OrderSource.WEBSITE, status: OrderStatus.PENDING_PAYMENT, totalAmount: "700.00" } });
+      await tx.payment.create({ data: { orderId: unpaidOrder.id, amount: "700.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
+
+      const freshLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Fresh" } });
+
+      const svc = new CustomersService(tx);
+      const paymentFollowUps = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, nbaAction: "FOLLOW_UP_PAYMENT" });
+      assert.equal(paymentFollowUps.pagination.totalItems, 1);
+      assert.equal(paymentFollowUps.items[0]?.leadId, unpaidLead.id);
+
+      const highPriority = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, nbaPriority: "HIGH" });
+      assert.equal(highPriority.pagination.totalItems, 1);
+      assert.equal(highPriority.items[0]?.leadId, unpaidLead.id);
+
+      const lowPriority = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, nbaPriority: "LOW" });
+      assert.equal(lowPriority.items[0]?.leadId, freshLead.id);
+    });
+  });
+
+  it("respects lead-based role scoping and 404s consistently for an out-of-scope customer on the dedicated NBA endpoint", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id } });
+      const otherLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id } });
+
+      const svc = new CustomersService(tx);
+      assert.ok(await svc.getNextBestAction(as(rep, Role.SALESPERSON), ownLead.id));
+      await assert.rejects(() => svc.getNextBestAction(as(rep, Role.SALESPERSON), otherLead.id), /Customer not found/);
+    });
+  });
+});

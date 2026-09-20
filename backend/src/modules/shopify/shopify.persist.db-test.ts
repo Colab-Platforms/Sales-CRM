@@ -97,7 +97,7 @@ async function counts(tx: Db, orderExternalId: string) {
     tx.orderItem.count({ where: { orderId: order.id } }),
     tx.payment.count({ where: { orderId: order.id } }),
     tx.shipment.count({ where: { orderId: order.id } }),
-    tx.activity.count({ where: { referenceType: "Order", referenceId: order.id } }),
+    tx.activity.count({ where: { orderId: order.id } }),
   ]);
   return { orders: 1, items, payments, shipments, activities };
 }
@@ -145,9 +145,15 @@ describe("importing an order", () => {
       assert.equal(order.lead.ownerId, null);
       assert.equal(order.lead.externalId, customerId);
 
-      const activities = await tx.activity.findMany({ where: { referenceType: "Order", referenceId: order.id }, orderBy: { createdAt: "asc" } });
-      assert.deepEqual(activities.map((a) => a.type).sort(), [ActivityType.ORDER_CONFIRMED, ActivityType.ORDER_CREATED, ActivityType.PAYMENT].sort());
+      const activities = await tx.activity.findMany({ where: { orderId: order.id }, orderBy: { createdAt: "asc" } });
+      assert.deepEqual(
+        activities.map((a) => a.type).sort(),
+        [ActivityType.ORDER_CONFIRMED, ActivityType.ORDER_CREATED, ActivityType.PAYMENT_CREATED].sort(),
+      );
       assert.equal(activities[0].leadId, order.leadId, "the timeline hangs off the customer's lead");
+      const payment = activities.find((a) => a.type === ActivityType.PAYMENT_CREATED)!;
+      assert.equal(payment.referenceType, "Payment", "a payment event's entity is the payment, not the order");
+      assert.equal(payment.source, "SHOPIFY_SYNC");
     });
   });
 
@@ -207,10 +213,11 @@ describe("importing an order", () => {
       assert.equal(after.payments[0].method, PaymentMethod.COD);
       assert.ok(after.payments[0].paidAt);
 
-      const changes = await tx.activity.findMany({ where: { referenceType: "Order", referenceId: order.id, type: ActivityType.STATUS_CHANGE } });
+      const changes = await tx.activity.findMany({ where: { referenceType: "Order", referenceId: order.id, type: ActivityType.ORDER_STATUS_CHANGED } });
       assert.equal(changes.length, 1);
       assert.equal(changes[0].description, "CONFIRMED -> DELIVERED");
-      assert.equal(await tx.activity.count({ where: { referenceType: "Order", referenceId: order.id, type: ActivityType.PAYMENT } }), 1);
+      assert.equal(changes[0].source, "SHOPIFY_SYNC");
+      assert.equal(await tx.activity.count({ where: { orderId: order.id, type: ActivityType.PAYMENT_STATUS_CHANGED } }), 1);
     });
   });
 
@@ -254,8 +261,9 @@ describe("importing an order", () => {
 
       const order = await tx.order.findFirstOrThrow({ where: { ...ext, externalId: first.id } });
       assert.equal(order.status, OrderStatus.CANCELLED);
-      const change = await tx.activity.findFirstOrThrow({ where: { referenceType: "Order", referenceId: order.id, type: ActivityType.STATUS_CHANGE } });
+      const change = await tx.activity.findFirstOrThrow({ where: { referenceType: "Order", referenceId: order.id, type: ActivityType.ORDER_CANCELLED } });
       assert.equal(change.description, "CONFIRMED -> CANCELLED");
+      assert.deepEqual(change.newValue, { status: "CANCELLED", cancelReason: "OTHER" });
     });
   });
 

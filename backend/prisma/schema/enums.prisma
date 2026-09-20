@@ -283,7 +283,31 @@ enum ActivityType {
   RECOVERY
   TASK
 
+  // E6.6 Audit Trail: more specific types recorded going forward for events that used to share a
+  // generic type above (STATUS_CHANGE, PAYMENT) or were not recorded as Activity at all (shipments,
+  // discount changes). The generic types above are kept so historical rows keep rendering correctly.
+  ORDER_STATUS_CHANGED
+  ORDER_CANCELLED
+  PAYMENT_CREATED
+  PAYMENT_STATUS_CHANGED
+  PAYMENT_REFUNDED
+  PAYMENT_MISMATCH_DETECTED
+  SHIPMENT_CREATED
+  SHIPMENT_STATUS_CHANGED
+  TRACKING_UPDATED
+  DISCOUNT_CHANGED
+
   @@map("activity_type")
+}
+
+// Who/what actually caused an audit event, so a system/integration action never looks like a human one.
+enum ActivitySource {
+  USER
+  SHOPIFY_SYNC
+  SHOPIFY_WEBHOOK
+  SYSTEM
+
+  @@map("activity_source")
 }
 
 enum WebhookStatus {

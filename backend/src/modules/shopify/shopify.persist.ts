@@ -1,7 +1,19 @@
-import { ActivityType, ExternalSource, LeadWorkingStatus, OrderStatus, PaymentStatus, ProductStatus } from "../../../generated/prisma/enums.js";
+import {
+  ActivitySource,
+  ActivityType,
+  ExternalSource,
+  LeadWorkingStatus,
+  OrderStatus,
+  PaymentStatus,
+  ProductStatus,
+  type ShipmentStatus,
+} from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
-import type { MappedLeadIdentity, MappedOrder, MappedPayment, MappedProduct } from "./shopify.mapper.js";
+import { computePaymentBreakdown } from "../orders/orders.filters.js";
+import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
+import type { MappedFulfillment, MappedLeadIdentity, MappedOrder, MappedPayment, MappedProduct } from "./shopify.mapper.js";
+import { toCents } from "./shopify.money.js";
 
 // Writes mapped Shopify data into the CRM. Every function takes a transaction from the caller and is safe to
 // run repeatedly: records are found by their Shopify id, so a second run updates or skips, never duplicates.
@@ -239,7 +251,8 @@ export interface OrderResult {
 
 const PAYMENT_EVENTS = new Set<PaymentStatus>([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED]);
 
-export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: boolean } = {}): Promise<OrderResult> {
+export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: boolean; source?: ActivitySource } = {}): Promise<OrderResult> {
+  const activitySource = opts.source ?? ActivitySource.SHOPIFY_SYNC;
   await lock(tx, `shopify:order:${mapped.externalId}`);
   const result: OrderResult = {
     action: "skipped",
@@ -257,8 +270,12 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
       status: true,
       leadId: true,
       externalUpdatedAt: true,
+      discountAmount: true,
       payments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true, status: true } },
-      shipments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true } },
+      shipments: {
+        where: { externalSource: SOURCE },
+        select: { id: true, externalId: true, status: true, courier: true, trackingNumber: true, trackingUrl: true },
+      },
     },
   });
   if (existing && !opts.force && existing.externalUpdatedAt && existing.externalUpdatedAt >= mapped.externalUpdatedAt) {
@@ -314,8 +331,17 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
 
   await replaceItems(tx, order.id, mapped, result);
   const paymentEvents = await syncPayments(tx, order.id, mapped, existing?.payments ?? [], result);
-  await syncShipments(tx, order.id, mapped, existing?.shipments ?? [], result);
-  await recordActivity(tx, order.id, lead.leadId, mapped, existing?.status ?? null, paymentEvents);
+  const shipmentEvents = await syncShipments(tx, order.id, mapped, existing?.shipments ?? [], result);
+  await recordActivity(tx, {
+    orderId: order.id,
+    leadId: lead.leadId,
+    mapped,
+    previousStatus: existing?.status ?? null,
+    previousDiscountAmount: existing?.discountAmount ?? null,
+    paymentEvents,
+    shipmentEvents,
+    source: activitySource,
+  });
   return result;
 }
 
@@ -351,6 +377,7 @@ async function replaceItems(tx: Db, orderId: string, mapped: MappedOrder, result
 
 interface PaymentEvent {
   payment: MappedPayment;
+  paymentId: string;
   from: PaymentStatus | null;
 }
 
@@ -383,13 +410,14 @@ async function syncPayments(
     if (before) {
       await tx.payment.update({ where: { id: before.id }, data });
       result.payments.updated++;
-      if (before.status !== payment.status) events.push({ payment, from: before.status });
+      if (before.status !== payment.status) events.push({ payment, paymentId: before.id, from: before.status });
     } else {
-      await tx.payment.create({
+      const created = await tx.payment.create({
         data: { ...data, orderId, externalSource: SOURCE, externalId: payment.externalId, createdAt: payment.paidAt ?? payment.failedAt ?? mapped.createdAt },
+        select: { id: true },
       });
       result.payments.created++;
-      events.push({ payment, from: null });
+      events.push({ payment, paymentId: created.id, from: null });
     }
   }
 
@@ -403,13 +431,30 @@ async function syncPayments(
   return events;
 }
 
+export interface ShipmentEvent {
+  shipmentId: string;
+  fulfillment: MappedFulfillment;
+  kind: "created" | "status_changed" | "tracking_updated";
+  from?: { status?: ShipmentStatus; courier?: string | null; trackingNumber?: string | null; trackingUrl?: string | null };
+}
+
+interface CurrentShipment {
+  id: string;
+  externalId: string | null;
+  status: ShipmentStatus;
+  courier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+}
+
 async function syncShipments(
   tx: Db,
   orderId: string,
   mapped: MappedOrder,
-  current: { id: string; externalId: string | null }[],
+  current: CurrentShipment[],
   result: OrderResult,
-): Promise<void> {
+): Promise<ShipmentEvent[]> {
+  const events: ShipmentEvent[] = [];
   const byExt = new Map(current.map((s) => [s.externalId, s]));
 
   for (const fulfillment of mapped.fulfillments) {
@@ -425,9 +470,24 @@ async function syncShipments(
     if (before) {
       await tx.shipment.update({ where: { id: before.id }, data });
       result.shipments.updated++;
+      if (before.status !== data.status) {
+        events.push({ shipmentId: before.id, fulfillment, kind: "status_changed", from: { status: before.status } });
+      }
+      if (before.courier !== data.courier || before.trackingNumber !== data.trackingNumber || before.trackingUrl !== data.trackingUrl) {
+        events.push({
+          shipmentId: before.id,
+          fulfillment,
+          kind: "tracking_updated",
+          from: { courier: before.courier, trackingNumber: before.trackingNumber, trackingUrl: before.trackingUrl },
+        });
+      }
     } else {
-      await tx.shipment.create({ data: { ...data, orderId, externalSource: SOURCE, externalId: fulfillment.externalId } });
+      const created = await tx.shipment.create({
+        data: { ...data, orderId, externalSource: SOURCE, externalId: fulfillment.externalId },
+        select: { id: true },
+      });
       result.shipments.created++;
+      events.push({ shipmentId: created.id, fulfillment, kind: "created" });
     }
   }
 
@@ -439,43 +499,147 @@ async function syncShipments(
     await tx.shipment.deleteMany({ where: { id: { in: stale.map((s) => s.id) }, externalSource: SOURCE } });
     result.shipments.deleted += stale.length;
   }
+  return events;
 }
 
-// Timeline entries for Customer 360 and the order's status history. Written only when something actually
-// changed, so re-running a sync never adds duplicates.
-async function recordActivity(
-  tx: Db,
-  orderId: string,
-  leadId: string,
-  mapped: MappedOrder,
-  previousStatus: OrderStatus | null,
-  paymentEvents: PaymentEvent[],
-): Promise<void> {
-  const base = { leadId, referenceType: ORDER_REFERENCE_TYPE, referenceId: orderId };
+interface RecordActivityInput {
+  orderId: string;
+  leadId: string;
+  mapped: MappedOrder;
+  previousStatus: OrderStatus | null;
+  previousDiscountAmount: Prisma.Decimal | null;
+  paymentEvents: PaymentEvent[];
+  shipmentEvents: ShipmentEvent[];
+  source: ActivitySource;
+}
+
+// Audit-trail entries for Customer 360, the order's status history, the standalone Audit Trail page and
+// Order Detail's Audit History section. Written only when something actually changed, so re-running a
+// sync (the backfill re-visiting an unchanged order, or a webhook retry) never adds duplicates.
+//
+// `orderId` is set on every row here regardless of which entity changed, so an order-scoped audit query
+// is a single indexed lookup. `referenceType`/`referenceId` stay entity-specific (Order/Payment/Shipment)
+// EXCEPT that order-level events keep referenceType "Order" so the pre-existing status-history query and
+// Customer 360 timeline (which read historical rows written before `orderId` existed) keep working.
+async function recordActivity(tx: Db, input: RecordActivityInput): Promise<void> {
+  const { orderId, leadId, mapped, previousStatus, previousDiscountAmount, paymentEvents, shipmentEvents, source } = input;
+  const base = { leadId, orderId, source };
   const rows: Prisma.ActivityCreateManyInput[] = [];
 
   if (previousStatus === null) {
-    rows.push({ ...base, type: ActivityType.ORDER_CREATED, title: `Shopify order ${mapped.externalNumber} placed`, createdAt: mapped.createdAt });
-    if (mapped.confirmedAt) rows.push({ ...base, type: ActivityType.ORDER_CONFIRMED, title: `Order ${mapped.externalNumber} confirmed`, createdAt: mapped.confirmedAt });
-  } else if (previousStatus !== mapped.status) {
     rows.push({
       ...base,
-      type: ActivityType.STATUS_CHANGE,
-      title: `Order ${mapped.externalNumber} status changed`,
+      type: ActivityType.ORDER_CREATED,
+      referenceType: ORDER_REFERENCE_TYPE,
+      referenceId: orderId,
+      title: `Shopify order ${mapped.externalNumber} placed`,
+      newValue: { status: mapped.status, totalAmount: mapped.totalAmount, currency: mapped.currency },
+      createdAt: mapped.createdAt,
+    });
+    if (mapped.confirmedAt) {
+      rows.push({
+        ...base,
+        type: ActivityType.ORDER_CONFIRMED,
+        referenceType: ORDER_REFERENCE_TYPE,
+        referenceId: orderId,
+        title: `Order ${mapped.externalNumber} confirmed`,
+        createdAt: mapped.confirmedAt,
+      });
+    }
+  } else if (previousStatus !== mapped.status) {
+    const isCancellation = mapped.status === OrderStatus.CANCELLED;
+    rows.push({
+      ...base,
+      type: isCancellation ? ActivityType.ORDER_CANCELLED : ActivityType.ORDER_STATUS_CHANGED,
+      referenceType: ORDER_REFERENCE_TYPE,
+      referenceId: orderId,
+      title: isCancellation ? `Order ${mapped.externalNumber} cancelled` : `Order ${mapped.externalNumber} status changed`,
       description: `${previousStatus} -> ${mapped.status}`,
+      oldValue: { status: previousStatus },
+      newValue: isCancellation ? { status: mapped.status, cancelReason: mapped.cancelReason } : { status: mapped.status },
       createdAt: mapped.externalUpdatedAt,
     });
   }
 
-  for (const { payment, from } of paymentEvents) {
-    if (!PAYMENT_EVENTS.has(payment.status)) continue;
+  if (previousDiscountAmount !== null && toCents(previousDiscountAmount.toString()) !== toCents(mapped.discountAmount)) {
     rows.push({
       ...base,
-      type: ActivityType.PAYMENT,
+      type: ActivityType.DISCOUNT_CHANGED,
+      referenceType: ORDER_REFERENCE_TYPE,
+      referenceId: orderId,
+      title: `Order ${mapped.externalNumber} discount changed`,
+      oldValue: { discountAmount: previousDiscountAmount.toString() },
+      newValue: { discountAmount: mapped.discountAmount },
+      createdAt: mapped.externalUpdatedAt,
+    });
+  }
+
+  for (const { payment, paymentId, from } of paymentEvents) {
+    if (!PAYMENT_EVENTS.has(payment.status)) continue;
+    const isRefund = payment.status === PaymentStatus.REFUNDED || payment.status === PaymentStatus.PARTIALLY_REFUNDED;
+    rows.push({
+      ...base,
+      type: from === null ? ActivityType.PAYMENT_CREATED : isRefund ? ActivityType.PAYMENT_REFUNDED : ActivityType.PAYMENT_STATUS_CHANGED,
+      referenceType: "Payment",
+      referenceId: paymentId,
       title: `Payment ${payment.status.toLowerCase().replace("_", " ")}${payment.provider ? ` (${payment.provider})` : ""}`,
       description: from ? `${from} -> ${payment.status}` : null,
+      oldValue: from ? { status: from } : undefined,
+      newValue: { status: payment.status, amount: payment.amount, method: payment.method, ...(isRefund ? { refundedAmount: payment.refundedAmount } : {}) },
       createdAt: payment.refundedAt ?? payment.paidAt ?? payment.failedAt ?? mapped.externalUpdatedAt,
     });
+  }
+
+  for (const event of shipmentEvents) {
+    const shipmentBase = { ...base, referenceType: "Shipment", referenceId: event.shipmentId, createdAt: mapped.externalUpdatedAt };
+    if (event.kind === "created") {
+      rows.push({
+        ...shipmentBase,
+        type: ActivityType.SHIPMENT_CREATED,
+        title: `Shipment created${event.fulfillment.courier ? ` via ${event.fulfillment.courier}` : ""} for order ${mapped.externalNumber}`,
+        newValue: { status: event.fulfillment.status, courier: event.fulfillment.courier, trackingNumber: event.fulfillment.trackingNumber },
+      });
+    } else if (event.kind === "status_changed") {
+      rows.push({
+        ...shipmentBase,
+        type: ActivityType.SHIPMENT_STATUS_CHANGED,
+        title: `Shipment status changed for order ${mapped.externalNumber}`,
+        description: `${event.from?.status} -> ${event.fulfillment.status}`,
+        oldValue: { status: event.from?.status ?? null },
+        newValue: { status: event.fulfillment.status },
+      });
+    } else {
+      rows.push({
+        ...shipmentBase,
+        type: ActivityType.TRACKING_UPDATED,
+        title: `Tracking updated for order ${mapped.externalNumber}`,
+        oldValue: { courier: event.from?.courier ?? null, trackingNumber: event.from?.trackingNumber ?? null },
+        newValue: { courier: event.fulfillment.courier, trackingNumber: event.fulfillment.trackingNumber, trackingUrl: event.fulfillment.trackingUrl },
+      });
+    }
+  }
+
+  // Only checked when a payment actually changed this run, so an unrelated re-sync of an already
+  // mismatched order never re-reports it.
+  if (paymentEvents.length > 0) {
+    const totalCents = toCents(mapped.totalAmount);
+    const breakdown = computePaymentBreakdown(mapped.payments);
+    const status = deriveReconciliationStatus(totalCents, breakdown, mapped.payments.length > 0);
+    if (status === "PAYMENT_MISMATCH") {
+      rows.push({
+        ...base,
+        type: ActivityType.PAYMENT_MISMATCH_DETECTED,
+        referenceType: ORDER_REFERENCE_TYPE,
+        referenceId: orderId,
+        title: `Payment mismatch detected for order ${mapped.externalNumber}`,
+        metadata: {
+          orderTotal: mapped.totalAmount,
+          netPaid: (breakdown.paidCents / 100).toFixed(2),
+          refunded: (breakdown.refundedCents / 100).toFixed(2),
+        },
+        createdAt: mapped.externalUpdatedAt,
+      });
+    }
   }
 
   if (rows.length > 0) await tx.activity.createMany({ data: rows });

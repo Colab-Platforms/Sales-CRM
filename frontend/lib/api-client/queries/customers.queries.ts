@@ -1,10 +1,11 @@
 import axios from "axios";
 import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { customersApi } from "../endpoints/customers.api";
-import type { CustomerTimelineParams } from "../types/customers.types";
+import type { CustomerTimelineParams, CustomersListParams } from "../types/customers.types";
 
 export const customersKeys = {
   all: ["customers"] as const,
+  list: (params: CustomersListParams) => [...customersKeys.all, "list", params] as const,
   detail: (leadId: string) => [...customersKeys.all, "detail", leadId] as const,
   timeline: (leadId: string, params: CustomerTimelineParams) =>
     [...customersKeys.all, "timeline", leadId, params] as const,
@@ -20,6 +21,16 @@ function retryUnlessClientError(failureCount: number, error: unknown): boolean {
     return false;
   }
   return failureCount < MAX_RETRIES;
+}
+
+export function customersListQueryOptions(params: CustomersListParams) {
+  return queryOptions({
+    queryKey: customersKeys.list(params),
+    queryFn: () => customersApi.list(params),
+    staleTime: STALE_TIME_MS,
+    placeholderData: keepPreviousData,
+    retry: retryUnlessClientError,
+  });
 }
 
 export function customer360QueryOptions(leadId: string) {

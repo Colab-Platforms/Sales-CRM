@@ -1,3 +1,4 @@
+import type { ActivitySource } from "../../../generated/prisma/enums.js";
 import { ShopifyApiError, ShopifyGraphQLError, type ShopifyClient } from "./shopify.client.js";
 import { fetchCustomer, fetchProduct } from "./shopify.catalog.js";
 import { mapCustomer, mapOrder, mapProduct, type MappedOrder } from "./shopify.mapper.js";
@@ -158,7 +159,11 @@ export interface OrderSyncOutcome {
  * `notBefore` (the sync start date) makes an older order a no-op; the CLI leaves it out because a --since that
  * reaches further back is an explicit request.
  */
-export async function syncOrderById(deps: SyncDeps, orderGid: string, opts: { force?: boolean; notBefore?: Date } = {}): Promise<OrderSyncOutcome> {
+export async function syncOrderById(
+  deps: SyncDeps,
+  orderGid: string,
+  opts: { force?: boolean; notBefore?: Date; source?: ActivitySource } = {},
+): Promise<OrderSyncOutcome> {
   const runner = requireRunner(deps);
   const raw = await fetchOrder(deps.client, toGid("Order", orderGid));
   if (!raw) return { notFound: true, outOfWindow: false, mapped: null, result: null, productsSynced: 0, productResults: [] };
@@ -175,7 +180,9 @@ export async function syncOrderById(deps: SyncDeps, orderGid: string, opts: { fo
     if (outcome.result) productResults.push(outcome.result);
   }
 
-  const result = await withConflictRetry(() => runner.$transaction((tx) => upsertOrder(tx, mapped, opts), TX_OPTIONS));
+  const result = await withConflictRetry(() =>
+    runner.$transaction((tx) => upsertOrder(tx, mapped, { force: opts.force, source: opts.source }), TX_OPTIONS),
+  );
   return { notFound: false, outOfWindow: false, mapped, result, productsSynced: productResults.length, productResults };
 }
 

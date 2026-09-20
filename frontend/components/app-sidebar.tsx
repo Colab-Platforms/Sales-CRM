@@ -13,6 +13,8 @@ import {
   UserCog,
   Building2,
   Wallet,
+  History,
+  Contact,
 } from "lucide-react";
 import {
   Sidebar,
@@ -42,13 +44,17 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "My Leads", href: "/dashboard/leads", icon: Users },
     { title: "Interested Leads", icon: Target },
     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+    { title: "Customers", href: "/dashboard/customers", icon: Contact },
+    { title: "Audit Trail", href: "/dashboard/audit", icon: History },
   ],
   MANAGER: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { title: "Team", href: "/dashboard/team", icon: UsersRound },
     { title: "Leads", icon: Users },
     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+    { title: "Customers", href: "/dashboard/customers", icon: Contact },
     { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
+    { title: "Audit Trail", href: "/dashboard/audit", icon: History },
     { title: "Reports", icon: BarChart3 },
   ],
   ADMIN: [
@@ -57,7 +63,9 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Groups", icon: Building2 },
     { title: "Leads", icon: Users },
     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+    { title: "Customers", href: "/dashboard/customers", icon: Contact },
     { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
+    { title: "Audit Trail", href: "/dashboard/audit", icon: History },
     { title: "Reports", icon: BarChart3 },
   ],
 };

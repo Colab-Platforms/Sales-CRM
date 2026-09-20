@@ -1,9 +1,19 @@
-import type { PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import type { LeadWorkingStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
 import type { ShipmentDetail } from "../orders/orders.types.js";
 import { fromCents, sumCents, toCents } from "../shopify/shopify.money.js";
-import type { CustomerOrderSummary, CustomerPaymentSummary, CustomerProfile } from "./customers.types.js";
+import { deriveNextBestAction, type NbaOrderInput } from "./nba.js";
+import { deriveCustomerSegment } from "./segment.js";
+import type {
+  CustomerListItem,
+  CustomerOrderSummary,
+  CustomerPaymentSummary,
+  CustomerProfile,
+  CustomerSegmentInfo,
+  ListCustomersQuery,
+  NextBestActionInfo,
+} from "./customers.types.js";
 
 // One lead (customer), but only if the user's lead scope allows it. Mirrors orders.filters.ts'
 // scopedOrderWhere so a customer id that exists but is out of scope looks the same as a missing one.
@@ -160,5 +170,101 @@ export function buildPaymentSummary(orders: OrderSummaryInput[]): CustomerPaymen
     codValue: fromCents(codCents),
     prepaidOrderCount,
     prepaidValue: fromCents(prepaidCents),
+  };
+}
+
+// ---- E6.7: Customer Segments & Post-Sale Management ----
+
+// The customer's lifecycle segment, built from the exact same orders/paymentSummary the rest of
+// Customer 360 already computed - never a second, independent calculation of "paid" or "orders".
+export function buildSegmentInfo(
+  lead: { workingStatus: LeadWorkingStatus },
+  hasActiveInterestedPeriod: boolean,
+  orders: OrderSummaryInput[],
+  paymentSummary: CustomerPaymentSummary,
+  now?: Date,
+): CustomerSegmentInfo {
+  return deriveCustomerSegment({
+    workingStatus: lead.workingStatus,
+    hasActiveInterestedPeriod,
+    orders: orders.map((o) => ({ createdAt: o.createdAt, payments: o.payments })),
+    totalPaidCents: toCents(paymentSummary.totalPaid),
+    now,
+  });
+}
+
+export function buildCustomerListWhere(query: ListCustomersQuery, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
+  const and: Prisma.LeadWhereInput[] = [];
+
+  if (Object.keys(leadScope).length > 0) and.push(leadScope);
+  if (query.ownerId) and.push({ ownerId: query.ownerId });
+  if (query.dateFrom || query.dateTo) and.push({ createdAt: { gte: query.dateFrom, lte: query.dateTo } });
+  if (query.search) {
+    const contains = { contains: query.search, mode: "insensitive" as const };
+    and.push({ OR: [{ firstName: contains }, { lastName: contains }, { leadNumber: contains }, { mobile: contains }, { email: contains }] });
+  }
+
+  return and.length > 0 ? { AND: and } : {};
+}
+
+// ---- E6.8: Next Best Action ----
+
+// Built from the exact same orders/segment/paymentSummary already computed - the recommendation can
+// never disagree with the segment or payment summary shown alongside it.
+export function buildNbaInfo(orders: OrderSummaryInput[], segmentInfo: CustomerSegmentInfo, paymentSummary: CustomerPaymentSummary): NextBestActionInfo {
+  const nbaOrders: NbaOrderInput[] = orders.map((o) => ({
+    id: o.id,
+    orderNumber: o.orderNumber,
+    totalAmount: o.totalAmount,
+    payments: o.payments,
+    latestShipmentStatus: o.shipments[0]?.status ?? null,
+  }));
+
+  return deriveNextBestAction({
+    segment: segmentInfo,
+    orders: nbaOrders,
+    totalPaidCents: toCents(paymentSummary.totalPaid),
+    totalOutstandingCents: toCents(paymentSummary.totalOutstanding),
+  });
+}
+
+export interface CustomerListLeadInput {
+  id: string;
+  leadNumber: string;
+  firstName: string;
+  lastName: string | null;
+  mobile: string | null;
+  workingStatus: LeadWorkingStatus;
+  owner: { id: string; name: string } | null;
+  hasActiveInterestedPeriod: boolean;
+}
+
+// `orders` must already be sorted most-recent-first (the same convention as everywhere else in this
+// module), so `orders[0]` is the customer's current/latest order.
+export function mapCustomerListItem(lead: CustomerListLeadInput, orders: OrderSummaryInput[], now?: Date): CustomerListItem {
+  const paymentSummary = buildPaymentSummary(orders);
+  const segmentInfo = buildSegmentInfo(lead, lead.hasActiveInterestedPeriod, orders, paymentSummary, now);
+  const nba = buildNbaInfo(orders, segmentInfo, paymentSummary);
+  const latest = orders[0];
+  const latestSummary = latest ? mapOrderSummary(latest) : null;
+
+  return {
+    leadId: lead.id,
+    leadNumber: lead.leadNumber,
+    name: fullName(lead.firstName, lead.lastName),
+    mobile: lead.mobile,
+    segment: segmentInfo.segment,
+    segmentReason: segmentInfo.reason,
+    orderCount: orders.length,
+    totalPaid: paymentSummary.totalPaid,
+    outstandingAmount: paymentSummary.totalOutstanding,
+    lastOrderAt: latest?.createdAt ?? null,
+    currentOrderStatus: latest?.status ?? null,
+    currentPaymentStatus: latestSummary?.paymentStatus ?? null,
+    currentShipmentStatus: latestSummary?.latestShipment?.status ?? null,
+    owner: lead.owner,
+    nbaAction: nba.action,
+    nbaPriority: nba.priority,
+    nbaReason: nba.reason,
   };
 }

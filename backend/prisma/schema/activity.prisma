@@ -6,21 +6,42 @@ model Activity {
 
   actorId String? @map("actor_id") @db.Uuid
   actor   User?   @relation("ActivityActor", fields: [actorId], references: [id])
+  // The actor's role at the time of the event, since a user's role can change later.
+  actorRole Role? @map("actor_role")
 
   type ActivityType @map("type")
 
-  // App-enforced polymorphic reference; no DB-level FK by design.
+  // App-enforced polymorphic reference to the entity that actually changed; no DB-level FK by design.
   referenceType String? @map("reference_type") @db.VarChar(100)
   referenceId   String? @map("reference_id") @db.VarChar(255)
 
+  // Direct pointer to the related order, when there is one - distinct from referenceId/Type above,
+  // since e.g. a payment or shipment event's entity is the payment/shipment, not the order itself.
+  // Kept nullable and separate from the polymorphic pair above so order-scoped audit queries stay a
+  // single indexed lookup regardless of which entity actually changed.
+  orderId String? @map("order_id") @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  // Who/what caused the event - never guessed; SYSTEM is the default for rows written before this
+  // column existed, since none of them impersonated a user.
+  source ActivitySource @default(SYSTEM) @map("source")
+
   title       String? @map("title") @db.VarChar(255)
   description String? @map("description")
+
+  // Safe, structured before/after business values (never secrets/tokens/passwords) plus any extra
+  // context. JSON rather than dedicated columns since the shape genuinely differs per event type.
+  oldValue Json? @map("old_value")
+  newValue Json? @map("new_value")
+  metadata Json? @map("metadata")
 
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([leadId])
   @@index([actorId])
+  @@index([orderId])
   @@index([type])
+  @@index([source])
   @@index([createdAt])
   @@map("activities")
 }

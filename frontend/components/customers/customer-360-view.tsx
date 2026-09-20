@@ -6,6 +6,8 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCustomer360 } from "@/hooks/useCustomers";
 import { CustomerProfileCard } from "./customer-profile-card";
+import { CustomerSegmentCard } from "./customer-segment-card";
+import { NextBestActionCard } from "./next-best-action-card";
 import { CustomerPaymentSummaryCard } from "./customer-payment-summary-card";
 import { CustomerOrdersList } from "./customer-orders-list";
 import { CustomerTimeline } from "./customer-timeline";
@@ -57,9 +59,16 @@ export function Customer360View({ leadId }: { leadId: string }) {
     <div className="space-y-6">
       <BackLink />
       <CustomerProfileCard customer={data} />
+      <CustomerSegmentCard segment={data.segment} currency={currency} />
+      <NextBestActionCard nba={data.nextBestAction} />
       <CustomerPaymentSummaryCard summary={data.paymentSummary} currency={currency} />
       <CustomerOrdersList orders={data.orders} />
       <CustomerTimeline leadId={leadId} />
+      <div>
+        <Link href={`/dashboard/audit?leadId=${leadId}`} className="text-sm text-primary hover:underline">
+          View full audit trail for this customer
+        </Link>
+      </div>
     </div>
   );
 }
