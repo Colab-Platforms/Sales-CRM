@@ -37,6 +37,10 @@ export interface AddSalespersonPayload {
   phone?: string;
 }
 
+export interface CreateSalespersonPayload extends AddSalespersonPayload {
+  groupId: string;
+}
+
 export interface SalespersonUser {
   id: string;
   name: string;

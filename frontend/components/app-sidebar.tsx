@@ -12,6 +12,7 @@ import {
   BarChart3,
   UserCog,
   Building2,
+  Contact,
 } from "lucide-react";
 import {
   Sidebar,
@@ -45,6 +46,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
   MANAGER: [
     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
     { title: "Team", href: "/dashboard/team", icon: UsersRound },
+    { title: "Salespersons", href: "/dashboard/salespersons", icon: Contact },
     { title: "Leads", href: "/dashboard/leads", icon: Users },
     { title: "Orders", icon: ShoppingCart },
     { title: "Reports", icon: BarChart3 },

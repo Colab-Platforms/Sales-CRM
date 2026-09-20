@@ -5,6 +5,7 @@ import type {
   AddExistingMemberPayload,
   AddSalespersonPayload,
   CreateGroupPayload,
+  CreateSalespersonPayload,
   Group,
   SalespersonUser,
   UpdateGroupPayload,
@@ -52,6 +53,20 @@ export function useAddSalespersonMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
       queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.mySalespersons() });
+    },
+  });
+}
+
+export function useCreateSalespersonMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<SalespersonUser, unknown, CreateSalespersonPayload>({
+    mutationFn: (payload) => managerApi.createSalesperson(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.mySalespersons() });
     },
   });
 }
@@ -64,6 +79,7 @@ export function useAddExistingSalespersonMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
       queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.mySalespersons() });
     },
   });
 }
@@ -79,6 +95,7 @@ export function useUpdateSalespersonMutation() {
     mutationFn: ({ groupId, userId, payload }) => managerApi.updateSalesperson(groupId, userId, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.mySalespersons() });
     },
   });
 }
@@ -91,6 +108,7 @@ export function useRemoveSalespersonMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
       queryClient.invalidateQueries({ queryKey: managerKeys.salespersons() });
+      queryClient.invalidateQueries({ queryKey: managerKeys.mySalespersons() });
     },
   });
 }

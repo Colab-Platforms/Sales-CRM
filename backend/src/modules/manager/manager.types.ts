@@ -10,6 +10,10 @@ export interface AddSalespersonBody {
   phone?: string;
 }
 
+export interface CreateSalespersonBody extends AddSalespersonBody {
+  groupId: string;
+}
+
 export interface AddExistingMemberBody {
   userId: string;
 }

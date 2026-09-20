@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FolderPlus, LayoutGrid } from "lucide-react";
+import { FolderPlus, UserPlus, LayoutGrid } from "lucide-react";
 import { groupsQueryOptions, salespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import {
   useAddExistingSalespersonMutation,
@@ -13,6 +13,7 @@ import {
   useUpdateGroupMutation,
   useUpdateSalespersonMutation,
 } from "@/lib/api-client/mutations/manager.mutations";
+import { CreateSalespersonModal } from "@/components/team/create-salesperson-modal";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -469,6 +470,7 @@ function GroupCard({ group }: { group: Group }) {
 export default function TeamPage() {
   const { data: groups, isPending, error } = useQuery(groupsQueryOptions());
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
 
   return (
     <div className="space-y-6">
@@ -477,14 +479,26 @@ export default function TeamPage() {
           <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
           <p className="text-sm text-muted-foreground">Create groups and add salespeople to your team.</p>
         </div>
-        <Button onClick={() => setIsCreateOpen(true)} className="gap-2 sm:self-center">
-          <FolderPlus className="size-4" />
-          Create Group
-        </Button>
+        <div className="flex flex-wrap gap-2 sm:self-center">
+          <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)} className="gap-2">
+            <UserPlus className="size-4" />
+            Add Salesperson
+          </Button>
+          <Button onClick={() => setIsCreateOpen(true)} className="gap-2">
+            <FolderPlus className="size-4" />
+            Create Group
+          </Button>
+        </div>
       </div>
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         {isCreateOpen ? <CreateGroupModalContent onDone={() => setIsCreateOpen(false)} /> : null}
+      </Dialog>
+
+      <Dialog open={isAddSalespersonOpen} onOpenChange={setIsAddSalespersonOpen}>
+        {isAddSalespersonOpen ? (
+          <CreateSalespersonModal groups={groups ?? []} onDone={() => setIsAddSalespersonOpen(false)} />
+        ) : null}
       </Dialog>
 
       {isPending ? (
