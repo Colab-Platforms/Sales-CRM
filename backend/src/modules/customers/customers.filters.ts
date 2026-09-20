@@ -1,7 +1,6 @@
-import { PaymentStatus } from "../../../generated/prisma/enums.js";
-import type { PaymentMethod, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import type { PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
+import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
 import type { ShipmentDetail } from "../orders/orders.types.js";
 import { fromCents, sumCents, toCents } from "../shopify/shopify.money.js";
 import type { CustomerOrderSummary, CustomerPaymentSummary, CustomerProfile } from "./customers.types.js";
@@ -104,13 +103,15 @@ export function mapOrderSummary(order: OrderSummaryInput): CustomerOrderSummary 
   };
 }
 
-// All money is summed in integer cents (via the same helpers the Shopify sync uses) so totals
-// across many orders/payments never drift the way repeated float addition would.
+// All money is summed in integer cents (via computePaymentBreakdown, the same per-order math the
+// reconciliation module uses) so totals across many orders/payments never drift, and a customer's
+// payment summary can never disagree with the reconciliation view about the same orders.
 export function buildPaymentSummary(orders: OrderSummaryInput[]): CustomerPaymentSummary {
   let paidCents = 0;
   let pendingCents = 0;
   let failedCents = 0;
   let refundedCents = 0;
+  let outstandingCents = 0;
   let successfulPaymentCount = 0;
   let pendingPaymentCount = 0;
   let failedPaymentCount = 0;
@@ -131,35 +132,16 @@ export function buildPaymentSummary(orders: OrderSummaryInput[]): CustomerPaymen
       prepaidCents += orderTotalCents;
     }
 
-    for (const payment of order.payments) {
-      const amountCents = toCents(payment.amount.toString());
-      const refundedForPayment = payment.refundedAmount ? toCents(payment.refundedAmount.toString()) : 0;
-
-      switch (payment.status) {
-        case PaymentStatus.SUCCESS:
-          paidCents += amountCents;
-          successfulPaymentCount++;
-          break;
-        case PaymentStatus.PENDING:
-        case PaymentStatus.PROCESSING:
-          pendingCents += amountCents;
-          pendingPaymentCount++;
-          break;
-        case PaymentStatus.FAILED:
-          failedCents += amountCents;
-          failedPaymentCount++;
-          break;
-        case PaymentStatus.REFUNDED:
-          refundedCents += refundedForPayment || amountCents;
-          refundedPaymentCount++;
-          break;
-        case PaymentStatus.PARTIALLY_REFUNDED:
-          refundedCents += refundedForPayment;
-          paidCents += Math.max(amountCents - refundedForPayment, 0);
-          refundedPaymentCount++;
-          break;
-      }
-    }
+    const breakdown = computePaymentBreakdown(order.payments);
+    paidCents += breakdown.paidCents;
+    pendingCents += breakdown.pendingCents;
+    failedCents += breakdown.failedCents;
+    refundedCents += breakdown.refundedCents;
+    outstandingCents += Math.max(orderTotalCents - breakdown.paidCents - breakdown.refundedCents, 0);
+    successfulPaymentCount += breakdown.successfulPaymentCount;
+    pendingPaymentCount += breakdown.pendingPaymentCount;
+    failedPaymentCount += breakdown.failedPaymentCount;
+    refundedPaymentCount += breakdown.refundedPaymentCount;
   }
 
   return {
@@ -169,6 +151,7 @@ export function buildPaymentSummary(orders: OrderSummaryInput[]): CustomerPaymen
     totalPending: fromCents(pendingCents),
     totalFailed: fromCents(failedCents),
     totalRefunded: fromCents(refundedCents),
+    totalOutstanding: fromCents(outstandingCents),
     successfulPaymentCount,
     pendingPaymentCount,
     failedPaymentCount,

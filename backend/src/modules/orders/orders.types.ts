@@ -1,4 +1,5 @@
 import type { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import type { ReconciliationStatus } from "../reconciliation/reconciliation.types.js";
 
 // How the customer pays: cash on delivery, or up front by any other method. Null when the method is not known.
 export type PaymentMode = "COD" | "PREPAID";
@@ -77,6 +78,11 @@ export interface OrderDetail {
   cancelledAt: Date | null;
   paymentStatus: PaymentStatus | null;
   paymentMode: PaymentMode | null;
+  // Reconciliation breakdown, derived the same way as the reconciliation module so the two never disagree.
+  paidAmount: Money;
+  refundedAmount: Money;
+  outstandingAmount: Money;
+  reconciliationStatus: ReconciliationStatus;
   customer: {
     leadId: string;
     leadNumber: string;

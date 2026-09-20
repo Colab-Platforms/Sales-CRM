@@ -157,6 +157,8 @@ describe("buildPaymentSummary", () => {
     assert.equal(summary.totalPending, "300.00");
     assert.equal(summary.totalFailed, "200.00");
     assert.equal(summary.totalRefunded, "100.00");
+    // Pending (300) and failed (200) orders still owe their full amount; paid and fully-refunded do not.
+    assert.equal(summary.totalOutstanding, "500.00");
     assert.equal(summary.successfulPaymentCount, 1);
     assert.equal(summary.pendingPaymentCount, 1);
     assert.equal(summary.failedPaymentCount, 1);
@@ -181,6 +183,7 @@ describe("buildPaymentSummary", () => {
     const summary = buildPaymentSummary(orders);
     assert.equal(summary.totalPaid, "600.00");
     assert.equal(summary.totalRefunded, "400.00");
+    assert.equal(summary.totalOutstanding, "0.00", "the paid remainder plus the refund covers the whole order");
   });
 
   it("counts COD and prepaid orders and their value separately", () => {

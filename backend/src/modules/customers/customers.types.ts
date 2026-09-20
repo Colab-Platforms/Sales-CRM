@@ -47,6 +47,7 @@ export interface CustomerPaymentSummary {
   totalPending: Money;
   totalFailed: Money;
   totalRefunded: Money;
+  totalOutstanding: Money;
   successfulPaymentCount: number;
   pendingPaymentCount: number;
   failedPaymentCount: number;

@@ -21,12 +21,13 @@ export function CustomerPaymentSummaryCard({ summary, currency }: { summary: Cus
         <CardTitle>Payment summary</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           <Stat label="Total order value" value={money(summary.totalOrderValue)} hint={`${summary.orderCount} orders`} />
           <Stat label="Paid" value={money(summary.totalPaid)} hint={`${summary.successfulPaymentCount} successful`} />
           <Stat label="Pending" value={money(summary.totalPending)} hint={`${summary.pendingPaymentCount} pending`} />
           <Stat label="Failed" value={money(summary.totalFailed)} hint={`${summary.failedPaymentCount} failed`} />
           <Stat label="Refunded" value={money(summary.totalRefunded)} hint={`${summary.refundedPaymentCount} refunded`} />
+          <Stat label="Outstanding" value={money(summary.totalOutstanding)} />
         </div>
         <div className="grid grid-cols-2 gap-3 sm:w-fit sm:grid-cols-2">
           <Stat label="COD" value={money(summary.codValue)} hint={`${summary.codOrderCount} orders`} />

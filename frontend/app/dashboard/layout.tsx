@@ -17,7 +17,9 @@ function DashboardShell({ children }: { children: ReactNode }) {
     ? "Orders"
     : pathname.startsWith("/dashboard/customers")
       ? "Customers"
-      : "Dashboard";
+      : pathname.startsWith("/dashboard/reconciliation")
+        ? "Reconciliation"
+        : "Dashboard";
 
   return (
     <SidebarProvider>

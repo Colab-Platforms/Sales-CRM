@@ -1,3 +1,5 @@
+import type { ReconciliationStatus } from "./reconciliation.types";
+
 export type OrderStatus =
   | "DRAFT"
   | "PENDING_PAYMENT"
@@ -149,6 +151,11 @@ export interface OrderDetail {
   cancelledAt: string | null;
   paymentStatus: PaymentStatus | null;
   paymentMode: PaymentMode | null;
+  // Reconciliation breakdown - see reconciliation.types.ts for what each status means.
+  paidAmount: string;
+  refundedAmount: string;
+  outstandingAmount: string;
+  reconciliationStatus: ReconciliationStatus;
   customer: {
     leadId: string;
     leadNumber: string;

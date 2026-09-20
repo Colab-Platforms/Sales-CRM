@@ -5,7 +5,16 @@ import { ActivityType, Role, UserStatus } from "../../../generated/prisma/enums.
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, getManagerTeam, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
-import { buildOrderWhere, derivePaymentMode, derivePaymentStatus, fullName, scopedOrderWhere } from "./orders.filters.js";
+import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
+import { fromCents, toCents } from "../shopify/shopify.money.js";
+import {
+  buildOrderWhere,
+  computePaymentBreakdown,
+  derivePaymentMode,
+  derivePaymentStatus,
+  fullName,
+  scopedOrderWhere,
+} from "./orders.filters.js";
 import {
   ORDER_REFERENCE_TYPE,
   type ListOrdersQuery,
@@ -152,6 +161,10 @@ class OrdersService {
 
     const money = (value: Prisma.Decimal) => value.toString();
 
+    const totalCents = toCents(order.totalAmount.toString());
+    const breakdown = computePaymentBreakdown(order.payments);
+    const outstandingCents = Math.max(totalCents - breakdown.paidCents - breakdown.refundedCents, 0);
+
     return {
       id: order.id,
       orderNumber: order.orderNumber,
@@ -174,6 +187,10 @@ class OrdersService {
       cancelledAt: order.cancelledAt,
       paymentStatus: derivePaymentStatus(order.payments),
       paymentMode: derivePaymentMode(order.payments),
+      paidAmount: fromCents(breakdown.paidCents),
+      refundedAmount: fromCents(breakdown.refundedCents),
+      outstandingAmount: fromCents(outstandingCents),
+      reconciliationStatus: deriveReconciliationStatus(totalCents, breakdown, order.payments.length > 0),
       customer: {
         leadId: order.lead.id,
         leadNumber: order.lead.leadNumber,

@@ -22,6 +22,7 @@ import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { PaymentStatusBadge } from "./payment-status-badge";
+import { ReconciliationStatusBadge } from "./reconciliation-status-badge";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
 
 const ORDERS_HREF = "/dashboard/orders";
@@ -77,6 +78,40 @@ function PaymentCard({ payment, currency }: { payment: PaymentDetail; currency: 
         {payment.failureReason ? <DetailField label="Failure reason">{payment.failureReason}</DetailField> : null}
       </DetailGrid>
     </div>
+  );
+}
+
+function PaymentReconciliationCard({ order }: { order: OrderDetail }) {
+  // The most recent payment attempt drives the method/provider/reference shown here, same
+  // convention as the reconciliation list (payments are already ordered most-recent-first).
+  const latestPayment = order.payments[0] ?? null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Payment Reconciliation</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <DetailGrid>
+          <DetailField label="Order amount">{formatMoney(order.totalAmount, order.currency)}</DetailField>
+          <DetailField label="Discount">{formatMoney(order.discountAmount, order.currency)}</DetailField>
+          <DetailField label="Paid">{formatMoney(order.paidAmount, order.currency)}</DetailField>
+          <DetailField label="Refunded">{formatMoney(order.refundedAmount, order.currency)}</DetailField>
+          <DetailField label="Outstanding">{formatMoney(order.outstandingAmount, order.currency)}</DetailField>
+          <DetailField label="Payment method">{latestPayment?.method ? PAYMENT_METHOD_LABELS[latestPayment.method] : "—"}</DetailField>
+          <DetailField label="Payment provider">{latestPayment?.provider ?? "—"}</DetailField>
+          <DetailField label="Transaction reference">
+            {latestPayment?.transactionReference ?? latestPayment?.providerPaymentId ?? "—"}
+          </DetailField>
+          <DetailField label="Payment status">
+            <PaymentStatusBadge status={order.paymentStatus} />
+          </DetailField>
+          <DetailField label="Reconciliation status">
+            <ReconciliationStatusBadge status={order.reconciliationStatus} />
+          </DetailField>
+        </DetailGrid>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -228,6 +263,8 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           )}
         </CardContent>
       </Card>
+
+      <PaymentReconciliationCard order={order} />
 
       <OrderShipmentSection shipments={order.shipments} />
 

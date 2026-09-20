@@ -1,5 +1,6 @@
 import { PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
+import { toCents } from "../shopify/shopify.money.js";
 import { NO_PAYMENT, type ListOrdersQuery, type PaymentMode, type PaymentStatusFilter } from "./orders.types.js";
 
 // An order can carry several payment attempts. Its single "payment status" is the most
@@ -93,4 +94,78 @@ export function scopedOrderWhere(id: string, leadScope: Prisma.LeadWhereInput): 
 
 export function fullName(firstName: string, lastName: string | null): string {
   return lastName ? `${firstName} ${lastName}` : firstName;
+}
+
+export interface PaymentBreakdown {
+  // Net money currently held: successful payments, plus the un-refunded remainder of a partial refund.
+  paidCents: number;
+  pendingCents: number;
+  failedCents: number;
+  // Money actually returned to the customer.
+  refundedCents: number;
+  // Everything ever captured before any refund (successful, partially-refunded and fully-refunded
+  // payments' original amounts) - used to sanity-check that a refund never exceeds what was collected.
+  grossReceivedCents: number;
+  successfulPaymentCount: number;
+  pendingPaymentCount: number;
+  failedPaymentCount: number;
+  refundedPaymentCount: number;
+}
+
+type BreakdownPayment = {
+  status: PaymentStatus;
+  amount: { toString(): string };
+  refundedAmount: { toString(): string } | null;
+};
+
+// The single place money is summed across an order's payment attempts, in integer cents so results
+// never drift. Shared by the customer payment summary and the reconciliation module so neither can
+// disagree with the other about what "paid" or "refunded" means.
+export function computePaymentBreakdown(payments: BreakdownPayment[]): PaymentBreakdown {
+  const breakdown: PaymentBreakdown = {
+    paidCents: 0,
+    pendingCents: 0,
+    failedCents: 0,
+    refundedCents: 0,
+    grossReceivedCents: 0,
+    successfulPaymentCount: 0,
+    pendingPaymentCount: 0,
+    failedPaymentCount: 0,
+    refundedPaymentCount: 0,
+  };
+
+  for (const payment of payments) {
+    const amountCents = toCents(payment.amount.toString());
+    const refundedForPayment = payment.refundedAmount ? toCents(payment.refundedAmount.toString()) : 0;
+
+    switch (payment.status) {
+      case PaymentStatus.SUCCESS:
+        breakdown.paidCents += amountCents;
+        breakdown.grossReceivedCents += amountCents;
+        breakdown.successfulPaymentCount++;
+        break;
+      case PaymentStatus.PENDING:
+      case PaymentStatus.PROCESSING:
+        breakdown.pendingCents += amountCents;
+        breakdown.pendingPaymentCount++;
+        break;
+      case PaymentStatus.FAILED:
+        breakdown.failedCents += amountCents;
+        breakdown.failedPaymentCount++;
+        break;
+      case PaymentStatus.REFUNDED:
+        breakdown.refundedCents += refundedForPayment || amountCents;
+        breakdown.grossReceivedCents += amountCents;
+        breakdown.refundedPaymentCount++;
+        break;
+      case PaymentStatus.PARTIALLY_REFUNDED:
+        breakdown.refundedCents += refundedForPayment;
+        breakdown.paidCents += Math.max(amountCents - refundedForPayment, 0);
+        breakdown.grossReceivedCents += amountCents;
+        breakdown.refundedPaymentCount++;
+        break;
+    }
+  }
+
+  return breakdown;
 }

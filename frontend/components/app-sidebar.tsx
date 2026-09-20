@@ -12,6 +12,7 @@ import {
   BarChart3,
   UserCog,
   Building2,
+  Wallet,
 } from "lucide-react";
 import {
   Sidebar,
@@ -47,6 +48,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Team", href: "/dashboard/team", icon: UsersRound },
     { title: "Leads", icon: Users },
     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+    { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
     { title: "Reports", icon: BarChart3 },
   ],
   ADMIN: [
@@ -55,6 +57,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
     { title: "Groups", icon: Building2 },
     { title: "Leads", icon: Users },
     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+    { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
     { title: "Reports", icon: BarChart3 },
   ],
 };
