@@ -50,6 +50,8 @@ model Order {
   shipments        Shipment[]
   activities       Activity[]
   whatsAppMessages WhatsAppMessage[]
+  whatsAppAutomationRuns WhatsAppAutomationRun[]
+  whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
 
   @@unique([externalSource, externalId])
   @@index([leadId])

@@ -312,6 +312,15 @@ enum ActivityType {
   WHATSAPP_TEMPLATE_STATUS_CHANGED
   WHATSAPP_TEMPLATE_SYNCED
 
+  // E7.7 Campaign & Bulk Messaging: campaign-level lifecycle events, not tied to any one customer
+  // (null leadId, same convention as the WHATSAPP_TEMPLATE_* rows above). A campaign's individual
+  // per-recipient sends still use WHATSAPP_MESSAGE_SENT/WHATSAPP_FAILED above - never a second,
+  // duplicate activity for the same logical message.
+  WHATSAPP_CAMPAIGN_CREATED
+  WHATSAPP_CAMPAIGN_LAUNCHED
+  WHATSAPP_CAMPAIGN_CANCELLED
+  WHATSAPP_CAMPAIGN_COMPLETED
+
   @@map("activity_type")
 }
 
@@ -385,6 +394,68 @@ enum WhatsAppTemplateStatus {
   DISABLED
 
   @@map("whatsapp_template_status")
+}
+
+// E7.6 Lifecycle Automation. The six business events the CRM can automatically send a WhatsApp
+// template for. ORDER_* map 1:1 onto the matching OrderStatus value the order actually transitions
+// into; PAYMENT_PENDING and FOLLOW_UP_DUE are time-based (a scheduler sweep), not a single transition.
+enum WhatsAppAutomationType {
+  ORDER_CONFIRMED
+  ORDER_SHIPPED
+  ORDER_OUT_FOR_DELIVERY
+  ORDER_DELIVERED
+  PAYMENT_PENDING
+  FOLLOW_UP_DUE
+
+  @@map("whatsapp_automation_type")
+}
+
+// SENT: the automation ran and produced a WhatsAppMessage row (its own delivery outcome is tracked
+// separately by E7.5, on that row - a provider rejection here still counts as SENT, since the
+// automation itself did its job of attempting the send). SKIPPED: the automation intentionally did
+// not attempt a send (disabled, no approved template configured, a required variable was
+// unavailable, no valid mobile number, WhatsApp not configured). FAILED: an unexpected error during
+// the automation's own execution, distinct from a clean, expected skip.
+enum WhatsAppAutomationRunStatus {
+  SENT
+  SKIPPED
+  FAILED
+
+  @@map("whatsapp_automation_run_status")
+}
+
+// E7.7 Campaign & Bulk Messaging. DRAFT: being configured, freely editable. SCHEDULED: launched
+// for a future time, not yet sending. RUNNING: actively processing recipients. COMPLETED: every
+// recipient reached a terminal state (SENT/SKIPPED/FAILED) - regardless of how many individually
+// failed, which is a recipient-level, not campaign-level, outcome (see stats). CANCELLED: stopped
+// before/while running; already-sent messages are never undone. FAILED: the campaign itself could
+// never start (e.g. its template stopped being APPROVED between save and launch) - no recipients
+// were ever created for it.
+enum WhatsAppCampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  COMPLETED
+  CANCELLED
+  FAILED
+
+  @@map("whatsapp_campaign_status")
+}
+
+// PENDING: not yet attempted. CLAIMED: a worker tick has picked this recipient up and is about to
+// send - a transient state that only exists mid-batch, the atomic claim step E7.7's idempotency
+// relies on. SENT: a send was attempted and produced a WhatsAppMessage row (that message's own
+// further delivery outcome lives on WhatsAppMessage.status, tracked by E7.5 - never duplicated
+// here). SKIPPED: cleanly not sent (no valid mobile, a required variable unavailable). FAILED: an
+// unexpected error while processing this one recipient - it never stops the rest of the campaign.
+enum WhatsAppCampaignRecipientStatus {
+  PENDING
+  CLAIMED
+  SENT
+  SKIPPED
+  FAILED
+
+  @@map("whatsapp_campaign_recipient_status")
 }
 
 enum WebhookStatus {

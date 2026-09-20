@@ -247,6 +247,12 @@ export interface OrderResult {
   items: number;
   payments: { created: number; updated: number; deleted: number };
   shipments: { created: number; updated: number; deleted: number };
+  // E7.6: the order's status immediately before and after this run, so a caller can detect a real
+  // lifecycle transition (e.g. "just became CONFIRMED") without re-deriving what recordActivity
+  // already computed. Both null when the order was skipped (unchanged since last sync - see the
+  // externalUpdatedAt guard below), since nothing was actually re-evaluated.
+  previousStatus: OrderStatus | null;
+  status: OrderStatus | null;
 }
 
 const PAYMENT_EVENTS = new Set<PaymentStatus>([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED]);
@@ -261,6 +267,8 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
     items: 0,
     payments: { created: 0, updated: 0, deleted: 0 },
     shipments: { created: 0, updated: 0, deleted: 0 },
+    previousStatus: null,
+    status: null,
   };
 
   const existing = await tx.order.findUnique({
@@ -328,6 +336,8 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
       });
   result.action = existing ? "updated" : "created";
   result.orderId = order.id;
+  result.previousStatus = existing?.status ?? null;
+  result.status = mapped.status;
 
   await replaceItems(tx, order.id, mapped, result);
   const paymentEvents = await syncPayments(tx, order.id, mapped, existing?.payments ?? [], result);

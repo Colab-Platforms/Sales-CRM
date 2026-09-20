@@ -260,11 +260,30 @@ class CustomersService {
   // helpers Customer 360 uses. Segment/order-count/payment/shipment state are not database columns,
   // so - like the reconciliation module - matching leads (already narrowed by scope, owner, date
   // range and search at the database level) are fetched with their orders in ONE query, derived and
-  // filtered/sorted/paginated in memory. Acceptable at today's scale; would need a materialized
-  // column if the customer base grows by orders of magnitude.
+  // filtered/sorted in memory (resolveMatchingCustomers), then paginated here. Acceptable at
+  // today's scale; would need a materialized column if the customer base grows by orders of magnitude.
+  //
+  // E7.7 reuses resolveMatchingCustomers directly as its audience-resolution engine (see
+  // whatsapp.campaign.service.ts) - the exact same scope/filter/segment logic, never a second
+  // customer-segmentation engine, and RBAC (a salesperson's campaign audience is already narrowed
+  // to their own leads) falls out of the same getLeadScope() call this list already makes.
   async listCustomers(user: AuthUser, query: ListCustomersQuery): Promise<CustomerListResult> {
+    const items = await this.resolveMatchingCustomers(user, query);
+
+    const totalItems = items.length;
+    const start = (query.page - 1) * query.pageSize;
+    const page = items.slice(start, start + query.pageSize);
+
+    return {
+      items: page,
+      pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
+    };
+  }
+
+  /** Every customer matching these filters, within the caller's RBAC scope - sorted, not paginated. */
+  async resolveMatchingCustomers(user: AuthUser, filters: Omit<ListCustomersQuery, "page" | "pageSize">): Promise<CustomerListResult["items"]> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildCustomerListWhere(query, leadScope);
+    const where = buildCustomerListWhere(filters, leadScope);
 
     const leads = await this.db.lead.findMany({
       where,
@@ -276,26 +295,18 @@ class CustomersService {
       mapCustomerListItem({ ...lead, hasActiveInterestedPeriod: lead.interestedPeriods.length > 0 }, lead.orders),
     );
 
-    if (query.hasOrders !== undefined) items = items.filter((c) => (query.hasOrders ? c.orderCount > 0 : c.orderCount === 0));
-    if (query.segment) items = items.filter((c) => c.segment === query.segment);
-    if (query.paymentStatus) {
-      items = items.filter((c) => (query.paymentStatus === "NONE" ? c.currentPaymentStatus === null : c.currentPaymentStatus === query.paymentStatus));
+    if (filters.hasOrders !== undefined) items = items.filter((c) => (filters.hasOrders ? c.orderCount > 0 : c.orderCount === 0));
+    if (filters.segment) items = items.filter((c) => c.segment === filters.segment);
+    if (filters.paymentStatus) {
+      items = items.filter((c) => (filters.paymentStatus === "NONE" ? c.currentPaymentStatus === null : c.currentPaymentStatus === filters.paymentStatus));
     }
-    if (query.shipmentStatus) items = items.filter((c) => c.currentShipmentStatus === query.shipmentStatus);
-    if (query.nbaAction) items = items.filter((c) => c.nbaAction === query.nbaAction);
-    if (query.nbaPriority) items = items.filter((c) => c.nbaPriority === query.nbaPriority);
+    if (filters.shipmentStatus) items = items.filter((c) => c.currentShipmentStatus === filters.shipmentStatus);
+    if (filters.nbaAction) items = items.filter((c) => c.nbaAction === filters.nbaAction);
+    if (filters.nbaPriority) items = items.filter((c) => c.nbaPriority === filters.nbaPriority);
 
     // Most recently active customers first; customers with no order yet sort last.
     items.sort((a, b) => (b.lastOrderAt?.getTime() ?? 0) - (a.lastOrderAt?.getTime() ?? 0));
-
-    const totalItems = items.length;
-    const start = (query.page - 1) * query.pageSize;
-    const page = items.slice(start, start + query.pageSize);
-
-    return {
-      items: page,
-      pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
-    };
+    return items;
   }
 
   async getTimeline(user: AuthUser, leadId: string, query: ListCustomerTimelineQuery): Promise<CustomerTimelineResult> {

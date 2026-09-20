@@ -8,6 +8,8 @@ import { notFoundHandler } from "./middlewares/notFoundHandler.js";
 import sanitizeMiddleware from "./middlewares/sanitize.js";
 import shopifyWebhookRoutes, { startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
 import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
+import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
+import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 
 const app = express();
 
@@ -58,4 +60,6 @@ app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   startShopifyWebhookWorker();
   startWhatsAppWebhookWorker();
+  startLifecycleAutomationScheduler();
+  startCampaignScheduler();
 });

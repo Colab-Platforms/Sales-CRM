@@ -242,25 +242,32 @@ class WhatsAppService {
   async recordStatusUpdate(provider: WhatsAppProviderId, update: NormalizedStatusUpdate): Promise<void> {
     const existing = await this.db.whatsAppMessage.findUnique({
       where: { provider_providerMessageId: { provider, providerMessageId: update.providerMessageId } },
-      select: { id: true, status: true, leadId: true },
+      select: { id: true, status: true, leadId: true, sentAt: true, deliveredAt: true, readAt: true, failedAt: true },
     });
     // A status event for a message the CRM never recorded sending is not fabricated into a new row.
     if (!existing) return;
-    if (currentRank(update.status) <= currentRank(existing.status)) return; // stale or duplicate
 
     const timestampField = { SENT: "sentAt", DELIVERED: "deliveredAt", READ: "readAt", FAILED: "failedAt" } as const;
+    const field = timestampField[update.status];
+    const isAdvance = currentRank(update.status) > currentRank(existing.status);
+
+    // A same-or-lower-rank event (stale, duplicate, or arriving out of order - e.g. a delayed
+    // DELIVERED webhook after READ already landed) must never move status backwards or re-fire an
+    // activity. It can still carry real information about *when* its own milestone happened, so that
+    // one timestamp is backfilled if - and only if - nothing was ever recorded for it; an
+    // already-known timestamp is never overwritten by a later duplicate.
+    if (!isAdvance && existing[field] != null) return;
+
     const row = await this.db.whatsAppMessage.update({
       where: { id: existing.id },
       data: {
-        status: update.status,
-        [timestampField[update.status]]: update.timestamp,
-        errorCode: update.errorCode ?? undefined,
-        errorMessage: update.errorMessage ?? undefined,
+        ...(isAdvance ? { status: update.status, errorCode: update.errorCode ?? undefined, errorMessage: update.errorMessage ?? undefined } : {}),
+        [field]: update.timestamp,
       },
       select: { id: true },
     });
 
-    if (!existing.leadId) return;
+    if (!isAdvance || !existing.leadId) return;
     const meta = ACTIVITY_BY_STATUS[update.status];
     if (!meta) return; // SENT is the initial state, not its own audit event
     await this.db.activity.create({

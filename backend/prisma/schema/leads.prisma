@@ -57,6 +57,8 @@ model Lead {
   recoveryActions          RecoveryAction[]
   activities               Activity[]
   whatsAppMessages         WhatsAppMessage[]
+  whatsAppAutomationRuns   WhatsAppAutomationRun[]
+  whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
 
   @@unique([externalSource, externalId])
   @@index([normalizedMobile])

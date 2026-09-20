@@ -12,6 +12,7 @@ import { CUSTOMER_REFS_QUERY, ORDER_REFS_QUERY, PRODUCT_REFS_QUERY, type CountFi
 import {
   DEFAULT_START_DATE, isValidTimeZone, resolveWindow, startOfDay, windowSearch, type SyncWindow, type WindowSpec,
 } from "./shopify.window.js";
+import { dispatchOrderLifecycleAutomation } from "../whatsapp/whatsapp.automation.triggers.js";
 
 // Pipeline:  Shopify fetch  ->  map  ->  persist.
 // With dryRun the persist step is never reached and no TxRunner is needed, so a dry run cannot touch the database.
@@ -183,6 +184,10 @@ export async function syncOrderById(
   const result = await withConflictRetry(() =>
     runner.$transaction((tx) => upsertOrder(tx, mapped, { force: opts.force, source: opts.source }), TX_OPTIONS),
   );
+  // E7.6: strictly after the order transaction above has committed, so a WhatsApp automation
+  // outcome can never affect (let alone roll back) the order sync itself - see the doc comment on
+  // dispatchOrderLifecycleAutomation.
+  await dispatchOrderLifecycleAutomation(result);
   return { notFound: false, outOfWindow: false, mapped, result, productsSynced: productResults.length, productResults };
 }
 

@@ -193,7 +193,7 @@ export function buildSegmentInfo(
   });
 }
 
-export function buildCustomerListWhere(query: ListCustomersQuery, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
+export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId" | "dateFrom" | "dateTo" | "search">, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
   const and: Prisma.LeadWhereInput[] = [];
 
   if (Object.keys(leadScope).length > 0) and.push(leadScope);

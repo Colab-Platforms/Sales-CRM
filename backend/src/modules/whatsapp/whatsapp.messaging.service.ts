@@ -86,6 +86,15 @@ const REFERENCE_TYPE = "WhatsAppMessage";
 // message to the same customer minutes later is never silently swallowed.
 const DUPLICATE_GUARD_MS = 30_000;
 
+// Who is asking for this send. A real signed-in user is subject to E7.1's lead-scope RBAC (the same
+// rule Customer 360's "Send WhatsApp" button always has); E7.6's lifecycle automation is a system
+// process reacting to a real business event it already resolved the correct lead/order for directly
+// (the same trust level shopify.persist.ts's own writes already operate at) - not a human trying to
+// reach a customer, so there is no per-user scope to check. Either way the resulting WhatsAppMessage/
+// Activity honestly records who/what actually sent it (sentById + ActivitySource) - never attributed
+// to a fabricated user.
+type SendActor = { kind: "user"; user: AuthUser } | { kind: "system" };
+
 class WhatsAppMessagingService {
   constructor(
     private readonly db: DbClient = prisma,
@@ -93,7 +102,7 @@ class WhatsAppMessagingService {
   ) {}
 
   async previewTemplate(user: AuthUser, input: PreviewTemplateInput): Promise<TemplatePreviewResult> {
-    const { template, resolution } = await this.loadAndResolve(user, input, { requireProviderMatch: false });
+    const { template, resolution } = await this.loadAndResolve({ kind: "user", user }, input, { requireProviderMatch: false });
     if (resolution.errors.length > 0) throw new ApiError(resolution.errors[0], STATUS_CODES.BAD_REQUEST);
 
     return {
@@ -107,7 +116,22 @@ class WhatsAppMessagingService {
   }
 
   async sendTemplate(user: AuthUser, input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
-    const { lead, order, template, resolution } = await this.loadAndResolve(user, input, { requireProviderMatch: true });
+    return this.send({ kind: "user", user }, input);
+  }
+
+  // E7.6/E7.7: the same send path a user's "Send WhatsApp" button uses, minus the per-user
+  // lead-scope check - see the SendActor comment above for why. Every other rule (APPROVED-only,
+  // order must belong to the lead, variables must resolve, the 30s duplicate guard, the
+  // idempotent-insert send, Customer 360/Audit Trail via the existing Activity types) is identical,
+  // because this is the exact same method underneath, not a parallel implementation. Used by both
+  // E7.6's LifecycleAutomationService and E7.7's WhatsAppCampaignService - neither calls a provider
+  // directly, and neither duplicates this send logic.
+  async sendTemplateAsSystem(input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
+    return this.send({ kind: "system" }, input);
+  }
+
+  private async send(actor: SendActor, input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
+    const { lead, order, template, resolution } = await this.loadAndResolve(actor, input, { requireProviderMatch: true });
     if (resolution.errors.length > 0) throw new ApiError(resolution.errors[0], STATUS_CODES.BAD_REQUEST);
     if (!lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
 
@@ -167,7 +191,7 @@ class WhatsAppMessagingService {
           toNumber: lead.normalizedMobile,
           normalizedContact: lead.normalizedMobile,
           templateName: template.name,
-          sentById: user.id,
+          sentById: actor.kind === "user" ? actor.user.id : null,
           sentAt: sendError ? null : now,
           failedAt: sendError ? now : null,
           errorMessage: sendError ? sendError.message : null,
@@ -192,12 +216,12 @@ class WhatsAppMessagingService {
       data: {
         leadId: lead.id,
         orderId: order?.id,
-        actorId: user.id,
-        actorRole: user.role,
+        actorId: actor.kind === "user" ? actor.user.id : null,
+        actorRole: actor.kind === "user" ? actor.user.role : null,
         type: sendError ? ActivityType.WHATSAPP_FAILED : ActivityType.WHATSAPP_MESSAGE_SENT,
         referenceType: REFERENCE_TYPE,
         referenceId: row.id,
-        source: ActivitySource.USER,
+        source: actor.kind === "user" ? ActivitySource.USER : ActivitySource.SYSTEM,
         title: sendError ? "WhatsApp message failed to send" : "WhatsApp template sent",
         description: sendError ? sendError.message : template.name,
       },
@@ -209,12 +233,18 @@ class WhatsAppMessagingService {
   // Shared by preview and send: everything up to "here is the message that would be sent", so the
   // two flows can never disagree about what a template needs or whether it is actually sendable.
   private async loadAndResolve(
-    user: AuthUser,
+    actor: SendActor,
     input: PreviewTemplateInput,
     opts: { requireProviderMatch: boolean },
   ): Promise<{ lead: LeadRow; order: OrderRow | null; template: TemplateRow; resolution: { values: Record<string, string>; errors: string[] } }> {
-    const leadScope = await getLeadScope(user, this.db);
-    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, leadScope), select: LEAD_SELECT });
+    // A human caller only ever reaches a lead already inside their own RBAC scope (E7.1's rule for
+    // this endpoint). A system caller (E7.6) already resolved this exact lead from the business
+    // event itself - the same direct-by-id trust level shopify.persist.ts's own lead lookups use -
+    // so there is no separate human "can they see this lead" question to ask here.
+    const lead =
+      actor.kind === "user"
+        ? await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, await getLeadScope(actor.user, this.db)), select: LEAD_SELECT })
+        : await this.db.lead.findFirst({ where: { id: input.leadId }, select: LEAD_SELECT });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
 
     const template = await this.db.whatsAppTemplate.findUnique({ where: { id: input.templateId }, select: TEMPLATE_SELECT });
