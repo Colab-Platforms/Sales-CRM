@@ -9,6 +9,7 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 
 export function AssignManagerDialog({
   open,
@@ -73,12 +74,12 @@ export function AssignManagerDialog({
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-sm">
+            <div className="grid grid-cols-2 gap-2.5">
+              <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
                 <input type="radio" checked={method === "MANUAL"} onChange={() => setMethod("MANUAL")} />
                 Manual
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
                 <input type="radio" checked={method === "ROUND_ROBIN"} onChange={() => setMethod("ROUND_ROBIN")} />
                 Round Robin
               </label>
@@ -87,11 +88,7 @@ export function AssignManagerDialog({
             {method === "MANUAL" ? (
               <div className="space-y-1.5">
                 <Label>Manager</Label>
-                <select
-                  value={managerId}
-                  onChange={(e) => setManagerId(e.target.value)}
-                  className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
-                >
+                <NativeSelect value={managerId} onChange={(e) => setManagerId(e.target.value)}>
                   <option value="" disabled>
                     Select a manager
                   </option>
@@ -100,17 +97,22 @@ export function AssignManagerDialog({
                       {m.name}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </div>
             ) : (
               <div className="space-y-1.5">
                 <Label>Eligible managers</Label>
-                <div className="max-h-48 space-y-1.5 overflow-y-auto rounded-md border p-2">
+                <div className="sketch-outline max-h-48 space-y-0.5 overflow-y-auto p-1.5">
                   {activeManagers.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No active managers available.</p>
+                    <p className="px-2 py-1.5 text-sm text-muted-foreground">
+                      No active managers available.
+                    </p>
                   ) : null}
                   {activeManagers.map((m) => (
-                    <label key={m.id} className="flex items-center gap-2 text-sm">
+                    <label
+                      key={m.id}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm hover:bg-muted"
+                    >
                       <input
                         type="checkbox"
                         checked={managerIds.has(m.id)}

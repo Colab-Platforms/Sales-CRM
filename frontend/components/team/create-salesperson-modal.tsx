@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import type { Group } from "@/lib/api-client/types/manager.types";
 
@@ -78,11 +79,10 @@ export function CreateSalespersonModal({ groups, onDone }: { groups: Group[]; on
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="new-sp-group">Group</Label>
-          <select
+          <NativeSelect
             id="new-sp-group"
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
-            className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
             required
           >
             <option value="" disabled>
@@ -93,11 +93,11 @@ export function CreateSalespersonModal({ groups, onDone }: { groups: Group[]; on
                 {g.name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </div>
 
         {createSalesperson.error ? (
-          <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2.5 text-sm text-destructive">
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {getErrorMessage(createSalesperson.error, "Failed to create salesperson.")}
           </div>
         ) : null}

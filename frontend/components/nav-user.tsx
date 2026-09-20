@@ -20,6 +20,15 @@ const ROLE_LABELS: Record<CurrentUser["role"], string> = {
   SALESPERSON: "Salesperson",
 };
 
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
 export function NavUser({ user }: { user: CurrentUser }) {
   const { isMobile } = useSidebar();
   const { logout } = useAuth();
@@ -29,18 +38,26 @@ export function NavUser({ user }: { user: CurrentUser }) {
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger render={<SidebarMenuButton size="lg" />}>
-            <div className="flex flex-1 flex-col text-left leading-tight">
-              <span className="truncate text-sm font-medium">{user.name}</span>
-              <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+            <span
+              aria-hidden="true"
+              className="flex size-8 shrink-0 items-center justify-center rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line/40 bg-primary/10 text-xs font-bold text-primary"
+            >
+              {initials(user.name)}
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
+              <span className="truncate text-sm font-semibold">{user.name}</span>
+              <span className="truncate text-xs text-muted-foreground">
+                {ROLE_LABELS[user.role]}
+              </span>
             </div>
             <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
           </DropdownMenuTrigger>
-          <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="end" className="min-w-56">
+          <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="end" className="min-w-60">
             <DropdownMenuGroup>
               <DropdownMenuLabel className="font-normal">
-                <div className="flex flex-col">
-                  <span className="text-sm font-medium">{user.name}</span>
-                  <span className="text-xs text-muted-foreground">{ROLE_LABELS[user.role]}</span>
+                <div className="flex flex-col gap-0.5 py-0.5">
+                  <span className="text-sm font-semibold text-foreground">{user.name}</span>
+                  <span className="text-xs break-all text-muted-foreground">{user.email}</span>
                 </div>
               </DropdownMenuLabel>
             </DropdownMenuGroup>

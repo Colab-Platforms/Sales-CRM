@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 import type { ImportPreviewResult } from "@/lib/api-client/types/lead.types";
 
 const CRM_FIELDS = [
@@ -97,7 +98,7 @@ export function ImportLeadsDialog({
 
           <div className="space-y-4">
             {isManager ? (
-              <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+              <p className="sketch-outline border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
                 Imported leads go to Admin&apos;s unassigned pool for distribution — they won&apos;t appear in your
                 own lead list until Admin assigns them to you.
               </p>
@@ -110,21 +111,23 @@ export function ImportLeadsDialog({
             {headers.length > 0 && !preview ? (
               <div className="space-y-2">
                 <Label>Column mapping</Label>
-                <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border p-3">
+                <div className="sketch-outline max-h-56 space-y-2 overflow-y-auto p-3">
                   {headers.map((header) => (
                     <div key={header} className="flex items-center justify-between gap-3">
-                      <span className="text-sm">{header}</span>
-                      <select
+                      <span className="min-w-0 truncate font-mono text-sm">{header}</span>
+                      <NativeSelect
+                        size="sm"
+                        wrapperClassName="w-44 shrink-0"
+                        aria-label={`Map column ${header}`}
                         value={mapping[header] ?? ""}
                         onChange={(e) => setMapping((prev) => ({ ...prev, [header]: e.target.value }))}
-                        className="border-input h-8 rounded-md border bg-transparent px-2 text-sm shadow-xs"
                       >
                         {CRM_FIELDS.map((f) => (
                           <option key={f.value} value={f.value}>
                             {f.label}
                           </option>
                         ))}
-                      </select>
+                      </NativeSelect>
                     </div>
                   ))}
                 </div>
@@ -132,18 +135,20 @@ export function ImportLeadsDialog({
             ) : null}
 
             {preview ? (
-              <div className="grid grid-cols-3 gap-3 rounded-lg border p-3 text-sm">
-                <div>
-                  <div className="text-muted-foreground">Total rows</div>
-                  <div className="font-medium">{preview.totalRows}</div>
+              <div className="sketch-outline grid grid-cols-3 gap-3 p-4 text-sm">
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">Total rows</div>
+                  <div className="text-xl font-extrabold tabular-nums">{preview.totalRows}</div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">Valid</div>
-                  <div className="font-medium text-emerald-600">{preview.validRows}</div>
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">Valid</div>
+                  <div className="text-xl font-extrabold tabular-nums text-emerald-700 dark:text-emerald-300">
+                    {preview.validRows}
+                  </div>
                 </div>
-                <div>
-                  <div className="text-muted-foreground">Duplicate / Invalid</div>
-                  <div className="font-medium text-amber-600">
+                <div className="space-y-1">
+                  <div className="text-xs font-medium text-muted-foreground">Duplicate / Invalid</div>
+                  <div className="text-xl font-extrabold tabular-nums text-amber-700 dark:text-amber-300">
                     {preview.duplicateRows} / {preview.invalidRows}
                   </div>
                 </div>

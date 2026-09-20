@@ -20,6 +20,8 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
@@ -82,7 +84,7 @@ function CreateGroupModalContent({ onDone }: { onDone: () => void }) {
         </div>
 
         {createGroup.error ? (
-          <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2.5 text-sm text-destructive">
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {getErrorMessage(createGroup.error, "Failed to create group.")}
           </div>
         ) : null}
@@ -140,15 +142,14 @@ function EditGroupForm({ group, onDone }: { group: Group; onDone: () => void }) 
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={`group-edit-status-${group.id}`}>Status</Label>
-        <select
+        <NativeSelect
           id={`group-edit-status-${group.id}`}
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
         >
-          <option value="ACTIVE">ACTIVE</option>
-          <option value="INACTIVE">INACTIVE</option>
-        </select>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </NativeSelect>
       </div>
       {updateGroup.error ? (
         <p className="text-sm text-destructive sm:col-span-3">
@@ -183,7 +184,7 @@ function AddSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () =
   }
 
   return (
-    <form onSubmit={handleSubmit} className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-4">
+    <form onSubmit={handleSubmit} className="sketch-dashed grid gap-4 bg-muted/30 p-4 sm:grid-cols-2 lg:grid-cols-4">
       <div className="space-y-1.5">
         <Label htmlFor={`sp-name-${groupId}`}>Name</Label>
         <Input id={`sp-name-${groupId}`} value={name} onChange={(e) => setName(e.target.value)} required />
@@ -257,14 +258,13 @@ function AddExistingSalespersonForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 rounded-lg border p-4">
-      <div className="min-w-64 space-y-1.5">
+    <form onSubmit={handleSubmit} className="sketch-dashed flex flex-wrap items-end gap-3 bg-muted/30 p-4">
+      <div className="min-w-64 flex-1 space-y-1.5">
         <Label htmlFor={`existing-userid-${groupId}`}>Existing salesperson</Label>
-        <select
+        <NativeSelect
           id={`existing-userid-${groupId}`}
           value={userId}
           onChange={(e) => setUserId(e.target.value)}
-          className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
           required
         >
           <option value="" disabled>
@@ -275,7 +275,7 @@ function AddExistingSalespersonForm({
               {sp.name} ({sp.email}){sp.currentGroup ? ` — currently in ${sp.currentGroup.name}` : ""}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {options.length === 0 ? (
           <p className="text-xs text-muted-foreground">No other salespersons available to add.</p>
         ) : null}
@@ -387,18 +387,21 @@ function GroupCard({ group }: { group: Group }) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-4">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4">
         {editingGroup ? (
           <div className="flex-1">
             <EditGroupForm group={group} onDone={() => setEditingGroup(false)} />
           </div>
         ) : (
           <>
-            <div>
+            <div className="min-w-0 space-y-1">
               <CardTitle>{group.name}</CardTitle>
               {group.description ? <p className="text-sm text-muted-foreground">{group.description}</p> : null}
+              <p className="font-hand text-sm text-muted-foreground">
+                {activeMembers.length} salesperson{activeMembers.length === 1 ? "" : "s"}
+              </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant={isActive ? "default" : "secondary"}>{group.status}</Badge>
               <Button size="sm" variant="outline" onClick={() => setEditingGroup(true)}>
                 Edit
@@ -422,6 +425,7 @@ function GroupCard({ group }: { group: Group }) {
         )}
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="sketch-outline overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -443,6 +447,7 @@ function GroupCard({ group }: { group: Group }) {
             )}
           </TableBody>
         </Table>
+        </div>
 
         {addingNew ? (
           <AddSalespersonForm groupId={group.id} onDone={() => setAddingNew(false)} />
@@ -474,22 +479,22 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
-          <p className="text-sm text-muted-foreground">Create groups and add salespeople to your team.</p>
-        </div>
-        <div className="flex flex-wrap gap-2 sm:self-center">
-          <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)} className="gap-2">
-            <UserPlus className="size-4" />
-            Add Salesperson
-          </Button>
-          <Button onClick={() => setIsCreateOpen(true)} className="gap-2">
-            <FolderPlus className="size-4" />
-            Create Group
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title="Team"
+        description="Create groups and add salespeople to your team."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)}>
+              <UserPlus />
+              Add Salesperson
+            </Button>
+            <Button onClick={() => setIsCreateOpen(true)}>
+              <FolderPlus />
+              Create Group
+            </Button>
+          </>
+        }
+      />
 
       <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
         {isCreateOpen ? <CreateGroupModalContent onDone={() => setIsCreateOpen(false)} /> : null}
@@ -502,17 +507,21 @@ export default function TeamPage() {
       </Dialog>
 
       {isPending ? (
-        <Skeleton className="h-40" />
+        <Skeleton className="h-40 rounded-xl" />
       ) : error ? (
-        <p className="text-sm text-destructive">{getErrorMessage(error, "Failed to load groups.")}</p>
+        <div className="sketch-outline border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          {getErrorMessage(error, "Failed to load groups.")}
+        </div>
       ) : groups && groups.length === 0 ? (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-2 py-10">
-            <LayoutGrid className="size-8 text-muted-foreground/50" />
-            <p className="font-medium text-foreground">No groups yet</p>
-            <p className="text-sm text-muted-foreground">Get started by creating your first team group.</p>
-            <Button size="sm" className="mt-2 gap-1.5" onClick={() => setIsCreateOpen(true)}>
-              <FolderPlus className="size-3.5" />
+          <CardContent className="flex flex-col items-center justify-center gap-2 py-14">
+            <LayoutGrid className="size-9 text-muted-foreground/40" />
+            <p className="font-heading text-lg font-bold">No groups yet</p>
+            <p className="font-hand text-base text-muted-foreground">
+              Get started by creating your first team group.
+            </p>
+            <Button className="mt-3" onClick={() => setIsCreateOpen(true)}>
+              <FolderPlus />
               Create Group
             </Button>
           </CardContent>

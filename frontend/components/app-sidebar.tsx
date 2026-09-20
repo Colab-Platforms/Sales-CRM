@@ -28,6 +28,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/nav-user";
+import { BrandMark } from "@/components/brand-mark";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
 
 interface NavItem {
@@ -36,80 +37,150 @@ interface NavItem {
   icon: ComponentType<{ className?: string }>;
 }
 
-const NAV_BY_ROLE: Record<CurrentUser["role"], NavItem[]> = {
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
+
+/**
+ * Grouped so each role sees the same rhythm: where they are, who they work
+ * with, then the pipeline itself.
+ */
+const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
   SALESPERSON: [
-    { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { title: "My Leads", href: "/dashboard/leads", icon: Users },
-    { title: "Interested Leads", icon: Target },
-    { title: "Orders", icon: ShoppingCart },
+    {
+      label: "Overview",
+      items: [
+        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "Pipeline",
+      items: [
+        { title: "My Leads", href: "/dashboard/leads", icon: Users },
+        { title: "Interested Leads", icon: Target },
+        { title: "Orders", icon: ShoppingCart },
+      ],
+    },
   ],
   MANAGER: [
-    { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { title: "Team", href: "/dashboard/team", icon: UsersRound },
-    { title: "Salespersons", href: "/dashboard/salespersons", icon: Contact },
-    { title: "Leads", href: "/dashboard/leads", icon: Users },
-    { title: "Orders", icon: ShoppingCart },
-    { title: "Reports", icon: BarChart3 },
+    {
+      label: "Overview",
+      items: [
+        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "People",
+      items: [
+        { title: "Team", href: "/dashboard/team", icon: UsersRound },
+        {
+          title: "Salespersons",
+          href: "/dashboard/salespersons",
+          icon: Contact,
+        },
+      ],
+    },
+    {
+      label: "Pipeline",
+      items: [
+        { title: "Leads", href: "/dashboard/leads", icon: Users },
+        { title: "Orders", icon: ShoppingCart },
+        { title: "Reports", icon: BarChart3 },
+      ],
+    },
   ],
   ADMIN: [
-    { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-    { title: "Users", href: "/dashboard/users", icon: UserCog },
-    { title: "Groups", icon: Building2 },
-    { title: "Leads", href: "/dashboard/leads", icon: Users },
-    { title: "Orders", icon: ShoppingCart },
-    { title: "Reports", icon: BarChart3 },
+    {
+      label: "Overview",
+      items: [
+        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "Organization",
+      items: [
+        { title: "Users", href: "/dashboard/users", icon: UserCog },
+        { title: "Groups", icon: Building2 },
+      ],
+    },
+    {
+      label: "Pipeline",
+      items: [
+        { title: "Leads", href: "/dashboard/leads", icon: Users },
+        { title: "Orders", icon: ShoppingCart },
+        { title: "Reports", icon: BarChart3 },
+      ],
+    },
   ],
 };
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
-  const items = NAV_BY_ROLE[user.role];
+  const sections = NAV_BY_ROLE[user.role];
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
+      <SidebarHeader className="border-b-[1.5px] border-sidebar-border pb-3">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" render={<Link href="/dashboard" />}>
-              <span className="text-sm font-semibold">Sales CRM</span>
+            <SidebarMenuButton
+              size="lg"
+              className="hover:bg-transparent"
+              render={<Link href="/dashboard" />}
+            >
+              {/* <BrandMark className="size-8 shrink-0" /> */}
+              <div className="flex min-w-0 flex-col leading-tight">
+                <span className="truncate font-hand text-xl leading-none font-bold text-foreground">
+                  Sales CRM
+                </span>
+                <span className="truncate text-[0.7rem] text-muted-foreground">
+                  Lead workspace
+                </span>
+              </div>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  {item.href ? (
-                    <SidebarMenuButton
-                      render={<Link href={item.href} />}
-                      isActive={pathname === item.href}
-                      tooltip={item.title}
-                    >
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </SidebarMenuButton>
-                  ) : (
-                    <>
-                      <SidebarMenuButton disabled tooltip={`${item.title} — coming soon`}>
+        {sections.map((section) => (
+          <SidebarGroup key={section.label}>
+            <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {section.items.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    {item.href ? (
+                      <SidebarMenuButton
+                        render={<Link href={item.href} />}
+                        isActive={pathname === item.href}
+                        tooltip={item.title}
+                      >
                         <item.icon />
                         <span>{item.title}</span>
                       </SidebarMenuButton>
-                      <SidebarMenuBadge>Soon</SidebarMenuBadge>
-                    </>
-                  )}
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+                    ) : (
+                      <>
+                        <SidebarMenuButton
+                          disabled
+                          tooltip={`${item.title} — coming soon`}
+                        >
+                          <item.icon />
+                          <span>{item.title}</span>
+                        </SidebarMenuButton>
+                        <SidebarMenuBadge>soon</SidebarMenuBadge>
+                      </>
+                    )}
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        ))}
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="border-t-[1.5px] border-sidebar-border pt-3">
         <NavUser user={user} />
       </SidebarFooter>
     </Sidebar>

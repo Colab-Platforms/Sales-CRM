@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import {
   Dialog,
@@ -110,7 +111,7 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </div>
 
         {createManager.error ? (
-          <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2.5 text-sm text-destructive">
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {getErrorMessage(createManager.error, "Failed to create manager.")}
           </div>
         ) : null}
@@ -199,7 +200,7 @@ function EditManagerModalContent({
           />
         </div>
         {updateManager.error ? (
-          <div className="rounded-md border border-destructive/20 bg-destructive/10 p-2.5 text-sm text-destructive">
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
             {getErrorMessage(updateManager.error, "Failed to update manager.")}
           </div>
         ) : null}
@@ -231,13 +232,15 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
   return (
     <>
       <TableRow>
-        <TableCell className="font-medium">{manager.name}</TableCell>
+        <TableCell className="pl-5 font-semibold">{manager.name}</TableCell>
         <TableCell className="text-muted-foreground">{manager.email}</TableCell>
         <TableCell>{manager.phone ?? "—"}</TableCell>
         <TableCell>
-          <Badge variant={isActive ? "default" : "secondary"}>{manager.status}</Badge>
+          <Badge variant={isActive ? "default" : "secondary"}>
+            {isActive ? "Active" : "Inactive"}
+          </Badge>
         </TableCell>
-        <TableCell className="text-right">
+        <TableCell className="pr-5 text-right">
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setIsEditDialogOpen(true)}>
               Edit
@@ -294,19 +297,16 @@ export default function UsersPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header section with title, description, and prominent Add Manager button on the right */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Managers</h1>
-          <p className="text-sm text-muted-foreground">
-            Manage manager accounts, monitor active statuses, and configure team permissions.
-          </p>
-        </div>
-        <Button onClick={() => setIsAddOpen(true)} className="gap-2 sm:self-center">
-          <UserPlus className="size-4" />
-          Add Manager
-        </Button>
-      </div>
+      <PageHeader
+        title="Managers"
+        description="Manage manager accounts, monitor active statuses, and configure team permissions."
+        actions={
+          <Button onClick={() => setIsAddOpen(true)}>
+            <UserPlus />
+            Add Manager
+          </Button>
+        }
+      />
 
       {/* Add Manager Dialog */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
@@ -317,52 +317,48 @@ export default function UsersPage() {
 
       {/* Managers Table Card */}
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-          <div>
-            <CardTitle>All Managers</CardTitle>
-            <CardDescription className="mt-1">
-              {managers ? `${managers.length} manager${managers.length === 1 ? "" : "s"} listed` : "Loading managers..."}
-            </CardDescription>
-          </div>
+        <CardHeader>
+          <CardTitle>All Managers</CardTitle>
+          <CardDescription>
+            {managers
+              ? `${managers.length} manager${managers.length === 1 ? "" : "s"} listed`
+              : "Loading managers..."}
+          </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="px-0">
           {isPending ? (
-            <div className="space-y-3 py-2">
+            <div className="space-y-3 px-5">
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
               <Skeleton className="h-10 w-full" />
             </div>
           ) : error ? (
-            <div className="rounded-lg border border-destructive/20 bg-destructive/10 p-4 text-sm text-destructive">
+            <div className="sketch-outline mx-5 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
               {getErrorMessage(error, "Failed to load managers.")}
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
+                  <TableHead className="pl-5">Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {managers && managers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="py-10 text-center">
+                    <TableCell colSpan={5} className="py-14 text-center">
                       <div className="flex flex-col items-center justify-center gap-2">
-                        <Users className="size-8 text-muted-foreground/50" />
-                        <p className="font-medium text-foreground">No managers yet</p>
-                        <p className="text-sm text-muted-foreground">
+                        <Users className="size-9 text-muted-foreground/40" />
+                        <p className="font-heading text-lg font-bold">No managers yet</p>
+                        <p className="font-hand text-base text-muted-foreground">
                           Get started by adding your first manager to the platform.
                         </p>
-                        <Button
-                          size="sm"
-                          className="mt-2 gap-1.5"
-                          onClick={() => setIsAddOpen(true)}
-                        >
-                          <UserPlus className="size-3.5" />
+                        <Button className="mt-3" onClick={() => setIsAddOpen(true)}>
+                          <UserPlus />
                           Add Manager
                         </Button>
                       </div>

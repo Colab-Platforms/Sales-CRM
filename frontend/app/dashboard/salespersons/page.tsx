@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -71,8 +72,8 @@ function SalespersonRow({ salesperson }: { salesperson: MySalesperson }) {
 
   return (
     <TableRow>
-      <TableCell>
-        <div className="font-medium">{salesperson.name}</div>
+      <TableCell className="pl-5">
+        <div className="font-semibold">{salesperson.name}</div>
         <div className="text-xs text-muted-foreground">{salesperson.email}</div>
       </TableCell>
       <TableCell>{salesperson.phone ?? "—"}</TableCell>
@@ -80,9 +81,11 @@ function SalespersonRow({ salesperson }: { salesperson: MySalesperson }) {
         <Badge variant="outline">{salesperson.groupName}</Badge>
       </TableCell>
       <TableCell>
-        <Badge variant={salesperson.status === "ACTIVE" ? "default" : "secondary"}>{salesperson.status}</Badge>
+        <Badge variant={salesperson.status === "ACTIVE" ? "default" : "secondary"}>
+          {salesperson.status === "ACTIVE" ? "Active" : "Inactive"}
+        </Badge>
       </TableCell>
-      <TableCell className="text-right">
+      <TableCell className="pr-5 text-right">
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
             Edit
@@ -121,16 +124,16 @@ export default function SalespersonsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Salespersons</h1>
-          <p className="text-sm text-muted-foreground">Everyone you&apos;ve added across your teams, in one place.</p>
-        </div>
-        <Button onClick={() => setIsAddOpen(true)} className="gap-2 sm:self-center">
-          <UserPlus className="size-4" />
-          Add Salesperson
-        </Button>
-      </div>
+      <PageHeader
+        title="Salespersons"
+        description="Everyone you've added across your teams, in one place."
+        actions={
+          <Button onClick={() => setIsAddOpen(true)}>
+            <UserPlus />
+            Add Salesperson
+          </Button>
+        }
+      />
 
       {salespersons && salespersons.length > 0 ? (
         <div className="relative max-w-sm">
@@ -139,46 +142,50 @@ export default function SalespersonsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search by name, email, or group..."
-            className="pl-9"
+            className="pl-9.5"
           />
         </div>
       ) : null}
 
       {isPending ? (
-        <Skeleton className="h-40" />
+        <Skeleton className="h-40 rounded-xl" />
       ) : error ? (
-        <p className="text-sm text-destructive">{getErrorMessage(error, "Failed to load salespersons.")}</p>
+        <div className="sketch-outline border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          {getErrorMessage(error, "Failed to load salespersons.")}
+        </div>
       ) : (salespersons?.length ?? 0) === 0 ? (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-2 py-10">
-            <Users2 className="size-8 text-muted-foreground/50" />
-            <p className="font-medium text-foreground">No salespeople yet</p>
-            <p className="text-sm text-muted-foreground">Add your first salesperson to get started.</p>
-            <Button size="sm" className="mt-2 gap-1.5" onClick={() => setIsAddOpen(true)}>
-              <UserPlus className="size-3.5" />
+          <CardContent className="flex flex-col items-center justify-center gap-2 py-14">
+            <Users2 className="size-9 text-muted-foreground/40" />
+            <p className="font-heading text-lg font-bold">No salespeople yet</p>
+            <p className="font-hand text-base text-muted-foreground">
+              Add your first salesperson to get started.
+            </p>
+            <Button className="mt-3" onClick={() => setIsAddOpen(true)}>
+              <UserPlus />
               Add Salesperson
             </Button>
           </CardContent>
         </Card>
       ) : filtered.length === 0 ? (
         <Card>
-          <CardContent className="flex flex-col items-center justify-center gap-2 py-10">
-            <Contact className="size-8 text-muted-foreground/50" />
-            <p className="font-medium text-foreground">No matches</p>
-            <p className="text-sm text-muted-foreground">Try a different search term.</p>
+          <CardContent className="flex flex-col items-center justify-center gap-2 py-14">
+            <Contact className="size-9 text-muted-foreground/40" />
+            <p className="font-heading text-lg font-bold">No matches</p>
+            <p className="font-hand text-base text-muted-foreground">Try a different search term.</p>
           </CardContent>
         </Card>
       ) : (
         <Card>
-          <CardContent className="overflow-x-auto">
+          <CardContent className="overflow-x-auto px-0">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Salesperson</TableHead>
+                  <TableHead className="pl-5">Salesperson</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Group</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>

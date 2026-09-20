@@ -14,9 +14,12 @@ function DashboardShell({ children }: { children: ReactNode }) {
   return (
     <SidebarProvider>
       <AppSidebar user={user} />
-      <SidebarInset>
-        <SiteHeader title="Dashboard" />
-        <div className="flex flex-1 flex-col gap-6 p-6">{children}</div>
+      {/* Transparent so the paper dot-grid painted on <body> shows in the gutters. */}
+      <SidebarInset className="bg-transparent">
+        <SiteHeader />
+        <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
+          {children}
+        </div>
       </SidebarInset>
     </SidebarProvider>
   );
