@@ -45,8 +45,9 @@ model Order {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  items    OrderItem[]
-  payments Payment[]
+  items     OrderItem[]
+  payments  Payment[]
+  shipments Shipment[]
 
   @@unique([externalSource, externalId])
   @@index([leadId])
@@ -134,4 +135,37 @@ model Payment {
   @@index([providerOrderId])
   @@index([status])
   @@map("payments")
+}
+
+// One row per shipment/fulfilment (an order can ship in more than one parcel). Courier,
+// tracking and delivery dates are only ever as complete as the source (Shopify fulfilment, or a
+// future provider integration) actually reports - missing fields mean "not known", not zero.
+model Shipment {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @map("order_id") @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  status ShipmentStatus @map("status")
+
+  courier         String? @map("courier") @db.VarChar(150)
+  trackingNumber  String? @map("tracking_number") @db.VarChar(150)
+  trackingUrl     String? @map("tracking_url")
+
+  shippedAt          DateTime? @map("shipped_at")
+  expectedDeliveryAt DateTime? @map("expected_delivery_at")
+  deliveredAt        DateTime? @map("delivered_at")
+  returnedAt         DateTime? @map("returned_at")
+
+  // Identity in an external system (Shopify fulfilment). Null for shipments created inside the CRM.
+  externalSource ExternalSource? @map("external_source")
+  externalId     String?         @map("external_id") @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([externalSource, externalId])
+  @@index([orderId])
+  @@index([status])
+  @@map("shipments")
 }

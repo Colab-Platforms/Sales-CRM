@@ -5,7 +5,7 @@ import type {
   OrderStatus,
   PaymentStatus,
 } from "../../../generated/prisma/enums.js";
-import type { PaymentMode } from "../orders/orders.types.js";
+import type { PaymentMode, ShipmentDetail } from "../orders/orders.types.js";
 
 // Decimal columns are sent as strings so no precision is lost in JSON.
 type Money = string;
@@ -36,6 +36,8 @@ export interface CustomerOrderSummary {
   status: OrderStatus;
   paymentStatus: PaymentStatus | null;
   paymentMode: PaymentMode | null;
+  // The order's most recently updated shipment/fulfilment, if any has been synced.
+  latestShipment: ShipmentDetail | null;
 }
 
 export interface CustomerPaymentSummary {
@@ -77,6 +79,9 @@ export type TimelineEventType =
   | "ORDER_STATUS_CHANGE"
   | "ORDER_CANCELLED"
   | "PAYMENT"
+  | "SHIPMENT_SHIPPED"
+  | "SHIPMENT_DELIVERED"
+  | "SHIPMENT_RETURNED"
   | "ABANDONMENT"
   | "ABANDONMENT_RECOVERED"
   | "RECOVERY_ACTION";

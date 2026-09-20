@@ -1,4 +1,4 @@
-import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ProductStatus } from "../../../generated/prisma/enums.js";
+import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ProductStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { NormalizedProduct, NormalizedShopifyCustomer } from "./shopify.catalog.js";
 import { fromCents, gidToId, sumCents, toCents } from "./shopify.money.js";
 import type { NormalizedFulfillment, NormalizedOrder, NormalizedTransaction } from "./shopify.orders.js";
@@ -70,6 +70,51 @@ export function mapOrderStatus(input: StatusInput): StatusResult {
   // Not shipped yet: confirmed once paid, or accepted for cash on delivery; otherwise still awaiting payment.
   const paid = ["PAID", "PARTIALLY_PAID", "PARTIALLY_REFUNDED"].includes(financial);
   return done(paid || input.isCod ? OrderStatus.CONFIRMED : OrderStatus.PENDING_PAYMENT);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Shipments
+// ---------------------------------------------------------------------------------------------
+
+const RETURNED_DISPLAY = new Set(["RETURNED", "RESTOCKED"]);
+const IN_TRANSIT = new Set(["IN_TRANSIT", "LABEL_PRINTED", "LABEL_PURCHASED", "PICKED_UP", "CONFIRMED", "READY_FOR_PICKUP", "SUBMITTED"]);
+
+export interface MappedFulfillment {
+  externalId: string;
+  status: ShipmentStatus;
+  courier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shippedAt: Date | null;
+  deliveredAt: Date | null;
+}
+
+// One row per Shopify fulfilment (an order can ship in more than one parcel). Cancelled/errored
+// fulfilments never became a real shipment, so they are left out entirely rather than mapped to
+// some placeholder status. Shopify does not report a distinct "returned at" or "estimated
+// delivery" timestamp in what this integration fetches, so those stay null (never guessed).
+export function mapFulfillments(order: Pick<NormalizedOrder, "fulfillments" | "returnStatus" | "tags">): MappedFulfillment[] {
+  return order.fulfillments
+    .filter((f) => !CLOSED_FULFILLMENT.has(f.status))
+    .map((f) => {
+      const display = f.displayStatus ?? "";
+      let status: ShipmentStatus;
+      if (DELIVERED.has(display)) status = ShipmentStatus.DELIVERED;
+      else if (OUT_FOR_DELIVERY.has(display)) status = ShipmentStatus.OUT_FOR_DELIVERY;
+      else if (RETURNED_DISPLAY.has(display) || order.tags.some((t) => RTO_DELIVERED_TAG.test(t))) status = ShipmentStatus.RETURNED;
+      else if (IN_TRANSIT.has(display)) status = ShipmentStatus.IN_TRANSIT;
+      else status = ShipmentStatus.SHIPPED; // Unlisted values count as shipped, same rule mapOrderStatus uses.
+
+      return {
+        externalId: gidToId(f.id),
+        status,
+        courier: f.trackingCompany,
+        trackingNumber: f.trackingNumber,
+        trackingUrl: f.trackingUrl,
+        shippedAt: date(f.createdAt),
+        deliveredAt: date(f.deliveredAt),
+      };
+    });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -263,6 +308,7 @@ export interface MappedOrder {
   metadata: Record<string, unknown>;
   items: MappedItem[];
   payments: MappedPayment[];
+  fulfillments: MappedFulfillment[];
   identity: MappedLeadIdentity;
   /** Something the mapping could not fully explain (unrecognised status, totals that do not add up). */
   warnings: string[];
@@ -321,6 +367,7 @@ export function mapOrder(order: NormalizedOrder): MappedOrder {
   }
 
   const payments = mapPayments(order);
+  const fulfillments = mapFulfillments(order);
   const placedAt = new Date(order.processedAt ?? order.createdAt);
   const address = order.shippingAddress;
 
@@ -378,6 +425,7 @@ export function mapOrder(order: NormalizedOrder): MappedOrder {
     },
     items,
     payments,
+    fulfillments,
     identity: {
       externalId: order.customer.id ? gidToId(order.customer.id) : null,
       firstName: order.customer.firstName,

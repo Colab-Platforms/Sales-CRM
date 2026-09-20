@@ -1,4 +1,4 @@
-import type { OrderSource, OrderStatus, PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
+import type { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 
 // How the customer pays: cash on delivery, or up front by any other method. Null when the method is not known.
 export type PaymentMode = "COD" | "PREPAID";
@@ -91,6 +91,7 @@ export interface OrderDetail {
   leadOwner: { id: string; name: string } | null;
   items: OrderItemDetail[];
   payments: PaymentDetail[];
+  shipments: ShipmentDetail[];
 }
 
 export interface OrderItemDetail {
@@ -121,6 +122,21 @@ export interface PaymentDetail {
   refundedAt: Date | null;
   refundedAmount: Money | null;
   failureReason: string | null;
+  createdAt: Date;
+}
+
+// A shipment with no tracking/courier/dates yet (Shopify created the fulfilment record but has not
+// reported those fields) is not the same as "no shipment at all" - null fields mean "not known".
+export interface ShipmentDetail {
+  id: string;
+  status: ShipmentStatus;
+  courier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shippedAt: Date | null;
+  expectedDeliveryAt: Date | null;
+  deliveredAt: Date | null;
+  returnedAt: Date | null;
   createdAt: Date;
 }
 

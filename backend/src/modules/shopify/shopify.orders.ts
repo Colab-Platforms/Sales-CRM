@@ -141,6 +141,8 @@ export interface NormalizedFulfillment {
   id: string;
   status: string;
   displayStatus: string | null;
+  /** When Shopify created the fulfilment record, i.e. when the parcel was shipped. */
+  createdAt: string | null;
   deliveredAt: string | null;
   trackingCompany: string | null;
   trackingNumber: string | null;
@@ -314,6 +316,7 @@ export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): Normalize
       id: f.id,
       status: f.status,
       displayStatus: f.displayStatus ?? null,
+      createdAt: f.createdAt ?? null,
       deliveredAt: f.deliveredAt ?? null,
       trackingCompany: f.trackingInfo?.[0]?.company ?? null,
       trackingNumber: f.trackingInfo?.[0]?.number ?? null,

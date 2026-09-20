@@ -67,6 +67,9 @@ describe("Customer 360", () => {
         data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.PENDING_PAYMENT, totalAmount: "500.00", createdAt: new Date("2026-02-01T00:00:00.000Z") },
       });
       await tx.payment.create({ data: { orderId: order2.id, amount: "500.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
+      await tx.shipment.create({
+        data: { orderId: order2.id, status: "OUT_FOR_DELIVERY", courier: "Delhivery", trackingNumber: "DL777", shippedAt: new Date("2026-02-02T00:00:00.000Z") },
+      });
 
       const svc = new CustomersService(tx);
       const result = await svc.getCustomer360(as(admin, Role.ADMIN), lead.id);
@@ -77,6 +80,9 @@ describe("Customer 360", () => {
       assert.equal(result.orders.length, 2);
       assert.equal(result.latestOrder?.id, order2.id, "the most recently created order is latest");
       assert.equal(result.currentOrderStatus, OrderStatus.PENDING_PAYMENT);
+      assert.equal(result.latestOrder?.latestShipment?.courier, "Delhivery");
+      assert.equal(result.latestOrder?.latestShipment?.trackingNumber, "DL777");
+      assert.equal(result.orders.find((o) => o.id === order1.id)?.latestShipment, null, "order1 has no shipment yet");
 
       const p = result.paymentSummary;
       assert.equal(p.orderCount, 2);
@@ -179,6 +185,16 @@ describe("Customer 360", () => {
           createdAt: new Date("2026-01-06T00:00:00.000Z"),
         },
       });
+      await tx.shipment.create({
+        data: {
+          orderId: order1.id,
+          status: "DELIVERED",
+          courier: "Bluedart",
+          trackingNumber: "BD555",
+          shippedAt: new Date("2026-01-06T12:00:00.000Z"),
+          deliveredAt: new Date("2026-01-09T09:00:00.000Z"),
+        },
+      });
 
       // Order 2 has no Activity rows at all, so its CREATED milestone must fall back to the
       // order's own createdAt.
@@ -211,6 +227,11 @@ describe("Customer 360", () => {
       assert.equal(byType("INTERESTED_ENDED").length, 1);
       assert.equal(byType("TASK").length, 1);
       assert.equal(byType("ORDER_CANCELLED").length, 1);
+      assert.equal(byType("SHIPMENT_SHIPPED").length, 1);
+      assert.equal(byType("SHIPMENT_DELIVERED").length, 1);
+      assert.match(byType("SHIPMENT_SHIPPED")[0].title, /Bluedart/);
+      assert.match(byType("SHIPMENT_SHIPPED")[0].description ?? "", /BD555/);
+      assert.equal(byType("SHIPMENT_SHIPPED")[0].order?.id, order1.id);
 
       // Order 1's CREATED milestone came from the real Activity row, not a synthesized duplicate.
       const order1Created = byType("ORDER_CREATED").filter((e) => e.order?.id === order1.id);

@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ProductStatus } from "../../../generated/prisma/enums.js";
+import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ProductStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import { codOrderNode, normalized, orderNode, rawFulfillment, rawLineItem, rawTransaction, money } from "./shopify.fixtures.js";
 import { isCodOrder, mapCustomer, mapOrder, mapOrderStatus, mapPayments, mapProduct, type StatusInput } from "./shopify.mapper.js";
 import { fromCents, gidToId, sumCents, toCents, toGid } from "./shopify.money.js";
@@ -109,6 +109,41 @@ describe("order status mapping", () => {
     });
     assert.deepEqual(result.unmapped, ["financialStatus:SOMETHING_NEW", "fulfillmentStatus:BRAND_NEW"]);
     assert.equal(result.status, OrderStatus.PENDING_PAYMENT);
+  });
+});
+
+describe("fulfilment mapping", () => {
+  const fulfillments = (raw: ReturnType<typeof rawFulfillment>[], overrides: Record<string, unknown> = {}) =>
+    mapOrder(normalized(orderNode({ displayFulfillmentStatus: "FULFILLED", fulfillments: raw, ...overrides }))).fulfillments;
+
+  it("maps display statuses to the shipment lifecycle", () => {
+    assert.equal(fulfillments([rawFulfillment("IN_TRANSIT")])[0].status, ShipmentStatus.IN_TRANSIT);
+    assert.equal(fulfillments([rawFulfillment("OUT_FOR_DELIVERY")])[0].status, ShipmentStatus.OUT_FOR_DELIVERY);
+    assert.equal(fulfillments([rawFulfillment("ATTEMPTED_DELIVERY")])[0].status, ShipmentStatus.OUT_FOR_DELIVERY);
+    assert.equal(fulfillments([rawFulfillment("DELIVERED")])[0].status, ShipmentStatus.DELIVERED);
+    assert.equal(fulfillments([rawFulfillment("RETURNED")])[0].status, ShipmentStatus.RETURNED);
+    assert.equal(fulfillments([rawFulfillment("CONFIRMED")])[0].status, ShipmentStatus.IN_TRANSIT);
+  });
+
+  it("falls back to SHIPPED for a display status it does not recognise, same rule as order status", () => {
+    assert.equal(fulfillments([rawFulfillment("SOMETHING_NEW")])[0].status, ShipmentStatus.SHIPPED);
+  });
+
+  it("treats an RTO-tagged order as returned even if Shopify's own display status disagrees", () => {
+    const shipped = fulfillments([rawFulfillment("IN_TRANSIT")], { tags: ["RTO Delivered"] });
+    assert.equal(shipped[0].status, ShipmentStatus.RETURNED);
+  });
+
+  it("leaves out a cancelled or failed fulfilment entirely - it never became a real shipment", () => {
+    assert.equal(fulfillments([rawFulfillment("DELIVERED", { status: "CANCELLED" })]).length, 0);
+    assert.equal(fulfillments([rawFulfillment("DELIVERED", { status: "ERROR" })]).length, 0);
+    assert.equal(fulfillments([rawFulfillment("DELIVERED", { status: "FAILURE" })]).length, 0);
+  });
+
+  it("never invents an expected-delivery or returned-at date - Shopify does not report them here", () => {
+    const o = mapOrder(normalized(orderNode({ displayFulfillmentStatus: "FULFILLED", fulfillments: [rawFulfillment("RETURNED")] })));
+    // MappedFulfillment has no expectedDeliveryAt/returnedAt field at all - only what Shopify actually gives.
+    assert.deepEqual(Object.keys(o.fulfillments[0]).sort(), ["courier", "deliveredAt", "externalId", "shippedAt", "status", "trackingNumber", "trackingUrl"]);
   });
 });
 
@@ -389,6 +424,18 @@ describe("order mapping", () => {
     assert.equal(o.status, OrderStatus.DELIVERED);
     assert.equal((o.metadata.shopify as { fulfillments: { trackingNumber: string }[] }).fulfillments[0].trackingNumber, "SR12345");
     assert.ok(o.confirmedAt);
+  });
+
+  it("also maps the fulfilment into a first-class shipment", () => {
+    const o = mapOrder(normalized(orderNode({ displayFulfillmentStatus: "FULFILLED", fulfillments: [rawFulfillment("DELIVERED")] })));
+    assert.equal(o.fulfillments.length, 1);
+    const shipment = o.fulfillments[0];
+    assert.equal(shipment.status, ShipmentStatus.DELIVERED);
+    assert.equal(shipment.courier, "Shiprocket");
+    assert.equal(shipment.trackingNumber, "SR12345");
+    assert.equal(shipment.trackingUrl, "https://track.example/SR12345");
+    assert.equal(shipment.shippedAt?.toISOString(), "2026-09-19T12:00:00.000Z");
+    assert.equal(shipment.deliveredAt?.toISOString(), "2026-09-21T09:00:00.000Z");
   });
 
   it("maps a fully refunded order", () => {

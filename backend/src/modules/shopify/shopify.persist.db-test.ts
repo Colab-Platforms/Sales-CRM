@@ -92,13 +92,14 @@ const ext = { externalSource: "SHOPIFY" } as const;
 
 async function counts(tx: Db, orderExternalId: string) {
   const order = await tx.order.findFirst({ where: { ...ext, externalId: orderExternalId }, select: { id: true } });
-  if (!order) return { orders: 0, items: 0, payments: 0, activities: 0 };
-  const [items, payments, activities] = await Promise.all([
+  if (!order) return { orders: 0, items: 0, payments: 0, shipments: 0, activities: 0 };
+  const [items, payments, shipments, activities] = await Promise.all([
     tx.orderItem.count({ where: { orderId: order.id } }),
     tx.payment.count({ where: { orderId: order.id } }),
+    tx.shipment.count({ where: { orderId: order.id } }),
     tx.activity.count({ where: { referenceType: "Order", referenceId: order.id } }),
   ]);
-  return { orders: 1, items, payments, activities };
+  return { orders: 1, items, payments, shipments, activities };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -278,6 +279,68 @@ describe("importing an order", () => {
       assert.equal(partOrder.status, OrderStatus.CONFIRMED);
       assert.equal(partOrder.payments[0].status, PaymentStatus.PARTIALLY_REFUNDED);
       assert.equal(partOrder.payments[0].refundedAmount?.toString(), "200");
+    });
+  });
+
+  it("stores a shipment with courier and tracking, and progresses it as Shopify updates the fulfilment", async () => {
+    await inRollback(async (tx) => {
+      const fulfillmentGid = `gid://shopify/Fulfillment/${uid()}`;
+      const { id, mapped } = make({
+        node: { displayFulfillmentStatus: "FULFILLED", fulfillments: [rawFulfillment("IN_TRANSIT", { id: fulfillmentGid })] },
+      });
+      await upsertOrder(tx, mapped);
+
+      const order = await tx.order.findFirstOrThrow({ where: { ...ext, externalId: id }, include: { shipments: true } });
+      assert.equal(order.shipments.length, 1);
+      assert.equal(order.shipments[0].status, "IN_TRANSIT");
+      assert.equal(order.shipments[0].courier, "Shiprocket");
+      assert.equal(order.shipments[0].trackingNumber, "SR12345");
+      assert.equal(order.shipments[0].trackingUrl, "https://track.example/SR12345");
+      assert.ok(order.shipments[0].shippedAt);
+      assert.equal(order.shipments[0].deliveredAt, null);
+      assert.equal(order.shipments[0].externalSource, "SHOPIFY");
+
+      // Shopify later reports the same fulfilment as delivered: the row is updated, not duplicated.
+      const delivered = make({
+        id,
+        customerId: null,
+        node: {
+          displayFulfillmentStatus: "FULFILLED",
+          updatedAt: "2026-09-22T09:00:00Z",
+          fulfillments: [rawFulfillment("DELIVERED", { id: fulfillmentGid })],
+        },
+      });
+      await upsertOrder(tx, delivered.mapped, { force: true });
+
+      const after = await tx.order.findFirstOrThrow({ where: { ...ext, externalId: id }, include: { shipments: true } });
+      assert.equal(after.shipments.length, 1, "the same Shopify fulfilment updates its row instead of adding a new one");
+      assert.equal(after.shipments[0].status, "DELIVERED");
+      assert.ok(after.shipments[0].deliveredAt);
+    });
+  });
+
+  it("removes a shipment row if Shopify later cancels that fulfilment", async () => {
+    await inRollback(async (tx) => {
+      const fulfillmentGid = `gid://shopify/Fulfillment/${uid()}`;
+      const { id, mapped } = make({ node: { displayFulfillmentStatus: "FULFILLED", fulfillments: [rawFulfillment("IN_TRANSIT", { id: fulfillmentGid })] } });
+      await upsertOrder(tx, mapped);
+      assert.equal((await counts(tx, id)).shipments, 1);
+
+      const cancelled = make({
+        id,
+        customerId: null,
+        node: { displayFulfillmentStatus: "UNFULFILLED", updatedAt: "2026-09-22T09:00:00Z", fulfillments: [rawFulfillment("IN_TRANSIT", { id: fulfillmentGid, status: "CANCELLED" })] },
+      });
+      await upsertOrder(tx, cancelled.mapped, { force: true });
+      assert.equal((await counts(tx, id)).shipments, 0);
+    });
+  });
+
+  it("does not create a shipment for an order Shopify has not fulfilled yet", async () => {
+    await inRollback(async (tx) => {
+      const { id, mapped } = make();
+      await upsertOrder(tx, mapped);
+      assert.equal((await counts(tx, id)).shipments, 0);
     });
   });
 

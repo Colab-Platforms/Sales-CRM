@@ -36,6 +36,23 @@ export type PaymentMethod =
   | "OTHER"
   | "COD";
 
+export type ShipmentStatus = "SHIPPED" | "IN_TRANSIT" | "OUT_FOR_DELIVERY" | "DELIVERED" | "RETURNED";
+
+// A shipment with no tracking/courier/dates yet (only the fulfilment record itself has synced) is
+// not the same as "no shipment at all" - null fields mean "not known", not zero.
+export interface ShipmentDetail {
+  id: string;
+  status: ShipmentStatus;
+  courier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shippedAt: string | null;
+  expectedDeliveryAt: string | null;
+  deliveredAt: string | null;
+  returnedAt: string | null;
+  createdAt: string;
+}
+
 export interface OrdersListParams {
   page: number;
   pageSize: number;
@@ -144,6 +161,7 @@ export interface OrderDetail {
   leadOwner: { id: string; name: string } | null;
   items: OrderItemDetail[];
   payments: PaymentDetail[];
+  shipments: ShipmentDetail[];
 }
 
 export type StatusHistoryEvent = "CREATED" | "PLACED" | "CONFIRMED" | "CANCELLED" | "STATUS_CHANGE";

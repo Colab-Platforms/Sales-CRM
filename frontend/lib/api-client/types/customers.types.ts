@@ -1,4 +1,4 @@
-import type { OrderSource, OrderStatus, PaymentMode, PaymentStatus } from "./orders.types";
+import type { OrderSource, OrderStatus, PaymentMode, PaymentStatus, ShipmentDetail } from "./orders.types";
 
 export type LeadWorkingStatus = "NEW" | "ASSIGNED" | "WORKING" | "INTERESTED" | "EXPIRED" | "CONVERTED" | "CLOSED";
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH";
@@ -29,6 +29,7 @@ export interface CustomerOrderSummary {
   status: OrderStatus;
   paymentStatus: PaymentStatus | null;
   paymentMode: PaymentMode | null;
+  latestShipment: ShipmentDetail | null;
 }
 
 export interface CustomerPaymentSummary {
@@ -70,6 +71,9 @@ export type TimelineEventType =
   | "ORDER_STATUS_CHANGE"
   | "ORDER_CANCELLED"
   | "PAYMENT"
+  | "SHIPMENT_SHIPPED"
+  | "SHIPMENT_DELIVERED"
+  | "SHIPMENT_RETURNED"
   | "ABANDONMENT"
   | "ABANDONMENT_RECOVERED"
   | "RECOVERY_ACTION";

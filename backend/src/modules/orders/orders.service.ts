@@ -75,6 +75,7 @@ const DETAIL_SELECT = {
   },
   items: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
   payments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
+  shipments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
 } satisfies Prisma.OrderSelect;
 
 const HISTORY_ACTIVITY_TYPES = [ActivityType.ORDER_CREATED, ActivityType.ORDER_CONFIRMED, ActivityType.STATUS_CHANGE];
@@ -211,6 +212,18 @@ class OrdersService {
         refundedAmount: payment.refundedAmount ? money(payment.refundedAmount) : null,
         failureReason: payment.failureReason,
         createdAt: payment.createdAt,
+      })),
+      shipments: order.shipments.map((shipment) => ({
+        id: shipment.id,
+        status: shipment.status,
+        courier: shipment.courier,
+        trackingNumber: shipment.trackingNumber,
+        trackingUrl: shipment.trackingUrl,
+        shippedAt: shipment.shippedAt,
+        expectedDeliveryAt: shipment.expectedDeliveryAt,
+        deliveredAt: shipment.deliveredAt,
+        returnedAt: shipment.returnedAt,
+        createdAt: shipment.createdAt,
       })),
     };
   }

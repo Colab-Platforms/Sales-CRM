@@ -4,6 +4,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { orderDetailHref } from "@/components/orders/orders-table";
 import { OrderStatusBadge } from "@/components/orders/order-status-badge";
 import { PaymentStatusBadge } from "@/components/orders/payment-status-badge";
+import { ShipmentStatusBadge } from "@/components/orders/shipment-status-badge";
 import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import type { CustomerOrderSummary } from "@/lib/api-client/types/customers.types";
 
@@ -25,6 +26,7 @@ export function CustomerOrdersList({ orders }: { orders: CustomerOrderSummary[] 
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead>Payment</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Fulfilment</TableHead>
                 <TableHead>Date</TableHead>
               </TableRow>
             </TableHeader>
@@ -49,6 +51,18 @@ export function CustomerOrdersList({ orders }: { orders: CustomerOrderSummary[] 
                   </TableCell>
                   <TableCell>
                     <OrderStatusBadge status={order.status} />
+                  </TableCell>
+                  <TableCell>
+                    {order.latestShipment ? (
+                      <>
+                        <ShipmentStatusBadge status={order.latestShipment.status} />
+                        {order.latestShipment.courier ? (
+                          <div className="mt-0.5 text-xs text-muted-foreground">{order.latestShipment.courier}</div>
+                        ) : null}
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
                   </TableCell>
                   <TableCell className="text-muted-foreground">{formatDate(order.createdAt)}</TableCell>
                 </TableRow>

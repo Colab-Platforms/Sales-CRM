@@ -1,7 +1,8 @@
 import { PaymentStatus } from "../../../generated/prisma/enums.js";
-import type { PaymentMethod } from "../../../generated/prisma/enums.js";
+import type { PaymentMethod, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
+import type { ShipmentDetail } from "../orders/orders.types.js";
 import { fromCents, sumCents, toCents } from "../shopify/shopify.money.js";
 import type { CustomerOrderSummary, CustomerPaymentSummary, CustomerProfile } from "./customers.types.js";
 
@@ -44,6 +45,19 @@ export function mapProfile(lead: LeadProfileInput): CustomerProfile {
   };
 }
 
+export interface ShipmentSummaryInput {
+  id: string;
+  status: ShipmentStatus;
+  courier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shippedAt: Date | null;
+  expectedDeliveryAt: Date | null;
+  deliveredAt: Date | null;
+  returnedAt: Date | null;
+  createdAt: Date;
+}
+
 export interface OrderSummaryInput {
   id: string;
   orderNumber: string;
@@ -54,9 +68,27 @@ export interface OrderSummaryInput {
   totalAmount: { toString(): string };
   status: CustomerOrderSummary["status"];
   payments: { status: PaymentStatus; method: PaymentMethod | null; amount: { toString(): string }; refundedAmount: { toString(): string } | null }[];
+  // Expected pre-sorted most-recent-first (same convention as the order list itself).
+  shipments: ShipmentSummaryInput[];
 }
 
 export function mapOrderSummary(order: OrderSummaryInput): CustomerOrderSummary {
+  const latest = order.shipments[0];
+  const latestShipment: ShipmentDetail | null = latest
+    ? {
+        id: latest.id,
+        status: latest.status,
+        courier: latest.courier,
+        trackingNumber: latest.trackingNumber,
+        trackingUrl: latest.trackingUrl,
+        shippedAt: latest.shippedAt,
+        expectedDeliveryAt: latest.expectedDeliveryAt,
+        deliveredAt: latest.deliveredAt,
+        returnedAt: latest.returnedAt,
+        createdAt: latest.createdAt,
+      }
+    : null;
+
   return {
     id: order.id,
     orderNumber: order.orderNumber,
@@ -68,6 +100,7 @@ export function mapOrderSummary(order: OrderSummaryInput): CustomerOrderSummary 
     status: order.status,
     paymentStatus: derivePaymentStatus(order.payments),
     paymentMode: derivePaymentMode(order.payments),
+    latestShipment,
   };
 }
 

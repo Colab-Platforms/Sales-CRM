@@ -48,6 +48,17 @@ enum AssignmentType {
   @@map("assignment_type")
 }
 
+// Matches the "import_batch_status" Postgres enum already defined in migration
+// 20260919122125_lead_assign_batch_implement (LeadImportBatch referenced this type, but the
+// declaration itself was missing from the schema, which blocked all Prisma tooling).
+enum ImportBatchStatus {
+  DRAFT
+  COMMITTED
+  FAILED
+
+  @@map("import_batch_status")
+}
+
 enum InterestedPeriodStatus {
   ACTIVE
   CONVERTED
@@ -175,6 +186,16 @@ enum OrderStatus {
   DELIVERED
 
   @@map("order_status")
+}
+
+enum ShipmentStatus {
+  SHIPPED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+
+  @@map("shipment_status")
 }
 
 enum OrderSource {

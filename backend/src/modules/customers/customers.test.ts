@@ -26,6 +26,7 @@ function order(overrides: Partial<OrderSummaryInput> = {}): OrderSummaryInput {
     totalAmount: { toString: () => "1000.00" },
     status: OrderStatus.CONFIRMED,
     payments: [],
+    shipments: [],
     ...overrides,
   };
 }
@@ -90,6 +91,33 @@ describe("mapOrderSummary", () => {
     assert.equal(summary.paymentStatus, PaymentStatus.SUCCESS);
     assert.equal(summary.paymentMode, "PREPAID");
     assert.equal(summary.totalAmount, "1000.00");
+  });
+
+  it("is null when the order has no shipment yet", () => {
+    assert.equal(mapOrderSummary(order()).latestShipment, null);
+  });
+
+  it("surfaces the most recent shipment (expected to already be sorted most-recent-first)", () => {
+    const summary = mapOrderSummary(
+      order({
+        shipments: [
+          {
+            id: "s2",
+            status: "OUT_FOR_DELIVERY" as any,
+            courier: "Delhivery",
+            trackingNumber: "DL999",
+            trackingUrl: "https://track.example/DL999",
+            shippedAt: new Date("2026-01-02"),
+            expectedDeliveryAt: null,
+            deliveredAt: null,
+            returnedAt: null,
+            createdAt: new Date("2026-01-02"),
+          },
+        ],
+      }),
+    );
+    assert.equal(summary.latestShipment?.courier, "Delhivery");
+    assert.equal(summary.latestShipment?.status, "OUT_FOR_DELIVERY");
   });
 });
 
@@ -214,6 +242,7 @@ describe("buildOrderEntries", () => {
     placedAt: new Date("2026-01-01T00:05:00.000Z"),
     confirmedAt: new Date("2026-01-01T00:10:00.000Z"),
     cancelledAt: null,
+    shipments: [],
   };
 
   it("falls back to the order's own timestamps when no Activity rows exist for it", () => {
@@ -261,6 +290,30 @@ describe("buildOrderEntries", () => {
       ],
     );
     assert.ok(!entries.some((e) => e.id === "act1"));
+  });
+
+  it("adds a shipped and delivered milestone for each real shipment timestamp", () => {
+    const withShipment = {
+      ...orderRow,
+      shipments: [
+        { id: "sh1", courier: "Delhivery", trackingNumber: "DL1", shippedAt: new Date("2026-01-02T00:00:00.000Z"), deliveredAt: new Date("2026-01-04T00:00:00.000Z"), returnedAt: null },
+      ],
+    };
+    const entries = buildOrderEntries([withShipment], []);
+    const shipped = entries.find((e) => e.type === "SHIPMENT_SHIPPED");
+    const delivered = entries.find((e) => e.type === "SHIPMENT_DELIVERED");
+    assert.ok(shipped);
+    assert.match(shipped!.title, /Delhivery/);
+    assert.match(shipped!.description ?? "", /DL1/);
+    assert.equal(shipped!.order?.id, UUID);
+    assert.ok(delivered);
+    assert.equal(delivered!.occurredAt.toISOString(), "2026-01-04T00:00:00.000Z");
+  });
+
+  it("never invents a shipped/delivered/returned milestone when the shipment has no such timestamp", () => {
+    const noTimestamps = { ...orderRow, shipments: [{ id: "sh2", courier: null, trackingNumber: null, shippedAt: null, deliveredAt: null, returnedAt: null }] };
+    const entries = buildOrderEntries([noTimestamps], []);
+    assert.ok(!entries.some((e) => e.type.startsWith("SHIPMENT_")));
   });
 });
 

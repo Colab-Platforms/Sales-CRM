@@ -4,6 +4,7 @@ import type {
   PaymentMethod,
   PaymentMode,
   PaymentStatus,
+  ShipmentStatus,
 } from "./api-client/types/orders.types";
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
@@ -99,6 +100,22 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
 export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
   COD: "COD",
   PREPAID: "Prepaid",
+};
+
+export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
+  SHIPPED: "Shipped",
+  IN_TRANSIT: "In transit",
+  OUT_FOR_DELIVERY: "Out for delivery",
+  DELIVERED: "Delivered",
+  RETURNED: "Returned",
+};
+
+export const SHIPMENT_STATUS_COLORS: Record<ShipmentStatus, string> = {
+  SHIPPED: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  IN_TRANSIT: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  OUT_FOR_DELIVERY: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
+  DELIVERED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  RETURNED: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
 };
 
 // Amounts arrive as decimal strings; they are only converted for display.

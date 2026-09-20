@@ -34,6 +34,24 @@ const PROFILE_SELECT = {
   owner: { select: { id: true, name: true } },
 } satisfies Prisma.LeadSelect;
 
+// Most-recent-first: mapOrderSummary treats shipments[0] as the latest, and the timeline builder
+// only reads timestamps so order does not matter there.
+const SHIPMENT_SELECT = {
+  select: {
+    id: true,
+    status: true,
+    courier: true,
+    trackingNumber: true,
+    trackingUrl: true,
+    shippedAt: true,
+    expectedDeliveryAt: true,
+    deliveredAt: true,
+    returnedAt: true,
+    createdAt: true,
+  },
+  orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }],
+} satisfies Prisma.Order$shipmentsArgs;
+
 const ORDER_SUMMARY_SELECT = {
   id: true,
   orderNumber: true,
@@ -44,6 +62,7 @@ const ORDER_SUMMARY_SELECT = {
   totalAmount: true,
   status: true,
   payments: { select: { status: true, method: true, amount: true, refundedAmount: true } },
+  shipments: SHIPMENT_SELECT,
 } satisfies Prisma.OrderSelect;
 
 const ORDER_MILESTONE_SELECT = {
@@ -55,6 +74,7 @@ const ORDER_MILESTONE_SELECT = {
   placedAt: true,
   confirmedAt: true,
   cancelledAt: true,
+  shipments: { select: { id: true, courier: true, trackingNumber: true, shippedAt: true, deliveredAt: true, returnedAt: true } },
 } satisfies Prisma.OrderSelect;
 
 const ACTIVITY_SELECT = {

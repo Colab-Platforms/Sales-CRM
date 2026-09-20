@@ -234,17 +234,32 @@ export interface OrderResult {
   lead: LeadResolution | null;
   items: number;
   payments: { created: number; updated: number; deleted: number };
+  shipments: { created: number; updated: number; deleted: number };
 }
 
 const PAYMENT_EVENTS = new Set<PaymentStatus>([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED]);
 
 export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: boolean } = {}): Promise<OrderResult> {
   await lock(tx, `shopify:order:${mapped.externalId}`);
-  const result: OrderResult = { action: "skipped", orderId: null, lead: null, items: 0, payments: { created: 0, updated: 0, deleted: 0 } };
+  const result: OrderResult = {
+    action: "skipped",
+    orderId: null,
+    lead: null,
+    items: 0,
+    payments: { created: 0, updated: 0, deleted: 0 },
+    shipments: { created: 0, updated: 0, deleted: 0 },
+  };
 
   const existing = await tx.order.findUnique({
     where: extKey(mapped.externalId),
-    select: { id: true, status: true, leadId: true, externalUpdatedAt: true, payments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true, status: true } } },
+    select: {
+      id: true,
+      status: true,
+      leadId: true,
+      externalUpdatedAt: true,
+      payments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true, status: true } },
+      shipments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true } },
+    },
   });
   if (existing && !opts.force && existing.externalUpdatedAt && existing.externalUpdatedAt >= mapped.externalUpdatedAt) {
     result.orderId = existing.id;
@@ -299,6 +314,7 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
 
   await replaceItems(tx, order.id, mapped, result);
   const paymentEvents = await syncPayments(tx, order.id, mapped, existing?.payments ?? [], result);
+  await syncShipments(tx, order.id, mapped, existing?.shipments ?? [], result);
   await recordActivity(tx, order.id, lead.leadId, mapped, existing?.status ?? null, paymentEvents);
   return result;
 }
@@ -385,6 +401,44 @@ async function syncPayments(
     result.payments.deleted += stale.length;
   }
   return events;
+}
+
+async function syncShipments(
+  tx: Db,
+  orderId: string,
+  mapped: MappedOrder,
+  current: { id: string; externalId: string | null }[],
+  result: OrderResult,
+): Promise<void> {
+  const byExt = new Map(current.map((s) => [s.externalId, s]));
+
+  for (const fulfillment of mapped.fulfillments) {
+    const data = {
+      status: fulfillment.status,
+      courier: fulfillment.courier?.slice(0, 150) ?? null,
+      trackingNumber: fulfillment.trackingNumber?.slice(0, 150) ?? null,
+      trackingUrl: fulfillment.trackingUrl,
+      shippedAt: fulfillment.shippedAt,
+      deliveredAt: fulfillment.deliveredAt,
+    };
+    const before = byExt.get(fulfillment.externalId);
+    if (before) {
+      await tx.shipment.update({ where: { id: before.id }, data });
+      result.shipments.updated++;
+    } else {
+      await tx.shipment.create({ data: { ...data, orderId, externalSource: SOURCE, externalId: fulfillment.externalId } });
+      result.shipments.created++;
+    }
+  }
+
+  // A fulfilment that Shopify has since cancelled never became a real shipment, so any row
+  // previously synced for it is removed (mirrors how a stale placeholder payment is removed).
+  const wanted = new Set(mapped.fulfillments.map((f) => f.externalId));
+  const stale = current.filter((s) => !s.externalId || !wanted.has(s.externalId));
+  if (stale.length > 0) {
+    await tx.shipment.deleteMany({ where: { id: { in: stale.map((s) => s.id) }, externalSource: SOURCE } });
+    result.shipments.deleted += stale.length;
+  }
 }
 
 // Timeline entries for Customer 360 and the order's status history. Written only when something actually

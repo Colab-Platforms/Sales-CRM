@@ -18,6 +18,7 @@ import {
 } from "@/lib/order-status";
 import { DetailField, DetailGrid } from "./detail-field";
 import { customerDetailHref } from "./orders-table";
+import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { PaymentStatusBadge } from "./payment-status-badge";
@@ -227,6 +228,8 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           )}
         </CardContent>
       </Card>
+
+      <OrderShipmentSection shipments={order.shipments} />
 
       <Card>
         <CardHeader>

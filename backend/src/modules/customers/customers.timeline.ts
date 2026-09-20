@@ -227,6 +227,15 @@ export function buildRecoveryEntries(actions: RecoveryActionRow[]): TimelineEntr
 // ---- Orders: mirrors orders.service.ts' getStatusHistory, but batched across every order the
 // lead has, and without a second DB round trip per order. ----
 
+export interface ShipmentMilestoneRow {
+  id: string;
+  courier: string | null;
+  trackingNumber: string | null;
+  shippedAt: Date | null;
+  deliveredAt: Date | null;
+  returnedAt: Date | null;
+}
+
 export interface OrderRow {
   id: string;
   orderNumber: string;
@@ -236,6 +245,54 @@ export interface OrderRow {
   placedAt: Date | null;
   confirmedAt: Date | null;
   cancelledAt: Date | null;
+  shipments: ShipmentMilestoneRow[];
+}
+
+// Shopify does not report when a fulfilment entered transit or when a return completed, so only
+// the two timestamps it does give (shipped, delivered) become timeline milestones - never guessed.
+function shipmentEntries(orderLink: TimelineEntry["order"], shipments: ShipmentMilestoneRow[]): TimelineEntry[] {
+  const entries: TimelineEntry[] = [];
+  for (const shipment of shipments) {
+    const via = shipment.courier ? ` via ${shipment.courier}` : "";
+    const awb = shipment.trackingNumber ? ` (AWB ${shipment.trackingNumber})` : "";
+    if (shipment.shippedAt) {
+      entries.push({
+        id: `shipment:${shipment.id}:SHIPPED`,
+        type: "SHIPMENT_SHIPPED",
+        title: `Shipped${via}`,
+        description: shipment.trackingNumber ? `Tracking${awb}` : null,
+        occurredAt: shipment.shippedAt,
+        actor: null,
+        order: orderLink,
+        source: "RECORD",
+      });
+    }
+    if (shipment.deliveredAt) {
+      entries.push({
+        id: `shipment:${shipment.id}:DELIVERED`,
+        type: "SHIPMENT_DELIVERED",
+        title: `Delivered${via}`,
+        description: null,
+        occurredAt: shipment.deliveredAt,
+        actor: null,
+        order: orderLink,
+        source: "RECORD",
+      });
+    }
+    if (shipment.returnedAt) {
+      entries.push({
+        id: `shipment:${shipment.id}:RETURNED`,
+        type: "SHIPMENT_RETURNED",
+        title: `Returned${via}`,
+        description: null,
+        occurredAt: shipment.returnedAt,
+        actor: null,
+        order: orderLink,
+        source: "RECORD",
+      });
+    }
+  }
+  return entries;
 }
 
 const ORDER_ACTIVITY_EVENT: Partial<Record<ActivityType, { type: TimelineEntry["type"]; fallbackTitle: string }>> = {
@@ -283,6 +340,8 @@ export function buildOrderEntries(orders: OrderRow[], activities: ActivityRow[])
       milestone(`order:${order.id}:CONFIRMED`, "ORDER_CONFIRMED", `Order ${order.orderNumber} confirmed`, order.confirmedAt);
     }
     milestone(`order:${order.id}:CANCELLED`, "ORDER_CANCELLED", `Order ${order.orderNumber} cancelled`, order.cancelledAt);
+
+    entries.push(...shipmentEntries(orderLink, order.shipments));
   }
 
   return entries;
