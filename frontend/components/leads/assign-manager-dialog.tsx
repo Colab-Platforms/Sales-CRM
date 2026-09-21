@@ -22,7 +22,7 @@ export function AssignManagerDialog({
   leadIds: string[];
   onDone: () => void;
 }) {
-  const { data: managers } = useQuery(managersQueryOptions());
+  const { data: managers } = useQuery({ ...managersQueryOptions(), enabled: open });
   const bulkAssign = useBulkAssignManagerMutation();
   const [method, setMethod] = useState<"MANUAL" | "ROUND_ROBIN">("MANUAL");
   const [managerId, setManagerId] = useState("");

@@ -22,7 +22,7 @@ export function AssignSalespersonDialog({
   leadIds: string[];
   onDone: () => void;
 }) {
-  const { data: salespersons, isPending, error } = useQuery(mySalespersonsQueryOptions());
+  const { data: salespersons, isPending, error } = useQuery({ ...mySalespersonsQueryOptions(), enabled: open });
   const bulkAssign = useBulkAssignSalespersonMutation();
   const [method, setMethod] = useState<"MANUAL" | "ROUND_ROBIN">("MANUAL");
   const [salespersonId, setSalespersonId] = useState("");
