@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "prebuild": "prisma generate",
     "build": "tsc && tsc-alias",
     "start": "node dist/src/server.js",

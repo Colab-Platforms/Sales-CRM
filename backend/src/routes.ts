@@ -9,10 +9,13 @@ import adminRoutes from "@modules/admin/admin.routes.js";
 import managerRoutes from "@modules/manager/manager.routes.js";
 import leadRoutes from "@modules/lead/lead.routes.js";
 import exotelIvrRoutes from "@modules/webhooks/exotel/exotelIvr.routes.js";
+import callerDeskRoutes from "@modules/webhooks/callerdesk/callerdesk.routes.js";
+import callRoutes from "@modules/call/call.routes.js";
 
 const router = Router();
 
 router.use("/webhooks/exotel", exotelIvrRoutes);
+router.use("/webhooks/callerdesk", callerDeskRoutes);
 
 router.get("/health", (_req, res) => {
   res.status(200).json({ success: true, message: "ok" });
@@ -39,5 +42,6 @@ router.use("/dashboard", dashboardRoutes);
 router.use("/admin", adminRoutes);
 router.use("/manager", managerRoutes);
 router.use("/lead", leadRoutes);
+router.use("/calls", callRoutes);
 
 export default router;
