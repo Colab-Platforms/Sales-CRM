@@ -7,6 +7,7 @@ import ordersRoutes from "@modules/orders/orders.routes.js";
 import customersRoutes from "@modules/customers/customers.routes.js";
 import auditRoutes from "@modules/audit/audit.routes.js";
 import whatsappRoutes from "@modules/whatsapp/whatsapp.routes.js";
+import leadRoutes from "./modules/lead/lead.routes.js";
 
 const router = Router();
 
@@ -22,5 +23,7 @@ router.use("/orders", ordersRoutes);
 router.use("/customers", customersRoutes);
 router.use("/audit", auditRoutes);
 router.use("/whatsapp", whatsappRoutes);
+router.use("/lead", leadRoutes);                          // add with the other router.use lines
+
 
 export default router;
