@@ -70,7 +70,6 @@ const bulkAssignSalespersonSchema = z
   .object({
     leadIds: z.array(z.string().uuid()).min(1, "No leads selected"),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
-    groupId: z.string().uuid(),
     salespersonId: z.string().uuid().optional(),
     salespersonIds: z.array(z.string().uuid()).optional(),
   })

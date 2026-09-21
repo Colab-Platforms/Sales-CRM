@@ -10,6 +10,7 @@
   --font-sans: var(--font-sans);
   --font-mono: var(--font-geist-mono);
   --font-heading: var(--font-sans);
+  --font-hand: var(--font-hand);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -39,6 +40,7 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  --color-ink-line: var(--ink-line);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -48,73 +50,97 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+/*
+  Palette: "ink on paper". A warm off-white ground with dark indigo ink, so the
+  hand-drawn borders and offset shadows below read as pen strokes on a notepad
+  rather than as generic grey chrome.
+*/
 :root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --paper: oklch(0.986 0.006 95);
+  --ink: oklch(0.26 0.035 266);
+
+  --background: var(--paper);
+  --foreground: var(--ink);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --card-foreground: var(--ink);
+  --popover: oklch(0.995 0.004 95);
+  --popover-foreground: var(--ink);
+  --primary: oklch(0.51 0.168 266);
+  --primary-foreground: oklch(0.99 0.005 95);
+  --secondary: oklch(0.955 0.012 95);
+  --secondary-foreground: var(--ink);
+  --muted: oklch(0.958 0.009 95);
+  --muted-foreground: oklch(0.525 0.025 266);
+  --accent: oklch(0.938 0.032 266);
+  --accent-foreground: oklch(0.37 0.115 266);
+  --destructive: oklch(0.575 0.2 25);
+  --border: oklch(0.875 0.014 266);
+  --input: oklch(0.83 0.02 266);
+  --ring: oklch(0.6 0.14 266);
+  --chart-1: oklch(0.55 0.17 266);
+  --chart-2: oklch(0.65 0.12 195);
+  --chart-3: oklch(0.75 0.14 75);
+  --chart-4: oklch(0.63 0.17 15);
+  --chart-5: oklch(0.6 0.16 310);
+  --radius: 0.75rem;
+
+  /* Sketch layer: the pen colour, its dropped shadow and the notepad dots. */
+  --ink-line: oklch(0.34 0.045 266 / 0.8);
+  --ink-line-soft: oklch(0.34 0.045 266 / 0.35);
+  --sketch-shadow: oklch(0.34 0.045 266 / 0.18);
+  --paper-dot: oklch(0.7 0.03 266 / 0.28);
+
+  --sidebar: oklch(0.972 0.01 95);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: oklch(0.51 0.168 266);
+  --sidebar-primary-foreground: oklch(0.99 0.005 95);
+  --sidebar-accent: oklch(0.93 0.035 266);
+  --sidebar-accent-foreground: oklch(0.37 0.115 266);
+  --sidebar-border: oklch(0.87 0.016 266);
+  --sidebar-ring: oklch(0.6 0.14 266);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --paper: oklch(0.185 0.02 266);
+  --ink: oklch(0.95 0.008 95);
+
+  --background: var(--paper);
+  --foreground: var(--ink);
+  --card: oklch(0.232 0.022 266);
+  --card-foreground: var(--ink);
+  --popover: oklch(0.245 0.024 266);
+  --popover-foreground: var(--ink);
+  --primary: oklch(0.72 0.14 266);
+  --primary-foreground: oklch(0.19 0.03 266);
+  --secondary: oklch(0.29 0.025 266);
+  --secondary-foreground: var(--ink);
+  --muted: oklch(0.285 0.022 266);
+  --muted-foreground: oklch(0.72 0.02 266);
+  --accent: oklch(0.33 0.05 266);
+  --accent-foreground: oklch(0.9 0.05 266);
+  --destructive: oklch(0.68 0.18 22);
+  --border: oklch(1 0 0 / 14%);
+  --input: oklch(1 0 0 / 20%);
+  --ring: oklch(0.6 0.13 266);
+  --chart-1: oklch(0.68 0.15 266);
+  --chart-2: oklch(0.72 0.11 195);
+  --chart-3: oklch(0.8 0.13 75);
+  --chart-4: oklch(0.7 0.16 15);
+  --chart-5: oklch(0.68 0.15 310);
+
+  --ink-line: oklch(0.86 0.02 266 / 0.4);
+  --ink-line-soft: oklch(0.86 0.02 266 / 0.18);
+  --sketch-shadow: oklch(0.08 0.02 266 / 0.55);
+  --paper-dot: oklch(0.7 0.03 266 / 0.16);
+
+  --sidebar: oklch(0.213 0.022 266);
+  --sidebar-foreground: var(--ink);
+  --sidebar-primary: oklch(0.72 0.14 266);
+  --sidebar-primary-foreground: oklch(0.19 0.03 266);
+  --sidebar-accent: oklch(0.31 0.045 266);
+  --sidebar-accent-foreground: oklch(0.92 0.04 266);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.6 0.13 266);
 }
 
 @layer base {
@@ -124,9 +150,108 @@
 
   body {
     @apply bg-background text-foreground;
+    /* Notepad dot grid. Cards paint solid, so it only shows in the gutters. */
+    background-image: radial-gradient(var(--paper-dot) 1px, transparent 1px);
+    background-size: 22px 22px;
+    background-position: -1px -1px;
   }
 
   html {
     @apply font-sans;
+  }
+
+  /* Native controls used throughout the lead tables and assign dialogs. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--primary);
+    inline-size: 1rem;
+    block-size: 1rem;
+    cursor: pointer;
+  }
+
+  input[type="checkbox"]:disabled,
+  input[type="radio"]:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+}
+
+@layer components {
+  /*
+    Hand-drawn panel: an uneven pen border with the shadow offset down-right,
+    the way a marker outline sits slightly off its fill. Nth-child variants keep
+    a grid of cards from looking like identical stamps.
+  */
+  .sketch-panel {
+    border: 1.5px solid var(--ink-line);
+    border-radius: 16px 13px 18px 12px;
+    box-shadow: 3px 3px 0 0 var(--sketch-shadow);
+  }
+
+  .sketch-panel:nth-child(2n) {
+    border-radius: 13px 18px 12px 16px;
+  }
+
+  .sketch-panel:nth-child(3n) {
+    border-radius: 18px 12px 16px 14px;
+  }
+
+  .sketch-panel:nth-child(5n) {
+    border-radius: 12px 16px 14px 18px;
+  }
+
+  /* Lighter version for inline strips: toolbars, filter bars, empty states. */
+  .sketch-outline {
+    border: 1.5px solid var(--ink-line-soft);
+    border-radius: 14px 11px 15px 10px;
+  }
+
+  .sketch-dashed {
+    border: 1.5px dashed var(--ink-line-soft);
+    border-radius: 15px 11px 16px 12px;
+  }
+
+  /* Squiggle drawn under page titles, in the ink colour. */
+  .sketch-underline {
+    position: relative;
+    display: inline-block;
+  }
+
+  .sketch-underline::after {
+    content: "";
+    position: absolute;
+    inset-inline: -2px;
+    bottom: -7px;
+    block-size: 6px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 120 6' preserveAspectRatio='none'%3E%3Cpath d='M1 4.2c14-3 26 1.4 39-.6s24-3.4 39-.9 27 1 40-1.1' fill='none' stroke='%236366f1' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    opacity: 0.75;
+  }
+
+  /* Tick marks the eye reads as a hand-ruled divider. */
+  .sketch-rule {
+    block-size: 2px;
+    border: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 2' preserveAspectRatio='none'%3E%3Cpath d='M0 1.2c25-1.1 50 .9 75-.2s50-1 100 .4' fill='none' stroke='%23475569' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-size: 100% 100%;
+    opacity: 0.3;
+  }
+
+  /*
+    Press effect for buttons: the shadow collapses under the cursor. Uses
+    drop-shadow rather than box-shadow so it neither fights Tailwind's
+    focus ring (also a box-shadow) nor squares off the uneven corners.
+  */
+  .sketch-press {
+    filter: drop-shadow(2px 2px 0 var(--sketch-shadow));
+    transition:
+      filter 120ms ease,
+      transform 120ms ease;
+  }
+
+  .sketch-press:active:not(:disabled) {
+    filter: drop-shadow(0 0 0 var(--sketch-shadow));
+    transform: translate(2px, 2px);
   }
 }

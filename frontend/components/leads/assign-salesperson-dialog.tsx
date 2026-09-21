@@ -1,14 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { groupsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import { useBulkAssignSalespersonMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 
 export function AssignSalespersonDialog({
   open,
@@ -21,22 +22,24 @@ export function AssignSalespersonDialog({
   leadIds: string[];
   onDone: () => void;
 }) {
-  const { data: groups } = useQuery(groupsQueryOptions());
+  const { data: salespersons, isPending, error } = useQuery(mySalespersonsQueryOptions());
   const bulkAssign = useBulkAssignSalespersonMutation();
-  const [groupId, setGroupId] = useState("");
   const [method, setMethod] = useState<"MANUAL" | "ROUND_ROBIN">("MANUAL");
   const [salespersonId, setSalespersonId] = useState("");
   const [salespersonIds, setSalespersonIds] = useState<Set<string>>(new Set());
 
-  const activeGroups = (groups ?? []).filter((g) => g.status === "ACTIVE");
-  const selectedGroup = activeGroups.find((g) => g.id === groupId);
-  const members = selectedGroup?.members.filter((m) => m.isActive) ?? [];
+  const team = salespersons ?? [];
 
-  function handleGroupChange(id: string) {
-    setGroupId(id);
-    setSalespersonId("");
-    setSalespersonIds(new Set());
-  }
+  // This dialog stays mounted between opens (only its content is conditionally
+  // rendered), so without this reset a stale selection from a previous batch
+  // could silently carry over into a new one.
+  useEffect(() => {
+    if (open) {
+      setMethod("MANUAL");
+      setSalespersonId("");
+      setSalespersonIds(new Set());
+    }
+  }, [open]);
 
   function toggleSalesperson(id: string, checked: boolean) {
     setSalespersonIds((prev) => {
@@ -50,8 +53,8 @@ export function AssignSalespersonDialog({
   function handleSubmit() {
     bulkAssign.mutate(
       method === "MANUAL"
-        ? { leadIds, method, groupId, salespersonId }
-        : { leadIds, method, groupId, salespersonIds: [...salespersonIds] },
+        ? { leadIds, method, salespersonId }
+        : { leadIds, method, salespersonIds: [...salespersonIds] },
       {
         onSuccess: (result) => {
           toast.success(`${result.assignedCount} lead(s) assigned.`);
@@ -61,7 +64,7 @@ export function AssignSalespersonDialog({
     );
   }
 
-  const canSubmit = Boolean(groupId) && (method === "MANUAL" ? Boolean(salespersonId) : salespersonIds.size > 0);
+  const canSubmit = method === "MANUAL" ? Boolean(salespersonId) : salespersonIds.size > 0;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -73,69 +76,60 @@ export function AssignSalespersonDialog({
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Group</Label>
-              <select
-                value={groupId}
-                onChange={(e) => handleGroupChange(e.target.value)}
-                className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
-              >
-                <option value="" disabled>
-                  Select a group
-                </option>
-                {activeGroups.map((g) => (
-                  <option key={g.id} value={g.id}>
-                    {g.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-sm">
+            <div className="grid grid-cols-2 gap-2.5">
+              <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
                 <input type="radio" checked={method === "MANUAL"} onChange={() => setMethod("MANUAL")} />
                 Manual
               </label>
-              <label className="flex items-center gap-2 text-sm">
+              <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
                 <input type="radio" checked={method === "ROUND_ROBIN"} onChange={() => setMethod("ROUND_ROBIN")} />
                 Round Robin
               </label>
             </div>
 
+            {error ? (
+              <p className="text-sm text-destructive">{getErrorMessage(error, "Failed to load your salespeople.")}</p>
+            ) : null}
+
+            {!isPending && !error && team.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                You haven&apos;t added any salespeople to your teams yet.
+              </p>
+            ) : null}
+
             {method === "MANUAL" ? (
               <div className="space-y-1.5">
                 <Label>Salesperson</Label>
-                <select
+                <NativeSelect
                   value={salespersonId}
                   onChange={(e) => setSalespersonId(e.target.value)}
-                  disabled={!groupId}
-                  className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
+                  disabled={team.length === 0}
                 >
                   <option value="" disabled>
                     Select a salesperson
                   </option>
-                  {members.map((m) => (
-                    <option key={m.userId} value={m.userId}>
-                      {m.user.name}
+                  {team.map((sp) => (
+                    <option key={sp.id} value={sp.id}>
+                      {sp.name} — {sp.groupName}
                     </option>
                   ))}
-                </select>
+                </NativeSelect>
               </div>
             ) : (
               <div className="space-y-1.5">
                 <Label>Eligible salespeople</Label>
-                <div className="max-h-48 space-y-1.5 overflow-y-auto rounded-md border p-2">
-                  {members.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">Select a group first.</p>
-                  ) : null}
-                  {members.map((m) => (
-                    <label key={m.userId} className="flex items-center gap-2 text-sm">
+                <div className="sketch-outline max-h-48 space-y-0.5 overflow-y-auto p-1.5">
+                  {team.map((sp) => (
+                    <label
+                      key={sp.id}
+                      className="flex cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-sm hover:bg-muted"
+                    >
                       <input
                         type="checkbox"
-                        checked={salespersonIds.has(m.userId)}
-                        onChange={(e) => toggleSalesperson(m.userId, e.target.checked)}
+                        checked={salespersonIds.has(sp.id)}
+                        onChange={(e) => toggleSalesperson(sp.id, e.target.checked)}
                       />
-                      {m.user.name}
+                      {sp.name} — {sp.groupName}
                     </label>
                   ))}
                 </div>

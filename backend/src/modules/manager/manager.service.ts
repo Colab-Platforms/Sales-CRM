@@ -113,6 +113,22 @@ class ManagerService {
     return toPublicUser(salesperson);
   }
 
+  // Every salesperson this manager has actually added to one of their own
+  // active groups — used for lead-assignment target pickers, where the manager
+  // shouldn't have to pick a group first (that group is implicit per person).
+  async listMySalespersons(managerId: string) {
+    const members = await prisma.groupMember.findMany({
+      where: { isActive: true, group: { managerId, status: GroupStatus.ACTIVE }, user: { status: UserStatus.ACTIVE } },
+      include: {
+        user: { select: { id: true, name: true, email: true, phone: true, status: true, role: true } },
+        group: { select: { id: true, name: true } },
+      },
+      orderBy: { user: { name: "asc" } },
+    });
+
+    return members.map((m) => ({ ...toPublicUser(m.user), groupId: m.group.id, groupName: m.group.name }));
+  }
+
   async listAllSalespersons() {
     const salespersons = await prisma.user.findMany({
       where: { role: Role.SALESPERSON },

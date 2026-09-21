@@ -6,6 +6,8 @@ import {
   updateGroup,
   deleteGroup,
   listSalespersons,
+  listMySalespersons,
+  createSalesperson,
   addNewSalesperson,
   addExistingSalesperson,
   updateSalesperson,
@@ -22,6 +24,8 @@ router.post("/groups", createGroup);
 router.get("/groups", listMyGroups);
 router.get("/groups/:groupId", getGroup);
 router.get("/salespersons", listSalespersons);
+router.get("/salespersons/mine", listMySalespersons);
+router.post("/salespersons", createSalesperson);
 router.patch("/groups/:groupId", updateGroup);
 router.delete("/groups/:groupId", deleteGroup);
 router.post("/groups/:groupId/members", addNewSalesperson);

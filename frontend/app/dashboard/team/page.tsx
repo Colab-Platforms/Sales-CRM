@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { FolderPlus, UserPlus, LayoutGrid } from "lucide-react";
 import { groupsQueryOptions, salespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import {
   useAddExistingSalespersonMutation,
@@ -12,18 +13,29 @@ import {
   useUpdateGroupMutation,
   useUpdateSalespersonMutation,
 } from "@/lib/api-client/mutations/manager.mutations";
+import { CreateSalespersonModal } from "@/components/team/create-salesperson-modal";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Group, GroupMember } from "@/lib/api-client/types/manager.types";
 
-function CreateGroupForm() {
+function CreateGroupModalContent({ onDone }: { onDone: () => void }) {
   const createGroup = useCreateGroupMutation();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -32,38 +44,66 @@ function CreateGroupForm() {
     e.preventDefault();
     createGroup.mutate(
       { name, description: description || undefined },
-      { onSuccess: () => { setName(""); setDescription(""); } },
+      { onSuccess: onDone },
     );
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Create group</CardTitle>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="group-name">Group name</Label>
-            <Input id="group-name" value={name} onChange={(e) => setName(e.target.value)} required />
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Create Group</DialogTitle>
+        <DialogDescription>
+          Create a new team group. You can add salespeople to it once it&apos;s created.
+        </DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="group-name">Group Name</Label>
+          <Input
+            id="group-name"
+            placeholder="e.g. North Region Sales"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="group-description">Description</Label>
+            <span className="text-xs text-muted-foreground">Optional</span>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="group-description">Description (optional)</Label>
-            <Input id="group-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+          <Input
+            id="group-description"
+            placeholder="e.g. Handles inbound leads for the north region"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+
+        {createGroup.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createGroup.error, "Failed to create group.")}
           </div>
-          {createGroup.error ? (
-            <p className="text-sm text-destructive sm:col-span-2">
-              {getErrorMessage(createGroup.error, "Failed to create group.")}
-            </p>
-          ) : null}
-          <div className="sm:col-span-2">
-            <Button type="submit" disabled={createGroup.isPending}>
-              {createGroup.isPending ? "Creating..." : "Create group"}
-            </Button>
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onDone}
+            disabled={createGroup.isPending}
+          >
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createGroup.isPending}>
+            {createGroup.isPending ? "Creating..." : "Create Group"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
   );
 }
 
@@ -102,15 +142,14 @@ function EditGroupForm({ group, onDone }: { group: Group; onDone: () => void }) 
       </div>
       <div className="space-y-1.5">
         <Label htmlFor={`group-edit-status-${group.id}`}>Status</Label>
-        <select
+        <NativeSelect
           id={`group-edit-status-${group.id}`}
           value={status}
           onChange={(e) => setStatus(e.target.value)}
-          className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
         >
-          <option value="ACTIVE">ACTIVE</option>
-          <option value="INACTIVE">INACTIVE</option>
-        </select>
+          <option value="ACTIVE">Active</option>
+          <option value="INACTIVE">Inactive</option>
+        </NativeSelect>
       </div>
       {updateGroup.error ? (
         <p className="text-sm text-destructive sm:col-span-3">
@@ -145,7 +184,7 @@ function AddSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () =
   }
 
   return (
-    <form onSubmit={handleSubmit} className="grid gap-3 rounded-lg border p-4 sm:grid-cols-2 lg:grid-cols-4">
+    <form onSubmit={handleSubmit} className="sketch-dashed grid gap-4 bg-muted/30 p-4 sm:grid-cols-2 lg:grid-cols-4">
       <div className="space-y-1.5">
         <Label htmlFor={`sp-name-${groupId}`}>Name</Label>
         <Input id={`sp-name-${groupId}`} value={name} onChange={(e) => setName(e.target.value)} required />
@@ -219,14 +258,13 @@ function AddExistingSalespersonForm({
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3 rounded-lg border p-4">
-      <div className="min-w-64 space-y-1.5">
+    <form onSubmit={handleSubmit} className="sketch-dashed flex flex-wrap items-end gap-3 bg-muted/30 p-4">
+      <div className="min-w-64 flex-1 space-y-1.5">
         <Label htmlFor={`existing-userid-${groupId}`}>Existing salesperson</Label>
-        <select
+        <NativeSelect
           id={`existing-userid-${groupId}`}
           value={userId}
           onChange={(e) => setUserId(e.target.value)}
-          className="border-input h-9 w-full rounded-md border bg-transparent px-3 text-sm shadow-xs"
           required
         >
           <option value="" disabled>
@@ -237,7 +275,7 @@ function AddExistingSalespersonForm({
               {sp.name} ({sp.email}){sp.currentGroup ? ` — currently in ${sp.currentGroup.name}` : ""}
             </option>
           ))}
-        </select>
+        </NativeSelect>
         {options.length === 0 ? (
           <p className="text-xs text-muted-foreground">No other salespersons available to add.</p>
         ) : null}
@@ -349,18 +387,21 @@ function GroupCard({ group }: { group: Group }) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-4">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-4">
         {editingGroup ? (
           <div className="flex-1">
             <EditGroupForm group={group} onDone={() => setEditingGroup(false)} />
           </div>
         ) : (
           <>
-            <div>
+            <div className="min-w-0 space-y-1">
               <CardTitle>{group.name}</CardTitle>
               {group.description ? <p className="text-sm text-muted-foreground">{group.description}</p> : null}
+              <p className="font-hand text-sm text-muted-foreground">
+                {activeMembers.length} salesperson{activeMembers.length === 1 ? "" : "s"}
+              </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Badge variant={isActive ? "default" : "secondary"}>{group.status}</Badge>
               <Button size="sm" variant="outline" onClick={() => setEditingGroup(true)}>
                 Edit
@@ -384,6 +425,7 @@ function GroupCard({ group }: { group: Group }) {
         )}
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="sketch-outline overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -405,6 +447,7 @@ function GroupCard({ group }: { group: Group }) {
             )}
           </TableBody>
         </Table>
+        </div>
 
         {addingNew ? (
           <AddSalespersonForm groupId={group.id} onDone={() => setAddingNew(false)} />
@@ -431,22 +474,58 @@ function GroupCard({ group }: { group: Group }) {
 
 export default function TeamPage() {
   const { data: groups, isPending, error } = useQuery(groupsQueryOptions());
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Team</h1>
-        <p className="text-sm text-muted-foreground">Create groups and add salespeople to your team.</p>
-      </div>
+      <PageHeader
+        title="Team"
+        description="Create groups and add salespeople to your team."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)}>
+              <UserPlus />
+              Add Salesperson
+            </Button>
+            <Button onClick={() => setIsCreateOpen(true)}>
+              <FolderPlus />
+              Create Group
+            </Button>
+          </>
+        }
+      />
 
-      <CreateGroupForm />
+      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+        {isCreateOpen ? <CreateGroupModalContent onDone={() => setIsCreateOpen(false)} /> : null}
+      </Dialog>
+
+      <Dialog open={isAddSalespersonOpen} onOpenChange={setIsAddSalespersonOpen}>
+        {isAddSalespersonOpen ? (
+          <CreateSalespersonModal groups={groups ?? []} onDone={() => setIsAddSalespersonOpen(false)} />
+        ) : null}
+      </Dialog>
 
       {isPending ? (
-        <Skeleton className="h-40" />
+        <Skeleton className="h-40 rounded-xl" />
       ) : error ? (
-        <p className="text-sm text-destructive">{getErrorMessage(error, "Failed to load groups.")}</p>
+        <div className="sketch-outline border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          {getErrorMessage(error, "Failed to load groups.")}
+        </div>
       ) : groups && groups.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No groups yet. Create one above.</p>
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center gap-2 py-14">
+            <LayoutGrid className="size-9 text-muted-foreground/40" />
+            <p className="font-heading text-lg font-bold">No groups yet</p>
+            <p className="font-hand text-base text-muted-foreground">
+              Get started by creating your first team group.
+            </p>
+            <Button className="mt-3" onClick={() => setIsCreateOpen(true)}>
+              <FolderPlus />
+              Create Group
+            </Button>
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-4">
           {groups?.map((group) => (

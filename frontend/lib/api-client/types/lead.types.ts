@@ -19,6 +19,11 @@ export interface LeadGroupRef {
   name: string;
 }
 
+export interface LeadImportBatchRef {
+  fileName: string;
+  uploadedBy: { id: string; name: string; role: string };
+}
+
 export interface Lead {
   id: string;
   leadNumber: string;
@@ -36,6 +41,7 @@ export interface Lead {
   owner: LeadUserRef | null;
   assignedManager: LeadUserRef | null;
   group: LeadGroupRef | null;
+  importBatch: LeadImportBatchRef | null;
 }
 
 export interface LeadListPagination {
@@ -104,7 +110,6 @@ export interface BulkAssignManagerPayload {
 export interface BulkAssignSalespersonPayload {
   leadIds: string[];
   method: "MANUAL" | "ROUND_ROBIN";
-  groupId: string;
   salespersonId?: string;
   salespersonIds?: string[];
 }

@@ -6,6 +6,7 @@ import type { AuthRequest } from "@/middlewares/auth.js";
 import {
   validateCreateGroupSchema,
   validateAddSalespersonSchema,
+  validateCreateSalespersonSchema,
   validateAddExistingMemberSchema,
   validateUpdateGroupSchema,
   validateUpdateSalespersonSchema,
@@ -74,6 +75,31 @@ export const listSalespersons = async (_req: AuthRequest, res: Response): Promis
   try {
     const result = await managerService.listAllSalespersons();
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listMySalespersons = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await managerService.listMySalespersons(req.user!.id);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const createSalesperson = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCreateSalespersonSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const { groupId, ...data } = value;
+    const result = await managerService.addNewSalesperson(req.user!.id, groupId, data);
+    sendResponse(res, true, result, "Salesperson created.", STATUS_CODES.CREATED);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

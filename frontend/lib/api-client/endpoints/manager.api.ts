@@ -3,8 +3,10 @@ import type { ApiEnvelope } from "../types/common.types";
 import type {
   CreateGroupPayload,
   AddSalespersonPayload,
+  CreateSalespersonPayload,
   AddExistingMemberPayload,
   Group,
+  MySalesperson,
   SalespersonUser,
   SalespersonWithGroup,
   UpdateGroupPayload,
@@ -19,6 +21,16 @@ export const managerApi = {
 
   async listSalespersons(): Promise<SalespersonWithGroup[]> {
     const res = await apiClient.get<ApiEnvelope<SalespersonWithGroup[]>>("/manager/salespersons");
+    return res.data.data;
+  },
+
+  async listMySalespersons(): Promise<MySalesperson[]> {
+    const res = await apiClient.get<ApiEnvelope<MySalesperson[]>>("/manager/salespersons/mine");
+    return res.data.data;
+  },
+
+  async createSalesperson(payload: CreateSalespersonPayload): Promise<SalespersonUser> {
+    const res = await apiClient.post<ApiEnvelope<SalespersonUser>>("/manager/salespersons", payload);
     return res.data.data;
   },
 

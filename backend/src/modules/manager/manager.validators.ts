@@ -3,6 +3,7 @@ import { validateSchema } from "@/utils/validate.js";
 import type {
   CreateGroupBody,
   AddSalespersonBody,
+  CreateSalespersonBody,
   AddExistingMemberBody,
   UpdateGroupBody,
   UpdateSalespersonBody,
@@ -18,6 +19,14 @@ const addSalespersonSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   phone: z.string().max(20).optional(),
+});
+
+const createSalespersonSchema = z.object({
+  name: z.string().min(2).max(150),
+  email: z.string().email(),
+  password: z.string().min(6),
+  phone: z.string().max(20).optional(),
+  groupId: z.string().uuid(),
 });
 
 const addExistingMemberSchema = z.object({
@@ -44,6 +53,9 @@ export const validateCreateGroupSchema = (body: unknown) => validateSchema<Creat
 
 export const validateAddSalespersonSchema = (body: unknown) =>
   validateSchema<AddSalespersonBody>(addSalespersonSchema, body);
+
+export const validateCreateSalespersonSchema = (body: unknown) =>
+  validateSchema<CreateSalespersonBody>(createSalespersonSchema, body);
 
 export const validateAddExistingMemberSchema = (body: unknown) =>
   validateSchema<AddExistingMemberBody>(addExistingMemberSchema, body);

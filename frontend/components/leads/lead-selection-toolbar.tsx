@@ -13,11 +13,14 @@ export function LeadSelectionToolbar({
   onAssignSalesperson?: () => void;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-muted/50 px-4 py-2.5">
-      <span className="text-sm font-medium">
-        {count} lead{count === 1 ? "" : "s"} selected
+    <div className="sketch-outline flex flex-wrap items-center justify-between gap-3 border-primary/40 bg-primary/8 px-4 py-3">
+      <span className="flex items-center gap-2 text-sm">
+        <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground tabular-nums">
+          {count}
+        </span>
+        <span className="font-semibold">lead{count === 1 ? "" : "s"} selected</span>
       </span>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {onAssignManager ? (
           <Button size="sm" onClick={onAssignManager}>
             Assign Manager
@@ -28,8 +31,8 @@ export function LeadSelectionToolbar({
             Assign Salesperson
           </Button>
         ) : null}
-        <Button size="sm" variant="ghost" onClick={onClear} className="gap-1">
-          <X className="size-3.5" />
+        <Button size="sm" variant="ghost" onClick={onClear}>
+          <X />
           Clear
         </Button>
       </div>
