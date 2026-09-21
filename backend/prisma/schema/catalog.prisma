@@ -11,6 +11,11 @@ model Product {
 
   sku String? @unique @map("sku") @db.VarChar(100)
 
+  // Identity in an external system (Shopify). Null for records created inside the CRM.
+  externalSource    ExternalSource? @map("external_source")
+  externalId        String?         @map("external_id") @db.VarChar(100)
+  externalUpdatedAt DateTime?       @map("external_updated_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -18,6 +23,7 @@ model Product {
   leads      Lead[]
   orderItems OrderItem[]
 
+  @@unique([externalSource, externalId])
   @@index([status])
   @@index([type])
   @@map("products")
@@ -36,11 +42,17 @@ model ProductVariant {
 
   status ProductStatus @default(ACTIVE) @map("status")
 
+  // Identity in an external system (Shopify). Null for records created inside the CRM.
+  externalSource    ExternalSource? @map("external_source")
+  externalId        String?         @map("external_id") @db.VarChar(100)
+  externalUpdatedAt DateTime?       @map("external_updated_at")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   orderItems OrderItem[]
 
+  @@unique([externalSource, externalId])
   @@index([productId])
   @@index([status])
   @@map("product_variants")

@@ -1,26 +1,55 @@
 model Activity {
   id String @id @default(uuid()) @db.Uuid
 
-  leadId String @map("lead_id") @db.Uuid
-  lead   Lead   @relation(fields: [leadId], references: [id])
+  // Nullable since E7.2: a WhatsApp template action (create/update/status change/sync) is not
+  // about any one customer, so it has no lead to attach to. Every event before E7.2 always had a
+  // real lead, and every lead-scoped read (buildAuditWhere's lead-scope filter, getCustomerAudit's
+  // `{leadId}` query) already naturally excludes a null-leadId row for anyone but ADMIN, since a
+  // relation filter or an equality match against a real id never matches NULL.
+  leadId String? @map("lead_id") @db.Uuid
+  // onDelete explicitly kept as RESTRICT (Prisma's own original behavior here, before this
+  // relation became optional) so a lead with audit history still cannot be deleted - only making
+  // the column nullable should change, never the existing delete-safety guarantee.
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: Restrict)
 
   actorId String? @map("actor_id") @db.Uuid
   actor   User?   @relation("ActivityActor", fields: [actorId], references: [id])
+  // The actor's role at the time of the event, since a user's role can change later.
+  actorRole Role? @map("actor_role")
 
   type ActivityType @map("type")
 
-  // App-enforced polymorphic reference; no DB-level FK by design.
+  // App-enforced polymorphic reference to the entity that actually changed; no DB-level FK by design.
   referenceType String? @map("reference_type") @db.VarChar(100)
   referenceId   String? @map("reference_id") @db.VarChar(255)
 
+  // Direct pointer to the related order, when there is one - distinct from referenceId/Type above,
+  // since e.g. a payment or shipment event's entity is the payment/shipment, not the order itself.
+  // Kept nullable and separate from the polymorphic pair above so order-scoped audit queries stay a
+  // single indexed lookup regardless of which entity actually changed.
+  orderId String? @map("order_id") @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  // Who/what caused the event - never guessed; SYSTEM is the default for rows written before this
+  // column existed, since none of them impersonated a user.
+  source ActivitySource @default(SYSTEM) @map("source")
+
   title       String? @map("title") @db.VarChar(255)
   description String? @map("description")
+
+  // Safe, structured before/after business values (never secrets/tokens/passwords) plus any extra
+  // context. JSON rather than dedicated columns since the shape genuinely differs per event type.
+  oldValue Json? @map("old_value")
+  newValue Json? @map("new_value")
+  metadata Json? @map("metadata")
 
   createdAt DateTime @default(now()) @map("created_at")
 
   @@index([leadId])
   @@index([actorId])
+  @@index([orderId])
   @@index([type])
+  @@index([source])
   @@index([createdAt])
   @@map("activities")
 }

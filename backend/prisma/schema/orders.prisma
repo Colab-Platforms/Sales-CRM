@@ -23,6 +23,21 @@ model Order {
 
   discountReason String? @map("discount_reason")
 
+  // Identity in an external system (Shopify). Null for records created inside the CRM.
+  externalSource    ExternalSource? @map("external_source")
+  externalId        String?         @map("external_id") @db.VarChar(100)
+  externalUpdatedAt DateTime?       @map("external_updated_at")
+  // Order number as shown in the external system (e.g. "#TST1002").
+  externalNumber    String?         @map("external_number") @db.VarChar(100)
+
+  shippingAddress Json?   @map("shipping_address")
+  shippingPincode String? @map("shipping_pincode") @db.VarChar(12)
+
+  cancelReason String? @map("cancel_reason")
+
+  // Raw external statuses and reconciliation notes, kept so nothing from the source is silently lost.
+  metadata Json? @map("metadata")
+
   placedAt    DateTime? @map("placed_at")
   confirmedAt DateTime? @map("confirmed_at")
   cancelledAt DateTime? @map("cancelled_at")
@@ -30,14 +45,21 @@ model Order {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  items    OrderItem[]
-  payments Payment[]
+  items            OrderItem[]
+  payments         Payment[]
+  shipments        Shipment[]
+  activities       Activity[]
+  whatsAppMessages WhatsAppMessage[]
+  whatsAppAutomationRuns WhatsAppAutomationRun[]
+  whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
 
+  @@unique([externalSource, externalId])
   @@index([leadId])
   @@index([createdById])
   @@index([status])
   @@index([source])
   @@index([placedAt])
+  @@index([shippingPincode])
   @@map("orders")
 }
 
@@ -102,12 +124,76 @@ model Payment {
 
   failureReason String? @map("failure_reason")
 
+  refundedAmount Decimal? @map("refunded_amount") @db.Decimal(12, 2)
+
+  // Identity in an external system: a Shopify transaction, or (CASHFREE) the payment link the CRM created, whose
+  // link id is the externalId so the same link can never be recorded twice. Null for payments created inside the CRM.
+  externalSource ExternalSource? @map("external_source")
+  externalId     String?         @map("external_id") @db.VarChar(100)
+
+  // Cashfree payment link the customer pays through. Only set on payments the CRM created via Cashfree.
+  paymentUrl       String?   @map("payment_url")
+  paymentExpiresAt DateTime? @map("payment_expires_at")
+
+  // Provider-side raw statuses and the last failed attempt. Never credentials.
+  metadata Json? @map("metadata")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@unique([externalSource, externalId])
   @@index([orderId])
   @@index([providerPaymentId])
   @@index([providerOrderId])
   @@index([status])
   @@map("payments")
+}
+
+// One row per shipment/fulfilment (an order can ship in more than one parcel). Courier,
+// tracking and delivery dates are only ever as complete as the source (Shopify fulfilment, or a
+// future provider integration) actually reports - missing fields mean "not known", not zero.
+model Shipment {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @map("order_id") @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  status ShipmentStatus @map("status")
+
+  courier         String? @map("courier") @db.VarChar(150)
+  trackingNumber  String? @map("tracking_number") @db.VarChar(150)
+  trackingUrl     String? @map("tracking_url")
+
+  shippedAt          DateTime? @map("shipped_at")
+  expectedDeliveryAt DateTime? @map("expected_delivery_at")
+  deliveredAt        DateTime? @map("delivered_at")
+  returnedAt         DateTime? @map("returned_at")
+
+  // Identity in an external system: a Shopify fulfilment, or (SHIPROCKET) the Shiprocket shipment id of a shipment the
+  // CRM created directly. Null for shipments created inside the CRM.
+  externalSource ExternalSource? @map("external_source")
+  externalId     String?         @map("external_id") @db.VarChar(100)
+
+  // Shiprocket operational data. Only set on shipments the CRM created via Shiprocket.
+  // providerOrderId is Shiprocket's own order id; channelOrderId is the order id the CRM sent when creating it (what
+  // Shiprocket echoes back as "order_id"). trackingNumber holds the AWB.
+  providerOrderId  String?   @map("provider_order_id") @db.VarChar(100)
+  channelOrderId   String?   @map("channel_order_id") @db.VarChar(100)
+  courierCompanyId Int?      @map("courier_company_id")
+  labelUrl         String?   @map("label_url")
+  pickupScheduledAt DateTime? @map("pickup_scheduled_at")
+  // The provider's own status text exactly as reported, so a status the CRM does not map is still visible.
+  providerStatus String? @map("provider_status") @db.VarChar(150)
+  metadata       Json?   @map("metadata")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([externalSource, externalId])
+  @@index([orderId])
+  @@index([status])
+  @@index([trackingNumber])
+  @@index([providerOrderId])
+  @@index([channelOrderId])
+  @@map("shipments")
 }

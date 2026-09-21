@@ -48,6 +48,17 @@ enum AssignmentType {
   @@map("assignment_type")
 }
 
+// Matches the "import_batch_status" Postgres enum already defined in migration
+// 20260919122125_lead_assign_batch_implement (LeadImportBatch referenced this type, but the
+// declaration itself was missing from the schema, which blocked all Prisma tooling).
+enum ImportBatchStatus {
+  DRAFT
+  COMMITTED
+  FAILED
+
+  @@map("import_batch_status")
+}
+
 enum InterestedPeriodStatus {
   ACTIVE
   CONVERTED
@@ -170,14 +181,34 @@ enum OrderStatus {
   CANCELLED
   RETURNED
   REFUNDED
+  SHIPPED
+  OUT_FOR_DELIVERY
+  DELIVERED
 
   @@map("order_status")
+}
+
+enum ShipmentStatus {
+  SHIPPED
+  IN_TRANSIT
+  OUT_FOR_DELIVERY
+  DELIVERED
+  RETURNED
+  // Pre-pickup states of a shipment the CRM created in Shiprocket itself (Shopify only reports a fulfilment once
+  // it has shipped, so these never come from Shopify sync), plus a cancelled one.
+  CREATED
+  AWB_ASSIGNED
+  PICKUP_SCHEDULED
+  CANCELLED
+
+  @@map("shipment_status")
 }
 
 enum OrderSource {
   SALESPERSON
   WEBSITE
   API
+  SHOPIFY
 
   @@map("order_source")
 }
@@ -201,6 +232,7 @@ enum PaymentMethod {
   WALLET
   PAYMENT_LINK
   OTHER
+  COD
 
   @@map("payment_method")
 }
@@ -257,11 +289,195 @@ enum ActivityType {
   RECOVERY
   TASK
 
+  // E6.6 Audit Trail: more specific types recorded going forward for events that used to share a
+  // generic type above (STATUS_CHANGE, PAYMENT) or were not recorded as Activity at all (shipments,
+  // discount changes). The generic types above are kept so historical rows keep rendering correctly.
+  ORDER_STATUS_CHANGED
+  ORDER_CANCELLED
+  PAYMENT_CREATED
+  PAYMENT_STATUS_CHANGED
+  PAYMENT_REFUNDED
+  PAYMENT_MISMATCH_DETECTED
+  SHIPMENT_CREATED
+  SHIPMENT_STATUS_CHANGED
+  TRACKING_UPDATED
+  DISCOUNT_CHANGED
+
+  // E7.1 WhatsApp Provider Integration: recorded for real message sends/receipts/status
+  // transitions only - never invented for a message that was not actually sent/received.
+  WHATSAPP_MESSAGE_SENT
+  WHATSAPP_MESSAGE_RECEIVED
+  WHATSAPP_DELIVERED
+  WHATSAPP_READ
+  WHATSAPP_FAILED
+
+  // E7.2 Template Management: not tied to any one customer, so these are the only ActivityType
+  // values ever written with a null leadId.
+  WHATSAPP_TEMPLATE_CREATED
+  WHATSAPP_TEMPLATE_UPDATED
+  WHATSAPP_TEMPLATE_STATUS_CHANGED
+  WHATSAPP_TEMPLATE_SYNCED
+
+  // E7.7 Campaign & Bulk Messaging: campaign-level lifecycle events, not tied to any one customer
+  // (null leadId, same convention as the WHATSAPP_TEMPLATE_* rows above). A campaign's individual
+  // per-recipient sends still use WHATSAPP_MESSAGE_SENT/WHATSAPP_FAILED above - never a second,
+  // duplicate activity for the same logical message.
+  WHATSAPP_CAMPAIGN_CREATED
+  WHATSAPP_CAMPAIGN_LAUNCHED
+  WHATSAPP_CAMPAIGN_CANCELLED
+  WHATSAPP_CAMPAIGN_COMPLETED
+
+  // Cashfree payment links and Shiprocket shipments created from the CRM. Status changes on the payment/shipment
+  // themselves reuse PAYMENT_STATUS_CHANGED / SHIPMENT_STATUS_CHANGED / TRACKING_UPDATED above.
+  PAYMENT_LINK_CREATED
+  PAYMENT_LINK_CANCELLED
+  SHIPMENT_AWB_ASSIGNED
+  SHIPMENT_PICKUP_SCHEDULED
+  SHIPMENT_LABEL_GENERATED
+
   @@map("activity_type")
+}
+
+// Who/what actually caused an audit event, so a system/integration action never looks like a human one.
+enum ActivitySource {
+  USER
+  SHOPIFY_SYNC
+  SHOPIFY_WEBHOOK
+  SYSTEM
+  // A WhatsApp BSP webhook delivery (inbound message, or an async status update for an outbound
+  // one) - mirrors SHOPIFY_WEBHOOK. An actual outbound send triggered by a signed-in user is
+  // recorded with source USER instead, same as any other user-initiated write.
+  WHATSAPP_WEBHOOK
+  // Provider webhook deliveries, mirroring SHOPIFY_WEBHOOK / WHATSAPP_WEBHOOK.
+  CASHFREE_WEBHOOK
+  SHIPROCKET_WEBHOOK
+
+  @@map("activity_source")
+}
+
+// Which WhatsApp Business Solution Provider sent/received a message. Kept separate from
+// ExternalSource (which identifies where a CRM record like a Lead originated) since a WhatsApp
+// message is not a synced copy of an external record - it is its own event.
+enum WhatsAppProviderName {
+  AISENSY
+  GUPSHUP
+
+  @@map("whatsapp_provider_name")
+}
+
+enum WhatsAppDirection {
+  INBOUND
+  OUTBOUND
+
+  @@map("whatsapp_direction")
+}
+
+// Only the shapes the CRM actually understands and stores. An inbound message the parser cannot
+// classify (e.g. an unsupported media/interactive payload from the provider) is stored as OTHER
+// rather than guessed at or dropped.
+enum WhatsAppMessageType {
+  TEXT
+  TEMPLATE
+  MEDIA
+  INTERACTIVE
+  OTHER
+
+  @@map("whatsapp_message_type")
+}
+
+// Outbound messages progress QUEUED -> SENT -> DELIVERED -> READ, or to FAILED at any point.
+// Inbound messages are recorded as RECEIVED and never change status (WhatsApp gives no further
+// lifecycle for a message the business received).
+enum WhatsAppMessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+
+  @@map("whatsapp_message_status")
+}
+
+// E7.2 Template Management. DRAFT: created locally, never sent to the provider. PENDING/APPROVED/
+// REJECTED: the provider's own review states (only reachable via a real sync). DISABLED: the CRM
+// (or a provider sync that saw a paused/unrecognised provider status) has marked it unusable -
+// never selectable for sending, prepared for E7.3.
+enum WhatsAppTemplateStatus {
+  DRAFT
+  PENDING
+  APPROVED
+  REJECTED
+  DISABLED
+
+  @@map("whatsapp_template_status")
+}
+
+// E7.6 Lifecycle Automation. The six business events the CRM can automatically send a WhatsApp
+// template for. ORDER_* map 1:1 onto the matching OrderStatus value the order actually transitions
+// into; PAYMENT_PENDING and FOLLOW_UP_DUE are time-based (a scheduler sweep), not a single transition.
+enum WhatsAppAutomationType {
+  ORDER_CONFIRMED
+  ORDER_SHIPPED
+  ORDER_OUT_FOR_DELIVERY
+  ORDER_DELIVERED
+  PAYMENT_PENDING
+  FOLLOW_UP_DUE
+
+  @@map("whatsapp_automation_type")
+}
+
+// SENT: the automation ran and produced a WhatsAppMessage row (its own delivery outcome is tracked
+// separately by E7.5, on that row - a provider rejection here still counts as SENT, since the
+// automation itself did its job of attempting the send). SKIPPED: the automation intentionally did
+// not attempt a send (disabled, no approved template configured, a required variable was
+// unavailable, no valid mobile number, WhatsApp not configured). FAILED: an unexpected error during
+// the automation's own execution, distinct from a clean, expected skip.
+enum WhatsAppAutomationRunStatus {
+  SENT
+  SKIPPED
+  FAILED
+
+  @@map("whatsapp_automation_run_status")
+}
+
+// E7.7 Campaign & Bulk Messaging. DRAFT: being configured, freely editable. SCHEDULED: launched
+// for a future time, not yet sending. RUNNING: actively processing recipients. COMPLETED: every
+// recipient reached a terminal state (SENT/SKIPPED/FAILED) - regardless of how many individually
+// failed, which is a recipient-level, not campaign-level, outcome (see stats). CANCELLED: stopped
+// before/while running; already-sent messages are never undone. FAILED: the campaign itself could
+// never start (e.g. its template stopped being APPROVED between save and launch) - no recipients
+// were ever created for it.
+enum WhatsAppCampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  COMPLETED
+  CANCELLED
+  FAILED
+
+  @@map("whatsapp_campaign_status")
+}
+
+// PENDING: not yet attempted. CLAIMED: a worker tick has picked this recipient up and is about to
+// send - a transient state that only exists mid-batch, the atomic claim step E7.7's idempotency
+// relies on. SENT: a send was attempted and produced a WhatsAppMessage row (that message's own
+// further delivery outcome lives on WhatsAppMessage.status, tracked by E7.5 - never duplicated
+// here). SKIPPED: cleanly not sent (no valid mobile, a required variable unavailable). FAILED: an
+// unexpected error while processing this one recipient - it never stops the rest of the campaign.
+enum WhatsAppCampaignRecipientStatus {
+  PENDING
+  CLAIMED
+  SENT
+  SKIPPED
+  FAILED
+
+  @@map("whatsapp_campaign_recipient_status")
 }
 
 enum WebhookStatus {
   RECEIVED
+  PROCESSING
   PROCESSED
   FAILED
   IGNORED
@@ -269,10 +485,13 @@ enum WebhookStatus {
   @@map("webhook_status")
 }
 
-enum ImportBatchStatus {
-  DRAFT
-  COMMITTED
-  FAILED
+// Which external system a synced record came from. Null for records created inside the CRM.
+enum ExternalSource {
+  SHOPIFY
+  // Rows the CRM itself creates in a payment/shipping provider. Shopify sync only ever reads and deletes rows
+  // tagged SHOPIFY, so tagging direct provider rows differently is what keeps the two from touching each other.
+  CASHFREE
+  SHIPROCKET
 
-  @@map("import_batch_status")
+  @@map("external_source")
 }

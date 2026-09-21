@@ -1,0 +1,297 @@
+// E7.1 WhatsApp Provider Integration foundation. One table for every WhatsApp message the CRM
+// knows about, inbound or outbound, regardless of which BSP (AiSensy/Gupshup) handled it - the
+// rest of the CRM (Customer 360, Audit Trail) reads this table, never a provider-specific shape.
+//
+// Webhook delivery idempotency reuses the existing WebhookEvent model (webhooks.prisma) with a
+// new `provider` value ("AISENSY"/"GUPSHUP") rather than a second webhook-events table. This
+// model adds a second, message-level idempotency key (provider + providerMessageId) because one
+// webhook delivery can carry several message/status events, and because AiSensy/Gupshup may
+// resend the same event under a new delivery id.
+model WhatsAppMessage {
+  id String @id @default(uuid()) @db.Uuid
+
+  provider          WhatsAppProviderName @map("provider")
+  providerMessageId String?              @map("provider_message_id") @db.VarChar(255)
+
+  direction   WhatsAppDirection      @map("direction")
+  messageType WhatsAppMessageType    @default(TEXT) @map("message_type")
+  status      WhatsAppMessageStatus  @map("status")
+
+  // The customer side of the conversation, once matched (see whatsapp.matching.ts). Null when an
+  // inbound sender could not be matched to any existing lead - the message is still kept, just
+  // unresolved; the CRM never invents a lead to attach it to.
+  leadId String? @map("lead_id") @db.Uuid
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  // Raw numbers exactly as given by the provider, plus the normalized customer-side number used
+  // for matching (lib/leadIdentity.ts's normalizeMobile) regardless of direction.
+  fromNumber       String? @map("from_number") @db.VarChar(32)
+  toNumber         String? @map("to_number") @db.VarChar(32)
+  normalizedContact String? @map("normalized_contact") @db.VarChar(20)
+
+  // Snapshot of the template's own name at send time, kept even if the WhatsAppTemplate row is
+  // later renamed or removed - independent of templateId below, the same way toNumber is kept
+  // independent of the Lead relation.
+  templateName String? @map("template_name") @db.VarChar(150)
+  // E7.3: which structured template this OUTBOUND message actually used, when sent through the
+  // template-based flow (whatsapp.messaging.service.ts) rather than E7.1's raw send. Null for a
+  // raw/legacy send, and always null for INBOUND. onDelete SetNull: message history must survive a
+  // template being disabled or removed later.
+  templateId String?           @map("template_id") @db.Uuid
+  template   WhatsAppTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  // E7.3: the order whose data (order number, amount, tracking...) was used to resolve this
+  // message's variables, when the template needed one. Same onDelete rationale as templateId.
+  orderId String? @map("order_id") @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  // Actual text content only - never a placeholder/guessed value. Null for a non-text message
+  // whose content this foundation does not model in depth (messageType MEDIA/INTERACTIVE/OTHER).
+  body         String? @map("body")
+
+  errorCode    String? @map("error_code") @db.VarChar(100)
+  errorMessage String? @map("error_message")
+
+  // Which authenticated CRM user triggered an outbound send; null for inbound messages and for
+  // any automation, since E7.1 has none - every OUTBOUND row today has a real sentById.
+  sentById String? @map("sent_by_id") @db.Uuid
+  sentBy   User?   @relation("WhatsAppMessageSentBy", fields: [sentById], references: [id])
+
+  sentAt      DateTime? @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+  failedAt    DateTime? @map("failed_at")
+  receivedAt  DateTime? @map("received_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Nulls are not considered equal by Postgres, so this only rejects a genuine repeat of the same
+  // provider message id - it does not block multiple provider-id-less rows.
+  @@unique([provider, providerMessageId])
+  @@index([leadId])
+  @@index([direction])
+  @@index([status])
+  @@index([normalizedContact])
+  @@index([createdAt])
+  @@index([templateId])
+  @@index([orderId])
+  @@map("whatsapp_messages")
+
+  automationRuns WhatsAppAutomationRun[]
+  campaignRecipients WhatsAppCampaignRecipient[]
+}
+
+// E7.2 Template Management. A row is either a local DRAFT the CRM created (never sent to the
+// provider - providerTemplateId/externalId are null) or a copy of a real provider template
+// brought in by a sync (provider is the source of truth for status/category/quality going
+// forward; see whatsapp.template.service.ts). E7.3 links WhatsAppMessage rows sent through it.
+model WhatsAppTemplate {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The CRM's own name for this template - what a user picks when composing a message (E7.3).
+  // For a synced template this is set to the provider's elementName/campaign name so the two stay
+  // recognisably the same template; it is NOT necessarily unique across providers, only per-provider.
+  name String @map("name") @db.VarChar(150)
+
+  provider WhatsAppProviderName @map("provider")
+
+  // Gupshup: the template's own UUID (its Partner API `id`). AiSensy: null - AiSensy's Campaign API
+  // has no public template-listing endpoint (dashboard-only), so an AiSensy row is always a local
+  // DRAFT record the CRM never received an id for.
+  providerTemplateId String? @map("provider_template_id") @db.VarChar(255)
+  // Meta's own WhatsApp template id, when the provider exposes it (Gupshup's `externalId`).
+  externalId String? @map("external_id") @db.VarChar(255)
+
+  // Provider-defined category (e.g. MARKETING, UTILITY, AUTHENTICATION) - kept as a plain string,
+  // not an enum, since it is defined by Meta/the provider and this module must not invent or
+  // constrain values it does not control.
+  category String? @map("category") @db.VarChar(50)
+  language String  @default("en") @map("language") @db.VarChar(10)
+
+  // The CRM's own canonical body, using named placeholders like {{customer_name}} (never
+  // provider-specific positional {{1}}/{{2}} syntax) - see whatsapp.template.variables.ts. Mapping
+  // named -> positional for an actual send is E7.3's job, not this module's.
+  body String @map("body")
+  // Structured, ordered, de-duplicated variable names extracted from body at write time - e.g.
+  // ["customer_name","order_number"]. Never executed; used only to display and, later, validate a
+  // send has a value for every placeholder.
+  variables Json @map("variables")
+
+  status WhatsAppTemplateStatus @default(DRAFT) @map("status")
+  // Provider's own quality rating (e.g. Gupshup's UNKNOWN/HIGH), informational only.
+  quality String? @map("quality") @db.VarChar(50)
+
+  // Null for a pure local draft never synced; set to the sync time on every successful sync,
+  // including one that changed nothing.
+  lastSyncedAt DateTime? @map("last_synced_at")
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("WhatsAppTemplateCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  messages WhatsAppMessage[]
+
+  // A template name is only unique per provider AND language, since WhatsApp legitimately allows
+  // the same template name translated into more than one language.
+  @@unique([provider, name, language])
+  // Nulls are not equal in Postgres, so this only rejects a genuine repeat of the same provider id.
+  @@unique([provider, providerTemplateId])
+  @@index([status])
+  @@index([category])
+  @@index([language])
+  @@index([provider])
+  @@map("whatsapp_templates")
+
+  automationConfigs WhatsAppAutomationConfig[]
+  campaigns WhatsAppCampaign[]
+}
+
+// E7.6 Lifecycle Automation - admin configuration. One row per automation type (at most six ever
+// exist), matching what the admin UI shows: enabled/disabled plus which approved template to use.
+// A missing row (nothing configured yet) is treated by the service as enabled=true, template=none -
+// "wired up and ready, but nothing to send until an admin picks a template" - so the six required
+// automations are live out of the box without needing a seed migration.
+model WhatsAppAutomationConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  automationType WhatsAppAutomationType @unique @map("automation_type")
+
+  enabled Boolean @default(true) @map("enabled")
+
+  // Intentionally not required to be APPROVED at the database level - a provider sync can move a
+  // previously-approved template back to REJECTED/DISABLED later, and the row should keep recording
+  // the admin's last choice rather than silently clearing it. The automation service itself only
+  // ever sends when the referenced template is APPROVED right now (see whatsapp.automation.service.ts).
+  templateId String?           @map("template_id") @db.Uuid
+  template   WhatsAppTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  updatedById String? @map("updated_by_id") @db.Uuid
+  updatedBy   User?   @relation("WhatsAppAutomationConfigUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("whatsapp_automation_configs")
+}
+
+// E7.6 Lifecycle Automation - execution record. Answers what WhatsAppMessage alone cannot: which
+// automation fired, which business event triggered it, whether it already ran, and why it was
+// skipped/failed - see the E7.6 spec's "automation execution record" section. `eventKey` is the
+// durable, database-enforced idempotency guarantee (an INSERT ... ON CONFLICT DO NOTHING claim,
+// same idiom whatsapp.webhook.store.ts and whatsapp.messaging.service.ts already use) - never an
+// in-memory flag, and safe under concurrent/duplicate triggers for the same real-world event.
+model WhatsAppAutomationRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  automationType WhatsAppAutomationType @map("automation_type")
+
+  // e.g. "ORDER_CONFIRMED:<orderId>" (once ever per order), "PAYMENT_PENDING:<orderId>:<YYYY-MM-DD>"
+  // (at most one reminder per order per day), "FOLLOW_UP_DUE:<taskId>" (once ever per follow-up task).
+  eventKey String @unique @map("event_key")
+
+  leadId String? @map("lead_id") @db.Uuid
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+  orderId String? @map("order_id") @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id])
+
+  status WhatsAppAutomationRunStatus @map("status")
+
+  whatsAppMessageId String?          @map("whatsapp_message_id") @db.Uuid
+  whatsAppMessage   WhatsAppMessage? @relation(fields: [whatsAppMessageId], references: [id])
+
+  // Safe, human-readable skip/failure reason - never a secret/credential, never a raw provider payload.
+  reason String? @map("reason")
+
+  executedAt DateTime @default(now()) @map("executed_at")
+
+  @@index([automationType])
+  @@index([leadId])
+  @@index([orderId])
+  @@index([status])
+  @@map("whatsapp_automation_runs")
+}
+
+// E7.7 Campaign & Bulk Messaging. `filters` is the same audience-filter shape
+// customers.service.ts's CustomersService.resolveAudience() already accepts (E6.7's segmentation,
+// reused - not a second engine) - re-resolved at launch time, not frozen at creation, so editing a
+// DRAFT campaign's filters or the underlying CRM data before launch is reflected correctly.
+// sent/delivered/read/failed/skipped counts are deliberately NOT columns here: they are computed
+// live from WhatsAppCampaignRecipient.status joined with WhatsAppMessage.status (E7.5's own
+// tracked field), so they can never drift out of sync with a webhook-driven status update -
+// recipientCount is the one count actually frozen, at launch, since the audience size for a
+// specific run should not silently change after recipients are created.
+model WhatsAppCampaign {
+  id String @id @default(uuid()) @db.Uuid
+
+  name        String  @map("name") @db.VarChar(150)
+  description String? @map("description")
+
+  status WhatsAppCampaignStatus @default(DRAFT) @map("status")
+
+  templateId String           @map("template_id") @db.Uuid
+  template   WhatsAppTemplate @relation(fields: [templateId], references: [id])
+
+  filters Json @map("filters")
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("WhatsAppCampaignCreatedBy", fields: [createdById], references: [id])
+
+  scheduledAt DateTime? @map("scheduled_at")
+  startedAt   DateTime? @map("started_at")
+  completedAt DateTime? @map("completed_at")
+  cancelledAt DateTime? @map("cancelled_at")
+
+  recipientCount Int @default(0) @map("recipient_count")
+
+  // Set only for a campaign-level FAILED (e.g. its template stopped being APPROVED between save
+  // and launch) - never a secret/credential, never a raw provider payload.
+  failureReason String? @map("failure_reason")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  recipients WhatsAppCampaignRecipient[]
+
+  @@index([status])
+  @@index([createdById])
+  @@index([scheduledAt])
+  @@map("whatsapp_campaigns")
+}
+
+model WhatsAppCampaignRecipient {
+  id String @id @default(uuid()) @db.Uuid
+
+  campaignId String           @map("campaign_id") @db.Uuid
+  campaign   WhatsAppCampaign @relation(fields: [campaignId], references: [id])
+
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  // The order (if any) this recipient's variables were resolved against - the same "order context
+  // only when appropriate" E7.3 already applies to an individual send.
+  orderId String? @map("order_id") @db.Uuid
+  order   Order?  @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  status WhatsAppCampaignRecipientStatus @default(PENDING) @map("status")
+
+  // Set once this recipient's send was actually attempted (successfully or not) - the message's own
+  // sentAt/deliveredAt/readAt/failedAt timestamps live on WhatsAppMessage (E7.5), never duplicated here.
+  whatsAppMessageId String?          @map("whatsapp_message_id") @db.Uuid
+  whatsAppMessage   WhatsAppMessage? @relation(fields: [whatsAppMessageId], references: [id])
+
+  failureReason String? @map("failure_reason")
+
+  attemptedAt DateTime? @map("attempted_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // The database-enforced guarantee behind "the same campaign never sends twice to the same
+  // recipient" - not merely an application-level check.
+  @@unique([campaignId, leadId])
+  @@index([campaignId, status])
+  @@index([leadId])
+  @@map("whatsapp_campaign_recipients")
+}
