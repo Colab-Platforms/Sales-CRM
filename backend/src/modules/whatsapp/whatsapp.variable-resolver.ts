@@ -32,6 +32,9 @@ export interface ResolverPaymentContext {
   method: PaymentMethod | null;
   amount: string;
   refundedAmount: string | null;
+  // Set only on a payment the CRM created through a payment link; the link is what {{payment_link}} resolves to.
+  paymentUrl?: string | null;
+  paymentExpiresAt?: Date | null;
 }
 
 export interface ResolverOrderContext {
@@ -62,6 +65,17 @@ function formatCurrency(amount: string, currency: string): string {
 const DATE_FORMAT = new Intl.DateTimeFormat("en-IN", { day: "numeric", month: "short", year: "numeric" });
 const formatDate = (d: Date) => DATE_FORMAT.format(d);
 
+// The order's open payment link: a payment that has a link, is still awaiting payment, and has not expired. At most one
+// exists per order (the CRM refuses to create a second), so "the" link is unambiguous.
+function openPaymentLink(ctx: VariableResolutionContext): ResolverPaymentContext | null {
+  const now = Date.now();
+  return (
+    ctx.order?.payments.find(
+      (p) => !!p.paymentUrl && (p.status === PaymentStatus.PENDING || p.status === PaymentStatus.PROCESSING) && (!p.paymentExpiresAt || p.paymentExpiresAt.getTime() > now),
+    ) ?? null
+  );
+}
+
 /** null = this variable is meaningful but not available in the given context (e.g. no order, no shipment yet). */
 type Resolver = (ctx: VariableResolutionContext) => string | null;
 
@@ -86,6 +100,14 @@ const REGISTRY: Record<string, Resolver> = {
     return humanize(status);
   },
 
+  // A resolved value is only ever the real link of a real, still-open payment - never a guess - so a template using
+  // these fails validation (rather than sending a dead link) when the order has no open link.
+  payment_link: (ctx) => openPaymentLink(ctx)?.paymentUrl ?? null,
+  payment_amount: (ctx) => {
+    const link = openPaymentLink(ctx);
+    return link && ctx.order ? formatCurrency(fromCents(toCents(link.amount)), ctx.order.currency) : null; // two decimals, exactly what the customer will be asked to pay
+  },
+
   tracking_number: (ctx) => ctx.order?.latestShipment?.trackingNumber ?? null,
   tracking_url: (ctx) => ctx.order?.latestShipment?.trackingUrl ?? null,
   courier: (ctx) => ctx.order?.latestShipment?.courier ?? null,
@@ -98,7 +120,7 @@ const REGISTRY: Record<string, Resolver> = {
 /** The variable names this CRM can currently resolve, for the frontend to explain what a template needs. */
 export const RESOLVABLE_VARIABLES = Object.keys(REGISTRY);
 /** Variables that only ever resolve from order data - used to decide whether order selection is required. */
-export const ORDER_ONLY_VARIABLES = new Set(["order_number", "order_status", "order_amount", "outstanding_amount", "payment_status", "tracking_number", "tracking_url", "courier", "shipment_status", "shipped_date", "delivery_date", "expected_delivery_date"]);
+export const ORDER_ONLY_VARIABLES = new Set(["order_number", "order_status", "order_amount", "outstanding_amount", "payment_status", "payment_link", "payment_amount", "tracking_number", "tracking_url", "courier", "shipment_status", "shipped_date", "delivery_date", "expected_delivery_date"]);
 
 export interface VariableResolutionResult {
   values: Record<string, string>;

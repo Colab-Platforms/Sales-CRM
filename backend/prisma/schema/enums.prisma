@@ -194,6 +194,12 @@ enum ShipmentStatus {
   OUT_FOR_DELIVERY
   DELIVERED
   RETURNED
+  // Pre-pickup states of a shipment the CRM created in Shiprocket itself (Shopify only reports a fulfilment once
+  // it has shipped, so these never come from Shopify sync), plus a cancelled one.
+  CREATED
+  AWB_ASSIGNED
+  PICKUP_SCHEDULED
+  CANCELLED
 
   @@map("shipment_status")
 }
@@ -321,6 +327,14 @@ enum ActivityType {
   WHATSAPP_CAMPAIGN_CANCELLED
   WHATSAPP_CAMPAIGN_COMPLETED
 
+  // Cashfree payment links and Shiprocket shipments created from the CRM. Status changes on the payment/shipment
+  // themselves reuse PAYMENT_STATUS_CHANGED / SHIPMENT_STATUS_CHANGED / TRACKING_UPDATED above.
+  PAYMENT_LINK_CREATED
+  PAYMENT_LINK_CANCELLED
+  SHIPMENT_AWB_ASSIGNED
+  SHIPMENT_PICKUP_SCHEDULED
+  SHIPMENT_LABEL_GENERATED
+
   @@map("activity_type")
 }
 
@@ -334,6 +348,9 @@ enum ActivitySource {
   // one) - mirrors SHOPIFY_WEBHOOK. An actual outbound send triggered by a signed-in user is
   // recorded with source USER instead, same as any other user-initiated write.
   WHATSAPP_WEBHOOK
+  // Provider webhook deliveries, mirroring SHOPIFY_WEBHOOK / WHATSAPP_WEBHOOK.
+  CASHFREE_WEBHOOK
+  SHIPROCKET_WEBHOOK
 
   @@map("activity_source")
 }
@@ -471,6 +488,10 @@ enum WebhookStatus {
 // Which external system a synced record came from. Null for records created inside the CRM.
 enum ExternalSource {
   SHOPIFY
+  // Rows the CRM itself creates in a payment/shipping provider. Shopify sync only ever reads and deletes rows
+  // tagged SHOPIFY, so tagging direct provider rows differently is what keeps the two from touching each other.
+  CASHFREE
+  SHIPROCKET
 
   @@map("external_source")
 }

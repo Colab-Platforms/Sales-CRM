@@ -108,6 +108,10 @@ export const SHIPMENT_STATUS_LABELS: Record<ShipmentStatus, string> = {
   OUT_FOR_DELIVERY: "Out for delivery",
   DELIVERED: "Delivered",
   RETURNED: "Returned",
+  CREATED: "Created",
+  AWB_ASSIGNED: "AWB assigned",
+  PICKUP_SCHEDULED: "Pickup scheduled",
+  CANCELLED: "Cancelled",
 };
 
 export const SHIPMENT_STATUS_COLORS: Record<ShipmentStatus, string> = {
@@ -116,6 +120,10 @@ export const SHIPMENT_STATUS_COLORS: Record<ShipmentStatus, string> = {
   OUT_FOR_DELIVERY: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
   DELIVERED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
   RETURNED: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  CREATED: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
+  AWB_ASSIGNED: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
+  PICKUP_SCHEDULED: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
+  CANCELLED: "bg-red-500/10 text-red-600 dark:text-red-400",
 };
 
 // Amounts arrive as decimal strings; they are only converted for display.

@@ -1,4 +1,4 @@
-import type { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import type { ExternalSource, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { ReconciliationStatus } from "../reconciliation/reconciliation.types.js";
 
 // How the customer pays: cash on delivery, or up front by any other method. Null when the method is not known.
@@ -97,7 +97,7 @@ export interface OrderDetail {
   leadOwner: { id: string; name: string } | null;
   items: OrderItemDetail[];
   payments: PaymentDetail[];
-  shipments: ShipmentDetail[];
+  shipments: OrderShipmentDetail[];
 }
 
 export interface OrderItemDetail {
@@ -129,6 +129,11 @@ export interface PaymentDetail {
   refundedAmount: Money | null;
   failureReason: string | null;
   createdAt: Date;
+  // Where the payment record comes from: Shopify sync, or a Cashfree payment link the CRM created. Null for CRM-native rows.
+  source: ExternalSource | null;
+  // Set only for a Cashfree payment link; paymentUrl is what the customer pays through.
+  paymentUrl: string | null;
+  paymentExpiresAt: Date | null;
 }
 
 // A shipment with no tracking/courier/dates yet (Shopify created the fulfilment record but has not
@@ -144,6 +149,21 @@ export interface ShipmentDetail {
   deliveredAt: Date | null;
   returnedAt: Date | null;
   createdAt: Date;
+}
+
+// A shipment as the order detail shows it: the fields above plus where the record comes from and, for a shipment the CRM
+// created directly in Shiprocket, its operational data.
+export interface OrderShipmentDetail extends ShipmentDetail {
+  // Where the shipment record comes from: Shopify's fulfilment, or a shipment the CRM created directly in Shiprocket.
+  source: ExternalSource | null;
+  // Shiprocket operational data, only on a directly created shipment.
+  providerStatus: string | null;
+  labelUrl: string | null;
+  pickupScheduledAt: Date | null;
+  shiprocketOrderId: string | null;
+  // On a Shopify-derived shipment: the direct Shiprocket shipment carrying the same AWB, i.e. the same parcel. Derived
+  // when read, never stored, so it can not drift out of date.
+  linkedShipmentId: string | null;
 }
 
 export type StatusHistoryEvent = "CREATED" | "PLACED" | "CONFIRMED" | "CANCELLED" | "STATUS_CHANGE";

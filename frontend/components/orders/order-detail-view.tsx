@@ -22,6 +22,7 @@ import { customerDetailHref } from "./orders-table";
 import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
+import { CreatePaymentLinkButton, PaymentLinkPanel } from "./payment-link-panel";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import { ReconciliationStatusBadge } from "./reconciliation-status-badge";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
@@ -55,7 +56,8 @@ function DetailSkeleton() {
   );
 }
 
-function PaymentCard({ payment, currency }: { payment: PaymentDetail; currency: string }) {
+function PaymentCard({ payment, order }: { payment: PaymentDetail; order: OrderDetail }) {
+  const currency = order.currency;
   // Prefer the merchant reference; fall back to the provider's own payment id.
   const reference = payment.transactionReference ?? payment.providerPaymentId;
 
@@ -78,6 +80,7 @@ function PaymentCard({ payment, currency }: { payment: PaymentDetail; currency: 
         {payment.refundedAmount ? <DetailField label="Refunded amount">{formatMoney(payment.refundedAmount, payment.currency || currency)}</DetailField> : null}
         {payment.failureReason ? <DetailField label="Failure reason">{payment.failureReason}</DetailField> : null}
       </DetailGrid>
+      <PaymentLinkPanel payment={payment} order={order} />
     </div>
   );
 }
@@ -257,17 +260,18 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           <CardTitle>Payment</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <CreatePaymentLinkButton order={order} />
           {order.payments.length === 0 ? (
             <p className="text-sm text-muted-foreground">No payment has been recorded for this order yet.</p>
           ) : (
-            order.payments.map((payment) => <PaymentCard key={payment.id} payment={payment} currency={order.currency} />)
+            order.payments.map((payment) => <PaymentCard key={payment.id} payment={payment} order={order} />)
           )}
         </CardContent>
       </Card>
 
       <PaymentReconciliationCard order={order} />
 
-      <OrderShipmentSection shipments={order.shipments} />
+      <OrderShipmentSection shipments={order.shipments} orderId={order.id} orderNumber={order.orderNumber} orderStatus={order.status} currency={order.currency} />
 
       <Card>
         <CardHeader>

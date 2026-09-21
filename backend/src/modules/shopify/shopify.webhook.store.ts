@@ -35,7 +35,8 @@ export function backoffMs(attempts: number): number {
   return Math.min(60_000 * 2 ** Math.max(attempts - 1, 0), 60 * 60 * 1000);
 }
 
-export function createPrismaWebhookStore(db: Prisma.TransactionClient): WebhookStore {
+// `provider` defaults to Shopify; the Cashfree and Shiprocket webhooks reuse this same store (and the same table) under their own name.
+export function createPrismaWebhookStore(db: Prisma.TransactionClient, provider: string = PROVIDER): WebhookStore {
   return {
     async record({ eventType, externalEventId, payload, ignored }) {
       // One atomic INSERT ... ON CONFLICT DO NOTHING on (provider, external_event_id): a repeat delivery inserts
@@ -46,7 +47,7 @@ export function createPrismaWebhookStore(db: Prisma.TransactionClient): WebhookS
         data: [
           {
             id,
-            provider: PROVIDER,
+            provider,
             eventType,
             externalEventId,
             payload: payload as Prisma.InputJsonValue,
@@ -59,7 +60,7 @@ export function createPrismaWebhookStore(db: Prisma.TransactionClient): WebhookS
       });
       if (count === 1) return { id, duplicate: false };
 
-      const existing = await db.webhookEvent.findFirst({ where: { provider: PROVIDER, externalEventId }, select: { id: true } });
+      const existing = await db.webhookEvent.findFirst({ where: { provider, externalEventId }, select: { id: true } });
       return { id: existing?.id ?? "", duplicate: true };
     },
 
@@ -67,7 +68,7 @@ export function createPrismaWebhookStore(db: Prisma.TransactionClient): WebhookS
       const claimed = await db.webhookEvent.updateMany({
         where: {
           id,
-          provider: PROVIDER,
+          provider,
           OR: [
             { status: WebhookStatus.RECEIVED },
             { status: WebhookStatus.FAILED, nextAttemptAt: { lte: now } },
@@ -98,7 +99,7 @@ export function createPrismaWebhookStore(db: Prisma.TransactionClient): WebhookS
     async due(now, limit) {
       const rows = await db.webhookEvent.findMany({
         where: {
-          provider: PROVIDER,
+          provider,
           OR: [
             { status: WebhookStatus.RECEIVED, receivedAt: { lte: new Date(now.getTime() - STALE_RECEIVED_MS) } },
             { status: WebhookStatus.FAILED, nextAttemptAt: { lte: now }, attempts: { lt: MAX_ATTEMPTS } },

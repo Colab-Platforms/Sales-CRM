@@ -38,7 +38,20 @@ export type PaymentMethod =
   | "OTHER"
   | "COD";
 
-export type ShipmentStatus = "SHIPPED" | "IN_TRANSIT" | "OUT_FOR_DELIVERY" | "DELIVERED" | "RETURNED";
+export type ShipmentStatus =
+  | "SHIPPED"
+  | "IN_TRANSIT"
+  | "OUT_FOR_DELIVERY"
+  | "DELIVERED"
+  | "RETURNED"
+  // Only for a shipment the CRM created directly in Shiprocket (before the courier has it), and a cancelled one.
+  | "CREATED"
+  | "AWB_ASSIGNED"
+  | "PICKUP_SCHEDULED"
+  | "CANCELLED";
+
+// Where a payment or shipment record comes from: Shopify sync, or something the CRM created directly with the provider.
+export type ExternalSource = "SHOPIFY" | "CASHFREE" | "SHIPROCKET";
 
 // A shipment with no tracking/courier/dates yet (only the fulfilment record itself has synced) is
 // not the same as "no shipment at all" - null fields mean "not known", not zero.
@@ -53,6 +66,14 @@ export interface ShipmentDetail {
   deliveredAt: string | null;
   returnedAt: string | null;
   createdAt: string;
+  // Only on the order detail (the customer summary that reuses this type does not carry them).
+  source?: ExternalSource | null;
+  providerStatus?: string | null;
+  labelUrl?: string | null;
+  pickupScheduledAt?: string | null;
+  shiprocketOrderId?: string | null;
+  // On a Shopify-derived shipment: the direct Shiprocket shipment carrying the same AWB (the same parcel).
+  linkedShipmentId?: string | null;
 }
 
 export interface OrdersListParams {
@@ -127,6 +148,10 @@ export interface PaymentDetail {
   refundedAmount: string | null;
   failureReason: string | null;
   createdAt: string;
+  source: ExternalSource | null;
+  // A Cashfree payment link the customer pays through; only set on a payment the CRM created that way.
+  paymentUrl: string | null;
+  paymentExpiresAt: string | null;
 }
 
 export interface OrderDetail {

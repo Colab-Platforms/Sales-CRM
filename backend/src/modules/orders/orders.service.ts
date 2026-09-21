@@ -175,6 +175,13 @@ class OrdersService {
     const breakdown = computePaymentBreakdown(order.payments);
     const outstandingCents = Math.max(totalCents - breakdown.paidCents - breakdown.refundedCents, 0);
 
+    // The same parcel can be reported twice: by Shopify's fulfilment and by a shipment the CRM created directly in
+    // Shiprocket. They stay separate rows (each source owns its own), and are tied together here by AWB.
+    const normalizeAwb = (awb: string) => awb.trim().toUpperCase();
+    const directByAwb = new Map(
+      order.shipments.filter((s) => s.externalSource === "SHIPROCKET" && s.trackingNumber).map((s) => [normalizeAwb(s.trackingNumber!), s.id] as const),
+    );
+
     return {
       id: order.id,
       orderNumber: order.orderNumber,
@@ -239,6 +246,9 @@ class OrdersService {
         refundedAmount: payment.refundedAmount ? money(payment.refundedAmount) : null,
         failureReason: payment.failureReason,
         createdAt: payment.createdAt,
+        source: payment.externalSource,
+        paymentUrl: payment.paymentUrl,
+        paymentExpiresAt: payment.paymentExpiresAt,
       })),
       shipments: order.shipments.map((shipment) => ({
         id: shipment.id,
@@ -251,6 +261,12 @@ class OrdersService {
         deliveredAt: shipment.deliveredAt,
         returnedAt: shipment.returnedAt,
         createdAt: shipment.createdAt,
+        source: shipment.externalSource,
+        providerStatus: shipment.providerStatus,
+        labelUrl: shipment.labelUrl,
+        pickupScheduledAt: shipment.pickupScheduledAt,
+        shiprocketOrderId: shipment.providerOrderId,
+        linkedShipmentId: shipment.externalSource === "SHOPIFY" && shipment.trackingNumber ? (directByAwb.get(normalizeAwb(shipment.trackingNumber)) ?? null) : null,
       })),
     };
   }

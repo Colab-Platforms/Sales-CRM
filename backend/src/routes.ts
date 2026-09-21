@@ -8,6 +8,9 @@ import customersRoutes from "@modules/customers/customers.routes.js";
 import auditRoutes from "@modules/audit/audit.routes.js";
 import whatsappRoutes from "@modules/whatsapp/whatsapp.routes.js";
 import leadRoutes from "./modules/lead/lead.routes.js";
+import paymentsRoutes from "@modules/cashfree/cashfree.routes.js";
+import shipmentsRoutes from "@modules/shiprocket/shiprocket.routes.js";
+import integrationsRoutes from "@modules/integrations/integrations.routes.js";
 
 const router = Router();
 
@@ -23,6 +26,9 @@ router.use("/orders", ordersRoutes);
 router.use("/customers", customersRoutes);
 router.use("/audit", auditRoutes);
 router.use("/whatsapp", whatsappRoutes);
+router.use("/payments", paymentsRoutes);
+router.use("/shipments", shipmentsRoutes);
+router.use("/integrations", integrationsRoutes);
 router.use("/lead", leadRoutes);                          // add with the other router.use lines
 
 

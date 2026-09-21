@@ -4,6 +4,8 @@ import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders } from "./orders.controller.js";
+import { createPaymentLink } from "../cashfree/cashfree.controller.js";
+import { createShipment } from "../shiprocket/shiprocket.controller.js";
 
 const router = Router();
 
@@ -16,5 +18,10 @@ router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);
 router.get("/:id/audit", requireAuth, getOrderAudit);
+
+// Cashfree payment link for the order's exact pending amount. Every role may collect on orders inside their own lead scope.
+router.post("/:orderId/payment-links", requireAuth, createPaymentLink);
+// Shiprocket shipment for the order. Shipping is an operational step: ADMIN/MANAGER, within their lead scope.
+router.post("/:orderId/shipments", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), createShipment);
 
 export default router;
