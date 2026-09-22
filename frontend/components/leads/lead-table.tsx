@@ -1,7 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { toast } from "sonner";
-import { Inbox } from "lucide-react";
+import { Eye, Inbox } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,9 @@ import type { Lead, LeadListPagination } from "@/lib/api-client/types/lead.types
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
 
-function LeadStatusSelect({ lead }: { lead: Lead }) {
+// Exported so the Lead Details page can reuse the exact same status-change
+// control (and its mutation) instead of a second implementation.
+export function LeadStatusSelect({ lead }: { lead: Lead }) {
   const updateLead = useUpdateLeadMutation();
 
   return (
@@ -39,6 +42,10 @@ function LeadStatusSelect({ lead }: { lead: Lead }) {
   );
 }
 
+export function leadDetailHref(id: string) {
+  return `/dashboard/leads/${id}`;
+}
+
 interface LeadTableProps {
   leads: Lead[];
   isLoading: boolean;
@@ -61,7 +68,8 @@ export function LeadTable({
   onPageChange,
 }: LeadTableProps) {
   const allSelected = leads.length > 0 && leads.every((lead) => selectedIds.has(lead.id));
-  const columnCount = role !== "SALESPERSON" ? 9 : 8;
+  // checkbox, Lead, Mobile, Source, Product/Requirement, Status, Priority, [Manager], Salesperson, Created, Action
+  const columnCount = role !== "SALESPERSON" ? 11 : 10;
 
   if (isLoading) {
     return (
@@ -88,13 +96,15 @@ export function LeadTable({
                 />
               </TableHead>
               <TableHead>Lead</TableHead>
-              <TableHead>Contact</TableHead>
+              <TableHead>Mobile</TableHead>
               <TableHead>Source</TableHead>
+              <TableHead>Product / Requirement</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Priority</TableHead>
               {role !== "SALESPERSON" ? <TableHead>Manager</TableHead> : null}
               <TableHead>Salesperson</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead className="text-right pr-4">Action</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -141,6 +151,11 @@ export function LeadTable({
                       </div>
                     ) : null}
                   </TableCell>
+                  <TableCell className="max-w-48">
+                    <span className="block truncate" title={lead.requirement ?? undefined}>
+                      {lead.requirement ?? "—"}
+                    </span>
+                  </TableCell>
                   <TableCell>
                     {role === "SALESPERSON" ? (
                       <LeadStatusSelect lead={lead} />
@@ -155,6 +170,16 @@ export function LeadTable({
                   <TableCell>{lead.owner?.name ?? "—"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">
                     {new Date(lead.createdAt).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell className="pr-4 text-right">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      render={<Link href={leadDetailHref(lead.id)} aria-label={`View ${lead.firstName}`} />}
+                    >
+                      <Eye />
+                      View
+                    </Button>
                   </TableCell>
                 </TableRow>
               ))

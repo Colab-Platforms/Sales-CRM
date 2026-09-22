@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
 import { LeadTable } from "@/components/leads/lead-table";
 import { LeadFilters, type LeadFilterState } from "@/components/leads/lead-filters";
+import { LeadStatusTabs, type LeadStatusTab } from "@/components/leads/lead-status-tabs";
 import { LeadSelectionToolbar } from "@/components/leads/lead-selection-toolbar";
 import { AssignManagerDialog } from "@/components/leads/assign-manager-dialog";
 import { AssignSalespersonDialog } from "@/components/leads/assign-salesperson-dialog";
@@ -54,16 +55,25 @@ export default function LeadsPage() {
     });
   }
 
+  const activeTab: LeadStatusTab = filters.workingStatus ?? "ALL";
+
+  function handleTabChange(tab: LeadStatusTab) {
+    if (tab === "CALLBACK_DUE" || tab === "FOLLOWUP_DUE") return; // disabled placeholders
+    setFilters((prev) => ({ ...prev, workingStatus: tab === "ALL" ? undefined : tab }));
+    setPage(1);
+    clearSelection();
+  }
+
   return (
     <div className="space-y-6">
       <PageHeader
         title={isAdmin ? "All Leads" : "My Leads"}
         description={
           isAdmin
-            ? "View leads from every source and assign them to managers."
+            ? "The organization's sales lead workspace — view leads from every source and assign them to managers."
             : isManager
-              ? "View leads assigned to you and hand them off to your salespeople."
-              : "View the leads assigned to you and update their status."
+              ? "Your team's sales lead workspace — view leads assigned to you and hand them off to your salespeople."
+              : "Your sales lead workspace — view the leads assigned to you, update their status and reach out."
         }
         actions={
           <>
@@ -80,6 +90,8 @@ export default function LeadsPage() {
           </>
         }
       />
+
+      <LeadStatusTabs active={activeTab} onChange={handleTabChange} />
 
       <LeadFilters
         value={filters}
