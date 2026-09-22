@@ -13,6 +13,9 @@ model WebhookEvent {
 
   errorMessage String? @map("error_message")
 
+  sourceId String? @map("source_id") @db.Uuid
+  source   Source? @relation(fields: [sourceId], references: [id])
+
   receivedAt  DateTime  @map("received_at")
   processedAt DateTime? @map("processed_at")
 
@@ -21,5 +24,6 @@ model WebhookEvent {
   @@index([externalEventId])
   @@index([status])
   @@index([receivedAt])
+  @@index([sourceId])
   @@map("webhook_events")
 }

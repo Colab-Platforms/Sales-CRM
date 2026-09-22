@@ -48,6 +48,20 @@ const leadListInclude = {
   assignedManager: { select: { id: true, name: true, email: true } },
   group: { select: { id: true, name: true } },
   importBatch: { select: { fileName: true, uploadedBy: { select: { id: true, name: true, role: true } } } },
+  calls: {
+    select: {
+      id: true,
+      provider: true,
+      direction: true,
+      status: true,
+      startedAt: true,
+      answeredAt: true,
+      endedAt: true,
+      durationSeconds: true,
+      recording: { select: { recordingUrl: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  },
 } satisfies Prisma.LeadInclude;
 
 class LeadService {
@@ -759,6 +773,94 @@ class LeadService {
     this.assertBatchOwnership(user, batch);
     const { uploadedById: _uploadedById, ...publicBatch } = batch;
     return publicBatch;
+  }
+
+  // Used by the integrations module for webhook-originated leads (Meta/Shopify), which
+  // have no `user` actor and so skip the interactive createLead() owner/manager
+  // assignment logic — leads land unassigned and surface via the existing
+  // assignment=UNASSIGNED lead filter for admins/managers to pick up.
+  async createLeadFromSource(
+    sourceId: string,
+    data: {
+      firstName: string;
+      lastName?: string;
+      mobile?: string;
+      email?: string;
+      requirement?: string;
+      location?: string;
+    },
+    activityTitle: string,
+  ) {
+    const normalizedMobile = normalizeMobile(data.mobile);
+    const normalizedEmail = normalizeEmail(data.email);
+
+    // A single external customer can hit this path repeatedly over their lifecycle
+    // (e.g. Shopify's separate create/update webhooks). Dedup on normalized
+    // mobile/email so a later, more-complete event enriches the existing lead
+    // instead of spawning a duplicate.
+    const existing =
+      normalizedMobile || normalizedEmail
+        ? await prisma.lead.findFirst({
+            where: {
+              sourceId,
+              OR: [
+                ...(normalizedMobile ? [{ normalizedMobile }] : []),
+                ...(normalizedEmail ? [{ normalizedEmail }] : []),
+              ],
+            },
+          })
+        : null;
+
+    if (existing) {
+      const lead = await prisma.lead.update({
+        where: { id: existing.id },
+        data: {
+          firstName: data.firstName || existing.firstName,
+          lastName: data.lastName ?? existing.lastName,
+          mobile: data.mobile ?? existing.mobile,
+          normalizedMobile: normalizedMobile ?? existing.normalizedMobile,
+          email: data.email ?? existing.email,
+          normalizedEmail: normalizedEmail ?? existing.normalizedEmail,
+          location: data.location ?? existing.location,
+        },
+      });
+
+      await prisma.activity.create({
+        data: {
+          leadId: lead.id,
+          type: ActivityType.LEAD_UPDATED,
+          referenceType: "Source",
+          referenceId: sourceId,
+          title: `Lead updated via ${activityTitle.replace("Lead created via ", "")}`,
+        },
+      });
+
+      return lead;
+    }
+
+    const lead = await this.createLeadWithUniqueNumber({
+      firstName: data.firstName,
+      lastName: data.lastName,
+      mobile: data.mobile,
+      normalizedMobile,
+      email: data.email,
+      normalizedEmail,
+      requirement: data.requirement,
+      location: data.location,
+      sourceId,
+    });
+
+    await prisma.activity.create({
+      data: {
+        leadId: lead.id,
+        type: ActivityType.LEAD_CREATED,
+        referenceType: "Source",
+        referenceId: sourceId,
+        title: activityTitle,
+      },
+    });
+
+    return lead;
   }
 }
 
