@@ -1,17 +1,67 @@
 "use client";
 
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Inbox } from "lucide-react";
+import { Inbox, Phone } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
+import { useInitiateCallMutation } from "@/lib/api-client/mutations/calling.mutations";
+import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
+import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import type { Lead, LeadListPagination } from "@/lib/api-client/types/lead.types";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
+
+function ClickToCallButton({ lead }: { lead: Lead }) {
+  const initiateCall = useInitiateCallMutation(lead.id);
+  const { data: virtualNumbers = [] } = useQuery(virtualNumbersQueryOptions());
+  const [virtualNumberId, setVirtualNumberId] = useState("");
+  const selected = virtualNumberId || virtualNumbers[0]?.id || "";
+
+  if (!lead.mobile) return null;
+
+  return (
+    <div className="flex items-center gap-1">
+      <NativeSelect
+        size="sm"
+        aria-label="Call from virtual number"
+        className="text-xs"
+        wrapperClassName="w-28"
+        value={selected}
+        disabled={initiateCall.isPending || virtualNumbers.length === 0}
+        onChange={(e) => setVirtualNumberId(e.target.value)}
+      >
+        {virtualNumbers.length === 0 ? <option value="">No line</option> : null}
+        {virtualNumbers.map((vn) => (
+          <option key={vn.id} value={vn.id}>
+            {vn.displayName ?? vn.number}
+          </option>
+        ))}
+      </NativeSelect>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-6"
+        aria-label={`Call ${lead.firstName}`}
+        disabled={initiateCall.isPending || !selected}
+        onClick={() =>
+          initiateCall.mutate(selected, {
+            onSuccess: () => toast.success("Calling your phone now — hold on."),
+            onError: (error) => toast.error(getErrorMessage(error, "Failed to start call.")),
+          })
+        }
+      >
+        <Phone className="size-3.5" />
+      </Button>
+    </div>
+  );
+}
 
 function LeadStatusSelect({ lead }: { lead: Lead }) {
   const updateLead = useUpdateLeadMutation();
@@ -128,7 +178,10 @@ export function LeadTable({
                     <div className="font-mono text-xs text-muted-foreground">{lead.leadNumber}</div>
                   </TableCell>
                   <TableCell>
-                    <div>{lead.mobile ?? "—"}</div>
+                    <div className="flex items-center gap-1">
+                      <span>{lead.mobile ?? "—"}</span>
+                      <ClickToCallButton lead={lead} />
+                    </div>
                     {lead.email ? (
                       <div className="text-xs text-muted-foreground">{lead.email}</div>
                     ) : null}

@@ -13,6 +13,8 @@ import {
   UserCog,
   Building2,
   Contact,
+  Plug,
+  Phone,
 } from "lucide-react";
 import {
   Sidebar,
@@ -82,6 +84,12 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       ],
     },
     {
+      label: "Organization",
+      items: [
+        { title: "Virtual Numbers", href: "/dashboard/virtual-numbers", icon: Phone },
+      ],
+    },
+    {
       label: "Pipeline",
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
@@ -102,6 +110,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Users", href: "/dashboard/users", icon: UserCog },
         { title: "Groups", icon: Building2 },
+        { title: "Sources", href: "/dashboard/sources", icon: Plug },
+        { title: "Virtual Numbers", href: "/dashboard/virtual-numbers", icon: Phone },
       ],
     },
     {
