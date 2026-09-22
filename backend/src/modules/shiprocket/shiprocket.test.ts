@@ -4,7 +4,7 @@ import { PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.j
 import { ProviderHttpError } from "../integrations/integrations.common.js";
 import { fakeFetch, memoryStore } from "../integrations/integrations.testutil.js";
 import { canAdvance } from "./shiprocket.apply.js";
-import { ShiprocketClient, parseAssignedAwb, parseCouriers, parseCreatedOrder, parseLabelUrl, parsePickup, parseTracking } from "./shiprocket.client.js";
+import { ShiprocketClient, parseAssignedAwb, parseCouriers, parseCreatedOrder, parseLabelUrl, parseOrdersPage, parsePickup, parseTracking } from "./shiprocket.client.js";
 import { loadShiprocketConfig, loadShiprocketWebhookConfig, ShiprocketConfigError } from "./shiprocket.config.js";
 import { deliveryId, mapShiprocketStatus, parseEtd, parseShiprocketEvent, verifyShiprocketToken } from "./shiprocket.events.js";
 import { buildShiprocketOrder, formatOrderDate, providerFailure } from "./shiprocket.shipments.service.js";
@@ -169,6 +169,30 @@ describe("Shiprocket client", () => {
     const tracking = parseTracking({ tracking_data: { track_status: 1, track_url: "https://t/AWB1", etd: "2026-09-26 00:00:00", shipment_track: [{ current_status: "In Transit", courier_name: "Delhivery" }], shipment_track_activities: [{ date: "d", "sr-status-label": "IN TRANSIT", location: "Pune" }] } }, "AWB1");
     assert.deepEqual([tracking?.currentStatus, tracking?.trackUrl, tracking?.activities[0].location], ["In Transit", "https://t/AWB1", "Pune"]);
     assert.equal(parseTracking({ tracking_data: { error: "Invalid AWB" } }, "X"), null);
+  });
+
+  it("lists existing orders read-only, and never anything but GET", async () => {
+    const { impl, calls } = fakeFetch([
+      login(TOKEN_A),
+      [200, { data: [{ id: 900001, channel_order_id: "1050", created_at: "2026-01-05 10:00:00", shipments: [{ id: 800001, awb: "SRAWB1", status: "Delivered", courier_name: "Delhivery" }] }], meta: { pagination: { current_page: 1, total_pages: 3, total: 120 } } }],
+    ]);
+    const page = await new ShiprocketClient(config, impl).listOrders({ page: 1, perPage: 50, from: "2026-01-01", to: "2026-01-30" });
+    assert.equal(calls[1].method, "GET");
+    assert.match(calls[1].url, /\/orders\?page=1&per_page=50&sort_by=id&sort=ASC&from=2026-01-01&to=2026-01-30$/);
+    assert.deepEqual(page.shipments, [{ shiprocketOrderId: "900001", shiprocketShipmentId: "800001", channelOrderId: "1050", awb: "SRAWB1", courierName: "Delhivery", status: "Delivered", createdAt: "2026-01-05 10:00:00" }]);
+    assert.equal(page.currentPage, 1);
+    assert.equal(page.lastPage, 3);
+    assert.equal(page.totalOrders, 120);
+  });
+
+  it("parses an order with no nested shipments array as one shipment-less row, and tolerates an empty page", () => {
+    const noShipment = parseOrdersPage({ data: [{ id: 5, channel_order_id: "9", status: "NEW", created_at: "2026-01-01" }] });
+    assert.deepEqual(noShipment.shipments, [{ shiprocketOrderId: "5", shiprocketShipmentId: null, channelOrderId: "9", awb: null, courierName: null, status: "NEW", createdAt: "2026-01-01" }]);
+    assert.deepEqual(parseOrdersPage({ data: [] }).shipments, []);
+    assert.deepEqual(parseOrdersPage({}).shipments, []);
+    assert.equal(parseOrdersPage({}).lastPage, null);
+    // An order with no id at all can not be matched to anything and is dropped, not fabricated.
+    assert.deepEqual(parseOrdersPage({ data: [{ status: "NEW" }] }).shipments, []);
   });
 });
 

@@ -3,7 +3,7 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import ShiprocketShipmentsService from "./shiprocket.shipments.service.js";
-import { validateAssignBody, validateCreateBody, validateOrderParams, validateShipmentParams } from "./shiprocket.validators.js";
+import { validateAssignBody, validateCreateBody, validateListQuery, validateOrderParams, validateShipmentParams } from "./shiprocket.validators.js";
 
 const service = new ShiprocketShipmentsService();
 
@@ -59,5 +59,35 @@ const simple =
 export const schedulePickup = simple((u, id) => service.schedulePickup(u, id), "Pickup scheduled");
 export const generateLabel = simple((u, id) => service.generateLabel(u, id), "Label generated");
 export const refreshTracking = simple((u, id) => service.refreshTracking(u, id), "Tracking refreshed");
+
+// ---- centralized listing/tracking page ----
+
+export const listShipments = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateListQuery(req.query);
+    if (error) return void bad(res, error.message);
+    sendResponse(res, true, await service.listShipments(req.user!, value), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getShipment = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateShipmentParams(req.params);
+    if (params.error) return void bad(res, params.error.message);
+    sendResponse(res, true, await service.getShipmentDetail(req.user!, params.value.shipmentId), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getShipmentFilterOptions = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await service.getFilterOptions(req.user!), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
 
 export const shiprocketStatus = () => service.status();

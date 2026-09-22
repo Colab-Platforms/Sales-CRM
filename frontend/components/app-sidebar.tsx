@@ -19,6 +19,7 @@ import {
   Workflow,
   Send,
   Contact,
+  Truck,
 } from "lucide-react";
 import {
   Sidebar,
@@ -228,6 +229,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/reconciliation",
           icon: Wallet,
         },
+        {
+          title: "Shiprocket",
+          href: "/dashboard/shiprocket",
+          icon: Truck,
+        },
         { title: "Reports", icon: BarChart3 },
       ],
     },
@@ -284,6 +290,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
           icon: Wallet,
+        },
+        {
+          title: "Shiprocket",
+          href: "/dashboard/shiprocket",
+          icon: Truck,
         },
         { title: "Reports", icon: BarChart3 },
       ],

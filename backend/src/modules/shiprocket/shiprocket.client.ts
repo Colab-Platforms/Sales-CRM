@@ -9,11 +9,21 @@ import { ShiprocketTokenProvider, sharedTokenProvider } from "./shiprocket.token
 //   POST /courier/generate/pickup      {shipment_id: [..]}
 //   POST /courier/generate/label       {shipment_id: [..]}   -> label_url
 //   GET  /courier/track/awb/{awb}      tracking
+//   GET  /orders                       list existing orders  -> read-only, used by the backfill (shiprocket.backfill.ts)
 //
 // UNCONFIRMED until live credentials are available: Shiprocket's public documentation site could not be read here, so
 // the request bodies follow the helpsheet and well-known field names, and every parser below is deliberately tolerant
 // (reads several plausible shapes, never throws on a missing optional field). Anything a real response contradicts is
 // fixed in the parsers alone; nothing else in the CRM depends on Shiprocket's raw shapes.
+//
+// GET /orders itself is confirmed to exist (Shiprocket's own "Get Orders" API, listing every order already in the
+// account) via third-party integration documentation that mirrors its request/response schema, since apidocs.shiprocket.in
+// is a JavaScript app that could not be read directly here. Confirmed query parameters: page, per_page, sort ("ASC"/
+// "DESC"), sort_by ("id" or "status"), from/to (date filters - Shiprocket enforces a maximum 30-day range per call,
+// so the backfill chunks a longer window itself). Confirmed response shape: a list of orders, each carrying its own
+// id/channel_order_id/created_at/status and a nested "shipments" array (id, awb, status, courier). The exact field
+// names are UNCONFIRMED beyond that outline; parseOrdersPage below is written to tolerate the documented shape and a
+// couple of plausible variants, and is the one place to correct if a real response disagrees.
 
 export interface ShiprocketOrderItem {
   name: string;
@@ -163,6 +173,73 @@ export function parseTracking(json: unknown, awb: string): TrackingResult | null
   };
 }
 
+export interface ListOrdersParams {
+  page: number;
+  perPage: number;
+  /** YYYY-MM-DD, inclusive. Shiprocket rejects a from/to range longer than 30 days. */
+  from?: string;
+  to?: string;
+}
+
+/** One order-and-shipment pair as reported by Shiprocket's own order list - read-only, never a shipment this call created. */
+export interface ExistingShipment {
+  shiprocketOrderId: string;
+  /** null when the order has no shipment yet (e.g. cancelled before a courier was ever involved). */
+  shiprocketShipmentId: string | null;
+  /** The order id Shiprocket was given when this order was created there - by this CRM, or by whatever else created it. */
+  channelOrderId: string | null;
+  awb: string | null;
+  courierName: string | null;
+  /** Raw status text exactly as Shiprocket reports it - never normalised here; see shiprocket.events.ts's mapShiprocketStatus. */
+  status: string | null;
+  createdAt: string | null;
+}
+
+export interface OrdersPage {
+  shipments: ExistingShipment[];
+  currentPage: number;
+  /** null when Shiprocket's response does not say (still safe: the caller stops once a page comes back empty). */
+  lastPage: number | null;
+  totalOrders: number | null;
+}
+
+function parseExistingShipment(order: Record<string, unknown>): ExistingShipment[] {
+  const shiprocketOrderId = asString(order.id) ?? asString(order.order_id);
+  if (!shiprocketOrderId) return [];
+  const channelOrderId = asString(order.channel_order_id);
+  const createdAt = asString(order.created_at) ?? asString(order.channel_created_at);
+  // One order can have more than one shipment (a split parcel); each still carries the order's own identity above.
+  // When there is no nested shipments array at all (e.g. an order not yet shipped), there is no shipment id or AWB to
+  // read - the order's own "id" must never be misread as a shipment id just because a shipment row is missing.
+  const shipmentsRaw = order.shipments;
+  if (!Array.isArray(shipmentsRaw) || shipmentsRaw.length === 0) {
+    return [{ shiprocketOrderId, shiprocketShipmentId: null, channelOrderId, awb: null, courierName: null, status: asString(order.status), createdAt }];
+  }
+  return shipmentsRaw.map(asRecord).map((s) => ({
+    shiprocketOrderId,
+    shiprocketShipmentId: asString(s.id) ?? asString(s.shipment_id),
+    channelOrderId,
+    awb: asString(s.awb) ?? asString(s.awb_code),
+    courierName: asString(s.courier_name) ?? asString(s.courier),
+    status: asString(s.status) ?? asString(order.status),
+    createdAt: asString(s.created_at) ?? createdAt,
+  }));
+}
+
+export function parseOrdersPage(json: unknown): OrdersPage {
+  const body = asRecord(json);
+  const list = Array.isArray(body.data) ? body.data : Array.isArray(body.orders) ? body.orders : [];
+  const meta = asRecord(body.meta);
+  const pagination = asRecord(meta.pagination);
+  const num = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : null);
+  return {
+    shipments: list.flatMap((o) => parseExistingShipment(asRecord(o))),
+    currentPage: num(pagination.current_page ?? body.page) ?? 1,
+    lastPage: num(pagination.total_pages ?? pagination.last_page),
+    totalOrders: num(pagination.total ?? body.total),
+  };
+}
+
 export class ShiprocketClient {
   private readonly tokens: ShiprocketTokenProvider;
 
@@ -221,5 +298,13 @@ export class ShiprocketClient {
 
   async track(awb: string): Promise<TrackingResult | null> {
     return parseTracking(await this.call("GET", `/courier/track/awb/${encodeURIComponent(awb)}`), awb);
+  }
+
+  /** Read-only: orders already in the Shiprocket account. Never creates, updates or cancels anything. */
+  async listOrders(params: ListOrdersParams): Promise<OrdersPage> {
+    const q = new URLSearchParams({ page: String(params.page), per_page: String(params.perPage), sort_by: "id", sort: "ASC" });
+    if (params.from) q.set("from", params.from);
+    if (params.to) q.set("to", params.to);
+    return parseOrdersPage(await this.call("GET", `/orders?${q.toString()}`));
   }
 }

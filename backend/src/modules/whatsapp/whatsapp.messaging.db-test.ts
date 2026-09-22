@@ -13,7 +13,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import CustomersService from "../customers/customers.service.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
-import WhatsAppMessagingService from "./whatsapp.messaging.service.js";
+import WhatsAppMessagingService, { ORDER_CONFIRMATION_TEMPLATE_NAME } from "./whatsapp.messaging.service.js";
 
 class Rollback extends Error {}
 
@@ -299,6 +299,131 @@ describe("sending a template message", () => {
       const result = await svc.sendTemplate(as(admin, Role.ADMIN), { leadId: lead.id, templateId: template.id });
       const stored = await tx.whatsAppMessage.findUniqueOrThrow({ where: { id: result.id }, select: { leadId: true } });
       assert.equal(stored.leadId, otherLead.id, "returns the row that actually won the unique constraint, not a crash");
+    });
+  });
+});
+
+describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy order-confirmation template)", () => {
+  async function makeOrderConfirmationTemplate(tx: Prisma.TransactionClient, overrides: Partial<Prisma.WhatsAppTemplateUncheckedCreateInput> = {}) {
+    return makeTemplate(tx, {
+      name: ORDER_CONFIRMATION_TEMPLATE_NAME,
+      body: "Hi {{customer_name}}, your order {{order_number}} for {{order_amount}} is confirmed.",
+      variables: ["customer_name", "order_number", "order_amount"],
+      ...overrides,
+    });
+  }
+
+  it("full happy path: sends via the real template pipeline and returns a masked, key-free result", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const order = await makeOrder(tx, lead.id, { totalAmount: "1200.00" });
+      const template = await makeOrderConfirmationTemplate(tx);
+      let capturedParams: string[] | null = null;
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider({
+        sendTemplateMessage: async (input) => {
+          capturedParams = input.params;
+          return { providerMessageId: "wamid-order-confirmation-1", raw: { apiKey: "should-never-leak" } };
+        },
+      }));
+
+      const result = await svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id });
+
+      assert.equal(result.success, true);
+      assert.equal(result.provider, "AISENSY");
+      assert.equal(result.campaign, ORDER_CONFIRMATION_TEMPLATE_NAME);
+      assert.equal(result.destination, "********3210"); // never the full number
+      assert.equal(JSON.stringify(result).includes("should-never-leak"), false, "the raw provider response is never surfaced to the caller");
+      assert.equal(JSON.stringify(result).toLowerCase().includes("apikey"), false);
+
+      const orderRow = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { orderNumber: true } });
+      assert.deepEqual(capturedParams, ["Mahadev Babar", orderRow.orderNumber, "₹1200"]); // Prisma's Decimal.toString() drops trailing zeros
+
+      const message = await tx.whatsAppMessage.findFirstOrThrow({ where: { leadId: lead.id } });
+      assert.equal(message.status, "SENT");
+      assert.equal(message.templateId, template.id);
+      assert.equal(message.orderId, order.id);
+    });
+  });
+
+  it('reports a clear, actionable 404 when no "crm_order_confirmation" template exists yet', async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const order = await makeOrder(tx, lead.id);
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider());
+      await assert.rejects(
+        () => svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id }),
+        (e: any) => e.statusCode === 404 && new RegExp(ORDER_CONFIRMATION_TEMPLATE_NAME).test(e.message),
+      );
+      assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id } }), 0);
+    });
+  });
+
+  for (const status of ["DRAFT", "PENDING", "REJECTED", "DISABLED"] as const) {
+    it(`refuses to send while the template is ${status}, and never calls the provider`, async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const lead = await makeLead(tx);
+        const order = await makeOrder(tx, lead.id);
+        await makeOrderConfirmationTemplate(tx, { status: WhatsAppTemplateStatus[status] });
+        let called = false;
+        const svc = new WhatsAppMessagingService(tx, () => fakeProvider({ sendTemplateMessage: async () => { called = true; return { providerMessageId: "x", raw: {} }; } }));
+        await assert.rejects(() => svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id }), (e: any) => e.statusCode === 400 && /APPROVED/.test(e.message));
+        assert.equal(called, false);
+      });
+    });
+  }
+
+  it("fails safely, before calling the provider, when the customer has no phone number on file", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx, { normalizedMobile: null });
+      const order = await makeOrder(tx, lead.id);
+      await makeOrderConfirmationTemplate(tx);
+      let called = false;
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider({ sendTemplateMessage: async () => { called = true; return { providerMessageId: "x", raw: {} }; } }));
+      await assert.rejects(() => svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id }), (e: any) => e.statusCode === 400 && /phone|mobile/i.test(e.message));
+      assert.equal(called, false);
+    });
+  });
+
+  it("404s for an order outside the caller's lead scope - never reveals whether it exists", async () => {
+    await inRollback(async (tx) => {
+      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const lead = await makeLead(tx, { ownerId: rep2.id });
+      const order = await makeOrder(tx, lead.id);
+      await makeOrderConfirmationTemplate(tx);
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider());
+      await assert.rejects(() => svc.sendOrderConfirmationTest(as(rep1, Role.SALESPERSON), { orderId: order.id }), (e: any) => e.statusCode === 404);
+    });
+  });
+
+  it("surfaces (never hides) a real AiSensy rejection, and still audits the failed attempt", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const order = await makeOrder(tx, lead.id);
+      await makeOrderConfirmationTemplate(tx);
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider({ sendTemplateMessage: async () => { throw new WhatsAppSendError("AiSensy rejected the message (HTTP 400)"); } }));
+
+      await assert.rejects(() => svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id }), (e: any) => e.statusCode === 400 && /rejected/.test(e.message));
+
+      const message = await tx.whatsAppMessage.findFirstOrThrow({ where: { leadId: lead.id } });
+      assert.equal(message.status, "FAILED");
+    });
+  });
+
+  it("reports 503 when WhatsApp is not configured, and sends nothing", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const order = await makeOrder(tx, lead.id);
+      await makeOrderConfirmationTemplate(tx);
+      const svc = new WhatsAppMessagingService(tx, () => null);
+      await assert.rejects(() => svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id }), (e: any) => e.statusCode === 503);
+      assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id } }), 0);
     });
   });
 });

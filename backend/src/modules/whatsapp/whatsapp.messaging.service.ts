@@ -6,13 +6,13 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { fullName } from "../orders/orders.filters.js";
+import { fullName, scopedOrderWhere } from "../orders/orders.filters.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
-import type { PreviewTemplateInput, SendTemplateInput, TemplatePreviewResult } from "./whatsapp.messaging.types.js";
+import type { OrderConfirmationTestResult, PreviewTemplateInput, SendOrderConfirmationTestInput, SendTemplateInput, TemplatePreviewResult } from "./whatsapp.messaging.types.js";
 import { resolveTemplateVariables, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
 import type { WhatsAppMessageSummary } from "./whatsapp.types.js";
 
@@ -86,6 +86,23 @@ const REFERENCE_TYPE = "WhatsAppMessage";
 // message to the same customer minutes later is never silently swallowed.
 const DUPLICATE_GUARD_MS = 30_000;
 
+// The CRM's own local WhatsAppTemplate.name an admin must use when creating the order-confirmation
+// template (POST /api/whatsapp/templates, provider AISENSY) for sendOrderConfirmationTest to find
+// it. Not read from an env var: a campaign name is a per-template concept here (AiSensyProvider
+// sends `template.providerTemplateId ?? template.name` as AiSensy's own `campaignName` - see
+// whatsapp.aisensy.provider.ts), which already generalises to every future template/campaign
+// without more config, so a single global AISENSY_API_CAMPAIGN_NAME variable would only narrow that.
+// This constant exists solely so this one file and the AiSensy dashboard's Campaign name agree.
+export const ORDER_CONFIRMATION_TEMPLATE_NAME = "crm_order_confirmation";
+
+/** Never the raw number - e.g. "+919876543210" -> "********3210". */
+function maskDestination(mobile: string | null): string {
+  if (!mobile) return "-";
+  const digits = mobile.replace(/\D/g, "");
+  if (digits.length <= 4) return "*".repeat(digits.length);
+  return `${"*".repeat(digits.length - 4)}${digits.slice(-4)}`;
+}
+
 // Who is asking for this send. A real signed-in user is subject to E7.1's lead-scope RBAC (the same
 // rule Customer 360's "Send WhatsApp" button always has); E7.6's lifecycle automation is a system
 // process reacting to a real business event it already resolved the correct lead/order for directly
@@ -128,6 +145,56 @@ class WhatsAppMessagingService {
   // directly, and neither duplicates this send logic.
   async sendTemplateAsSystem(input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
     return this.send({ kind: "system" }, input);
+  }
+
+  // Safe, manual test path for the AiSensy order-confirmation template - NOT wired into order
+  // creation, Shopify sync, or any payment event; a real human, already authenticated and subject to
+  // the same lead-scope RBAC as every other send in this file, must call this explicitly. Recipient,
+  // name, order number and amount are always the real CRM data for `orderId` - never a caller-
+  // supplied destination - and this delegates to the exact same `send()` used everywhere else, so
+  // there is no second, parallel send implementation to keep in sync.
+  async sendOrderConfirmationTest(user: AuthUser, input: SendOrderConfirmationTestInput): Promise<OrderConfirmationTestResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const order = await this.db.order.findFirst({
+      where: scopedOrderWhere(input.orderId, leadScope),
+      select: { id: true, leadId: true, lead: { select: { normalizedMobile: true } } },
+    });
+    // Out of scope reads the same as missing - same convention as every other order/lead lookup here.
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    if (!order.lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
+
+    const template = await this.db.whatsAppTemplate.findFirst({
+      where: { provider: "AISENSY", name: ORDER_CONFIRMATION_TEMPLATE_NAME },
+      select: { id: true, status: true },
+    });
+    if (!template) {
+      throw new ApiError(
+        `No WhatsApp template named "${ORDER_CONFIRMATION_TEMPLATE_NAME}" exists yet. Create it first: POST /api/whatsapp/templates with provider "AISENSY" and a body containing {{customer_name}}, {{order_number}}, {{order_amount}} in that order.`,
+        STATUS_CODES.NOT_FOUND,
+      );
+    }
+    if (template.status !== "APPROVED") {
+      throw new ApiError(
+        `The "${ORDER_CONFIRMATION_TEMPLATE_NAME}" template is ${template.status}, not APPROVED. AiSensy has no API to check a Campaign's live status, so this is confirmed and set manually once the Campaign is actually Live in the AiSensy dashboard.`,
+        STATUS_CODES.BAD_REQUEST,
+      );
+    }
+
+    const result = await this.send({ kind: "user", user }, { leadId: order.leadId, templateId: template.id, orderId: order.id });
+    // send() persists a provider failure as a FAILED message rather than throwing (see the class
+    // comment on `send`) - a test call must still surface that as a failure, never report success
+    // for a message AiSensy actually rejected.
+    if (result.status === "FAILED") {
+      throw new ApiError(result.errorMessage ?? "AiSensy rejected the message", STATUS_CODES.BAD_REQUEST);
+    }
+
+    return {
+      success: true,
+      provider: "AISENSY",
+      campaign: ORDER_CONFIRMATION_TEMPLATE_NAME,
+      destination: maskDestination(order.lead.normalizedMobile),
+      message: "WhatsApp message submitted successfully",
+    };
   }
 
   private async send(actor: SendActor, input: SendTemplateInput): Promise<WhatsAppMessageSummary> {

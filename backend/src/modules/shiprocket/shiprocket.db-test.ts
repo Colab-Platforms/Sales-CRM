@@ -412,3 +412,171 @@ describe("Shopify sync alongside a direct Shiprocket shipment", () => {
     });
   });
 });
+
+describe("centralized shipment listing", () => {
+  // Real Shiprocket never reuses an order/shipment id; the shared fakeApi() above hardcodes "555"/"777" (fine for
+  // every other test here, which creates only one shipment), so a test creating several needs distinct ids per call.
+  function fakeApiSeries() {
+    let n = 0;
+    return fakeApi({
+      createOrder: async () => {
+        n += 1;
+        return { orderId: `list-${n}`, shipmentId: `list-${n}`, awb: null, courierName: null, courierCompanyId: null };
+      },
+    });
+  }
+
+  it("lists only Shiprocket-tagged shipments, newest first, paginated, alongside a correct summary", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const user = as(manager, Role.MANAGER);
+      const svc = service(runner, fakeApiSeries().api);
+
+      // A Shopify-derived shipment on its own order must never appear in this listing.
+      const shopifyOrder = await makeOrder(tx, lead.id);
+      await tx.shipment.create({ data: { orderId: shopifyOrder.id, status: ShipmentStatus.SHIPPED, externalSource: "SHOPIFY", externalId: uid(), trackingNumber: "SHOPIFY-AWB" } });
+
+      const order1 = await makeOrder(tx, lead.id);
+      const s1 = await svc.createShipment(user, order1.id, DIMS);
+      const order2 = await makeOrder(tx, lead.id);
+      const s2 = await svc.createShipment(user, order2.id, DIMS);
+      await svc.assignAwb(user, s2.id, 10);
+
+      const page1 = await svc.listShipments(user, { page: 1, pageSize: 1 });
+      assert.equal(page1.pagination.totalItems, 2);
+      assert.equal(page1.pagination.totalPages, 2);
+      assert.equal(page1.items.length, 1);
+      assert.equal(page1.items[0].id, s2.id); // newest first
+      assert.equal(page1.items[0].order.orderNumber, (await tx.order.findUniqueOrThrow({ where: { id: order2.id }, select: { orderNumber: true } })).orderNumber);
+      assert.equal(page1.items[0].customer.name, "Priya Shah");
+      assert.equal(page1.items[0].awb, "AWB123");
+      assert.equal(page1.items[0].amount, "649");
+      assert.equal(page1.items[0].paymentMode, "PREPAID");
+      assert.equal(page1.items[0].destinationCity, "Pune");
+      assert.equal(page1.items[0].destinationPincode, "411001");
+
+      const page2 = await svc.listShipments(user, { page: 2, pageSize: 1 });
+      assert.equal(page2.items[0].id, s1.id);
+
+      const summary = (await svc.listShipments(user, { page: 1, pageSize: 25 })).summary;
+      assert.equal(summary.total, 2); // the Shopify-sourced shipment is never counted here
+      // s1 (CREATED) and s2 (AWB_ASSIGNED) are both pre-pickup, so both fall under "pending".
+      assert.equal(summary.pending, 2);
+      assert.deepEqual([summary.inTransit, summary.outForDelivery, summary.delivered, summary.returned, summary.cancelled], [0, 0, 0, 0, 0]);
+    });
+  });
+
+  it("searches by order number, AWB, customer name and mobile", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const user = as(manager, Role.MANAGER);
+      const svc = service(runner, fakeApi().api);
+      const order = await makeOrder(tx, lead.id);
+      const created = await svc.createShipment(user, order.id, DIMS);
+      await svc.assignAwb(user, created.id, 10);
+      const orderNumber = (await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { orderNumber: true } })).orderNumber;
+
+      for (const term of [orderNumber, "AWB123", "Priya", "9876500000"]) {
+        const result = await svc.listShipments(user, { page: 1, pageSize: 25, search: term });
+        assert.equal(result.items.length, 1, `search "${term}" should find the shipment`);
+      }
+      const none = await svc.listShipments(user, { page: 1, pageSize: 25, search: "no-such-thing-xyz" });
+      assert.equal(none.items.length, 0);
+    });
+  });
+
+  it("filters by status and by courier", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const user = as(manager, Role.MANAGER);
+      const svc = service(runner, fakeApiSeries().api);
+      const orderA = await makeOrder(tx, lead.id);
+      const a = await svc.createShipment(user, orderA.id, DIMS); // CREATED, no courier yet
+      const orderB = await makeOrder(tx, lead.id);
+      const b = await svc.createShipment(user, orderB.id, DIMS);
+      await svc.assignAwb(user, b.id, 10); // AWB_ASSIGNED, courier Delhivery
+
+      const created = await svc.listShipments(user, { page: 1, pageSize: 25, status: ShipmentStatus.CREATED });
+      assert.deepEqual(created.items.map((i) => i.id), [a.id]);
+
+      const byCourier = await svc.listShipments(user, { page: 1, pageSize: 25, courier: "Delhivery" });
+      assert.deepEqual(byCourier.items.map((i) => i.id), [b.id]);
+
+      const options = await svc.getFilterOptions(user);
+      assert.deepEqual(options.couriers, ["Delhivery"]);
+    });
+  });
+
+  it("filters by payment type exactly as derivePaymentMode defines it, and by date range", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const user = as(manager, Role.MANAGER);
+      const svc = service(runner, fakeApiSeries().api);
+
+      const prepaidOrder = await makeOrder(tx, lead.id); // makeOrder's own payment is UPI -> prepaid
+      const prepaid = await svc.createShipment(user, prepaidOrder.id, DIMS);
+
+      const codOrder = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "300.00", shippingAddress: ADDRESS, shippingPincode: "411001" }, select: { id: true } });
+      await tx.orderItem.create({ data: { orderId: codOrder.id, productNameSnapshot: "Herbal Tea", quantity: 1, unitPrice: "300.00", totalPrice: "300.00" } });
+      await tx.payment.create({ data: { orderId: codOrder.id, amount: "300.00", status: PaymentStatus.PENDING, method: PaymentMethod.COD } });
+      const cod = await svc.createShipment(user, codOrder.id, DIMS);
+
+      const prepaidResult = await svc.listShipments(user, { page: 1, pageSize: 25, paymentMode: "PREPAID" });
+      assert.deepEqual(prepaidResult.items.map((i) => i.id), [prepaid.id]);
+      const codResult = await svc.listShipments(user, { page: 1, pageSize: 25, paymentMode: "COD" });
+      assert.deepEqual(codResult.items.map((i) => i.id), [cod.id]);
+
+      const future = await svc.listShipments(user, { page: 1, pageSize: 25, dateFrom: new Date(Date.now() + 24 * 3_600_000) });
+      assert.equal(future.items.length, 0);
+      const past = await svc.listShipments(user, { page: 1, pageSize: 25, dateFrom: new Date(Date.now() - 24 * 3_600_000) });
+      assert.equal(past.items.length, 2);
+    });
+  });
+
+  it("scopes the list, the detail view and the filter options to the caller's own leads", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const stranger = await makeUser(tx, Role.MANAGER); // a manager with no group/team, so no access to this lead
+      const admin = await makeUser(tx, Role.ADMIN);
+      const svc = service(runner, fakeApi().api);
+      const order = await makeOrder(tx, lead.id);
+      const created = await svc.createShipment(as(manager, Role.MANAGER), order.id, DIMS);
+
+      const strangerList = await svc.listShipments(as(stranger, Role.MANAGER), { page: 1, pageSize: 25 });
+      assert.equal(strangerList.items.length, 0);
+      await assert.rejects(svc.getShipmentDetail(as(stranger, Role.MANAGER), created.id), /Shipment not found/);
+      assert.deepEqual((await svc.getFilterOptions(as(stranger, Role.MANAGER))).couriers, []);
+
+      const adminList = await svc.listShipments(as(admin, Role.ADMIN), { page: 1, pageSize: 25 });
+      assert.equal(adminList.items.length, 1);
+    });
+  });
+
+  it("the detail view returns the full record - customer, destination, payment - and is honest about what is not stored", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const user = as(manager, Role.MANAGER);
+      await tx.lead.update({ where: { id: lead.id }, data: { email: "priya@example.invalid" }, select: { id: true } });
+      const svc = service(runner, fakeApi().api);
+      const order = await makeOrder(tx, lead.id);
+      const created = await svc.createShipment(user, order.id, DIMS);
+      await svc.assignAwb(user, created.id, 10);
+
+      const detail = await svc.getShipmentDetail(user, created.id);
+      assert.equal(detail.customer.name, "Priya Shah");
+      assert.equal(detail.customer.mobile, "9876500000");
+      assert.equal(detail.customerEmail, "priya@example.invalid");
+      assert.equal(detail.destinationCity, "Pune");
+      assert.equal(detail.destinationState, "Maharashtra");
+      assert.equal(detail.destinationAddress1, "12 MG Road");
+      assert.equal(detail.destinationCountry, "India");
+      assert.equal(detail.paymentMode, "PREPAID");
+      assert.equal(detail.amount, "649");
+      assert.equal(detail.awb, "AWB123");
+      assert.equal(detail.shiprocketOrderId, "555");
+      assert.ok(detail.channelOrderId); // the order id the CRM sent Shiprocket when creating the shipment
+      // No weight/length/breadth/height field exists on the result at all - never fabricated.
+      assert.ok(!("weight" in detail) && !("length" in detail) && !("breadth" in detail) && !("height" in detail));
+    });
+  });
+});

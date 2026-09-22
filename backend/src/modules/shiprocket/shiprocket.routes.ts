@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
-import { assignAwb, generateLabel, listCouriers, refreshTracking, schedulePickup } from "./shiprocket.controller.js";
+import { assignAwb, generateLabel, getShipment, getShipmentFilterOptions, listCouriers, listShipments, refreshTracking, schedulePickup } from "./shiprocket.controller.js";
 
 const router = Router();
 
@@ -9,6 +9,12 @@ const router = Router();
 // rule every order read uses) then decides WHICH orders a manager can act on. Salespersons keep read access to shipments
 // through the order detail, as before.
 const managers = requireRole(Role.ADMIN, Role.MANAGER);
+
+// Registered before "/:shipmentId" so "filter-options" is never read as a shipment id - same convention as
+// orders.routes.ts's "/filter-options" before "/:id". The centralized Shiprocket listing/tracking page.
+router.get("/filter-options", requireAuth, managers, getShipmentFilterOptions);
+router.get("/", requireAuth, managers, listShipments);
+router.get("/:shipmentId", requireAuth, managers, getShipment);
 
 router.get("/:shipmentId/couriers", requireAuth, managers, listCouriers);
 router.post("/:shipmentId/assign-awb", requireAuth, managers, assignAwb);

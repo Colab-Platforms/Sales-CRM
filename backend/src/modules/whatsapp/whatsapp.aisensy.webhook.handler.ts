@@ -4,15 +4,17 @@ import { deliveryId, extractTopic } from "./whatsapp.aisensy.webhook.events.js";
 import type { WebhookStore } from "../shopify/shopify.webhook.store.js";
 
 // Receives one AiSensy Project Webhook delivery (contact.*, message.*, payment.*, order.placed,
-// lead_form.submitted - see whatsapp.aisensy.webhook.events.ts). Deliberately does NOT parse any
-// topic's fields or write any CRM record: AiSensy's documented Project API covers the webhook
-// SUBSCRIPTION object, not the shape of an individual delivery, and no signature/verification header
-// is documented for this feature (see whatsapp.aisensy.webhook.config.ts) - so, per this task's own
-// instructions, nothing here guesses a payload schema or invents a verification mechanism. Every
-// syntactically valid delivery is safely recorded (deduplicated, never processed further) so a human
-// can inspect real deliveries later and this file can be extended once AiSensy's actual schema for a
-// given topic is confirmed - grep this codebase for "AISENSY_PROJECT_WEBHOOK" to find every place
-// that would need updating.
+// lead_form.submitted - see whatsapp.aisensy.webhook.events.ts). No signature/verification header is
+// documented for this feature (see whatsapp.aisensy.webhook.config.ts), so, per this task's own
+// instructions, nothing here invents a verification mechanism.
+//
+// Every syntactically valid delivery is safely recorded and deduplicated regardless of topic.
+// PROCESSED_TOPICS is the only set of topics whose payload shape is actually confirmed
+// (whatsapp.aisensy.webhook.events.ts / .processor.ts) - only those are scheduled for further
+// processing; every other topic is stored with `ignored: true`, exactly as before, so a human can
+// inspect real deliveries later and this file can be extended once a given topic's schema is
+// confirmed - grep this codebase for "AISENSY_PROJECT_WEBHOOK" to find every place that would need
+// updating.
 
 function timingSafeStringEqual(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
@@ -35,12 +37,17 @@ export interface AiSensyProjectWebhookResponse {
 export interface AiSensyProjectWebhookHandlerDeps {
   config: AiSensyProjectWebhookConfig;
   store: WebhookStore;
+  /** Called only for a topic in PROCESSED_TOPICS, after the delivery is durably recorded. */
+  schedule: (eventId: string) => void;
 }
+
+/** The only topics with a confirmed real payload today - see whatsapp.aisensy.webhook.processor.ts. */
+const PROCESSED_TOPICS = new Set(["message.status.updated"]);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 export async function handleAiSensyProjectWebhook(req: AiSensyProjectWebhookRequest, deps: AiSensyProjectWebhookHandlerDeps): Promise<AiSensyProjectWebhookResponse> {
-  const { config, store } = deps;
+  const { config, store, schedule } = deps;
 
   // 1. The CRM's own optional safeguard (never claimed to be an AiSensy-verified signature - see
   // whatsapp.aisensy.webhook.config.ts). Skipped entirely when no token is configured.
@@ -64,11 +71,20 @@ export async function handleAiSensyProjectWebhook(req: AiSensyProjectWebhookRequ
   }
 
   const topic = extractTopic(payload) ?? "unknown";
+  const willProcess = PROCESSED_TOPICS.has(topic);
 
-  // 2. Record only - see this file's header comment for why nothing is processed further yet.
-  // `ignored: true` is honest, not a placeholder: no business logic exists for any topic today.
-  const { duplicate } = await store.record({ eventType: topic, externalEventId: deliveryId(req.rawBody), payload, ignored: true });
+  // 2. Record. `ignored: true` for every topic without a confirmed payload shape is honest, not a
+  // placeholder - see this file's header comment.
+  const { id, duplicate } = await store.record({ eventType: topic, externalEventId: deliveryId(req.rawBody), payload, ignored: !willProcess });
   if (duplicate) return { status: 200, message: "Duplicate delivery ignored" };
 
-  return { status: 200, message: `Received (topic "${topic}") - stored for later reconciliation; no automatic processing is implemented for AiSensy Project Webhook topics yet` };
+  // 3. Acknowledge now; process afterwards - only for a topic whose shape is actually confirmed.
+  if (willProcess) schedule(id);
+
+  return {
+    status: 200,
+    message: willProcess
+      ? `Received (topic "${topic}") - queued for processing`
+      : `Received (topic "${topic}") - stored for later reconciliation; no automatic processing is implemented for this topic yet`,
+  };
 }

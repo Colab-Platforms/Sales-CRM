@@ -10,7 +10,7 @@ import shopifyWebhookRoutes, { startShopifyWebhookWorker } from "./modules/shopi
 import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
 import cashfreeWebhookRoutes, { startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
-import aisensyProjectWebhookRoutes from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
+import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 
@@ -74,6 +74,7 @@ app.listen(PORT, () => {
   startWhatsAppWebhookWorker();
   startCashfreeWebhookWorker();
   startShiprocketWebhookWorker();
+  startAiSensyProjectWebhookWorker();
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
 });

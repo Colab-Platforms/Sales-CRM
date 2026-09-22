@@ -13,6 +13,8 @@ import { applyShipmentUpdate, shipmentOrderLockKey, SHIPMENT_REFERENCE_TYPE } fr
 import { ShiprocketClient, type CourierOption, type CreateOrderRequest, type CreatedOrder } from "./shiprocket.client.js";
 import { isShiprocketEnabled, loadShiprocketConfig, ShiprocketConfigError, type ShiprocketConfig } from "./shiprocket.config.js";
 import { mapShiprocketStatus, parseEtd } from "./shiprocket.events.js";
+import { buildShipmentListWhere, buildShipmentSummary, mapShipmentDetailRow, mapShipmentListRow, scopedShipmentWhere, SHIPROCKET_SOURCE } from "./shiprocket.list.filters.js";
+import type { ListShipmentsQuery, ListShipmentsResult, ShipmentDetailResult, ShipmentFilterOptions } from "./shiprocket.types.js";
 
 // Creates and drives Shiprocket shipments for an existing CRM order (Shopify-sourced or otherwise). The Shipment row is
 // tagged externalSource SHIPROCKET, which is what keeps Shopify sync from ever reading, overwriting or deleting it; the
@@ -83,6 +85,46 @@ const SHIPMENT_SELECT = {
 } satisfies Prisma.ShipmentSelect;
 
 type ShipmentRow = Prisma.ShipmentGetPayload<{ select: typeof SHIPMENT_SELECT }>;
+
+// For the centralized listing/tracking page (Order -> customer/payment/destination come from the order the same way
+// the order detail page already reads them). Lead is always read through an explicit `select`, never bare `include`,
+// the same convention every other module in this codebase follows.
+const ORDER_SUMMARY_SELECT = {
+  id: true,
+  orderNumber: true,
+  externalNumber: true,
+  source: true,
+  currency: true,
+  totalAmount: true,
+  shippingAddress: true,
+  payments: { select: { method: true } },
+  lead: { select: { id: true, leadNumber: true, firstName: true, lastName: true, mobile: true } },
+} satisfies Prisma.OrderSelect;
+
+const LIST_SELECT = {
+  id: true,
+  status: true,
+  providerStatus: true,
+  courier: true,
+  trackingNumber: true,
+  createdAt: true,
+  updatedAt: true,
+  order: { select: ORDER_SUMMARY_SELECT },
+} satisfies Prisma.ShipmentSelect;
+
+const DETAIL_SELECT = {
+  ...LIST_SELECT,
+  trackingUrl: true,
+  labelUrl: true,
+  pickupScheduledAt: true,
+  expectedDeliveryAt: true,
+  shippedAt: true,
+  deliveredAt: true,
+  returnedAt: true,
+  providerOrderId: true,
+  channelOrderId: true,
+  order: { select: { ...ORDER_SUMMARY_SELECT, lead: { select: { ...ORDER_SUMMARY_SELECT.lead.select, email: true } } } },
+} satisfies Prisma.ShipmentSelect;
 
 const toResult = (s: ShipmentRow): ShipmentResult => ({
   id: s.id,
@@ -475,6 +517,61 @@ class ShiprocketShipmentsService {
       ),
     );
     return this.reload(shipmentId);
+  }
+
+  // ---------------------------------------------------------------- centralized listing/tracking
+
+  /**
+   * Every shipment the CRM has created directly through Shiprocket, across all orders - the "Shiprocket" sidebar page.
+   * Shopify-derived shipment rows never appear here; this only ever reads rows this CRM itself created (externalSource
+   * SHIPROCKET), same as every other Shiprocket-specific read in this service.
+   */
+  async listShipments(user: AuthUser, query: ListShipmentsQuery): Promise<ListShipmentsResult> {
+    return this.runner.$transaction(async (tx) => {
+      const leadScope = await getLeadScope(user, tx);
+      const where = buildShipmentListWhere(query, leadScope);
+
+      const [totalItems, rows, statusCounts] = await Promise.all([
+        tx.shipment.count({ where }),
+        tx.shipment.findMany({
+          where,
+          select: LIST_SELECT,
+          // id breaks ties so pages never repeat or skip rows created in the same instant.
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          skip: (query.page - 1) * query.pageSize,
+          take: query.pageSize,
+        }),
+        // Counted over the same filters but without pagination, so the summary cards describe the whole filtered set,
+        // not just the current page - one grouped COUNT, not a second full table scan.
+        tx.shipment.groupBy({ by: ["status"], where, _count: { _all: true } }),
+      ]);
+
+      return {
+        items: rows.map(mapShipmentListRow),
+        summary: buildShipmentSummary(statusCounts),
+        pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
+      };
+    });
+  }
+
+  async getShipmentDetail(user: AuthUser, shipmentId: string): Promise<ShipmentDetailResult> {
+    const shipment = await this.runner.$transaction(async (tx) => {
+      const leadScope = await getLeadScope(user, tx);
+      return tx.shipment.findFirst({ where: scopedShipmentWhere(shipmentId, leadScope), select: DETAIL_SELECT });
+    });
+    // Out-of-scope shipments look the same as missing ones so ids can't be probed - same rule orders.service.ts uses.
+    if (!shipment) throw new ApiError("Shipment not found", STATUS_CODES.NOT_FOUND);
+    return mapShipmentDetailRow(shipment);
+  }
+
+  /** Courier names actually seen on this user's own Shiprocket shipments, for the courier filter dropdown. */
+  async getFilterOptions(user: AuthUser): Promise<ShipmentFilterOptions> {
+    const rows = await this.runner.$transaction(async (tx) => {
+      const leadScope = await getLeadScope(user, tx);
+      const where: Prisma.ShipmentWhereInput = { ...SHIPROCKET_SOURCE, courier: { not: null }, ...(Object.keys(leadScope).length > 0 ? { order: { lead: leadScope } } : {}) };
+      return tx.shipment.findMany({ where, distinct: ["courier"], select: { courier: true }, orderBy: { courier: "asc" } });
+    });
+    return { couriers: rows.map((r) => r.courier!).filter(Boolean) };
   }
 }
 

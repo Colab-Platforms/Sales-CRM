@@ -8,7 +8,7 @@ import {
   listWhatsAppMessages,
   sendWhatsAppMessage,
 } from "./whatsapp.controller.js";
-import { previewTemplateMessage, sendTemplateMessage as sendTemplateMessageV2 } from "./whatsapp.messaging.controller.js";
+import { previewTemplateMessage, sendOrderConfirmationTest, sendTemplateMessage as sendTemplateMessageV2 } from "./whatsapp.messaging.controller.js";
 import {
   createTemplate,
   getTemplate,
@@ -49,6 +49,12 @@ router.patch("/templates/:id", requireAuth, requireRole(Role.ADMIN), updateTempl
 // customers they can already access.
 router.post("/messages/template/preview", requireAuth, previewTemplateMessage);
 router.post("/messages/template", requireAuth, sendTemplateMessageV2);
+
+// Safe, manual test path for the AiSensy order-confirmation template (built for this task - see
+// whatsapp.messaging.service.ts's sendOrderConfirmationTest). Never auto-triggered by order
+// creation/Shopify/Cashfree; a real authenticated user must call it, scoped to their own leads via
+// the order the same way "/messages/template" already is - no separate role gate.
+router.post("/test/order-confirmation", requireAuth, sendOrderConfirmationTest);
 
 // E7.4 Conversation/Message History. Read-only; same lead-scope RBAC as everything else here - a
 // leadId filter narrows to one customer's conversation (what Customer 360 uses), or is left off

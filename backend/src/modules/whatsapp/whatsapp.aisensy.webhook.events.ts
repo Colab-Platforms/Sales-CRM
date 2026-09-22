@@ -1,4 +1,5 @@
 import { asRecord, asString, sha256Hex } from "../integrations/integrations.common.js";
+import type { NormalizedStatusUpdate, WhatsAppDeliveryStatus } from "./whatsapp.provider.js";
 
 // AiSensy Project Webhook topic handling - deliberately minimal. See whatsapp.aisensy.webhook.config.ts
 // for why. This file exists to answer exactly two questions, both purely for observability/idempotency,
@@ -49,4 +50,54 @@ export function extractTopic(payload: unknown): string | null {
  */
 export function deliveryId(rawBody: Buffer): string {
   return `sha256:${sha256Hex(rawBody)}`;
+}
+
+// ---- message.status.updated - the one topic with a CONFIRMED real payload (captured 2026-09-22
+// from this account's own AiSensy project; see whatsapp.aisensy.webhook.processor.ts for how this
+// is used). Everything below reads only fields that were actually present in that captured delivery
+// - nothing here is guessed. No other topic gets a parser yet; see TOPICS_OBSERVED_IN_DASHBOARD above.
+
+// Confirmed statuses so far: SENT, READ - both map 1:1 onto the CRM's own existing
+// WhatsAppDeliveryStatus values (whatsapp.provider.ts), so nothing new is invented here. Any other
+// status AiSensy might send (e.g. DELIVERED, FAILED) is honestly reported as unsupported by
+// parseAiSensyMessageStatusUpdate returning null, never guessed onto the closest value.
+const CONFIRMED_STATUS_MAP: Record<string, WhatsAppDeliveryStatus> = {
+  SENT: "SENT",
+  READ: "READ",
+};
+
+// Which of the confirmed AiSensy millisecond-epoch timestamp fields corresponds to which confirmed
+// status - only the two pairs actually observed (sent_at for SENT, read_at for READ).
+const CONFIRMED_TIMESTAMP_FIELD: Record<string, string> = {
+  SENT: "sent_at",
+  READ: "read_at",
+};
+
+function msEpochToDate(value: unknown): Date | null {
+  return typeof value === "number" && Number.isFinite(value) ? new Date(value) : null;
+}
+
+/**
+ * Parses one message.status.updated delivery's confirmed `data.message` shape into the exact
+ * NormalizedStatusUpdate shape whatsapp.service.ts's existing recordStatusUpdate() already consumes
+ * (E7.1) - so that method's own idempotency/monotonic-status logic is reused as-is, never
+ * duplicated. Returns null - never a guess - when the delivery does not match the confirmed shape:
+ * no `data.message`, no `messageId`, no `status`, or a status outside CONFIRMED_STATUS_MAP.
+ */
+export function parseAiSensyMessageStatusUpdate(payload: unknown, now: () => Date = () => new Date()): NormalizedStatusUpdate | null {
+  const body = asRecord(payload);
+  const message = asRecord(asRecord(body.data).message);
+
+  const messageId = asString(message.messageId);
+  const rawStatus = asString(message.status);
+  if (!messageId || !rawStatus) return null;
+
+  const status = CONFIRMED_STATUS_MAP[rawStatus.toUpperCase()];
+  if (!status) return null;
+
+  const tsField = CONFIRMED_TIMESTAMP_FIELD[status];
+  const createdAt = asString(body.created_at);
+  const timestamp = msEpochToDate(message[tsField]) ?? (createdAt ? new Date(createdAt) : null) ?? now();
+
+  return { providerMessageId: messageId, status, timestamp };
 }
