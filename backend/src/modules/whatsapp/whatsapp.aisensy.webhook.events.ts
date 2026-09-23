@@ -1,5 +1,5 @@
 import { asRecord, asString, sha256Hex } from "../integrations/integrations.common.js";
-import type { NormalizedStatusUpdate, WhatsAppDeliveryStatus } from "./whatsapp.provider.js";
+import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus } from "./whatsapp.provider.js";
 
 // AiSensy Project Webhook topic handling - deliberately minimal. See whatsapp.aisensy.webhook.config.ts
 // for why. This file exists to answer exactly two questions, both purely for observability/idempotency,
@@ -57,19 +57,25 @@ export function deliveryId(rawBody: Buffer): string {
 // is used). Everything below reads only fields that were actually present in that captured delivery
 // - nothing here is guessed. No other topic gets a parser yet; see TOPICS_OBSERVED_IN_DASHBOARD above.
 
-// Confirmed statuses so far: SENT, READ - both map 1:1 onto the CRM's own existing
-// WhatsAppDeliveryStatus values (whatsapp.provider.ts), so nothing new is invented here. Any other
-// status AiSensy might send (e.g. DELIVERED, FAILED) is honestly reported as unsupported by
-// parseAiSensyMessageStatusUpdate returning null, never guessed onto the closest value.
+// Confirmed statuses so far: SENT, DELIVERED, READ (DELIVERED confirmed 2026-09-22 from a real
+// chatbot delivery in this account - see the task that added it) - all three map 1:1 onto the CRM's
+// own existing WhatsAppDeliveryStatus/WhatsAppMessageStatus values (whatsapp.provider.ts /
+// prisma/schema/enums.prisma), so nothing new is invented here and no migration is needed. Any other
+// status AiSensy might send (e.g. FAILED) is honestly reported as unsupported by
+// parseAiSensyMessageStatusUpdate returning null, never guessed onto the closest value. The CRM's
+// existing STATUS_RANK (whatsapp.service.ts: SENT=1 < DELIVERED=2 < READ=3 < FAILED=4) already
+// enforces SENT -> DELIVERED -> READ and rejects any regression - reused as-is, not reimplemented.
 const CONFIRMED_STATUS_MAP: Record<string, WhatsAppDeliveryStatus> = {
   SENT: "SENT",
+  DELIVERED: "DELIVERED",
   READ: "READ",
 };
 
 // Which of the confirmed AiSensy millisecond-epoch timestamp fields corresponds to which confirmed
-// status - only the two pairs actually observed (sent_at for SENT, read_at for READ).
+// status - only the pairs actually observed (sent_at/delivered_at/read_at).
 const CONFIRMED_TIMESTAMP_FIELD: Record<string, string> = {
   SENT: "sent_at",
+  DELIVERED: "delivered_at",
   READ: "read_at",
 };
 
@@ -100,4 +106,59 @@ export function parseAiSensyMessageStatusUpdate(payload: unknown, now: () => Dat
   const timestamp = msEpochToDate(message[tsField]) ?? (createdAt ? new Date(createdAt) : null) ?? now();
 
   return { providerMessageId: messageId, status, timestamp };
+}
+
+// ---- message.created - the second topic with a CONFIRMED real payload (captured 2026-09-22: one
+// real inbound "Hello" from a customer's phone, sender "USER"; one chatbot auto-reply, sender
+// "ASSISTANT" - both real, both observed in webhook_events). Everything below reads only fields
+// actually present in those two captured deliveries.
+//
+// Direction: the task this was added for explicitly warns not to assume sender=ASSISTANT means
+// inbound. The two real captured deliveries settle it the other way - sender "USER" is the customer
+// (inbound to the CRM); sender "ASSISTANT" is the chatbot's own reply (outbound, something the CRM
+// itself never originated, so never synced as a CRM-outbound WhatsAppMessage - see the processor).
+// No other sender value has been observed, so anything else is honestly reported as unsupported
+// rather than guessed in either direction.
+export type AiSensyMessageCreatedResult =
+  | { kind: "inbound"; message: NormalizedIncomingMessage }
+  /** sender "ASSISTANT": a real, recognised chatbot reply - by design not synced as a CRM message (see the processor). */
+  | { kind: "outbound_ignored"; reason: string }
+  /** Recognised as message.created but outside the confirmed shape: unknown sender, unsupported message_type, or missing fields. */
+  | { kind: "unsupported"; reason: string };
+
+/** Only TEXT has a confirmed content field (`message_content.text`) - anything else is reported unsupported, never guessed at. */
+const SUPPORTED_MESSAGE_TYPES = new Set(["TEXT"]);
+
+export function parseAiSensyMessageCreated(payload: unknown, now: () => Date = () => new Date()): AiSensyMessageCreatedResult {
+  const body = asRecord(payload);
+  const message = asRecord(asRecord(body.data).message);
+
+  const messageId = asString(message.messageId);
+  const phone = asString(message.phone_number);
+  const sender = asString(message.sender);
+  if (!messageId || !phone || !sender) {
+    return { kind: "unsupported", reason: "data.message is missing messageId, phone_number, or sender" };
+  }
+
+  if (sender === "ASSISTANT") {
+    return { kind: "outbound_ignored", reason: "chatbot-generated reply (sender=ASSISTANT) - not something the CRM originated, so not synced as an outbound WhatsAppMessage" };
+  }
+  if (sender !== "USER") {
+    return { kind: "unsupported", reason: `unrecognised sender "${sender}" - direction cannot be safely determined from confirmed data` };
+  }
+
+  const messageType = asString(message.message_type);
+  if (!messageType || !SUPPORTED_MESSAGE_TYPES.has(messageType)) {
+    return { kind: "unsupported", reason: `unsupported message_type "${messageType ?? "(none)"}" - only TEXT has a confirmed content field` };
+  }
+  const text = asString(asRecord(message.message_content).text);
+  if (!text) return { kind: "unsupported", reason: "TEXT message with no message_content.text" };
+
+  const createdAt = asString(body.created_at);
+  const timestamp = msEpochToDate(message.sent_at) ?? (createdAt ? new Date(createdAt) : null) ?? now();
+
+  return {
+    kind: "inbound",
+    message: { providerMessageId: messageId, from: phone, to: null, messageType: "TEXT", text, timestamp },
+  };
 }

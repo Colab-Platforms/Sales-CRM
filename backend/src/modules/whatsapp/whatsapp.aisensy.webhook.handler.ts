@@ -42,7 +42,7 @@ export interface AiSensyProjectWebhookHandlerDeps {
 }
 
 /** The only topics with a confirmed real payload today - see whatsapp.aisensy.webhook.processor.ts. */
-const PROCESSED_TOPICS = new Set(["message.status.updated"]);
+const PROCESSED_TOPICS = new Set(["message.status.updated", "message.created"]);
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 

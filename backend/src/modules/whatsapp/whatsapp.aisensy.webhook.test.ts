@@ -13,7 +13,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { loadAiSensyProjectWebhookConfig } from "./whatsapp.aisensy.webhook.config.js";
-import { deliveryId, extractTopic, parseAiSensyMessageStatusUpdate, TOPICS_OBSERVED_IN_DASHBOARD } from "./whatsapp.aisensy.webhook.events.js";
+import { deliveryId, extractTopic, parseAiSensyMessageCreated, parseAiSensyMessageStatusUpdate, TOPICS_OBSERVED_IN_DASHBOARD } from "./whatsapp.aisensy.webhook.events.js";
 import { handleAiSensyProjectWebhook, type AiSensyProjectWebhookRequest } from "./whatsapp.aisensy.webhook.handler.js";
 import { processAiSensyProjectWebhookEvent } from "./whatsapp.aisensy.webhook.processor.js";
 import { LEASE_MS, MAX_ATTEMPTS, type StoredEvent, type WebhookStore } from "../shopify/shopify.webhook.store.js";
@@ -52,6 +52,64 @@ const REAL_READ_PAYLOAD = {
   id: "6ab27af7d6e40e29a25aea97",
   data: { message: { ...REAL_SENT_PAYLOAD.data.message, status: "READ", sent_at: 1790081779530, read_at: 1790081781000 } },
   created_at: "2026-09-22T12:56:24.550Z",
+};
+
+const REAL_DELIVERED_PAYLOAD = {
+  ...REAL_SENT_PAYLOAD,
+  id: "6ab27fb560bdfea699cae7f8",
+  data: { message: { ...REAL_SENT_PAYLOAD.data.message, status: "DELIVERED", sent_at: 1790082993757, delivered_at: 1790082996000 } },
+  created_at: "2026-09-22T13:16:40.621Z",
+};
+
+// The exact real inbound message.created delivery captured 2026-09-22 (sender "USER", a real
+// message sent from a customer's phone).
+const REAL_INBOUND_MESSAGE_CREATED_PAYLOAD = {
+  id: "89400093-cdd5-48e6-a4b2-c23fa5aad244",
+  data: {
+    message: {
+      id: "6ab27fae125cc1a4028e21d0",
+      type: "message",
+      sender: "USER",
+      status: "DELIVERED",
+      sent_at: 1790082988000,
+      userName: "Vishwaa Reddy",
+      messageId: "wamid.HBgMOTE5MzIxNjE0MDI1FQIAEhggQUM0MTFEMzc3N0YzQ0ExNjBCM0RBODg3OTMzRDRGQjYA",
+      contact_id: "6a6452b80405540002a17805",
+      project_id: "6a6088353b43790e9cbf6114",
+      countryCode: "91",
+      message_type: "TEXT",
+      phone_number: "919321614025",
+      message_content: { text: "Hello" },
+    },
+  },
+  topic: "message.created",
+  created_at: "2026-09-22T13:16:33.454Z",
+  project_id: "6a6088353b43790e9cbf6114",
+};
+
+// The exact real chatbot (outbound) message.created delivery captured the same session.
+const REAL_OUTBOUND_MESSAGE_CREATED_PAYLOAD = {
+  id: "1c0e4be2-457d-451e-abf6-7ff77445c0b3",
+  data: {
+    message: {
+      id: "6ab27fb304516fff9ea607b6",
+      type: "message",
+      sender: "ASSISTANT",
+      status: "SENT",
+      sent_at: 1790082993757,
+      userName: "Vishwaa Reddy",
+      messageId: "wamid.HBgMOTE5MzIxNjE0MDI1FQIAERgSMEJGOUJDQTJFQjBERkZDNTZDAA==",
+      contact_id: "6a6452b80405540002a17805",
+      project_id: "6a6088353b43790e9cbf6114",
+      countryCode: "91",
+      message_type: "TEXT",
+      phone_number: "919321614025",
+      message_content: { text: "Hello! How can I assist you with your AI learning or career journey today?", isFromFlow: true, isAiGenerated: true },
+    },
+  },
+  topic: "message.created",
+  created_at: "2026-09-22T13:16:38.389Z",
+  project_id: "6a6088353b43790e9cbf6114",
 };
 
 interface Row {
@@ -250,9 +308,11 @@ describe("handleAiSensyProjectWebhook", () => {
     assert.equal(rows.length, 2);
   });
 
+  const PROCESSED_TOPICS_FOR_TEST = new Set(["message.status.updated", "message.created"]);
+
   it("stores payload/topic verbatim for every OTHER topic observed in the dashboard, without scheduling processing", async () => {
     for (const topic of TOPICS_OBSERVED_IN_DASHBOARD) {
-      if (topic === "message.status.updated") continue; // the one exception - covered below
+      if (PROCESSED_TOPICS_FOR_TEST.has(topic)) continue; // the two exceptions - covered below
       const { store, rows } = memoryStore();
       const { deps, scheduled } = handlerDeps(store);
       await handleAiSensyProjectWebhook(req({ type: topic, id: `evt-${topic}` }), deps);
@@ -262,7 +322,7 @@ describe("handleAiSensyProjectWebhook", () => {
     }
   });
 
-  it("schedules processing ONLY for message.status.updated - no other topic is auto-processed", async () => {
+  it("schedules processing for message.status.updated and message.created, and no other topic", async () => {
     const { store: store1, rows: rows1 } = memoryStore();
     const { deps: deps1, scheduled: scheduled1 } = handlerDeps(store1);
     const result1 = await handleAiSensyProjectWebhook(req(REAL_SENT_PAYLOAD), deps1);
@@ -271,10 +331,16 @@ describe("handleAiSensyProjectWebhook", () => {
     assert.equal(scheduled1.length, 1);
     assert.equal(scheduled1[0], rows1[0]!.id);
 
-    const { store: store2 } = memoryStore();
+    const { store: store2, rows: rows2 } = memoryStore();
     const { deps: deps2, scheduled: scheduled2 } = handlerDeps(store2);
-    await handleAiSensyProjectWebhook(req({ type: "contact.created" }), deps2);
-    assert.equal(scheduled2.length, 0);
+    await handleAiSensyProjectWebhook(req(REAL_INBOUND_MESSAGE_CREATED_PAYLOAD), deps2);
+    assert.equal(rows2[0]!.status, "RECEIVED");
+    assert.equal(scheduled2.length, 1);
+
+    const { store: store3 } = memoryStore();
+    const { deps: deps3, scheduled: scheduled3 } = handlerDeps(store3);
+    await handleAiSensyProjectWebhook(req({ type: "contact.created" }), deps3);
+    assert.equal(scheduled3.length, 0);
   });
 });
 
@@ -294,8 +360,15 @@ describe("parseAiSensyMessageStatusUpdate - only the confirmed real shape, never
     assert.equal(update!.timestamp.getTime(), 1790081781000); // read_at, converted from ms epoch
   });
 
+  it("parses the real captured DELIVERED delivery", () => {
+    const update = parseAiSensyMessageStatusUpdate(REAL_DELIVERED_PAYLOAD);
+    assert.ok(update);
+    assert.equal(update!.status, "DELIVERED");
+    assert.equal(update!.timestamp.getTime(), 1790082996000); // delivered_at, converted from ms epoch
+  });
+
   it("returns null for an unsupported status - never guesses onto the closest CRM value", () => {
-    const payload = { ...REAL_SENT_PAYLOAD, data: { message: { ...REAL_SENT_PAYLOAD.data.message, status: "DELIVERED" } } };
+    const payload = { ...REAL_SENT_PAYLOAD, data: { message: { ...REAL_SENT_PAYLOAD.data.message, status: "FAILED" } } };
     assert.equal(parseAiSensyMessageStatusUpdate(payload), null);
   });
 
@@ -321,12 +394,83 @@ describe("parseAiSensyMessageStatusUpdate - only the confirmed real shape, never
   });
 });
 
+describe("parseAiSensyMessageCreated - only the confirmed real shape, never a guess", () => {
+  it("parses the real captured inbound (sender USER) delivery", () => {
+    const result = parseAiSensyMessageCreated(REAL_INBOUND_MESSAGE_CREATED_PAYLOAD);
+    assert.equal(result.kind, "inbound");
+    if (result.kind !== "inbound") return;
+    assert.equal(result.message.providerMessageId, "wamid.HBgMOTE5MzIxNjE0MDI1FQIAEhggQUM0MTFEMzc3N0YzQ0ExNjBCM0RBODg3OTMzRDRGQjYA");
+    assert.equal(result.message.from, "919321614025");
+    assert.equal(result.message.to, null); // not present anywhere in the confirmed payload
+    assert.equal(result.message.messageType, "TEXT");
+    assert.equal(result.message.text, "Hello");
+    assert.equal(result.message.timestamp.getTime(), 1790082988000); // sent_at, converted from ms epoch
+  });
+
+  it("recognises the real captured chatbot (sender ASSISTANT) delivery as outbound_ignored, never as inbound", () => {
+    const result = parseAiSensyMessageCreated(REAL_OUTBOUND_MESSAGE_CREATED_PAYLOAD);
+    assert.equal(result.kind, "outbound_ignored");
+  });
+
+  it("reports unsupported (never guesses a direction) for an unrecognised sender value", () => {
+    const payload = { data: { message: { messageId: "wamid.x", phone_number: "919321614025", sender: "AGENT", message_type: "TEXT", message_content: { text: "hi" } } } };
+    const result = parseAiSensyMessageCreated(payload);
+    assert.equal(result.kind, "unsupported");
+  });
+
+  it("reports unsupported for a non-TEXT message_type - never fabricates body content", () => {
+    const payload = { data: { message: { messageId: "wamid.x", phone_number: "919321614025", sender: "USER", message_type: "IMAGE" } } };
+    const result = parseAiSensyMessageCreated(payload);
+    assert.equal(result.kind, "unsupported");
+  });
+
+  it("reports unsupported when data.message is missing entirely - never crashes", () => {
+    assert.equal(parseAiSensyMessageCreated({ topic: "message.created" }).kind, "unsupported");
+    assert.equal(parseAiSensyMessageCreated({}).kind, "unsupported");
+    assert.equal(parseAiSensyMessageCreated(null).kind, "unsupported");
+    assert.equal(parseAiSensyMessageCreated("not an object").kind, "unsupported");
+  });
+
+  it("reports unsupported when messageId or phone_number is missing", () => {
+    assert.equal(parseAiSensyMessageCreated({ data: { message: { phone_number: "919321614025", sender: "USER" } } }).kind, "unsupported");
+    assert.equal(parseAiSensyMessageCreated({ data: { message: { messageId: "wamid.x", sender: "USER" } } }).kind, "unsupported");
+  });
+
+  it("falls back to created_at, then now(), when sent_at is absent", () => {
+    const noTimestamp = { data: { message: { messageId: "wamid.x", phone_number: "919321614025", sender: "USER", message_type: "TEXT", message_content: { text: "hi" } } }, created_at: "2026-01-01T00:00:00.000Z" };
+    const parsed = parseAiSensyMessageCreated(noTimestamp);
+    assert.equal(parsed.kind, "inbound");
+    if (parsed.kind === "inbound") assert.equal(parsed.message.timestamp.toISOString(), "2026-01-01T00:00:00.000Z");
+
+    const fixedNow = new Date("2026-05-05T05:05:05.000Z");
+    const nothingAtAll = { data: { message: { messageId: "wamid.x", phone_number: "919321614025", sender: "USER", message_type: "TEXT", message_content: { text: "hi" } } } };
+    const parsed2 = parseAiSensyMessageCreated(nothingAtAll, () => fixedNow);
+    if (parsed2.kind === "inbound") assert.equal(parsed2.message.timestamp.getTime(), fixedNow.getTime());
+  });
+});
+
 describe("processAiSensyProjectWebhookEvent - branches that never touch the database", () => {
   const throwingDb = { whatsAppMessage: { findUnique: async () => { throw new Error("must not be called on this branch"); } } } as any;
 
-  it("ignores (never processes) a stored event for any topic other than message.status.updated", async () => {
+  it("ignores (never processes) a stored event for any topic other than message.status.updated/message.created", async () => {
     const { store, rows } = memoryStore();
     const { id } = await store.record({ eventType: "contact.created", externalEventId: "e1", payload: { type: "contact.created" } });
+    const outcome = await processAiSensyProjectWebhookEvent(id, { store, db: throwingDb });
+    assert.equal(outcome, "ignored");
+    assert.equal(rows.find((r) => r.id === id)!.status, "IGNORED");
+  });
+
+  it("ignores a chatbot (outbound) message.created without touching the database", async () => {
+    const { store, rows } = memoryStore();
+    const { id } = await store.record({ eventType: "message.created", externalEventId: "e5", payload: REAL_OUTBOUND_MESSAGE_CREATED_PAYLOAD });
+    const outcome = await processAiSensyProjectWebhookEvent(id, { store, db: throwingDb });
+    assert.equal(outcome, "ignored");
+    assert.equal(rows.find((r) => r.id === id)!.status, "IGNORED");
+  });
+
+  it("ignores an unparseable/unsupported message.created without touching the database", async () => {
+    const { store, rows } = memoryStore();
+    const { id } = await store.record({ eventType: "message.created", externalEventId: "e6", payload: { topic: "message.created" } });
     const outcome = await processAiSensyProjectWebhookEvent(id, { store, db: throwingDb });
     assert.equal(outcome, "ignored");
     assert.equal(rows.find((r) => r.id === id)!.status, "IGNORED");
