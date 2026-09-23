@@ -19,7 +19,7 @@ model User {
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
-  leadsOwned          Lead[] @relation("LeadOwner")
+  leadsOwned             Lead[] @relation("LeadOwner")
   leadsAssignedAsManager Lead[] @relation("LeadAssignedManager")
 
   leadAssignmentsMade       LeadAssignment[] @relation("LeadAssignmentUser")
@@ -30,7 +30,7 @@ model User {
   importBatchesUploaded         LeadImportBatch[]             @relation("LeadImportBatchUploadedBy")
   managerRoundRobinLastAssigned ManagerAssignmentRoundRobin[] @relation("ManagerAssignmentRoundRobinLastAssignedManager")
 
-  salespersonRoundRobinAsManager    SalespersonAssignmentRoundRobin?   @relation("SalespersonAssignmentRoundRobinManager")
+  salespersonRoundRobinAsManager    SalespersonAssignmentRoundRobin?  @relation("SalespersonAssignmentRoundRobinManager")
   salespersonRoundRobinLastAssigned SalespersonAssignmentRoundRobin[] @relation("SalespersonAssignmentRoundRobinLastAssigned")
 
   callsAsAgent Call[] @relation("CallAgent")
@@ -46,10 +46,6 @@ model User {
 
   activitiesAsActor Activity[] @relation("ActivityActor")
 
-  whatsAppMessagesSent WhatsAppMessage[] @relation("WhatsAppMessageSentBy")
-  whatsAppTemplatesCreated WhatsAppTemplate[] @relation("WhatsAppTemplateCreatedBy")
-  whatsAppAutomationConfigsUpdated WhatsAppAutomationConfig[] @relation("WhatsAppAutomationConfigUpdatedBy")
-  whatsAppCampaignsCreated WhatsAppCampaign[] @relation("WhatsAppCampaignCreatedBy")
 
   @@index([role])
   @@index([status])

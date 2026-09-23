@@ -30,7 +30,7 @@ model Lead {
   assignedManagerId String? @map("assigned_manager_id") @db.Uuid
   assignedManager   User?   @relation("LeadAssignedManager", fields: [assignedManagerId], references: [id])
 
-  importBatchId String?         @map("import_batch_id") @db.Uuid
+  importBatchId String?          @map("import_batch_id") @db.Uuid
   importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id])
 
   workingStatus LeadWorkingStatus @default(NEW) @map("working_status")
@@ -42,10 +42,6 @@ model Lead {
   lastContactedAt DateTime? @map("last_contacted_at")
   lastActivityAt  DateTime? @map("last_activity_at")
 
-  // Identity in an external system (Shopify). Null for records created inside the CRM.
-  externalSource    ExternalSource? @map("external_source")
-  externalId        String?         @map("external_id") @db.VarChar(100)
-  externalUpdatedAt DateTime?       @map("external_updated_at")
 
   assignments              LeadAssignment[]
   communicationPreferences CommunicationPreference[]
@@ -56,11 +52,8 @@ model Lead {
   abandonments             Abandonment[]
   recoveryActions          RecoveryAction[]
   activities               Activity[]
-  whatsAppMessages         WhatsAppMessage[]
-  whatsAppAutomationRuns   WhatsAppAutomationRun[]
-  whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
 
-  @@unique([externalSource, externalId])
+
   @@index([normalizedMobile])
   @@index([normalizedEmail])
   @@index([sourceId])

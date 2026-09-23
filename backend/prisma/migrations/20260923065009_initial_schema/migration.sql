@@ -17,6 +17,9 @@ CREATE TYPE "lead_priority" AS ENUM ('LOW', 'MEDIUM', 'HIGH');
 CREATE TYPE "assignment_type" AS ENUM ('ROUND_ROBIN', 'MANUAL', 'REASSIGNMENT');
 
 -- CreateEnum
+CREATE TYPE "import_batch_status" AS ENUM ('DRAFT', 'COMMITTED', 'FAILED');
+
+-- CreateEnum
 CREATE TYPE "interested_period_status" AS ENUM ('ACTIVE', 'CONVERTED', 'EXPIRED', 'CANCELLED');
 
 -- CreateEnum
@@ -53,19 +56,25 @@ CREATE TYPE "product_status" AS ENUM ('ACTIVE', 'INACTIVE');
 CREATE TYPE "source_status" AS ENUM ('ACTIVE', 'INACTIVE');
 
 -- CreateEnum
+CREATE TYPE "source_type" AS ENUM ('MANUAL', 'CSV', 'META', 'SHOPIFY', 'API');
+
+-- CreateEnum
 CREATE TYPE "virtual_number_status" AS ENUM ('ACTIVE', 'INACTIVE');
 
 -- CreateEnum
-CREATE TYPE "order_status" AS ENUM ('DRAFT', 'PENDING_PAYMENT', 'CONFIRMED', 'PROCESSING', 'CANCELLED', 'RETURNED', 'REFUNDED');
+CREATE TYPE "order_status" AS ENUM ('DRAFT', 'PENDING_PAYMENT', 'CONFIRMED', 'PROCESSING', 'CANCELLED', 'RETURNED', 'REFUNDED', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED');
 
 -- CreateEnum
-CREATE TYPE "order_source" AS ENUM ('SALESPERSON', 'WEBSITE', 'API');
+CREATE TYPE "shipment_status" AS ENUM ('SHIPPED', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'RETURNED', 'CREATED', 'AWB_ASSIGNED', 'PICKUP_SCHEDULED', 'CANCELLED');
+
+-- CreateEnum
+CREATE TYPE "order_source" AS ENUM ('SALESPERSON', 'WEBSITE', 'API', 'SHOPIFY');
 
 -- CreateEnum
 CREATE TYPE "payment_status" AS ENUM ('PENDING', 'PROCESSING', 'SUCCESS', 'FAILED', 'REFUNDED', 'PARTIALLY_REFUNDED');
 
 -- CreateEnum
-CREATE TYPE "payment_method" AS ENUM ('CASH', 'CARD', 'UPI', 'NET_BANKING', 'WALLET', 'PAYMENT_LINK', 'OTHER');
+CREATE TYPE "payment_method" AS ENUM ('CASH', 'CARD', 'UPI', 'NET_BANKING', 'WALLET', 'PAYMENT_LINK', 'OTHER', 'COD');
 
 -- CreateEnum
 CREATE TYPE "abandonment_type" AS ENUM ('CHECKOUT', 'PAYMENT', 'SALES');
@@ -80,10 +89,43 @@ CREATE TYPE "recovery_action_type" AS ENUM ('CALL', 'CALLBACK', 'CONTINUE_ORDER'
 CREATE TYPE "recovery_action_status" AS ENUM ('PENDING', 'IN_PROGRESS', 'SUCCESS', 'FAILED');
 
 -- CreateEnum
-CREATE TYPE "activity_type" AS ENUM ('LEAD_CREATED', 'LEAD_UPDATED', 'ASSIGNMENT', 'REASSIGNMENT', 'CALL', 'NOTE', 'STATUS_CHANGE', 'INTERESTED', 'INTERESTED_EXPIRED', 'ORDER_CREATED', 'ORDER_CONFIRMED', 'PAYMENT', 'ABANDONMENT', 'RECOVERY', 'TASK');
+CREATE TYPE "activity_type" AS ENUM ('LEAD_CREATED', 'LEAD_UPDATED', 'ASSIGNMENT', 'REASSIGNMENT', 'CALL', 'NOTE', 'STATUS_CHANGE', 'INTERESTED', 'INTERESTED_EXPIRED', 'ORDER_CREATED', 'ORDER_CONFIRMED', 'PAYMENT', 'ABANDONMENT', 'RECOVERY', 'TASK', 'ORDER_STATUS_CHANGED', 'ORDER_CANCELLED', 'PAYMENT_CREATED', 'PAYMENT_STATUS_CHANGED', 'PAYMENT_REFUNDED', 'PAYMENT_MISMATCH_DETECTED', 'SHIPMENT_CREATED', 'SHIPMENT_STATUS_CHANGED', 'TRACKING_UPDATED', 'DISCOUNT_CHANGED', 'WHATSAPP_MESSAGE_SENT', 'WHATSAPP_MESSAGE_RECEIVED', 'WHATSAPP_DELIVERED', 'WHATSAPP_READ', 'WHATSAPP_FAILED', 'WHATSAPP_TEMPLATE_CREATED', 'WHATSAPP_TEMPLATE_UPDATED', 'WHATSAPP_TEMPLATE_STATUS_CHANGED', 'WHATSAPP_TEMPLATE_SYNCED', 'WHATSAPP_CAMPAIGN_CREATED', 'WHATSAPP_CAMPAIGN_LAUNCHED', 'WHATSAPP_CAMPAIGN_CANCELLED', 'WHATSAPP_CAMPAIGN_COMPLETED', 'PAYMENT_LINK_CREATED', 'PAYMENT_LINK_CANCELLED', 'SHIPMENT_AWB_ASSIGNED', 'SHIPMENT_PICKUP_SCHEDULED', 'SHIPMENT_LABEL_GENERATED');
 
 -- CreateEnum
-CREATE TYPE "webhook_status" AS ENUM ('RECEIVED', 'PROCESSED', 'FAILED', 'IGNORED');
+CREATE TYPE "activity_source" AS ENUM ('USER', 'SHOPIFY_SYNC', 'SHOPIFY_WEBHOOK', 'SYSTEM', 'WHATSAPP_WEBHOOK', 'CASHFREE_WEBHOOK', 'SHIPROCKET_WEBHOOK');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_provider_name" AS ENUM ('AISENSY', 'GUPSHUP');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_direction" AS ENUM ('INBOUND', 'OUTBOUND');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_message_type" AS ENUM ('TEXT', 'TEMPLATE', 'MEDIA', 'INTERACTIVE', 'OTHER');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_message_status" AS ENUM ('QUEUED', 'SENT', 'DELIVERED', 'READ', 'FAILED', 'RECEIVED');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_template_status" AS ENUM ('DRAFT', 'PENDING', 'APPROVED', 'REJECTED', 'DISABLED');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_automation_type" AS ENUM ('ORDER_CONFIRMED', 'ORDER_SHIPPED', 'ORDER_OUT_FOR_DELIVERY', 'ORDER_DELIVERED', 'PAYMENT_PENDING', 'FOLLOW_UP_DUE');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_automation_run_status" AS ENUM ('SENT', 'SKIPPED', 'FAILED');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_campaign_status" AS ENUM ('DRAFT', 'SCHEDULED', 'RUNNING', 'COMPLETED', 'CANCELLED', 'FAILED');
+
+-- CreateEnum
+CREATE TYPE "whatsapp_campaign_recipient_status" AS ENUM ('PENDING', 'CLAIMED', 'SENT', 'SKIPPED', 'FAILED');
+
+-- CreateEnum
+CREATE TYPE "webhook_status" AS ENUM ('RECEIVED', 'PROCESSING', 'PROCESSED', 'FAILED', 'IGNORED');
+
+-- CreateEnum
+CREATE TYPE "external_source" AS ENUM ('SHOPIFY', 'CASHFREE', 'SHIPROCKET');
 
 -- CreateTable
 CREATE TABLE "abandonments" (
@@ -124,13 +166,19 @@ CREATE TABLE "recovery_actions" (
 -- CreateTable
 CREATE TABLE "activities" (
     "id" UUID NOT NULL,
-    "lead_id" UUID NOT NULL,
+    "lead_id" UUID,
     "actor_id" UUID,
+    "actor_role" "role",
     "type" "activity_type" NOT NULL,
     "reference_type" VARCHAR(100),
     "reference_id" VARCHAR(255),
+    "order_id" UUID,
+    "source" "activity_source" NOT NULL DEFAULT 'SYSTEM',
     "title" VARCHAR(255),
     "description" TEXT,
+    "old_value" JSONB,
+    "new_value" JSONB,
+    "metadata" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "activities_pkey" PRIMARY KEY ("id")
@@ -228,6 +276,9 @@ CREATE TABLE "products" (
     "status" "product_status" NOT NULL DEFAULT 'ACTIVE',
     "base_price" DECIMAL(12,2),
     "sku" VARCHAR(100),
+    "external_source" "external_source",
+    "external_id" VARCHAR(100),
+    "external_updated_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -242,6 +293,9 @@ CREATE TABLE "product_variants" (
     "sku" VARCHAR(100),
     "price" DECIMAL(12,2),
     "status" "product_status" NOT NULL DEFAULT 'ACTIVE',
+    "external_source" "external_source",
+    "external_id" VARCHAR(100),
+    "external_updated_at" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -280,6 +334,8 @@ CREATE TABLE "leads" (
     "interested_product_id" UUID,
     "owner_id" UUID,
     "group_id" UUID,
+    "assigned_manager_id" UUID,
+    "import_batch_id" UUID,
     "working_status" "lead_working_status" NOT NULL DEFAULT 'NEW',
     "priority" "lead_priority" NOT NULL DEFAULT 'MEDIUM',
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -318,6 +374,44 @@ CREATE TABLE "group_assignment_configs" (
 );
 
 -- CreateTable
+CREATE TABLE "lead_import_batches" (
+    "id" UUID NOT NULL,
+    "file_name" VARCHAR(255) NOT NULL,
+    "uploaded_by_id" UUID NOT NULL,
+    "status" "import_batch_status" NOT NULL DEFAULT 'DRAFT',
+    "total_rows" INTEGER NOT NULL DEFAULT 0,
+    "valid_rows" INTEGER NOT NULL DEFAULT 0,
+    "duplicate_rows" INTEGER NOT NULL DEFAULT 0,
+    "invalid_rows" INTEGER NOT NULL DEFAULT 0,
+    "column_mapping" JSONB NOT NULL,
+    "parsed_rows" JSONB,
+    "error_rows" JSONB,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "committed_at" TIMESTAMP(3),
+
+    CONSTRAINT "lead_import_batches_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "manager_assignment_round_robin" (
+    "id" UUID NOT NULL,
+    "last_assigned_manager_id" UUID,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "manager_assignment_round_robin_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "salesperson_assignment_round_robin" (
+    "id" UUID NOT NULL,
+    "manager_id" UUID NOT NULL,
+    "last_assigned_salesperson_id" UUID,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "salesperson_assignment_round_robin_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
 CREATE TABLE "communication_preferences" (
     "id" UUID NOT NULL,
     "lead_id" UUID NOT NULL,
@@ -346,6 +440,14 @@ CREATE TABLE "orders" (
     "shipping_amount" DECIMAL(12,2) NOT NULL DEFAULT 0,
     "total_amount" DECIMAL(12,2) NOT NULL DEFAULT 0,
     "discount_reason" TEXT,
+    "external_source" "external_source",
+    "external_id" VARCHAR(100),
+    "external_updated_at" TIMESTAMP(3),
+    "external_number" VARCHAR(100),
+    "shipping_address" JSONB,
+    "shipping_pincode" VARCHAR(12),
+    "cancel_reason" TEXT,
+    "metadata" JSONB,
     "placed_at" TIMESTAMP(3),
     "confirmed_at" TIMESTAMP(3),
     "cancelled_at" TIMESTAMP(3),
@@ -390,10 +492,43 @@ CREATE TABLE "payments" (
     "failed_at" TIMESTAMP(3),
     "refunded_at" TIMESTAMP(3),
     "failure_reason" TEXT,
+    "refunded_amount" DECIMAL(12,2),
+    "external_source" "external_source",
+    "external_id" VARCHAR(100),
+    "payment_url" TEXT,
+    "payment_expires_at" TIMESTAMP(3),
+    "metadata" JSONB,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
     CONSTRAINT "payments_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateTable
+CREATE TABLE "shipments" (
+    "id" UUID NOT NULL,
+    "order_id" UUID NOT NULL,
+    "status" "shipment_status" NOT NULL,
+    "courier" VARCHAR(150),
+    "tracking_number" VARCHAR(150),
+    "tracking_url" TEXT,
+    "shipped_at" TIMESTAMP(3),
+    "expected_delivery_at" TIMESTAMP(3),
+    "delivered_at" TIMESTAMP(3),
+    "returned_at" TIMESTAMP(3),
+    "external_source" "external_source",
+    "external_id" VARCHAR(100),
+    "provider_order_id" VARCHAR(100),
+    "channel_order_id" VARCHAR(100),
+    "courier_company_id" INTEGER,
+    "label_url" TEXT,
+    "pickup_scheduled_at" TIMESTAMP(3),
+    "provider_status" VARCHAR(150),
+    "metadata" JSONB,
+    "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updated_at" TIMESTAMP(3) NOT NULL,
+
+    CONSTRAINT "shipments_pkey" PRIMARY KEY ("id")
 );
 
 -- CreateTable
@@ -402,7 +537,14 @@ CREATE TABLE "sources" (
     "name" VARCHAR(150) NOT NULL,
     "code" VARCHAR(100),
     "description" TEXT,
+    "type" "source_type" NOT NULL DEFAULT 'MANUAL',
     "status" "source_status" NOT NULL DEFAULT 'ACTIVE',
+    "config" JSONB,
+    "credentials" JSONB,
+    "external_account_id" VARCHAR(255),
+    "last_synced_at" TIMESTAMP(3),
+    "last_sync_status" VARCHAR(50),
+    "last_sync_error" TEXT,
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL,
 
@@ -477,6 +619,7 @@ CREATE TABLE "webhook_events" (
     "payload" JSONB NOT NULL,
     "status" "webhook_status" NOT NULL DEFAULT 'RECEIVED',
     "error_message" TEXT,
+    "source_id" UUID,
     "received_at" TIMESTAMP(3) NOT NULL,
     "processed_at" TIMESTAMP(3),
 
@@ -520,7 +663,13 @@ CREATE INDEX "activities_lead_id_idx" ON "activities"("lead_id");
 CREATE INDEX "activities_actor_id_idx" ON "activities"("actor_id");
 
 -- CreateIndex
+CREATE INDEX "activities_order_id_idx" ON "activities"("order_id");
+
+-- CreateIndex
 CREATE INDEX "activities_type_idx" ON "activities"("type");
+
+-- CreateIndex
+CREATE INDEX "activities_source_idx" ON "activities"("source");
 
 -- CreateIndex
 CREATE INDEX "activities_created_at_idx" ON "activities"("created_at");
@@ -574,10 +723,16 @@ CREATE INDEX "products_status_idx" ON "products"("status");
 CREATE INDEX "products_type_idx" ON "products"("type");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "products_external_source_external_id_key" ON "products"("external_source", "external_id");
+
+-- CreateIndex
 CREATE INDEX "product_variants_product_id_idx" ON "product_variants"("product_id");
 
 -- CreateIndex
 CREATE INDEX "product_variants_status_idx" ON "product_variants"("status");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "product_variants_external_source_external_id_key" ON "product_variants"("external_source", "external_id");
 
 -- CreateIndex
 CREATE INDEX "interested_lead_periods_lead_id_idx" ON "interested_lead_periods"("lead_id");
@@ -610,6 +765,12 @@ CREATE INDEX "leads_owner_id_idx" ON "leads"("owner_id");
 CREATE INDEX "leads_group_id_idx" ON "leads"("group_id");
 
 -- CreateIndex
+CREATE INDEX "leads_assigned_manager_id_idx" ON "leads"("assigned_manager_id");
+
+-- CreateIndex
+CREATE INDEX "leads_import_batch_id_idx" ON "leads"("import_batch_id");
+
+-- CreateIndex
 CREATE INDEX "leads_working_status_idx" ON "leads"("working_status");
 
 -- CreateIndex
@@ -637,6 +798,18 @@ CREATE INDEX "lead_assignments_is_current_idx" ON "lead_assignments"("is_current
 CREATE UNIQUE INDEX "group_assignment_configs_group_id_key" ON "group_assignment_configs"("group_id");
 
 -- CreateIndex
+CREATE INDEX "lead_import_batches_uploaded_by_id_idx" ON "lead_import_batches"("uploaded_by_id");
+
+-- CreateIndex
+CREATE INDEX "lead_import_batches_status_idx" ON "lead_import_batches"("status");
+
+-- CreateIndex
+CREATE INDEX "lead_import_batches_created_at_idx" ON "lead_import_batches"("created_at");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "salesperson_assignment_round_robin_manager_id_key" ON "salesperson_assignment_round_robin"("manager_id");
+
+-- CreateIndex
 CREATE INDEX "communication_preferences_status_idx" ON "communication_preferences"("status");
 
 -- CreateIndex
@@ -661,6 +834,12 @@ CREATE INDEX "orders_source_idx" ON "orders"("source");
 CREATE INDEX "orders_placed_at_idx" ON "orders"("placed_at");
 
 -- CreateIndex
+CREATE INDEX "orders_shipping_pincode_idx" ON "orders"("shipping_pincode");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "orders_external_source_external_id_key" ON "orders"("external_source", "external_id");
+
+-- CreateIndex
 CREATE INDEX "order_items_order_id_idx" ON "order_items"("order_id");
 
 -- CreateIndex
@@ -682,7 +861,34 @@ CREATE INDEX "payments_provider_order_id_idx" ON "payments"("provider_order_id")
 CREATE INDEX "payments_status_idx" ON "payments"("status");
 
 -- CreateIndex
+CREATE UNIQUE INDEX "payments_external_source_external_id_key" ON "payments"("external_source", "external_id");
+
+-- CreateIndex
+CREATE INDEX "shipments_order_id_idx" ON "shipments"("order_id");
+
+-- CreateIndex
+CREATE INDEX "shipments_status_idx" ON "shipments"("status");
+
+-- CreateIndex
+CREATE INDEX "shipments_tracking_number_idx" ON "shipments"("tracking_number");
+
+-- CreateIndex
+CREATE INDEX "shipments_provider_order_id_idx" ON "shipments"("provider_order_id");
+
+-- CreateIndex
+CREATE INDEX "shipments_channel_order_id_idx" ON "shipments"("channel_order_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "shipments_external_source_external_id_key" ON "shipments"("external_source", "external_id");
+
+-- CreateIndex
 CREATE UNIQUE INDEX "sources_code_key" ON "sources"("code");
+
+-- CreateIndex
+CREATE INDEX "sources_type_idx" ON "sources"("type");
+
+-- CreateIndex
+CREATE INDEX "sources_external_account_id_idx" ON "sources"("external_account_id");
 
 -- CreateIndex
 CREATE INDEX "tasks_lead_id_idx" ON "tasks"("lead_id");
@@ -732,6 +938,12 @@ CREATE INDEX "webhook_events_status_idx" ON "webhook_events"("status");
 -- CreateIndex
 CREATE INDEX "webhook_events_received_at_idx" ON "webhook_events"("received_at");
 
+-- CreateIndex
+CREATE INDEX "webhook_events_source_id_idx" ON "webhook_events"("source_id");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "webhook_events_provider_external_event_id_key" ON "webhook_events"("provider", "external_event_id");
+
 -- AddForeignKey
 ALTER TABLE "abandonments" ADD CONSTRAINT "abandonments_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES "leads"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -758,6 +970,9 @@ ALTER TABLE "activities" ADD CONSTRAINT "activities_lead_id_fkey" FOREIGN KEY ("
 
 -- AddForeignKey
 ALTER TABLE "activities" ADD CONSTRAINT "activities_actor_id_fkey" FOREIGN KEY ("actor_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "activities" ADD CONSTRAINT "activities_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "virtual_numbers" ADD CONSTRAINT "virtual_numbers_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "groups"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -802,6 +1017,12 @@ ALTER TABLE "leads" ADD CONSTRAINT "leads_owner_id_fkey" FOREIGN KEY ("owner_id"
 ALTER TABLE "leads" ADD CONSTRAINT "leads_group_id_fkey" FOREIGN KEY ("group_id") REFERENCES "groups"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "leads" ADD CONSTRAINT "leads_assigned_manager_id_fkey" FOREIGN KEY ("assigned_manager_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "leads" ADD CONSTRAINT "leads_import_batch_id_fkey" FOREIGN KEY ("import_batch_id") REFERENCES "lead_import_batches"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "lead_assignments" ADD CONSTRAINT "lead_assignments_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES "leads"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -818,6 +1039,18 @@ ALTER TABLE "group_assignment_configs" ADD CONSTRAINT "group_assignment_configs_
 
 -- AddForeignKey
 ALTER TABLE "group_assignment_configs" ADD CONSTRAINT "group_assignment_configs_last_assigned_user_id_fkey" FOREIGN KEY ("last_assigned_user_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "lead_import_batches" ADD CONSTRAINT "lead_import_batches_uploaded_by_id_fkey" FOREIGN KEY ("uploaded_by_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "manager_assignment_round_robin" ADD CONSTRAINT "manager_assignment_round_robin_last_assigned_manager_id_fkey" FOREIGN KEY ("last_assigned_manager_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "salesperson_assignment_round_robin" ADD CONSTRAINT "salesperson_assignment_round_robin_manager_id_fkey" FOREIGN KEY ("manager_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "salesperson_assignment_round_robin" ADD CONSTRAINT "salesperson_assignment_round_robin_last_assigned_salespers_fkey" FOREIGN KEY ("last_assigned_salesperson_id") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "communication_preferences" ADD CONSTRAINT "communication_preferences_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES "leads"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
@@ -841,6 +1074,9 @@ ALTER TABLE "order_items" ADD CONSTRAINT "order_items_variant_id_fkey" FOREIGN K
 ALTER TABLE "payments" ADD CONSTRAINT "payments_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "shipments" ADD CONSTRAINT "shipments_order_id_fkey" FOREIGN KEY ("order_id") REFERENCES "orders"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "tasks" ADD CONSTRAINT "tasks_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES "leads"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -857,3 +1093,6 @@ ALTER TABLE "group_members" ADD CONSTRAINT "group_members_group_id_fkey" FOREIGN
 
 -- AddForeignKey
 ALTER TABLE "group_members" ADD CONSTRAINT "group_members_user_id_fkey" FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "webhook_events" ADD CONSTRAINT "webhook_events_source_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE SET NULL ON UPDATE CASCADE;

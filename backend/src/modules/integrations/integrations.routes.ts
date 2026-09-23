@@ -1,0 +1,31 @@
+import { Router } from "express";
+import {
+  listSources,
+  getSource,
+  createSource,
+  updateSource,
+  toggleSourceStatus,
+  listSourceWebhookEvents,
+  verifyProviderChallenge,
+  receiveWebhook,
+} from "./integrations.controller.js";
+import { requireAuth, requireRole } from "@/middlewares/auth.js";
+import { Role } from "../../../generated/prisma/enums.js";
+
+const router = Router();
+
+// Public: providers can't send a JWT, these are secured by adapter-level
+// signature verification (and Meta's GET handshake token) instead.
+router.get("/webhooks/:provider", verifyProviderChallenge);
+router.post("/webhooks/:provider", receiveWebhook);
+
+router.use(requireAuth, requireRole(Role.ADMIN));
+
+router.get("/sources", listSources);
+router.get("/sources/:id", getSource);
+router.post("/sources", createSource);
+router.patch("/sources/:id", updateSource);
+router.patch("/sources/:id/status", toggleSourceStatus);
+router.get("/sources/:id/events", listSourceWebhookEvents);
+
+export default router;

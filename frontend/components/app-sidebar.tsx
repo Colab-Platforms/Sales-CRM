@@ -19,6 +19,8 @@ import {
   Workflow,
   Send,
   Contact,
+  Plug,
+  Phone,
   PhoneCall,
 } from "lucide-react";
 import {
@@ -57,114 +59,10 @@ interface NavSection {
 /**
  * Grouped so each role sees the same rhythm: where they are, who they work
  * with, then the pipeline itself.
+ *
+ * "/dashboard" is the root of every page here, so it only matches exactly; other items
+ * also stay highlighted on their nested pages (e.g. an order's detail page) unless marked exact.
  */
-  // const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
-  //   SALESPERSON: [
-  //     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  //     { title: "My Leads", href: "/dashboard/leads", icon: Users },
-  //     { title: "Interested Leads", icon: Target },
-  //     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-  //     { title: "Customers", href: "/dashboard/customers", icon: Contact },
-  //     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
-  //     { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
-  //   ],
-  //   MANAGER: [
-  //     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  //     { title: "Team", href: "/dashboard/team", icon: UsersRound },
-  //     { title: "Leads", icon: Users },
-  //     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-  //     { title: "Customers", href: "/dashboard/customers", icon: Contact },
-  //     { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
-  //     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
-  //     { title: "WhatsApp Status", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
-  //     { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
-  //     { title: "WhatsApp Campaigns", href: "/dashboard/whatsapp/campaigns", icon: Send },
-  //     { title: "Reports", icon: BarChart3 },
-  //   ],
-  //   ADMIN: [
-  //     { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  //     { title: "Users", href: "/dashboard/users", icon: UserCog },
-  //     { title: "Groups", icon: Building2 },
-  //     { title: "Leads", icon: Users },
-  //     { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-  //     { title: "Customers", href: "/dashboard/customers", icon: Contact },
-  //     { title: "Reconciliation", href: "/dashboard/reconciliation", icon: Wallet },
-  //     { title: "Audit Trail", href: "/dashboard/audit", icon: History },
-  //     { title: "WhatsApp Status", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
-  //     { title: "WhatsApp Templates", href: "/dashboard/whatsapp/templates", icon: FileText },
-  //     { title: "WhatsApp Automations", href: "/dashboard/whatsapp/automations", icon: Workflow },
-  //     { title: "WhatsApp Campaigns", href: "/dashboard/whatsapp/campaigns", icon: Send },
-  //     { title: "Reports", icon: BarChart3 },
-  //     {
-  //       label: "Overview",
-  //       items: [
-  //         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  //       ],
-  //     },
-  //     {
-  //       label: "Pipeline",
-  //       items: [
-  //         { title: "My Leads", href: "/dashboard/leads", icon: Users },
-  //         { title: "Interested Leads", icon: Target },
-  //         { title: "Orders", icon: ShoppingCart },
-  //       ],
-  //     },
-  //   ],
-  //   MANAGER: [
-  //     {
-  //       label: "Overview",
-  //       items: [
-  //         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  //       ],
-  //     },
-  //     {
-  //       label: "People",
-  //       items: [
-  //         { title: "Team", href: "/dashboard/team", icon: UsersRound },
-  //         {
-  //           title: "Salespersons",
-  //           href: "/dashboard/salespersons",
-  //           icon: Contact,
-  //         },
-  //       ],
-  //     },
-  //     {
-  //       label: "Pipeline",
-  //       items: [
-  //         { title: "Leads", href: "/dashboard/leads", icon: Users },
-  //         { title: "Orders", icon: ShoppingCart },
-  //         { title: "Reports", icon: BarChart3 },
-  //       ],
-  //     },
-  //   ],
-  //   ADMIN: [
-  //     {
-  //       label: "Overview",
-  //       items: [
-  //         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  //       ],
-  //     },
-  //     {
-  //       label: "Organization",
-  //       items: [
-  //         { title: "Users", href: "/dashboard/users", icon: UserCog },
-  //         { title: "Groups", icon: Building2 },
-  //       ],
-  //     },
-  //     {
-  //       label: "Pipeline",
-  //       items: [
-  //         { title: "Leads", href: "/dashboard/leads", icon: Users },
-  //         { title: "Orders", icon: ShoppingCart },
-  //         { title: "Reports", icon: BarChart3 },
-  //       ],
-  //     },
-  //   ],
-  // };
-
-// "/dashboard" is the root of every page here, so it only matches exactly; other items
-// also stay highlighted on their nested pages (e.g. an order's detail page) unless marked exact.
-
 const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
   SALESPERSON: [
     {
@@ -222,6 +120,12 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/salespersons",
           icon: Contact,
         },
+      ],
+    },
+    {
+      label: "Organization",
+      items: [
+        { title: "Virtual Numbers", href: "/dashboard/virtual-numbers", icon: Phone },
       ],
     },
     {
@@ -285,6 +189,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Users", href: "/dashboard/users", icon: UserCog },
         { title: "Groups", icon: Building2 },
+        { title: "Sources", href: "/dashboard/sources", icon: Plug },
+        { title: "Virtual Numbers", href: "/dashboard/virtual-numbers", icon: Phone },
       ],
     },
     {
