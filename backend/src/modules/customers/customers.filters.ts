@@ -1,8 +1,6 @@
 import type { LeadWorkingStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
-import type { ShipmentDetail } from "../orders/orders.types.js";
-import { fromCents, sumCents, toCents } from "../shopify/shopify.money.js";
+import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus, fromCents, fullName, sumCents, toCents } from "./customers.money.js";
 import { deriveNextBestAction, type NbaOrderInput } from "./nba.js";
 import { deriveCustomerSegment } from "./segment.js";
 import type {
@@ -13,6 +11,7 @@ import type {
   CustomerSegmentInfo,
   ListCustomersQuery,
   NextBestActionInfo,
+  ShipmentDetail,
 } from "./customers.types.js";
 
 // One lead (customer), but only if the user's lead scope allows it. Mirrors orders.filters.ts'

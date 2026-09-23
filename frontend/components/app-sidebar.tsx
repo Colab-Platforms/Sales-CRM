@@ -19,6 +19,7 @@ import {
   Workflow,
   Send,
   Contact,
+  PhoneCall,
 } from "lucide-react";
 import {
   Sidebar,
@@ -182,6 +183,12 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       ],
     },
     {
+      label: "Calling",
+      items: [
+        { title: "Call History", href: "/dashboard/calling", icon: PhoneCall },
+      ],
+    },
+    {
       label: "Communication",
       items: [
         {
@@ -229,6 +236,12 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: Wallet,
         },
         { title: "Reports", icon: BarChart3 },
+      ],
+    },
+    {
+      label: "Calling",
+      items: [
+        { title: "Call History", href: "/dashboard/calling", icon: PhoneCall },
       ],
     },
     {
@@ -286,6 +299,12 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: Wallet,
         },
         { title: "Reports", icon: BarChart3 },
+      ],
+    },
+    {
+      label: "Calling",
+      items: [
+        { title: "Call History", href: "/dashboard/calling", icon: PhoneCall },
       ],
     },
     {

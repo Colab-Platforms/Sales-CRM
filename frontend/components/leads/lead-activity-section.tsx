@@ -8,19 +8,23 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { orderDetailHref } from "@/components/orders/orders-table";
+import { callDetailHref } from "@/components/calling/call-history-table";
 import { useCustomerAudit } from "@/hooks/useAudit";
+import { useCustomerTimeline } from "@/hooks/useCustomers";
 import type { ActivityType, AuditEntry } from "@/lib/api-client/types/audit.types";
+import type { TimelineEntry } from "@/lib/api-client/types/customers.types";
 
 /**
- * Backed by the existing per-lead audit trail (`GET /customers/:leadId/audit`,
- * `useCustomerAudit`) — the same endpoint the Customer 360 timeline uses. It
- * works for any lead, not only ones that have placed an order.
+ * All/WhatsApp/Follow-ups/Orders are backed by the per-lead audit trail (`GET
+ * /customers/:leadId/audit`, `useCustomerAudit`). Calls is backed by `GET
+ * /customers/:leadId/timeline` (`useCustomerTimeline`) instead — the only existing endpoint that
+ * reads real Call rows (status/duration/direction/agent), rather than a generic activity-log line.
+ * Both endpoints currently error for every lead (a database migration gap unrelated to calls
+ * themselves — see the Call History README/report); when that's fixed this starts working with no
+ * further change.
  *
- * There is no dedicated calls/follow-ups API yet, so those tabs read the same
- * feed filtered by activity type (CALL, TASK) rather than a separate,
- * not-yet-built endpoint. The list has no server-side type filter, so
- * filtering happens client-side over the currently loaded page; pagination
- * therefore only applies to the "All" tab, where the counts are accurate.
+ * Neither list has a server-side type filter, so filtering happens client-side over the currently
+ * loaded page; pagination is therefore only shown for the "All" tab, where the count is accurate.
  */
 
 type ActivityTab = "ALL" | "CALLS" | "WHATSAPP" | "FOLLOWUPS" | "ORDERS";
@@ -41,12 +45,10 @@ const EMPTY_MESSAGES: Record<ActivityTab, string> = {
   ORDERS: "No orders yet.",
 };
 
-function matchesTab(entry: AuditEntry, tab: ActivityTab): boolean {
+function matchesTab(entry: AuditEntry, tab: Exclude<ActivityTab, "CALLS">): boolean {
   switch (tab) {
     case "ALL":
       return true;
-    case "CALLS":
-      return entry.type === "CALL";
     case "WHATSAPP":
       return entry.type.startsWith("WHATSAPP_");
     case "FOLLOWUPS":
@@ -83,18 +85,66 @@ function describeActivity(type: ActivityType): string {
   return ACTIVITY_LABELS[type] ?? type.toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
 }
 
+/** Common shape both the audit feed and the timeline feed get mapped into, so the list renders once. */
+interface ActivityRow {
+  id: string;
+  label: string;
+  title: string;
+  description: string | null;
+  occurredAt: string | Date;
+  actorName: string | null;
+  orderLink: { id: string; orderNumber: string } | null;
+  /** Only set for a Calls-tab row — the real Call id (entry.id is "call:<uuid>"), for the View link. */
+  callId: string | null;
+}
+
+function auditEntryToRow(entry: AuditEntry): ActivityRow {
+  return {
+    id: entry.id,
+    label: describeActivity(entry.type),
+    title: entry.title ?? describeActivity(entry.type),
+    description: entry.description,
+    occurredAt: entry.occurredAt,
+    actorName: entry.actor?.name ?? null,
+    orderLink: entry.order,
+    callId: null,
+  };
+}
+
+function timelineEntryToRow(entry: TimelineEntry): ActivityRow {
+  return {
+    id: entry.id,
+    label: "Call",
+    title: entry.title,
+    description: entry.description,
+    occurredAt: entry.occurredAt,
+    actorName: entry.actor?.name ?? null,
+    orderLink: null,
+    callId: entry.id.startsWith("call:") ? entry.id.slice("call:".length) : null,
+  };
+}
+
 const PAGE_SIZE = 25;
 
 export function LeadActivitySection({ leadId }: { leadId: string }) {
   const [tab, setTab] = useState<ActivityTab>("ALL");
-  const [page, setPage] = useState(1);
-  const { data, isLoading, error } = useCustomerAudit(leadId, { page, pageSize: PAGE_SIZE });
+  const [auditPage, setAuditPage] = useState(1);
+  const [callsPage, setCallsPage] = useState(1);
 
-  const entries = data?.items.filter((entry) => matchesTab(entry, tab)) ?? [];
+  const audit = useCustomerAudit(leadId, { page: auditPage, pageSize: PAGE_SIZE });
+  const calls = useCustomerTimeline(leadId, { page: callsPage, pageSize: PAGE_SIZE });
+
+  const isCallsTab = tab === "CALLS";
+  const isLoading = isCallsTab ? calls.isLoading : audit.isLoading;
+  const error = isCallsTab ? calls.error : audit.error;
+  const rows: ActivityRow[] = isCallsTab
+    ? (calls.data?.entries.filter((entry) => entry.type === "CALL").map(timelineEntryToRow) ?? [])
+    : (audit.data?.items.filter((entry) => matchesTab(entry, tab)).map(auditEntryToRow) ?? []);
 
   function handleTabChange(next: ActivityTab) {
     setTab(next);
-    setPage(1);
+    setAuditPage(1);
+    setCallsPage(1);
   }
 
   return (
@@ -134,27 +184,35 @@ export function LeadActivitySection({ leadId }: { leadId: string }) {
           </div>
         ) : error ? (
           <p className="text-sm text-destructive">{error}</p>
-        ) : entries.length === 0 ? (
+        ) : rows.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-10 text-center">
             <Inbox className="size-7 text-muted-foreground/40" aria-hidden="true" />
             <p className="text-sm text-muted-foreground">{EMPTY_MESSAGES[tab]}</p>
           </div>
         ) : (
           <ol className="space-y-4 border-l pl-4">
-            {entries.map((entry) => (
-              <li key={entry.id} className="relative">
+            {rows.map((row) => (
+              <li key={row.id} className="relative">
                 <span className="absolute top-1.5 -left-[1.3rem] size-2 rounded-full bg-primary" aria-hidden="true" />
-                <p className="text-xs font-medium text-muted-foreground">{describeActivity(entry.type)}</p>
-                <p className="text-sm font-medium">{entry.title ?? describeActivity(entry.type)}</p>
-                {entry.description ? <p className="text-sm text-muted-foreground">{entry.description}</p> : null}
+                <p className="text-xs font-medium text-muted-foreground">{row.label}</p>
+                <p className="text-sm font-medium">{row.title}</p>
+                {row.description ? <p className="text-sm text-muted-foreground">{row.description}</p> : null}
                 <p className="text-xs text-muted-foreground">
-                  {new Date(entry.occurredAt).toLocaleString()}
-                  {entry.actor ? ` · ${entry.actor.name}` : null}
-                  {entry.order ? (
+                  {new Date(row.occurredAt).toLocaleString()}
+                  {row.actorName ? ` · ${row.actorName}` : null}
+                  {row.orderLink ? (
                     <>
                       {" · "}
-                      <Link href={orderDetailHref(entry.order.id)} className="hover:underline">
-                        Order {entry.order.orderNumber}
+                      <Link href={orderDetailHref(row.orderLink.id)} className="hover:underline">
+                        Order {row.orderLink.orderNumber}
+                      </Link>
+                    </>
+                  ) : null}
+                  {row.callId ? (
+                    <>
+                      {" · "}
+                      <Link href={callDetailHref(row.callId)} className="hover:underline">
+                        View call
                       </Link>
                     </>
                   ) : null}
@@ -164,8 +222,8 @@ export function LeadActivitySection({ leadId }: { leadId: string }) {
           </ol>
         )}
 
-        {tab === "ALL" && data ? (
-          <OrdersPagination pagination={data.pagination} onPageChange={setPage} disabled={isLoading} />
+        {tab === "ALL" && audit.data ? (
+          <OrdersPagination pagination={audit.data.pagination} onPageChange={setAuditPage} disabled={audit.isFetching} />
         ) : null}
       </CardContent>
     </Card>

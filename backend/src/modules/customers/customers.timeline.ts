@@ -12,8 +12,10 @@ import type {
   TaskStatus,
 } from "../../../generated/prisma/enums.js";
 import { ActivityType, AbandonmentType } from "../../../generated/prisma/enums.js";
-import { ORDER_REFERENCE_TYPE } from "../orders/orders.types.js";
 import type { TimelineEntry } from "./customers.types.js";
+
+// `Activity.referenceType` value for rows that point at an order.
+const ORDER_REFERENCE_TYPE = "Order";
 
 function humanize(value: string): string {
   return value

@@ -15,8 +15,7 @@
 //     only ever read, never written), so it is always null in practice - building a rule on it would
 //     be claiming a signal that does not actually exist yet.
 import { PaymentStatus, type LeadWorkingStatus } from "../../../generated/prisma/enums.js";
-import { derivePaymentStatus } from "../orders/orders.filters.js";
-import { fromCents } from "../shopify/shopify.money.js";
+import { derivePaymentStatus, fromCents } from "./customers.money.js";
 import { SEGMENT_THRESHOLDS } from "./segment.config.js";
 
 export type CustomerSegment = "NEW" | "HOT" | "REPEAT" | "VIP" | "DORMANT" | "AT_RISK";

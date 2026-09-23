@@ -6,12 +6,27 @@ import type {
   PaymentStatus,
   ShipmentStatus,
 } from "../../../generated/prisma/enums.js";
-import type { PaymentMode, PaymentStatusFilter, ShipmentDetail } from "../orders/orders.types.js";
+import type { PaymentMode, PaymentStatusFilter } from "./customers.money.js";
 import type { CustomerSegment, SegmentMetrics } from "./segment.js";
 import type { NbaAction, NbaChannel, NbaPriority } from "./nba.js";
 
 // Decimal columns are sent as strings so no precision is lost in JSON.
 type Money = string;
+
+// A shipment with no tracking/courier/dates yet (the source system created the fulfilment record but
+// hasn't reported those fields) is not the same as "no shipment at all" - null fields mean "not known".
+export interface ShipmentDetail {
+  id: string;
+  status: ShipmentStatus;
+  courier: string | null;
+  trackingNumber: string | null;
+  trackingUrl: string | null;
+  shippedAt: Date | null;
+  expectedDeliveryAt: Date | null;
+  deliveredAt: Date | null;
+  returnedAt: Date | null;
+  createdAt: Date;
+}
 
 export interface CustomerProfile {
   leadId: string;

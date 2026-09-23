@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
 import { PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
-import { NO_PAYMENT } from "../orders/orders.types.js";
+import { NO_PAYMENT } from "./customers.money.js";
 import type { ListCustomerTimelineQuery, ListCustomersQuery } from "./customers.types.js";
 
 const SEGMENTS = ["NEW", "HOT", "REPEAT", "VIP", "DORMANT", "AT_RISK"] as const;

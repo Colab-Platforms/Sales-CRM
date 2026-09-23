@@ -14,8 +14,7 @@
 // in, but this derivation never recommends them - only "CALL" (something a rep can actually do right
 // now) or "NONE" (no contact needed).
 import type { PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
-import { computePaymentBreakdown } from "../orders/orders.filters.js";
-import { fromCents, toCents } from "../shopify/shopify.money.js";
+import { computePaymentBreakdown, fromCents, toCents } from "./customers.money.js";
 import type { SegmentResult } from "./segment.js";
 
 export type NbaAction =
