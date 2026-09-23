@@ -30,7 +30,7 @@ model Lead {
   assignedManagerId String? @map("assigned_manager_id") @db.Uuid
   assignedManager   User?   @relation("LeadAssignedManager", fields: [assignedManagerId], references: [id])
 
-  importBatchId String?         @map("import_batch_id") @db.Uuid
+  importBatchId String?          @map("import_batch_id") @db.Uuid
   importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id])
 
   workingStatus LeadWorkingStatus @default(NEW) @map("working_status")

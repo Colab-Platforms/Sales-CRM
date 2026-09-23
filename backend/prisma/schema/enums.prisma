@@ -166,6 +166,16 @@ enum SourceStatus {
   @@map("source_status")
 }
 
+enum SourceType {
+  MANUAL
+  CSV
+  META
+  SHOPIFY
+  API
+
+  @@map("source_type")
+}
+
 enum VirtualNumberStatus {
   ACTIVE
   INACTIVE

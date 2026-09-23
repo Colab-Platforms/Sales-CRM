@@ -6,13 +6,31 @@ model Source {
 
   description String? @map("description")
 
+  type   SourceType   @default(MANUAL) @map("type")
   status SourceStatus @default(ACTIVE) @map("status")
+
+  // Non-secret adapter config (page/shop IDs, field mappings, verify tokens, etc.)
+  config Json? @map("config")
+
+  // Provider secrets (app secret, webhook secret, access token) — encrypted at rest
+  // via backend/src/utils/crypto.ts. Never returned as plaintext by any API response.
+  credentials Json? @map("credentials")
+
+  // Page ID / shop domain — used to resolve an inbound webhook to the right Source.
+  externalAccountId String? @map("external_account_id") @db.VarChar(255)
+
+  lastSyncedAt   DateTime? @map("last_synced_at")
+  lastSyncStatus String?   @map("last_sync_status") @db.VarChar(50)
+  lastSyncError  String?   @map("last_sync_error")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  leads        Lead[]
-  abandonments Abandonment[]
+  leads         Lead[]
+  abandonments  Abandonment[]
+  webhookEvents WebhookEvent[]
 
+  @@index([type])
+  @@index([externalAccountId])
   @@map("sources")
 }

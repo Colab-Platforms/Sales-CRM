@@ -1,4 +1,5 @@
 import type { LeadWorkingStatus } from "./dashboard.types";
+import type { Call } from "./calling.types";
 
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH";
 export type AssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
@@ -42,6 +43,7 @@ export interface Lead {
   assignedManager: LeadUserRef | null;
   group: LeadGroupRef | null;
   importBatch: LeadImportBatchRef | null;
+  calls: Call[];
 }
 
 export interface LeadListPagination {
