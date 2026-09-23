@@ -187,6 +187,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Communication",
       items: [
+        { title: "WhatsApp", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
         {
           title: "WhatsApp Templates",
           href: "/dashboard/whatsapp/templates",
@@ -248,11 +249,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Communication",
       items: [
+        { title: "WhatsApp", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
         {
           title: "WhatsApp Status",
-          href: "/dashboard/whatsapp",
+          href: "/dashboard/whatsapp/status",
           icon: MessageCircle,
-          exact: true,
         },
         {
           title: "WhatsApp Templates",
@@ -312,11 +313,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Communication",
       items: [
+        { title: "WhatsApp", href: "/dashboard/whatsapp", icon: MessageCircle, exact: true },
         {
           title: "WhatsApp Status",
-          href: "/dashboard/whatsapp",
+          href: "/dashboard/whatsapp/status",
           icon: MessageCircle,
-          exact: true,
         },
         {
           title: "WhatsApp Templates",

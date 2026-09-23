@@ -2,12 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, MessageCircle } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, MessageCircle, Pencil, Trash2 } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCustomer360 } from "@/hooks/useCustomers";
+import { useAuthStore } from "@/stores/auth-store";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
 import { WhatsAppConversation } from "@/components/whatsapp/conversation/whatsapp-conversation";
+import { EditLeadDialog } from "@/components/leads/edit-lead-dialog";
+import { DeleteLeadDialog } from "@/components/leads/delete-lead-dialog";
 import { CustomerProfileCard } from "./customer-profile-card";
 import { CustomerSegmentCard } from "./customer-segment-card";
 import { NextBestActionCard } from "./next-best-action-card";
@@ -38,8 +42,12 @@ function Customer360Skeleton() {
 }
 
 export function Customer360View({ leadId }: { leadId: string }) {
+  const router = useRouter();
+  const role = useAuthStore((s) => s.user?.role);
   const { data, isLoading, error, refetch } = useCustomer360(leadId);
   const [sendOpen, setSendOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   if (isLoading) return <Customer360Skeleton />;
 
@@ -63,10 +71,22 @@ export function Customer360View({ leadId }: { leadId: string }) {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <BackLink />
-        <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data.profile.mobile}>
-          <MessageCircle data-icon="inline-start" />
-          Send WhatsApp
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+            <Pencil data-icon="inline-start" />
+            Edit
+          </Button>
+          {role === "ADMIN" ? (
+            <Button size="sm" variant="destructive" onClick={() => setDeleteOpen(true)}>
+              <Trash2 data-icon="inline-start" />
+              Delete
+            </Button>
+          ) : null}
+          <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data.profile.mobile}>
+            <MessageCircle data-icon="inline-start" />
+            Send WhatsApp
+          </Button>
+        </div>
       </div>
       <CustomerProfileCard customer={data} />
       <CustomerSegmentCard segment={data.segment} currency={currency} />
@@ -81,6 +101,13 @@ export function Customer360View({ leadId }: { leadId: string }) {
         </Link>
       </div>
       <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={data.profile.name} orders={data.orders} />
+      <EditLeadDialog leadId={leadId} open={editOpen} onOpenChange={setEditOpen} onDone={() => setEditOpen(false)} />
+      <DeleteLeadDialog
+        lead={{ id: leadId, name: data.profile.name }}
+        open={deleteOpen}
+        onOpenChange={setDeleteOpen}
+        onDeleted={() => router.push(ORDERS_HREF)}
+      />
     </div>
   );
 }

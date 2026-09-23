@@ -68,6 +68,15 @@ export const updateLead = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
+export const deleteLead = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await leadService.deleteLead(req.user!, req.params.id as string);
+    sendResponse(res, true, result, "Lead deleted successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getAssignmentHistory = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await leadService.getAssignmentHistory(req.user!, req.params.id as string);

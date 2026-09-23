@@ -2,18 +2,23 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Phone } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
-import { Inbox, Phone } from "lucide-react";
+import { Inbox, Pencil, Trash2 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { StatusBadge } from "@/components/dashboard/status-badge";
+import { customerDetailHref } from "@/components/orders/orders-table";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { useInitiateCallMutation } from "@/lib/api-client/mutations/calling.mutations";
 import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
+import { EditLeadDialog } from "./edit-lead-dialog";
+import { DeleteLeadDialog } from "./delete-lead-dialog";
 import type { Lead, LeadListPagination } from "@/lib/api-client/types/lead.types";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
@@ -111,7 +116,9 @@ export function LeadTable({
   onPageChange,
 }: LeadTableProps) {
   const allSelected = leads.length > 0 && leads.every((lead) => selectedIds.has(lead.id));
-  const columnCount = role !== "SALESPERSON" ? 9 : 8;
+  const columnCount = (role !== "SALESPERSON" ? 9 : 8) + 1;
+  const [editingLeadId, setEditingLeadId] = useState<string | null>(null);
+  const [deletingLead, setDeletingLead] = useState<{ id: string; name: string } | null>(null);
 
   if (isLoading) {
     return (
@@ -145,6 +152,7 @@ export function LeadTable({
               {role !== "SALESPERSON" ? <TableHead>Manager</TableHead> : null}
               <TableHead>Salesperson</TableHead>
               <TableHead>Created</TableHead>
+              <TableHead className="text-right pr-4">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -172,9 +180,9 @@ export function LeadTable({
                     />
                   </TableCell>
                   <TableCell>
-                    <div className="font-semibold">
+                    <Link href={customerDetailHref(lead.id)} className="font-semibold hover:underline">
                       {lead.firstName} {lead.lastName ?? ""}
-                    </div>
+                    </Link>
                     <div className="font-mono text-xs text-muted-foreground">{lead.leadNumber}</div>
                   </TableCell>
                   <TableCell>
@@ -209,6 +217,28 @@ export function LeadTable({
                   <TableCell className="text-xs text-muted-foreground">
                     {new Date(lead.createdAt).toLocaleDateString()}
                   </TableCell>
+                  <TableCell className="pr-4 text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Edit ${lead.firstName}`}
+                        onClick={() => setEditingLeadId(lead.id)}
+                      >
+                        <Pencil />
+                      </Button>
+                      {role === "ADMIN" ? (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Delete ${lead.firstName}`}
+                          onClick={() => setDeletingLead({ id: lead.id, name: `${lead.firstName} ${lead.lastName ?? ""}`.trim() })}
+                        >
+                          <Trash2 className="text-destructive" />
+                        </Button>
+                      ) : null}
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))
             )}
@@ -242,6 +272,23 @@ export function LeadTable({
           </div>
         </div>
       ) : null}
+
+      <EditLeadDialog
+        leadId={editingLeadId}
+        open={editingLeadId !== null}
+        onOpenChange={(next) => {
+          if (!next) setEditingLeadId(null);
+        }}
+        onDone={() => setEditingLeadId(null)}
+      />
+      <DeleteLeadDialog
+        lead={deletingLead}
+        open={deletingLead !== null}
+        onOpenChange={(next) => {
+          if (!next) setDeletingLead(null);
+        }}
+        onDeleted={() => setDeletingLead(null)}
+      />
     </div>
   );
 }

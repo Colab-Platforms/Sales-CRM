@@ -6,13 +6,14 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
+import { fullName } from "../orders/orders.filters.js";
 import { resolveWhatsAppConfig } from "./whatsapp.config.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
 import { matchSenderToLead } from "./whatsapp.matching.js";
-import { buildMessageWhere, mapMessageHistoryItem, scopedMessageWhere } from "./whatsapp.history.filters.js";
-import type { ListMessagesQuery, WhatsAppMessageHistoryItem, WhatsAppMessageListResult } from "./whatsapp.history.types.js";
+import { buildConversationWhere, buildMessageWhere, mapMessageHistoryItem, scopedMessageWhere } from "./whatsapp.history.filters.js";
+import type { ConversationListResult, ConversationSummary, ListConversationsQuery, ListMessagesQuery, WhatsAppMessageHistoryItem, WhatsAppMessageListResult } from "./whatsapp.history.types.js";
 import type { CustomerWhatsAppStatus, SendWhatsAppMessageInput, WhatsAppMessageSummary, WhatsAppStatusResult } from "./whatsapp.types.js";
 
 // E7.4: a read-only, richer view (customer/template/order/sender resolved to names, not just ids)
@@ -196,6 +197,66 @@ class WhatsAppService {
     const row = await this.db.whatsAppMessage.findFirst({ where: scopedMessageWhere(id, leadScope), select: HISTORY_SELECT });
     if (!row) throw new ApiError("Message not found", STATUS_CODES.NOT_FOUND);
     return mapMessageHistoryItem(row);
+  }
+
+  // Central WhatsApp Inbox's conversation list: one row per Lead, carrying only their latest
+  // message - built entirely on the same whatsapp_messages table and lead-scope RBAC as
+  // listMessages/getMessage above, never a second data source. Prisma has no native "latest row per
+  // group" query, so this reduces a bounded recent window in memory rather than reaching for raw
+  // SQL - correct and simple at this CRM's real message volume; the window (not the whole table) is
+  // what's paginated, a known, documented limit rather than a silent one.
+  async listConversations(user: AuthUser, query: ListConversationsQuery): Promise<ConversationListResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const where = buildConversationWhere(leadScope, query.search);
+
+    const RECENT_WINDOW = 500;
+    const recent = await this.db.whatsAppMessage.findMany({
+      where,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: RECENT_WINDOW,
+      select: {
+        id: true,
+        leadId: true,
+        direction: true,
+        messageType: true,
+        status: true,
+        body: true,
+        templateName: true,
+        createdAt: true,
+        sentAt: true,
+        receivedAt: true,
+        lead: { select: { id: true, leadNumber: true, firstName: true, lastName: true, mobile: true, normalizedMobile: true } },
+      },
+    });
+
+    const byLead = new Map<string, (typeof recent)[number]>();
+    for (const m of recent) {
+      if (!m.leadId || byLead.has(m.leadId)) continue;
+      byLead.set(m.leadId, m);
+    }
+    const conversations = [...byLead.values()]; // already newest-first, since `recent` was fetched newest-first and only the first occurrence per lead is kept
+
+    const totalItems = conversations.length;
+    const page = conversations.slice((query.page - 1) * query.pageSize, query.page * query.pageSize);
+
+    const items: ConversationSummary[] = page.map((m) => ({
+      leadId: m.lead!.id,
+      leadNumber: m.lead!.leadNumber,
+      name: fullName(m.lead!.firstName, m.lead!.lastName),
+      mobile: m.lead!.mobile ?? m.lead!.normalizedMobile,
+      lastMessage: {
+        id: m.id,
+        direction: m.direction,
+        messageType: m.messageType,
+        status: m.status,
+        body: m.body,
+        templateName: m.templateName,
+        at: (m.direction === "OUTBOUND" ? m.sentAt : m.receivedAt) ?? m.createdAt,
+      },
+      awaitingReply: m.direction === "INBOUND",
+    }));
+
+    return { items, pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) } };
   }
 
   // ---- Webhook-driven persistence (called from whatsapp.webhook.processor.ts). Never invents a

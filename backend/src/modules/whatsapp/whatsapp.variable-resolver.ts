@@ -81,6 +81,7 @@ type Resolver = (ctx: VariableResolutionContext) => string | null;
 
 const REGISTRY: Record<string, Resolver> = {
   customer_name: (ctx) => fullName(ctx.lead.firstName, ctx.lead.lastName),
+  customer_first_name: (ctx) => ctx.lead.firstName,
   customer_mobile: (ctx) => ctx.lead.mobile ?? ctx.lead.normalizedMobile,
   customer_email: (ctx) => ctx.lead.email,
 

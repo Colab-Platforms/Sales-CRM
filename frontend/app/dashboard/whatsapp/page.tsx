@@ -1,5 +1,5 @@
-import { WhatsAppStatusView } from "@/components/whatsapp/whatsapp-status-view";
+import { WhatsAppInboxView } from "@/components/whatsapp/inbox/whatsapp-inbox-view";
 
 export default function WhatsAppPage() {
-  return <WhatsAppStatusView />;
+  return <WhatsAppInboxView />;
 }

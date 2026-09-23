@@ -5,6 +5,7 @@ import {
   getCustomerWhatsAppStatus,
   getWhatsAppMessage,
   getWhatsAppStatus,
+  listWhatsAppConversations,
   listWhatsAppMessages,
   sendWhatsAppMessage,
 } from "./whatsapp.controller.js";
@@ -63,6 +64,11 @@ router.post("/test/order-confirmation", requireAuth, sendOrderConfirmationTest);
 // via ?leadId=, so a second route would only duplicate it.
 router.get("/messages", requireAuth, listWhatsAppMessages);
 router.get("/messages/:id", requireAuth, getWhatsAppMessage);
+
+// Central WhatsApp Inbox (Admin/Telecaller conversation list) - one row per Lead with a message,
+// same lead-scope RBAC as the rest of this block. Registered here, not as a new module, since it
+// reads the exact same whatsapp_messages table via WhatsAppService.
+router.get("/conversations", requireAuth, listWhatsAppConversations);
 
 // E7.6 Lifecycle Automation config. Same ADMIN-only convention as template create/edit/sync above -
 // deciding which template an automated business event sends is an administrative action, not

@@ -29,6 +29,17 @@ export function scopedMessageWhere(id: string, leadScope: Prisma.LeadWhereInput)
   return Object.keys(leadScope).length > 0 ? { AND: [{ id }, { lead: leadScope }] } : { id };
 }
 
+/** Every message that belongs to a real Lead, scoped and optionally name/mobile-searched - the base query the Inbox's conversation list groups by leadId. */
+export function buildConversationWhere(leadScope: Prisma.LeadWhereInput, search?: string): Prisma.WhatsAppMessageWhereInput {
+  const and: Prisma.WhatsAppMessageWhereInput[] = [{ leadId: { not: null } }];
+  if (Object.keys(leadScope).length > 0) and.push({ lead: leadScope });
+  if (search) {
+    const contains = { contains: search, mode: "insensitive" as const };
+    and.push({ lead: { OR: [{ firstName: contains }, { lastName: contains }, { mobile: contains }, { normalizedMobile: contains }] } });
+  }
+  return { AND: and };
+}
+
 export interface MessageHistoryRow {
   id: string;
   provider: WhatsAppMessageHistoryItem["provider"];

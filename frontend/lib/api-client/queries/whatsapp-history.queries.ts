@@ -1,12 +1,13 @@
 import axios from "axios";
 import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { whatsappHistoryApi } from "../endpoints/whatsapp-history.api";
-import type { ListMessagesParams } from "../types/whatsapp-history.types";
+import type { ListConversationsParams, ListMessagesParams } from "../types/whatsapp-history.types";
 
 export const whatsappHistoryKeys = {
   all: ["whatsapp-messages"] as const,
   list: (params: ListMessagesParams) => [...whatsappHistoryKeys.all, "list", params] as const,
   detail: (id: string) => [...whatsappHistoryKeys.all, "detail", id] as const,
+  conversations: (params: ListConversationsParams) => [...whatsappHistoryKeys.all, "conversations", params] as const,
 };
 
 const STALE_TIME_MS = 30 * 1000;
@@ -32,6 +33,16 @@ export function whatsappMessageDetailQueryOptions(id: string) {
     queryKey: whatsappHistoryKeys.detail(id),
     queryFn: () => whatsappHistoryApi.get(id),
     staleTime: STALE_TIME_MS,
+    retry: retryUnlessClientError,
+  });
+}
+
+export function whatsappConversationListQueryOptions(params: ListConversationsParams) {
+  return queryOptions({
+    queryKey: whatsappHistoryKeys.conversations(params),
+    queryFn: () => whatsappHistoryApi.listConversations(params),
+    staleTime: STALE_TIME_MS,
+    placeholderData: keepPreviousData,
     retry: retryUnlessClientError,
   });
 }

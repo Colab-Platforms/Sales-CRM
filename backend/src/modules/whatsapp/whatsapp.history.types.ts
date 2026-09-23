@@ -50,3 +50,38 @@ export interface WhatsAppMessageListResult {
   items: WhatsAppMessageHistoryItem[];
   pagination: Pagination;
 }
+
+// ---- Central WhatsApp Inbox: one row per Lead that has at least one WhatsApp message, carrying
+// only its latest message - built on top of the same whatsapp_messages table / lead-scope RBAC as
+// everything else in this file, never a second data source.
+
+export interface ListConversationsQuery {
+  page: number;
+  pageSize: number;
+  /** Matches against the lead's name/mobile - same idea as the history list's own `search`, scoped to contacts instead of message bodies. */
+  search?: string;
+}
+
+export interface ConversationSummary {
+  leadId: string;
+  leadNumber: string;
+  name: string;
+  mobile: string | null;
+  lastMessage: {
+    id: string;
+    direction: WhatsAppDirection;
+    messageType: WhatsAppMessageType;
+    status: WhatsAppMessageStatus;
+    body: string | null;
+    templateName: string | null;
+    /** sentAt for an OUTBOUND message, receivedAt for an INBOUND one, createdAt otherwise - the same rule the existing conversation view already uses to decide what "the time" of a message is. */
+    at: Date;
+  };
+  /** True only when the lead's own most recent message is INBOUND - i.e. the customer's turn, nobody has replied since. Derived purely from existing direction/recency data; not a stored "read" flag (none exists on WhatsAppMessage). */
+  awaitingReply: boolean;
+}
+
+export interface ConversationListResult {
+  items: ConversationSummary[];
+  pagination: Pagination;
+}

@@ -51,3 +51,33 @@ export interface WhatsAppMessageListResult {
   items: WhatsAppMessageHistoryItem[];
   pagination: Pagination;
 }
+
+// ---- Central WhatsApp Inbox conversation list ----
+
+export interface ListConversationsParams {
+  page: number;
+  pageSize: number;
+  search?: string;
+}
+
+export interface ConversationSummary {
+  leadId: string;
+  leadNumber: string;
+  name: string;
+  mobile: string | null;
+  lastMessage: {
+    id: string;
+    direction: WhatsAppDirection;
+    messageType: string;
+    status: WhatsAppMessageStatus;
+    body: string | null;
+    templateName: string | null;
+    at: string;
+  };
+  awaitingReply: boolean;
+}
+
+export interface ConversationListResult {
+  items: ConversationSummary[];
+  pagination: Pagination;
+}

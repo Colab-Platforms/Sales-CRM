@@ -333,6 +333,92 @@ describe("message detail", () => {
   });
 });
 
+describe("central WhatsApp inbox: listConversations", () => {
+  // These use `search` on a unique, generated first name to isolate results from the dev DB's own
+  // real, pre-existing WhatsApp messages (from earlier real end-to-end sends in this project) - an
+  // unscoped ADMIN query legitimately also sees those, so asserting a bare item count would be flaky.
+
+  it("returns one row per lead, carrying only that lead's latest message", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const uniqueName = `Testlead${uid().slice(0, 8)}`;
+      const lead = await makeLead(tx, { firstName: uniqueName });
+      const base = new Date("2026-09-20T10:00:00Z");
+      await makeMessage(tx, { leadId: lead.id, createdAt: new Date(base.getTime() - 2000), sentAt: new Date(base.getTime() - 2000), body: "first" });
+      await makeMessage(tx, { leadId: lead.id, createdAt: base, sentAt: base, body: "latest" });
+      const svc = new WhatsAppService(tx);
+
+      const result = await svc.listConversations(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: uniqueName });
+      assert.equal(result.items.length, 1);
+      assert.equal(result.items[0].leadId, lead.id);
+      assert.equal(result.items[0].lastMessage.body, "latest");
+    });
+  });
+
+  it("marks awaitingReply true only when the lead's latest message is inbound", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const suffix = uid().slice(0, 8);
+      const leadWaiting = await makeLead(tx, { firstName: `Waiting${suffix}` });
+      const leadAnswered = await makeLead(tx, { firstName: `Answered${suffix}` });
+      await makeMessage(tx, { leadId: leadWaiting.id, direction: "INBOUND", status: "RECEIVED", body: "Are you there?" });
+      await makeMessage(tx, { leadId: leadAnswered.id, direction: "OUTBOUND", status: "SENT" });
+      const svc = new WhatsAppService(tx);
+
+      const result = await svc.listConversations(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: suffix });
+      const waiting = result.items.find((i) => i.leadId === leadWaiting.id);
+      const answered = result.items.find((i) => i.leadId === leadAnswered.id);
+      assert.equal(waiting?.awaitingReply, true);
+      assert.equal(answered?.awaitingReply, false);
+    });
+  });
+
+  it("searches by the lead's name and mobile, not by message body", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const suffix = uid().slice(0, 8);
+      const target = await makeLead(tx, { firstName: `Priyanka${suffix}`, lastName: "Rao", mobile: "9998887770", normalizedMobile: "+919998887770" });
+      const other = await makeLead(tx, { firstName: `Suresh${suffix}`, lastName: "Kumar", mobile: "9998887771", normalizedMobile: "+919998887771" });
+      await makeMessage(tx, { leadId: target.id });
+      await makeMessage(tx, { leadId: other.id });
+      const svc = new WhatsAppService(tx);
+
+      const result = await svc.listConversations(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: `priyanka${suffix}` });
+      assert.equal(result.items.length, 1);
+      assert.equal(result.items[0].leadId, target.id);
+    });
+  });
+
+  it("a salesperson only sees conversations for their own leads", async () => {
+    await inRollback(async (tx) => {
+      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const ownLead = await makeLead(tx, { ownerId: rep1.id });
+      const otherLead = await makeLead(tx, { ownerId: rep2.id });
+      await makeMessage(tx, { leadId: ownLead.id });
+      await makeMessage(tx, { leadId: otherLead.id });
+      const svc = new WhatsAppService(tx);
+
+      const result = await svc.listConversations(as(rep1, Role.SALESPERSON), { page: 1, pageSize: 20 });
+      assert.equal(result.items.length, 1);
+      assert.equal(result.items[0].leadId, ownLead.id);
+    });
+  });
+
+  it("returns an empty page (not an error) when a search matches no lead", async () => {
+    // Scoped via `search` rather than asserting a bare empty result: the dev DB this suite runs
+    // against already has real, pre-existing committed WhatsApp messages (from earlier real
+    // end-to-end sends in this project), which an unscoped ADMIN query legitimately also sees.
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const svc = new WhatsAppService(tx);
+      const result = await svc.listConversations(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: `no-such-lead-${uid()}` });
+      assert.deepEqual(result.items, []);
+      assert.equal(result.pagination.totalItems, 0);
+    });
+  });
+});
+
 describe("read-only guarantee", () => {
   it("listing and viewing messages writes no Activity row and calls no provider", async () => {
     await inRollback(async (tx) => {
