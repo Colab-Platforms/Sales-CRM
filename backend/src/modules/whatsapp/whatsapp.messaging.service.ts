@@ -95,6 +95,34 @@ const DUPLICATE_GUARD_MS = 30_000;
 // This constant exists solely so this one file and the AiSensy dashboard's Campaign name agree.
 export const ORDER_CONFIRMATION_TEMPLATE_NAME = "crm_order_confirmation";
 
+// The CRM has no file-hosting/storage service of its own, and is never allowed to invent one just
+// for this - so a media send only ever forwards a URL the caller already has. This is the one place
+// that URL is actually checked, so "a local filesystem path" or anything not genuinely publicly
+// reachable can never reach AiSensy. Deliberately a plain format/host check, not a network probe
+// (this module must never call out to a caller-supplied host itself, which would be its own SSRF risk).
+export function assertValidMediaUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new ApiError("mediaUrl must be a valid absolute URL (e.g. https://cdn.example.com/file.jpg)", STATUS_CODES.BAD_REQUEST);
+  }
+  if (parsed.protocol !== "https:") {
+    throw new ApiError("mediaUrl must use https - AiSensy requires a publicly accessible URL", STATUS_CODES.BAD_REQUEST);
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isPrivate =
+    host === "localhost" ||
+    host.endsWith(".local") ||
+    host === "127.0.0.1" ||
+    host.startsWith("192.168.") ||
+    host.startsWith("10.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+  if (isPrivate) {
+    throw new ApiError("mediaUrl must be a publicly accessible address, not a local/private host", STATUS_CODES.BAD_REQUEST);
+  }
+}
+
 /** Never the raw number - e.g. "+919876543210" -> "********3210". */
 function maskDestination(mobile: string | null): string {
   if (!mobile) return "-";
@@ -201,6 +229,7 @@ class WhatsAppMessagingService {
     const { lead, order, template, resolution } = await this.loadAndResolve(actor, input, { requireProviderMatch: true });
     if (resolution.errors.length > 0) throw new ApiError(resolution.errors[0], STATUS_CODES.BAD_REQUEST);
     if (!lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
+    if (input.mediaUrl) assertValidMediaUrl(input.mediaUrl); // fail fast, before any provider call or DB write
 
     const provider = this.getProvider()!; // loadAndResolve already confirmed this is non-null and matches the template
 
@@ -224,11 +253,22 @@ class WhatsAppMessagingService {
     const positionalParams = variableOrder.map((name) => resolution.values[name]);
     const contactName = fullName(lead.firstName, lead.lastName);
     const providerTemplateName = template.providerTemplateId ?? template.name;
+    // The actual text this send resolved to and attempted to deliver - the same rendering
+    // previewTemplate() already shows before sending. Bug fix: this was never persisted to
+    // WhatsAppMessage.body (an existing column, already selected/returned everywhere), so every
+    // template send's conversation history had no real message text to show, only the template
+    // name. Stored regardless of send outcome, since a FAILED send still attempted this exact body.
+    // When media is attached, its reference is appended to this same body - WhatsAppMessage has no
+    // dedicated media column (and none is being added), so this existing free-text field is what
+    // records it; the URL renders as a real clickable link in the Inbox (message-bubble.tsx already
+    // linkifies it).
+    const media = input.mediaUrl ? { url: input.mediaUrl, filename: input.mediaFilename } : undefined;
+    const resolvedBody = renderTemplateBody(template.body, resolution.values) + (media ? `\n\n📎 ${media.filename ?? "Attachment"}: ${media.url}` : "");
 
     let providerMessageId: string | null = null;
     let sendError: WhatsAppSendError | null = null;
     try {
-      const result = await provider.sendTemplateMessage({ to: lead.normalizedMobile, templateName: providerTemplateName, params: positionalParams, contactName });
+      const result = await provider.sendTemplateMessage({ to: lead.normalizedMobile, templateName: providerTemplateName, params: positionalParams, contactName, media });
       providerMessageId = result.providerMessageId;
     } catch (error) {
       if (error instanceof WhatsAppSendError) sendError = error;
@@ -258,6 +298,7 @@ class WhatsAppMessagingService {
           toNumber: lead.normalizedMobile,
           normalizedContact: lead.normalizedMobile,
           templateName: template.name,
+          body: resolvedBody,
           sentById: actor.kind === "user" ? actor.user.id : null,
           sentAt: sendError ? null : now,
           failedAt: sendError ? now : null,

@@ -76,6 +76,48 @@ export interface ShipmentDetail {
   linkedShipmentId?: string | null;
 }
 
+// E7.8 (WhatsApp -> CRM Order): manual order entry, same fields the backend's createManualOrder accepts.
+export interface CreateManualOrderItemInput {
+  productId: string;
+  variantId?: string;
+  quantity: number;
+  unitPrice: string;
+  discountAmount?: string;
+}
+
+export interface CreateManualOrderInput {
+  leadId: string;
+  items: CreateManualOrderItemInput[];
+  paymentMethod: PaymentMethod;
+  shippingAddress?: {
+    name?: string;
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    phone?: string;
+  };
+  shippingPincode?: string;
+  shippingAmount?: string;
+  discountAmount?: string;
+  discountReason?: string;
+}
+
+export type ShopifyPushStatus = "created" | "already_linked" | "failed";
+
+export interface ShopifyPushResult {
+  status: ShopifyPushStatus;
+  shopifyOrderId?: string;
+  shopifyOrderName?: string;
+  reason?: string;
+}
+
+export interface CreateManualOrderResult {
+  order: OrderDetail;
+  shopify: ShopifyPushResult;
+}
+
 export interface OrdersListParams {
   page: number;
   pageSize: number;

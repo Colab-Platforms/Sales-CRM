@@ -4,6 +4,15 @@
 
 export type WhatsAppProviderId = "AISENSY" | "GUPSHUP";
 
+export interface SendTemplateMessageMedia {
+  /** Must already be a publicly accessible https URL - never a local filesystem path. The CRM has
+   *  no file-hosting/storage service of its own (see whatsapp.messaging.service.ts's
+   *  assertValidMediaUrl), so this is always a URL the caller already has, never something the CRM
+   *  uploads on their behalf. */
+  url: string;
+  filename?: string;
+}
+
 export interface SendTemplateMessageInput {
   /** Destination WhatsApp number, already normalized (E.164-ish, e.g. "+919876543210"). */
   to: string;
@@ -13,6 +22,11 @@ export interface SendTemplateMessageInput {
   /** Recipient's display name, when known. Some providers (AiSensy) require a name field on every
    *  send; adapters that need one fall back to the phone number rather than inventing a name. */
   contactName?: string;
+  /** Optional media attached to this same template send - AiSensy's Campaign API accepts this
+   *  alongside campaignName/destination/params in one call (documented `media: { url, filename }`
+   *  field), not as a separate free-standing media message. A provider that doesn't support this
+   *  (e.g. Gupshup, not yet wired for it) is free to ignore it. */
+  media?: SendTemplateMessageMedia;
 }
 
 export interface SendTemplateMessageResult {

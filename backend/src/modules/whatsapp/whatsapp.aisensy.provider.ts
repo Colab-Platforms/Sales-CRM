@@ -78,6 +78,10 @@ export class AiSensyProvider implements WhatsAppProvider {
       destination: input.to,
       userName: input.contactName?.trim() || input.to,
       templateParams: input.params,
+      // Documented, optional field on the same Campaign API call - only included when the caller
+      // actually attached media; omitted entirely otherwise so the existing template-only payload
+      // this integration already sends successfully is completely unchanged.
+      ...(input.media ? { media: { url: input.media.url, filename: input.media.filename } } : {}),
     };
 
     let response: Response;

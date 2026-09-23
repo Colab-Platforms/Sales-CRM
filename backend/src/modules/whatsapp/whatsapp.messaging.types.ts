@@ -2,6 +2,12 @@ export interface SendTemplateInput {
   leadId: string;
   templateId: string;
   orderId?: string;
+  /** Optional media attached to this same template send (AiSensy's documented `media: {url,
+   *  filename}` field on the Campaign API). Must already be a publicly accessible https URL - the
+   *  CRM has no file-hosting service of its own, so it never uploads anything on the caller's
+   *  behalf; see whatsapp.messaging.service.ts's assertValidMediaUrl for what's rejected. */
+  mediaUrl?: string;
+  mediaFilename?: string;
 }
 
 export type PreviewTemplateInput = SendTemplateInput;

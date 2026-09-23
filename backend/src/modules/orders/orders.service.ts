@@ -1,12 +1,17 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { ActivityType, Role, UserStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, getManagerTeam, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
+import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
+import { ShopifyClient } from "../shopify/shopify.client.js";
+import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
+import { createShopifyOrder, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import {
   buildOrderWhere,
   computePaymentBreakdown,
@@ -17,13 +22,25 @@ import {
 } from "./orders.filters.js";
 import {
   ORDER_REFERENCE_TYPE,
+  type CreateManualOrderInput,
+  type CreateManualOrderResult,
   type ListOrdersQuery,
   type OrderDetail,
   type OrderFilterOptions,
   type OrderListResult,
   type OrderStatusHistory,
+  type ShopifyPushResult,
   type StatusHistoryEntry,
 } from "./orders.types.js";
+
+// Distinct "CRM-" prefix so a manually-entered order's number is never confused with a Shopify one
+// ("SHP-<name>") at a glance, in the UI or in a support conversation - same generator shape as
+// generateLeadNumber (@/utils/leadNumber.js).
+function generateManualOrderNumber(): string {
+  const timestamp = Date.now().toString(36).toUpperCase();
+  const random = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `CRM-${timestamp}-${random}`;
+}
 
 const LIST_SELECT = {
   id: true,
@@ -106,7 +123,14 @@ const ACTIVITY_EVENT = {
 } as const;
 
 class OrdersService {
-  constructor(private readonly db: DbClient = prisma) {}
+  // getShopifyClient is injectable so tests never construct a real client (which would read real
+  // env credentials) - same "factory the constructor can override" shape as WhatsAppMessagingService's
+  // getProvider. Wrapped in a function (not a stored instance) so a missing/bad config is only ever
+  // discovered at the moment a Shopify push is actually attempted, not at service construction.
+  constructor(
+    private readonly db: DbClient = prisma,
+    private readonly getShopifyClient: () => ShopifyClient = () => new ShopifyClient(loadShopifyConfig()),
+  ) {}
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
     const leadScope = await getLeadScope(user, this.db);
@@ -269,6 +293,217 @@ class OrdersService {
         linkedShipmentId: shipment.externalSource === "SHOPIFY" && shipment.trackingNumber ? (directByAwb.get(normalizeAwb(shipment.trackingNumber)) ?? null) : null,
       })),
     };
+  }
+
+  // E7.8 (WhatsApp -> CRM Order): the CRM's one and only manual order-entry path - used by the
+  // WhatsApp Inbox's "Create Order" action, but not specific to it; any caller with a lead in scope
+  // can use it. Writes the exact same Order/OrderItem/Payment rows every other order path
+  // (Shopify sync) writes, so it appears through listOrders/getOrder/Customer 360 automatically -
+  // there is no separate WhatsApp-only order record. source: SALESPERSON marks it as staff-entered,
+  // the same value a human-created order already used before this method existed.
+  async createManualOrder(user: AuthUser, input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, leadScope), select: { id: true } });
+    // Out-of-scope reads the same as missing, same convention as every other single-lead lookup.
+    if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+
+    const productIds = [...new Set(input.items.map((i) => i.productId))];
+    const products = await this.db.product.findMany({
+      where: { id: { in: productIds } },
+      select: { id: true, name: true, sku: true, variants: { select: { id: true, name: true, sku: true } } },
+    });
+    const productById = new Map(products.map((p) => [p.id, p]));
+
+    const itemRows = input.items.map((item) => {
+      const product = productById.get(item.productId);
+      if (!product) throw new ApiError(`Product not found: ${item.productId}`, STATUS_CODES.BAD_REQUEST);
+      const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
+      if (item.variantId && !variant) throw new ApiError(`Variant not found on this product: ${item.variantId}`, STATUS_CODES.BAD_REQUEST);
+
+      const lineTotalCents = toCents(item.unitPrice) * item.quantity - toCents(item.discountAmount);
+      return {
+        id: randomUUID(),
+        productId: product.id,
+        variantId: variant?.id ?? null,
+        productNameSnapshot: product.name,
+        variantNameSnapshot: variant?.name ?? null,
+        skuSnapshot: variant?.sku ?? product.sku ?? null,
+        quantity: item.quantity,
+        unitPrice: item.unitPrice,
+        discountAmount: item.discountAmount ?? "0",
+        taxAmount: "0",
+        totalPrice: fromCents(Math.max(lineTotalCents, 0)),
+      };
+    });
+
+    const subtotalCents = itemRows.reduce((sum, r) => sum + toCents(r.unitPrice) * r.quantity, 0);
+    const itemDiscountCents = itemRows.reduce((sum, r) => sum + toCents(r.discountAmount), 0);
+    const orderDiscountCents = toCents(input.discountAmount);
+    const shippingCents = toCents(input.shippingAmount);
+    const totalCents = Math.max(subtotalCents - itemDiscountCents - orderDiscountCents + shippingCents, 0);
+
+    const isCod = input.paymentMethod === "COD";
+    const now = new Date();
+    const orderId = randomUUID();
+
+    // Same "generate, try, retry on the rare collision" idiom as createLeadWithUniqueNumber -
+    // orderNumber is @unique, so a clash (astronomically unlikely, but real) must never 500.
+    let createdOrderId: string | null = null;
+    for (let attempt = 0; attempt < 5 && !createdOrderId; attempt++) {
+      try {
+        await this.db.$transaction(async (tx) => {
+          await tx.order.create({
+            data: {
+              id: orderId,
+              orderNumber: generateManualOrderNumber(),
+              leadId: lead.id,
+              createdById: user.id,
+              source: "SALESPERSON",
+              status: isCod ? "CONFIRMED" : "PENDING_PAYMENT",
+              subtotal: fromCents(subtotalCents),
+              discountAmount: fromCents(itemDiscountCents + orderDiscountCents),
+              taxAmount: "0",
+              shippingAmount: input.shippingAmount ?? "0",
+              totalAmount: fromCents(totalCents),
+              discountReason: input.discountReason,
+              shippingAddress: input.shippingAddress ?? undefined,
+              shippingPincode: input.shippingPincode ?? input.shippingAddress?.pincode,
+              // Free-form, existing field (Order.metadata) - never a new column. paymentMode mirrors
+              // the exact same derived value Shopify-synced orders already carry (shopify.mapper.ts).
+              metadata: { paymentMode: isCod ? "COD" : "PREPAID", createdVia: "WHATSAPP_INBOX" },
+              placedAt: now,
+              confirmedAt: isCod ? now : null,
+              items: { createMany: { data: itemRows } },
+              payments: { create: { amount: fromCents(totalCents), currency: "INR", method: input.paymentMethod, status: "PENDING" } },
+            },
+          });
+          await tx.activity.create({
+            data: {
+              leadId: lead.id,
+              orderId,
+              actorId: user.id,
+              actorRole: user.role,
+              type: ActivityType.ORDER_CREATED,
+              referenceType: ORDER_REFERENCE_TYPE,
+              referenceId: orderId,
+              source: ActivitySource.USER,
+              title: "Order created from WhatsApp Inbox",
+            },
+          });
+        });
+        createdOrderId = orderId;
+      } catch (error: any) {
+        if (error?.code === "P2002" && attempt < 4) continue; // orderNumber collision - retry with a new one
+        throw error;
+      }
+    }
+    if (!createdOrderId) throw new ApiError("Failed to generate a unique order number", STATUS_CODES.SERVER_ERROR);
+
+    // Best-effort, immediately after: the CRM order is already durably committed above regardless of
+    // what happens here. A Shopify failure is reported, never hidden, and never rolls back or
+    // duplicates the CRM order - retrying just calls pushOrderToShopify again (see there for why
+    // that's always safe).
+    const shopify = await this.pushOrderToShopify(user, createdOrderId);
+    const order = await this.getOrder(user, createdOrderId);
+    return { order, shopify };
+  }
+
+  // Pushes an already-created CRM order to Shopify via the Admin GraphQL orderCreate mutation - the
+  // one and only Shopify write in this codebase (shopify.sync.ts/shopify.orders.ts stay read-only).
+  // Idempotent by construction: once externalId is set, this only ever returns "already_linked" and
+  // never calls Shopify again - the safe way to let a caller "retry" after a failure without ever
+  // creating a second Shopify order for the same CRM order.
+  async pushOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const order = await this.db.order.findFirst({
+      where: scopedOrderWhere(orderId, leadScope),
+      select: {
+        id: true,
+        orderNumber: true,
+        currency: true,
+        externalSource: true,
+        externalId: true,
+        externalNumber: true,
+        shippingAddress: true,
+        shippingPincode: true,
+        lead: { select: { firstName: true, lastName: true, mobile: true, normalizedMobile: true, email: true } },
+        items: {
+          select: {
+            quantity: true,
+            unitPrice: true,
+            productNameSnapshot: true,
+            product: { select: { externalId: true } },
+            variant: { select: { externalId: true } },
+          },
+        },
+        payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" }, take: 1 },
+      },
+    });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+
+    if (order.externalId) {
+      // Already linked - whether by this same push earlier, or because the order actually came FROM
+      // Shopify sync in the first place. Either way, never create a second Shopify order for it.
+      return { status: "already_linked", shopifyOrderId: order.externalId, shopifyOrderName: order.externalNumber ?? undefined };
+    }
+
+    let client: ShopifyClient;
+    try {
+      client = this.getShopifyClient();
+    } catch (error) {
+      if (error instanceof ShopifyConfigError) return { status: "failed", reason: error.message };
+      throw error;
+    }
+
+    const address = (order.shippingAddress ?? {}) as Record<string, string | null | undefined>;
+    const shippingAddress: ShopifyOrderCreateInput["shippingAddress"] = order.shippingAddress
+      ? {
+          firstName: order.lead.firstName,
+          lastName: order.lead.lastName ?? undefined,
+          address1: address.line1 ?? undefined,
+          address2: address.line2 ?? undefined,
+          city: address.city ?? undefined,
+          province: address.state ?? undefined,
+          zip: address.pincode ?? order.shippingPincode ?? undefined,
+          country: "IN",
+          phone: address.phone ?? order.lead.normalizedMobile ?? undefined,
+        }
+      : undefined;
+
+    const input: ShopifyOrderCreateInput = {
+      lineItems: order.items.map((item) =>
+        item.variant?.externalId
+          ? { variantId: item.variant.externalId, quantity: item.quantity }
+          : { title: item.productNameSnapshot, quantity: item.quantity, priceAmount: item.unitPrice.toString() },
+      ),
+      email: order.lead.email ?? undefined,
+      phone: order.lead.normalizedMobile ?? undefined,
+      currency: order.currency,
+      // Reflects the CRM's own recorded payment status, not the payment METHOD - a not-yet-collected
+      // prepaid order is exactly as unpaid as a COD one until a payment actually succeeds.
+      financialStatus: order.payments[0]?.status === "SUCCESS" ? "PAID" : "PENDING",
+      note: `Created in the CRM (${order.orderNumber}) via the WhatsApp Inbox.`,
+      shippingAddress,
+    };
+
+    try {
+      const result = await createShopifyOrder(client, input);
+      // Guarded by the same id + "still unlinked" condition just checked above, so two concurrent
+      // pushes can never both win and create two Shopify orders for this one CRM order.
+      const { count } = await this.db.order.updateMany({
+        where: { id: orderId, externalId: null },
+        data: { externalSource: "SHOPIFY", externalId: result.shopifyOrderId, externalNumber: result.shopifyOrderName, externalUpdatedAt: new Date() },
+      });
+      if (count === 0) {
+        // Lost a race to a concurrent push that already linked it - report that one, not a phantom second order.
+        const linked = await this.db.order.findUniqueOrThrow({ where: { id: orderId }, select: { externalId: true, externalNumber: true } });
+        return { status: "already_linked", shopifyOrderId: linked.externalId!, shopifyOrderName: linked.externalNumber ?? undefined };
+      }
+      return { status: "created", shopifyOrderId: result.shopifyOrderId, shopifyOrderName: result.shopifyOrderName };
+    } catch (error) {
+      if (error instanceof ShopifyOrderCreateError) return { status: "failed", reason: error.message };
+      throw error;
+    }
   }
 
   // Foundation only: there is no status-history table yet, so this combines recorded

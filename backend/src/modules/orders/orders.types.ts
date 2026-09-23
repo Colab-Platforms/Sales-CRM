@@ -11,6 +11,54 @@ export type PaymentStatusFilter = PaymentStatus | typeof NO_PAYMENT;
 // `Activity.referenceType` value for rows that point at an order.
 export const ORDER_REFERENCE_TYPE = "Order";
 
+// E7.8 (WhatsApp -> CRM Order): the CRM's own manual order-entry path, used by the "Create Order"
+// action in the WhatsApp Inbox. Reuses the exact same Order/OrderItem/Payment models and OrderDetail
+// response every other order path already uses - never a parallel/WhatsApp-only order record.
+export interface CreateManualOrderItemInput {
+  productId: string;
+  variantId?: string;
+  quantity: number;
+  unitPrice: Money;
+  discountAmount?: Money;
+}
+
+export interface CreateManualOrderInput {
+  leadId: string;
+  items: CreateManualOrderItemInput[];
+  paymentMethod: PaymentMethod;
+  shippingAddress?: {
+    name?: string;
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    phone?: string;
+  };
+  shippingPincode?: string;
+  shippingAmount?: Money;
+  discountAmount?: Money;
+  discountReason?: string;
+}
+
+export type ShopifyPushStatus = "created" | "already_linked" | "failed";
+
+export interface ShopifyPushResult {
+  status: ShopifyPushStatus;
+  shopifyOrderId?: string;
+  shopifyOrderName?: string;
+  /** Set only when status is "failed" - the real reason (from ShopifyOrderCreateError/config), never
+   *  invented, never a generic "something went wrong". */
+  reason?: string;
+}
+
+// The combined, honest result of "create a CRM order, then best-effort try to push it to Shopify" -
+// each half's own real outcome, never a single flag that papers over a partial failure.
+export interface CreateManualOrderResult {
+  order: OrderDetail;
+  shopify: ShopifyPushResult;
+}
+
 export interface ListOrdersQuery {
   page: number;
   pageSize: number;

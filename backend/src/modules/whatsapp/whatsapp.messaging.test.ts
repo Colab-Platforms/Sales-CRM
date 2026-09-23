@@ -2,6 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
 import { ORDER_ONLY_VARIABLES, RESOLVABLE_VARIABLES, resolveTemplateVariables, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
+import { assertValidMediaUrl } from "./whatsapp.messaging.service.js";
 
 const lead = { firstName: "Mahadev", lastName: "Babar", mobile: "+919876543210", normalizedMobile: "+919876543210", email: "mahadev@example.invalid" };
 
@@ -95,5 +96,41 @@ describe("renderTemplateBody (provider-agnostic preview rendering)", () => {
 
   it("leaves a placeholder untouched if no value was supplied for it, rather than throwing", () => {
     assert.equal(renderTemplateBody("Hi {{customer_name}}, {{unresolved}}", { customer_name: "Priya" }), "Hi Priya, {{unresolved}}");
+  });
+});
+
+describe("assertValidMediaUrl (the one gate before any media URL reaches AiSensy)", () => {
+  it("accepts a genuine public https URL", () => {
+    assert.doesNotThrow(() => assertValidMediaUrl("https://cdn.example.com/brochure.pdf"));
+  });
+
+  it("rejects a local filesystem path - never reaches AiSensy", () => {
+    // A bare Unix-style path fails outright to parse as a URL at all.
+    assert.throws(() => assertValidMediaUrl("/var/uploads/file.jpg"), /valid absolute URL/);
+    // A Windows path parses (the WHATWG URL parser reads "C:" as a scheme), but is then rejected by
+    // the https-only check just like any other non-https scheme - still never reaches AiSensy.
+    assert.throws(() => assertValidMediaUrl("C:\\Users\\me\\file.jpg"), /https/);
+  });
+
+  it("rejects a file:// URL", () => {
+    assert.throws(() => assertValidMediaUrl("file:///etc/passwd"), /https/);
+  });
+
+  it("rejects plain http (not https)", () => {
+    assert.throws(() => assertValidMediaUrl("http://cdn.example.com/file.jpg"), /https/);
+  });
+
+  it("rejects localhost/private hosts, which are never publicly accessible", () => {
+    assert.throws(() => assertValidMediaUrl("https://localhost/file.jpg"), /publicly accessible/);
+    assert.throws(() => assertValidMediaUrl("https://127.0.0.1/file.jpg"), /publicly accessible/);
+    assert.throws(() => assertValidMediaUrl("https://192.168.1.5/file.jpg"), /publicly accessible/);
+    assert.throws(() => assertValidMediaUrl("https://10.0.0.5/file.jpg"), /publicly accessible/);
+    assert.throws(() => assertValidMediaUrl("https://172.16.0.5/file.jpg"), /publicly accessible/);
+    assert.throws(() => assertValidMediaUrl("https://my-box.local/file.jpg"), /publicly accessible/);
+  });
+
+  it("rejects garbage/empty input rather than guessing", () => {
+    assert.throws(() => assertValidMediaUrl(""), /valid absolute URL/);
+    assert.throws(() => assertValidMediaUrl("not a url"), /valid absolute URL/);
   });
 });

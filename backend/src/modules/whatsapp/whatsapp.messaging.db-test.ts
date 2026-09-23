@@ -137,7 +137,11 @@ describe("sending a template message", () => {
       assert.equal(result.status, "SENT");
       assert.equal(result.templateId, template.id);
       assert.equal(result.orderId, order.id);
-      assert.deepEqual(capturedParams, ["Mahadev Babar", (await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { orderNumber: true } })).orderNumber]);
+      const orderNumber = (await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { orderNumber: true } })).orderNumber;
+      assert.deepEqual(capturedParams, ["Mahadev Babar", orderNumber]);
+      // The actual resolved text, not just the template name - this is what the Inbox/Customer 360
+      // chat view shows as the message body; previously never persisted (bug fix).
+      assert.equal(result.body, `Hi Mahadev Babar, your order ${orderNumber} is confirmed.`);
 
       const activity = await tx.activity.findFirst({ where: { type: ActivityType.WHATSAPP_MESSAGE_SENT, referenceId: result.id } });
       assert.ok(activity);
@@ -244,6 +248,9 @@ describe("sending a template message", () => {
       assert.equal(result.status, "FAILED");
       assert.equal(result.providerMessageId, null);
       assert.match(result.errorMessage ?? "", /rejected/);
+      // Even a failed send records what text was actually attempted - never left null just because
+      // the provider rejected it.
+      assert.equal(result.body, "Hi Mahadev Babar");
 
       const activity = await tx.activity.findFirst({ where: { type: ActivityType.WHATSAPP_FAILED, referenceId: result.id } });
       assert.ok(activity, "a failed send is still audited");
@@ -299,6 +306,86 @@ describe("sending a template message", () => {
       const result = await svc.sendTemplate(as(admin, Role.ADMIN), { leadId: lead.id, templateId: template.id });
       const stored = await tx.whatsAppMessage.findUniqueOrThrow({ where: { id: result.id }, select: { leadId: true } });
       assert.equal(stored.leadId, otherLead.id, "returns the row that actually won the unique constraint, not a crash");
+    });
+  });
+});
+
+describe("optional media on a template send (AiSensy's documented media: {url, filename})", () => {
+  it("passes media through to the provider exactly as given, and records it in the message body", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
+      let capturedMedia: { url: string; filename?: string } | undefined;
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider({
+        sendTemplateMessage: async (input) => {
+          capturedMedia = input.media;
+          return { providerMessageId: "wamid-media-1", raw: {} };
+        },
+      }));
+
+      const result = await svc.sendTemplate(as(admin, Role.ADMIN), {
+        leadId: lead.id,
+        templateId: template.id,
+        mediaUrl: "https://cdn.example.com/brochure.pdf",
+        mediaFilename: "brochure.pdf",
+      });
+
+      assert.deepEqual(capturedMedia, { url: "https://cdn.example.com/brochure.pdf", filename: "brochure.pdf" });
+      assert.equal(result.status, "SENT");
+      assert.match(result.body ?? "", /Hi Mahadev Babar/);
+      assert.match(result.body ?? "", /brochure\.pdf: https:\/\/cdn\.example\.com\/brochure\.pdf/);
+    });
+  });
+
+  it("omits media entirely from the provider call when none is given - existing template sends are unchanged", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
+      let capturedInput: { media?: unknown } | undefined;
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider({
+        sendTemplateMessage: async (input) => {
+          capturedInput = input;
+          return { providerMessageId: "wamid-no-media-1", raw: {} };
+        },
+      }));
+
+      const result = await svc.sendTemplate(as(admin, Role.ADMIN), { leadId: lead.id, templateId: template.id });
+
+      assert.equal(capturedInput?.media, undefined, "no media key at all when none was attached");
+      assert.equal(result.body, "Hi Mahadev Babar", "body is exactly the resolved template text - no stray attachment line");
+    });
+  });
+
+  it("rejects a non-https/local media URL before ever calling the provider, and persists nothing", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
+      let providerCalled = false;
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider({ sendTemplateMessage: async () => { providerCalled = true; return { providerMessageId: "wamid-x", raw: {} }; } }));
+
+      await assert.rejects(
+        () => svc.sendTemplate(as(admin, Role.ADMIN), { leadId: lead.id, templateId: template.id, mediaUrl: "http://not-https.example.com/file.jpg" }),
+        (e: any) => e.statusCode === 400,
+      );
+      assert.equal(providerCalled, false, "an invalid media URL never reaches the provider");
+      assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id } }), 0, "nothing is persisted for a rejected send");
+    });
+  });
+
+  it("still applies the normal template-status/scope rules when media is attached - media is not a bypass", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const template = await makeTemplate(tx, { status: WhatsAppTemplateStatus.DRAFT });
+      const svc = new WhatsAppMessagingService(tx, () => fakeProvider());
+
+      await assert.rejects(
+        () => svc.sendTemplate(as(admin, Role.ADMIN), { leadId: lead.id, templateId: template.id, mediaUrl: "https://cdn.example.com/a.jpg" }),
+        (e: any) => e.statusCode === 400,
+      );
     });
   });
 });
