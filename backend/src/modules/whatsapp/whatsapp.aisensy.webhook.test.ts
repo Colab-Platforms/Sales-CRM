@@ -112,6 +112,58 @@ const REAL_OUTBOUND_MESSAGE_CREATED_PAYLOAD = {
   project_id: "6a6088353b43790e9cbf6114",
 };
 
+// The exact real payloads captured 2026-09-23 from a genuine CRM-originated send (sender "API") -
+// see whatsapp.aisensy.provider.ts and this file's own header comment for why. Confirms `messageId`
+// is UNSTABLE across an outbound message's lifecycle ("AS-..." at creation, a real "wamid..." once
+// delivered) while `submitted_message_id` is the one field that stays identical throughout.
+const REAL_API_SUBMITTED_ID = "b75aee45-53ff-4f2f-80a6-e9343410276d";
+const REAL_API_MESSAGE_CREATED_PAYLOAD = {
+  id: "742d0ed0-31ac-4fe1-92f8-e1c30f290d51",
+  data: {
+    message: {
+      id: "6ab365ba5f00cedd03f47467",
+      sender: "API",
+      status: undefined,
+      sent_at: 1790141882626,
+      userName: "Vishwaa Reddy",
+      messageId: "AS-WzW2X9eaL_HytellnPajBIPnpEKTxFyxPs3r", // AiSensy-internal id, NOT the eventual wamid
+      submitted_message_id: REAL_API_SUBMITTED_ID,
+      contact_id: "6a6452b80405540002a17805",
+      project_id: "6a6088353b43790e9cbf6114",
+      countryCode: "91",
+      message_type: "TEXT",
+      phone_number: "919321614025",
+      campaign: { _id: "6ab3605350f75a17882adfa1", name: "CRM Outbound Test" },
+      message_content: { text: "Hello Vishwaa,\n\nThank you for registering with Avatar India. ✅", isTemplate: true },
+    },
+  },
+  topic: "message.created",
+  created_at: "2026-09-23T05:38:08.326Z",
+  project_id: "6a6088353b43790e9cbf6114",
+};
+
+function realApiStatusPayload(status: "DELIVERED" | "SENT"): Record<string, unknown> {
+  return {
+    id: "6ab365c40ccc5e8303eaf3b5",
+    data: {
+      message: {
+        id: "6ab365ba5f00cedd03f47467",
+        sender: "API",
+        status,
+        sent_at: 1790141882626,
+        delivered_at: 1790141891000,
+        messageId: "wamid.HBgMOTE5MzIxNjE0MDI1FQIAERgSRDE1NjU3REIyQUREQjk1QUFEAA==", // the real wamid - different from message.created's "AS-..." id
+        submitted_message_id: REAL_API_SUBMITTED_ID, // identical across every event for this message
+        phone_number: "919321614025",
+        template_name: "avatar_registration",
+      },
+    },
+    topic: "message.status.updated",
+    created_at: "2026-09-23T05:38:17.477Z",
+    project_id: "6a6088353b43790e9cbf6114",
+  };
+}
+
 interface Row {
   id: string;
   eventType: string;
@@ -392,6 +444,22 @@ describe("parseAiSensyMessageStatusUpdate - only the confirmed real shape, never
     const nothingAtAll = { data: { message: { messageId: "wamid.x", status: "READ" } } };
     assert.equal(parseAiSensyMessageStatusUpdate(nothingAtAll, () => fixedNow)!.timestamp.getTime(), fixedNow.getTime());
   });
+
+  it("correlates a real CRM-originated (sender=API) status update by submitted_message_id, NOT by messageId - confirmed 2026-09-23: messageId itself changes between message.created (\"AS-...\") and message.status.updated (a real wamid) for the exact same message", () => {
+    const update = parseAiSensyMessageStatusUpdate(realApiStatusPayload("DELIVERED"));
+    assert.ok(update);
+    assert.equal(update!.providerMessageId, REAL_API_SUBMITTED_ID);
+    assert.notEqual(update!.providerMessageId, "wamid.HBgMOTE5MzIxNjE0MDI1FQIAERgSRDE1NjU3REIyQUREQjk1QUFEAA==", "messageId is deliberately NOT used when submitted_message_id is present");
+    assert.equal(update!.status, "DELIVERED");
+  });
+
+  it("still falls back to messageId when submitted_message_id is absent or blank (inbound messages, and any older payload without this field)", () => {
+    const blank = { data: { message: { messageId: "wamid.legacy", submitted_message_id: "", status: "SENT" } } };
+    assert.equal(parseAiSensyMessageStatusUpdate(blank)!.providerMessageId, "wamid.legacy");
+
+    const absent = { data: { message: { messageId: "wamid.legacy2", status: "SENT" } } };
+    assert.equal(parseAiSensyMessageStatusUpdate(absent)!.providerMessageId, "wamid.legacy2");
+  });
 });
 
 describe("parseAiSensyMessageCreated - only the confirmed real shape, never a guess", () => {
@@ -410,6 +478,11 @@ describe("parseAiSensyMessageCreated - only the confirmed real shape, never a gu
   it("recognises the real captured chatbot (sender ASSISTANT) delivery as outbound_ignored, never as inbound", () => {
     const result = parseAiSensyMessageCreated(REAL_OUTBOUND_MESSAGE_CREATED_PAYLOAD);
     assert.equal(result.kind, "outbound_ignored");
+  });
+
+  it("recognises a real CRM-originated (sender=API) delivery as api_sender_ignored, never as inbound or a duplicate write", () => {
+    const result = parseAiSensyMessageCreated(REAL_API_MESSAGE_CREATED_PAYLOAD);
+    assert.equal(result.kind, "api_sender_ignored");
   });
 
   it("reports unsupported (never guesses a direction) for an unrecognised sender value", () => {
@@ -463,6 +536,14 @@ describe("processAiSensyProjectWebhookEvent - branches that never touch the data
   it("ignores a chatbot (outbound) message.created without touching the database", async () => {
     const { store, rows } = memoryStore();
     const { id } = await store.record({ eventType: "message.created", externalEventId: "e5", payload: REAL_OUTBOUND_MESSAGE_CREATED_PAYLOAD });
+    const outcome = await processAiSensyProjectWebhookEvent(id, { store, db: throwingDb });
+    assert.equal(outcome, "ignored");
+    assert.equal(rows.find((r) => r.id === id)!.status, "IGNORED");
+  });
+
+  it("ignores a real CRM-originated (sender=API) message.created without touching the database - already recorded by the send itself", async () => {
+    const { store, rows } = memoryStore();
+    const { id } = await store.record({ eventType: "message.created", externalEventId: "e-api", payload: REAL_API_MESSAGE_CREATED_PAYLOAD });
     const outcome = await processAiSensyProjectWebhookEvent(id, { store, db: throwingDb });
     assert.equal(outcome, "ignored");
     assert.equal(rows.find((r) => r.id === id)!.status, "IGNORED");

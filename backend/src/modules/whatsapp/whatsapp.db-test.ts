@@ -203,13 +203,19 @@ describe("inbound message matching (Phase 6: never invents a customer)", () => {
 
   it("stores a message from an unmatched sender with leadId null, and writes no Activity", async () => {
     await inRollback(async (tx) => {
+      // A before/after delta, not an absolute 0: this shared dev database already has real
+      // WHATSAPP_MESSAGE_RECEIVED Activity rows from live end-to-end AiSensy testing (a real
+      // inbound message that DID match a real lead), unrelated to this test - see
+      // whatsapp.aisensy.webhook.db-test.ts for the same pattern used elsewhere in this module.
+      const activitiesBefore = await tx.activity.count({ where: { type: ActivityType.WHATSAPP_MESSAGE_RECEIVED } });
+
       const svc = new WhatsAppService(tx);
       const unknownNumber = `9${Date.now()}`.slice(0, 10);
       await svc.recordInboundMessage("AISENSY", { providerMessageId: "wamid-unmatched", from: unknownNumber, to: null, messageType: "TEXT", text: "Hello", timestamp: new Date() });
 
       const stored = await tx.whatsAppMessage.findUniqueOrThrow({ where: { provider_providerMessageId: { provider: "AISENSY", providerMessageId: "wamid-unmatched" } } });
       assert.equal(stored.leadId, null);
-      assert.equal(await tx.activity.count({ where: { type: ActivityType.WHATSAPP_MESSAGE_RECEIVED } }), 0, "no lead to attach an activity to");
+      assert.equal(await tx.activity.count({ where: { type: ActivityType.WHATSAPP_MESSAGE_RECEIVED } }), activitiesBefore, "no NEW activity - there was no lead to attach one to");
     });
   });
 

@@ -103,7 +103,14 @@ export class AiSensyProvider implements WhatsAppProvider {
       throw new WhatsAppSendError(`AiSensy rejected the message (HTTP ${response.status})`, parsed);
     }
 
-    const providerMessageId = isObject(parsed) && typeof parsed.id === "string" ? parsed.id : null;
+    // CONFIRMED via a real send (see whatsapp.aisensy.webhook.events.ts's header comment): the
+    // response's own `id` field is not present/usable in practice - `submitted_message_id` is what
+    // actually correlates this send with its later message.status.updated webhooks (that field is
+    // identical across a message's whole real lifecycle; `messageId` itself is NOT - it starts as an
+    // AiSensy-internal id at creation and only becomes a real wamid once WhatsApp delivers it, so it
+    // can never be captured correctly at send time). `id` is kept only as a fallback in case some
+    // response shape genuinely uses it - never assumed, always still an exact value, never guessed.
+    const providerMessageId = isObject(parsed) && typeof parsed.submitted_message_id === "string" ? parsed.submitted_message_id : isObject(parsed) && typeof parsed.id === "string" ? parsed.id : null;
     return { providerMessageId, raw: parsed };
   }
 

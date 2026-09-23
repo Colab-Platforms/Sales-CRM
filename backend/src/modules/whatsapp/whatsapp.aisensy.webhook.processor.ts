@@ -82,7 +82,7 @@ async function processStatusUpdate(payload: unknown, deps: AiSensyProjectWebhook
 async function processMessageCreated(payload: unknown, deps: AiSensyProjectWebhookProcessorDeps, id: string, now: () => Date): Promise<ProcessOutcome> {
   const result = parseAiSensyMessageCreated(payload, now);
 
-  if (result.kind === "outbound_ignored") {
+  if (result.kind === "outbound_ignored" || result.kind === "api_sender_ignored") {
     logger.info(`AiSensy message.created: ${result.reason}`);
     await deps.store.complete(id, "IGNORED", now());
     return "ignored";

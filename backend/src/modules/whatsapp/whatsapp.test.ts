@@ -198,6 +198,20 @@ describe("AiSensyProvider", () => {
     assert.deepEqual(body.templateParams, ["Ravi", "SHP-100"]);
   });
 
+  it("prefers submitted_message_id over id - confirmed 2026-09-23 as the stable correlation key a real send response and its later status webhooks actually share", async () => {
+    const fetchImpl = (async () => jsonResponse(200, { id: "should-not-be-used", submitted_message_id: "b75aee45-53ff-4f2f-80a6-e9343410276d" })) as typeof fetch;
+    const provider = new AiSensyProvider(aisensyConfig(), { fetchImpl });
+    const result = await provider.sendTemplateMessage({ to: "+919876543210", templateName: "t", params: [] });
+    assert.equal(result.providerMessageId, "b75aee45-53ff-4f2f-80a6-e9343410276d");
+  });
+
+  it("falls back to id when submitted_message_id is absent from the response", async () => {
+    const fetchImpl = (async () => jsonResponse(200, { id: "aisensy-msg-1" })) as typeof fetch;
+    const provider = new AiSensyProvider(aisensyConfig(), { fetchImpl });
+    const result = await provider.sendTemplateMessage({ to: "+919876543210", templateName: "t", params: [] });
+    assert.equal(result.providerMessageId, "aisensy-msg-1");
+  });
+
   it("falls back to the phone number as userName when no contact name is known", async () => {
     let captured: any = null;
     const fetchImpl = (async (_url: string, init: RequestInit) => {

@@ -56,6 +56,19 @@ export function deliveryId(rawBody: Buffer): string {
 // from this account's own AiSensy project; see whatsapp.aisensy.webhook.processor.ts for how this
 // is used). Everything below reads only fields that were actually present in that captured delivery
 // - nothing here is guessed. No other topic gets a parser yet; see TOPICS_OBSERVED_IN_DASHBOARD above.
+//
+// CORRELATION KEY, confirmed 2026-09-23 from a real CRM-originated send: `data.message.messageId` is
+// NOT stable for an outbound message across its own lifecycle - it is an AiSensy-internal
+// "AS-..." id on the message.created delivery, and only becomes the real WhatsApp "wamid..." id once
+// WhatsApp actually delivers it (both were observed for the exact same message in this account's real
+// test). `data.message.submitted_message_id`, by contrast, was identical (a stable UUID) across
+// message.created and every subsequent message.status.updated for that same message - it is the id
+// AiSensy assigns at submission time, which is why AiSensyProvider.sendTemplateMessage() now captures
+// it from the send response as providerMessageId (see whatsapp.aisensy.provider.ts). Matching
+// therefore prefers submitted_message_id, falling back to messageId only when it is absent - which
+// covers inbound messages (sender=USER), where submitted_message_id is always empty (the customer,
+// not this CRM, originated the message) and messageId - a real wamid from the moment WhatsApp
+// receives it - is already the correct, stable key (see parseAiSensyMessageCreated below, unchanged).
 
 // Confirmed statuses so far: SENT, DELIVERED, READ (DELIVERED confirmed 2026-09-22 from a real
 // chatbot delivery in this account - see the task that added it) - all three map 1:1 onto the CRM's
@@ -88,15 +101,19 @@ function msEpochToDate(value: unknown): Date | null {
  * NormalizedStatusUpdate shape whatsapp.service.ts's existing recordStatusUpdate() already consumes
  * (E7.1) - so that method's own idempotency/monotonic-status logic is reused as-is, never
  * duplicated. Returns null - never a guess - when the delivery does not match the confirmed shape:
- * no `data.message`, no `messageId`, no `status`, or a status outside CONFIRMED_STATUS_MAP.
+ * no `data.message`, no correlation id, no `status`, or a status outside CONFIRMED_STATUS_MAP.
+ *
+ * providerMessageId is `submitted_message_id` when present (the correct, stable key for a
+ * CRM-originated outbound message - see this file's header comment), falling back to `messageId`
+ * only when it is not (inbound messages, and any older/synthetic payload that never had this field).
  */
 export function parseAiSensyMessageStatusUpdate(payload: unknown, now: () => Date = () => new Date()): NormalizedStatusUpdate | null {
   const body = asRecord(payload);
   const message = asRecord(asRecord(body.data).message);
 
-  const messageId = asString(message.messageId);
+  const providerMessageId = asString(message.submitted_message_id) ?? asString(message.messageId);
   const rawStatus = asString(message.status);
-  if (!messageId || !rawStatus) return null;
+  if (!providerMessageId || !rawStatus) return null;
 
   const status = CONFIRMED_STATUS_MAP[rawStatus.toUpperCase()];
   if (!status) return null;
@@ -105,24 +122,30 @@ export function parseAiSensyMessageStatusUpdate(payload: unknown, now: () => Dat
   const createdAt = asString(body.created_at);
   const timestamp = msEpochToDate(message[tsField]) ?? (createdAt ? new Date(createdAt) : null) ?? now();
 
-  return { providerMessageId: messageId, status, timestamp };
+  return { providerMessageId, status, timestamp };
 }
 
-// ---- message.created - the second topic with a CONFIRMED real payload (captured 2026-09-22: one
-// real inbound "Hello" from a customer's phone, sender "USER"; one chatbot auto-reply, sender
-// "ASSISTANT" - both real, both observed in webhook_events). Everything below reads only fields
-// actually present in those two captured deliveries.
+// ---- message.created - the second topic with a CONFIRMED real payload. Three sender values have
+// now been observed for real, and only these three: "USER" (a real inbound "Hello" from a customer's
+// phone, captured 2026-09-22), "ASSISTANT" (a chatbot auto-reply, same date), and "API" (a real
+// CRM-originated send through WhatsAppService.sendTemplateMessage(), captured 2026-09-23 - see
+// whatsapp.aisensy.provider.ts). Everything below reads only fields actually present in those
+// captured deliveries.
 //
-// Direction: the task this was added for explicitly warns not to assume sender=ASSISTANT means
-// inbound. The two real captured deliveries settle it the other way - sender "USER" is the customer
-// (inbound to the CRM); sender "ASSISTANT" is the chatbot's own reply (outbound, something the CRM
-// itself never originated, so never synced as a CRM-outbound WhatsAppMessage - see the processor).
-// No other sender value has been observed, so anything else is honestly reported as unsupported
-// rather than guessed in either direction.
+// Direction: the task this was first added for explicitly warned not to assume sender=ASSISTANT
+// means inbound. The real captured deliveries settle it: sender "USER" is the customer (inbound to
+// the CRM); "ASSISTANT" and "API" are both outbound - something the CRM either did not originate
+// (the chatbot) or already recorded itself at send time (an API-originated send, via
+// message.status.updated matching on submitted_message_id, not through this message.created event) -
+// so neither is ever synced as a second/duplicate CRM message from this topic. No other sender value
+// has been observed, so anything else is honestly reported as unsupported rather than guessed in
+// either direction.
 export type AiSensyMessageCreatedResult =
   | { kind: "inbound"; message: NormalizedIncomingMessage }
   /** sender "ASSISTANT": a real, recognised chatbot reply - by design not synced as a CRM message (see the processor). */
   | { kind: "outbound_ignored"; reason: string }
+  /** sender "API": a real, recognised CRM-originated send - already recorded by the send itself; this event only confirms AiSensy received it, and is not a second write path. */
+  | { kind: "api_sender_ignored"; reason: string }
   /** Recognised as message.created but outside the confirmed shape: unknown sender, unsupported message_type, or missing fields. */
   | { kind: "unsupported"; reason: string };
 
@@ -142,6 +165,9 @@ export function parseAiSensyMessageCreated(payload: unknown, now: () => Date = (
 
   if (sender === "ASSISTANT") {
     return { kind: "outbound_ignored", reason: "chatbot-generated reply (sender=ASSISTANT) - not something the CRM originated, so not synced as an outbound WhatsAppMessage" };
+  }
+  if (sender === "API") {
+    return { kind: "api_sender_ignored", reason: "CRM-originated send (sender=API) - already recorded by WhatsAppService.sendTemplateMessage() at send time; not created again from this event" };
   }
   if (sender !== "USER") {
     return { kind: "unsupported", reason: `unrecognised sender "${sender}" - direction cannot be safely determined from confirmed data` };
