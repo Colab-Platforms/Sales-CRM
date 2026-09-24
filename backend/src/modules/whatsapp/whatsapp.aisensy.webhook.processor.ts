@@ -16,7 +16,7 @@ import WhatsAppService from "./whatsapp.service.js";
 //     status-rank rule (SENT < DELIVERED < READ < FAILED - a lower-rank event never moves status
 //     backwards), the per-status timestamp field, and the Activity entry.
 //   - recordInboundMessage(): idempotent (provider, providerMessageId) lookup, phone-based lead
-//     matching (never creates a lead), and the Activity entry when matched.
+//     matching or creation (never a duplicate for the same number), and the Activity entry.
 // Both are already tested against the Direct WhatsApp webhook. This file's only job per branch is:
 // is this delivery the one confirmed topic, does it parse, does the relevant CRM state exist - then
 // hand off.
@@ -93,9 +93,10 @@ async function processMessageCreated(payload: unknown, deps: AiSensyProjectWebho
     return "ignored";
   }
 
-  // recordInboundMessage() itself is fully idempotent on (provider, providerMessageId) and never
-  // creates a lead (matches an existing one by phone via matchSenderToLead, or leaves leadId null) -
-  // exactly the "do not create duplicate/fake customers" rule this task requires, reused as-is.
+  // recordInboundMessage() itself is fully idempotent on (provider, providerMessageId). It matches
+  // an existing lead by phone (matchSenderToLead) or creates one (leadService.createLeadFromSource,
+  // deduped by phone within the singleton "WhatsApp Inbound" Source) - never a duplicate lead for
+  // the same number, per the WhatsApp Inbox + AI order-taking task's Phase 2.
   await new WhatsAppService(deps.db).recordInboundMessage("AISENSY", result.message);
   await deps.store.complete(id, "PROCESSED", now());
   return "processed";

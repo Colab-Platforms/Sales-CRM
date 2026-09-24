@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
+import { logger } from "@/utils/logger.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
@@ -12,6 +13,9 @@ import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
 import { matchSenderToLead } from "./whatsapp.matching.js";
+import LeadService from "../lead/lead.service.js";
+import WhatsAppConversationService from "./whatsapp.conversation.service.js";
+import WhatsAppOrderConversationService from "./whatsapp.order-conversation.service.js";
 import { buildConversationWhere, buildMessageWhere, mapMessageHistoryItem, scopedMessageWhere } from "./whatsapp.history.filters.js";
 import type { ConversationListResult, ConversationSummary, ListConversationsQuery, ListMessagesQuery, WhatsAppMessageHistoryItem, WhatsAppMessageListResult } from "./whatsapp.history.types.js";
 import type { CustomerWhatsAppStatus, SendWhatsAppMessageInput, WhatsAppMessageSummary, WhatsAppStatusResult } from "./whatsapp.types.js";
@@ -81,10 +85,26 @@ class WhatsAppService {
   // getProvider is injectable so tests can exercise send/persist logic against a fake provider
   // without real credentials or network calls - the provider adapters themselves (HTTP calls,
   // signature verification, payload parsing) are unit-tested directly in whatsapp.test.ts.
+  private readonly leadService: LeadService;
+  private readonly conversationService: WhatsAppConversationService;
+  private readonly orderConversationService: WhatsAppOrderConversationService;
+
   constructor(
     private readonly db: DbClient = prisma,
     private readonly getProvider: () => WhatsAppProvider | null = getWhatsAppProvider,
-  ) {}
+  ) {
+    this.leadService = new LeadService();
+    this.conversationService = new WhatsAppConversationService(this.db);
+    this.orderConversationService = new WhatsAppOrderConversationService(this.db);
+  }
+
+  /** At most one row is meant to exist (name/type pair), same "findFirst-or-create, guarded"
+   *  pattern as whatsapp.cloud-config.service.ts's singleton WhatsAppConfig - not a DB constraint. */
+  private async getOrCreateWhatsAppSource(): Promise<{ id: string }> {
+    const existing = await this.db.source.findFirst({ where: { type: "WHATSAPP" }, select: { id: true } });
+    if (existing) return existing;
+    return this.db.source.create({ data: { name: "WhatsApp Inbound", type: "WHATSAPP", status: "ACTIVE" }, select: { id: true } });
+  }
 
   getStatus(): WhatsAppStatusResult {
     const result = resolveWhatsAppConfig();
@@ -239,35 +259,75 @@ class WhatsAppService {
     const totalItems = conversations.length;
     const page = conversations.slice((query.page - 1) * query.pageSize, query.page * query.pageSize);
 
-    const items: ConversationSummary[] = page.map((m) => ({
-      leadId: m.lead!.id,
-      leadNumber: m.lead!.leadNumber,
-      name: fullName(m.lead!.firstName, m.lead!.lastName),
-      mobile: m.lead!.mobile ?? m.lead!.normalizedMobile,
-      lastMessage: {
-        id: m.id,
-        direction: m.direction,
-        messageType: m.messageType,
-        status: m.status,
-        body: m.body,
-        templateName: m.templateName,
-        at: (m.direction === "OUTBOUND" ? m.sentAt : m.receivedAt) ?? m.createdAt,
-      },
-      awaitingReply: m.direction === "INBOUND",
-    }));
+    // WhatsAppConversation rows for this page only (bounded to pageSize, cheap) - a lead with
+    // messages predating this feature (or whose conversation row hasn't been created yet) simply
+    // gets the HUMAN/DISCOVERY/unassigned defaults below, same defaults getOrCreateConversation itself uses.
+    const leadIds = page.map((m) => m.leadId!);
+    const conversationRows = await this.db.whatsAppConversation.findMany({
+      where: { leadId: { in: leadIds } },
+      select: { leadId: true, mode: true, orderState: true, lastReadAt: true, assignedTo: { select: { id: true, name: true } } },
+    });
+    const conversationByLead = new Map(conversationRows.map((c) => [c.leadId, c]));
+    const unreadCounts = await Promise.all(
+      leadIds.map((leadId) => {
+        const lastReadAt = conversationByLead.get(leadId)?.lastReadAt ?? null;
+        return this.db.whatsAppMessage.count({ where: { leadId, direction: "INBOUND", createdAt: { gt: lastReadAt ?? new Date(0) } } });
+      }),
+    );
+    const unreadByLead = new Map(leadIds.map((leadId, i) => [leadId, unreadCounts[i]]));
+
+    const items: ConversationSummary[] = page.map((m) => {
+      const conversation = conversationByLead.get(m.leadId!);
+      return {
+        leadId: m.lead!.id,
+        leadNumber: m.lead!.leadNumber,
+        name: fullName(m.lead!.firstName, m.lead!.lastName),
+        mobile: m.lead!.mobile ?? m.lead!.normalizedMobile,
+        lastMessage: {
+          id: m.id,
+          direction: m.direction,
+          messageType: m.messageType,
+          status: m.status,
+          body: m.body,
+          templateName: m.templateName,
+          at: (m.direction === "OUTBOUND" ? m.sentAt : m.receivedAt) ?? m.createdAt,
+        },
+        awaitingReply: m.direction === "INBOUND",
+        mode: conversation?.mode ?? "HUMAN",
+        assignedTo: conversation?.assignedTo ?? null,
+        orderState: conversation?.orderState ?? "DISCOVERY",
+        unreadCount: unreadByLead.get(m.leadId!) ?? 0,
+      };
+    });
 
     return { items, pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) } };
   }
 
-  // ---- Webhook-driven persistence (called from whatsapp.webhook.processor.ts). Never invents a
-  // customer: an unmatched sender's message is still stored, with leadId left null. ----
+  // ---- Webhook-driven persistence (called from whatsapp.webhook.processor.ts). ----
 
   async recordInboundMessage(provider: WhatsAppProviderId, message: NormalizedIncomingMessage): Promise<void> {
-    const { leadId, normalizedContact } = await matchSenderToLead(message.from, { db: this.db });
-
-    // Idempotent: a repeat delivery of the same provider message id updates nothing new.
+    // Idempotent: a repeat delivery of the same provider message id does nothing new - checked
+    // before any lead-matching/creation or AI work, so a retried webhook can never double-process.
     const existing = await this.db.whatsAppMessage.findUnique({ where: { provider_providerMessageId: { provider, providerMessageId: message.providerMessageId } } });
     if (existing) return;
+
+    let { leadId, normalizedContact } = await matchSenderToLead(message.from, { db: this.db });
+
+    // Unmatched sender: create the CRM contact, same "Source-attributed lead" pattern Meta/Shopify
+    // already use (leadService.createLeadFromSource), never a bespoke lead-creation path. Dedup is
+    // createLeadFromSource's own (scoped to the single WhatsApp Source, by its own normalization),
+    // so a second message from the same unmatched number reuses the same lead, never a duplicate.
+    if (!leadId && normalizedContact) {
+      const source = await this.getOrCreateWhatsAppSource();
+      const lead = await this.leadService.createLeadFromSource(source.id, { firstName: message.from, mobile: message.from }, "Lead created from WhatsApp Inbox", this.db);
+      leadId = lead.id;
+      // Align this lead's normalizedMobile with the form matchSenderToLead actually queries by
+      // (leadIdentity.ts's, same scheme shopify.persist.ts already uses), so the next message from
+      // this number takes the fast matched path instead of re-running createLeadFromSource's dedup.
+      if (lead.normalizedMobile !== normalizedContact) {
+        await this.db.lead.update({ where: { id: leadId }, data: { normalizedMobile: normalizedContact } });
+      }
+    }
 
     const row = await this.db.whatsAppMessage.create({
       data: {
@@ -286,7 +346,7 @@ class WhatsAppService {
       select: { id: true },
     });
 
-    if (!leadId) return; // Unresolved sender: stored, but there is no lead to attach an Activity to.
+    if (!leadId) return; // No phone number at all to match or create from (rare, malformed sender).
     await this.db.activity.create({
       data: {
         leadId,
@@ -298,6 +358,17 @@ class WhatsAppService {
         description: message.text?.slice(0, 4000) ?? null,
       },
     });
+
+    const conversation = await this.conversationService.getOrCreateConversation(leadId, provider);
+    if (conversation.mode === "AI") {
+      // Fire-and-forget, same setImmediate pattern whatsapp.webhook.routes.ts already uses for
+      // processing - keeps the webhook's own 200-ack timing unaffected by an AI call's latency.
+      setImmediate(() => {
+        void this.orderConversationService
+          .processInboundForAi({ leadId: leadId!, messageText: message.text ?? "", conversation: { provider: conversation.provider, assignedToId: conversation.assignedToId, orderState: conversation.orderState, orderDraft: conversation.orderDraft as any } })
+          .catch((error) => logger.error("WhatsApp AI order-taking processing failed", error instanceof Error ? error.message : error));
+      });
+    }
   }
 
   async recordStatusUpdate(provider: WhatsAppProviderId, update: NormalizedStatusUpdate): Promise<void> {

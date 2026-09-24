@@ -1,6 +1,7 @@
 import { logger } from "@/utils/logger.js";
 import type { AiSensyConfig } from "./whatsapp.config.js";
 import { verifyAiSensyHmac } from "./whatsapp.hmac.js";
+import { isObject, metaCloudApiMessages } from "./whatsapp.meta.envelope.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type {
   NormalizedIncomingMessage,
@@ -24,8 +25,6 @@ const header = (headers: Record<string, string | string[] | undefined>, name: st
   return Array.isArray(value) ? value[0] : value;
 };
 
-const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
-
 // AiSensy's documented status values (delivered/read/failed/sent) map onto our own enum 1:1.
 const STATUS_MAP: Record<string, WhatsAppDeliveryStatus> = {
   sent: "SENT",
@@ -34,30 +33,11 @@ const STATUS_MAP: Record<string, WhatsAppDeliveryStatus> = {
   failed: "FAILED",
 };
 
-/**
- * Best-effort parsing of two plausible AiSensy webhook shapes:
- *  (a) AiSensy's "Direct API" line proxies Meta's own WhatsApp Cloud API, whose webhook envelope
- *      (entry[].changes[].value.messages[]/statuses[]) is a stable, publicly documented format.
- *  (b) AiSensy's classic Campaign API may instead deliver a flatter, provider-specific shape.
- * Neither shape has been confirmed against a live AiSensy sandbox delivery for this account, so
- * both are attempted defensively and neither is assumed to be complete - an unrecognised shape
- * returns [] rather than guessing or throwing. This should be calibrated against real deliveries
- * once AiSensy credentials and a configured webhook are available.
- */
-function metaCloudApiMessages(payload: unknown): unknown[] {
-  if (!isObject(payload)) return [];
-  const entries = Array.isArray(payload.entry) ? payload.entry : [];
-  const out: unknown[] = [];
-  for (const entry of entries) {
-    if (!isObject(entry)) continue;
-    const changes = Array.isArray(entry.changes) ? entry.changes : [];
-    for (const change of changes) {
-      if (!isObject(change) || !isObject(change.value)) continue;
-      out.push(change.value);
-    }
-  }
-  return out;
-}
+// AiSensy's "Direct API" line proxies Meta's own WhatsApp Cloud API, so its webhook envelope
+// (entry[].changes[].value.messages[]/statuses[]) is the same stable, publicly documented format
+// the real Meta Cloud API uses (see whatsapp.meta.envelope.ts, shared with whatsapp.meta.provider.ts).
+// Not confirmed against a live AiSensy sandbox delivery for this account - an unrecognised shape
+// returns [] rather than guessing or throwing.
 
 export class AiSensyProvider implements WhatsAppProvider {
   readonly id = "AISENSY" as const;

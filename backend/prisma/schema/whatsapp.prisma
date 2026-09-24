@@ -295,3 +295,85 @@ model WhatsAppCampaignRecipient {
   @@index([leadId])
   @@map("whatsapp_campaign_recipients")
 }
+
+// WhatsApp Cloud API (Meta, official) foundation. Unlike AiSensy/Gupshup above (env-var
+// configured), Meta's credentials are entered by an admin through the Settings UI and stored here,
+// encrypted at rest - so they can be rotated without a redeploy. At most one row ever exists
+// (enforced in whatsapp.cloud-config.service.ts, not by a DB constraint - same convention as
+// WhatsAppAutomationConfig's "at most six rows" invariant). Never joined into a normal API
+// response; see whatsapp.cloud-config.service.ts's masked getConfig().
+model WhatsAppConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  phoneNumberId      String  @map("phone_number_id") @db.VarChar(64)
+  businessAccountId  String  @map("business_account_id") @db.VarChar(64)
+  displayPhoneNumber String? @map("display_phone_number") @db.VarChar(32)
+  businessName       String? @map("business_name") @db.VarChar(150)
+  isActive           Boolean @default(true) @map("is_active")
+
+  // { accessToken, appSecret, verifyToken } encrypted as one JSON blob via backend/src/utils/crypto.ts
+  // (AES-256-GCM) - same pattern as Source.credentials. Never selected into an API response.
+  credentials Json @map("credentials")
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("WhatsAppConfigCreatedBy", fields: [createdById], references: [id])
+  updatedById String? @map("updated_by_id") @db.Uuid
+  updatedBy   User?   @relation("WhatsAppConfigUpdatedBy", fields: [updatedById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([isActive])
+  @@map("whatsapp_configs")
+}
+
+// WhatsApp Inbox: the persisted conversation entity `WhatsAppService.listConversations()` does not
+// have today (that method computes conversations on the fly from WhatsAppMessage grouped by lead -
+// see its own header comment). This model adds exactly what that computed view cannot carry:
+// assignment, AI/human mode, CRM-side read state, and the AI order-taking draft/state machine. One
+// row per Lead (a WhatsApp "conversation" is still one-per-customer, same grouping as before).
+model WhatsAppConversation {
+  id String @id @default(uuid()) @db.Uuid
+
+  leadId String @unique @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id])
+
+  // The provider this conversation was last seen on - decides whether the AI engine can auto-send
+  // free text (Meta only; see whatsapp.order-conversation.service.ts) or must draft for a human
+  // (AiSensy/Gupshup, which only support pre-approved template sends).
+  provider WhatsAppProviderName @map("provider")
+
+  mode ConversationMode @default(HUMAN) @map("mode")
+
+  assignedToId String? @map("assigned_to_id") @db.Uuid
+  assignedTo   User?   @relation("WhatsAppConversationAssignedTo", fields: [assignedToId], references: [id])
+
+  // CRM-side "has a salesperson viewed this in the inbox" marker - distinct from WhatsAppMessage.readAt,
+  // which is the customer's own WhatsApp read receipt for an outbound message. Unread count is
+  // computed as inbound WhatsAppMessage rows with createdAt > lastReadAt (null = never read).
+  lastReadAt DateTime? @map("last_read_at")
+
+  orderState OrderConversationState @default(DISCOVERY) @map("order_state")
+  // Accumulated structured order fields, shaped like CreateManualOrderInput (orders.types.ts) so the
+  // confirmed draft can be handed to orders.service.ts's createManualOrder() unchanged.
+  orderDraft Json? @map("order_draft")
+  // Set only when the active provider cannot auto-send free text (AiSensy/Gupshup) - the AI's
+  // drafted reply for a human to review and send manually, never auto-sent in that case.
+  aiSuggestedReply String? @map("ai_suggested_reply")
+  // Human-readable reason the AI last handed off to a human (low confidence, explicit request,
+  // unsupported request, or an AI-call failure) - never a secret/credential.
+  lastAiHandoffReason String? @map("last_ai_handoff_reason")
+
+  // Set exactly once, by a conditional updateMany(where: {createdOrderId: null}) - the same
+  // idempotency idiom orders.service.ts's pushOrderToShopify already uses for Order.externalId - so
+  // a duplicate AI-confirmation trigger can never create two orders for the same conversation.
+  createdOrderId String? @unique @map("created_order_id") @db.Uuid
+  createdOrder   Order?  @relation(fields: [createdOrderId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([assignedToId])
+  @@index([mode])
+  @@map("whatsapp_conversations")
+}

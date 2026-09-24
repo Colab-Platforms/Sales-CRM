@@ -57,6 +57,7 @@ model Lead {
   recoveryActions          RecoveryAction[]
   activities               Activity[]
   whatsAppMessages         WhatsAppMessage[]
+  whatsAppConversation     WhatsAppConversation?
   whatsAppAutomationRuns   WhatsAppAutomationRun[]
   whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
 

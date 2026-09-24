@@ -1,4 +1,4 @@
-import type { WhatsAppDirection, WhatsAppMessageStatus, WhatsAppMessageType, WhatsAppProviderName } from "../../../generated/prisma/enums.js";
+import type { ConversationMode, OrderConversationState, WhatsAppDirection, WhatsAppMessageStatus, WhatsAppMessageType, WhatsAppProviderName } from "../../../generated/prisma/enums.js";
 
 export interface ListMessagesQuery {
   page: number;
@@ -79,6 +79,11 @@ export interface ConversationSummary {
   };
   /** True only when the lead's own most recent message is INBOUND - i.e. the customer's turn, nobody has replied since. Derived purely from existing direction/recency data; not a stored "read" flag (none exists on WhatsAppMessage). */
   awaitingReply: boolean;
+  /** From WhatsAppConversation (whatsapp.conversation.service.ts) - defaults applied when no row exists yet (a lead with messages predating that feature, or whose first message hasn't been processed as a real conversation yet). */
+  mode: ConversationMode;
+  assignedTo: { id: string; name: string } | null;
+  orderState: OrderConversationState;
+  unreadCount: number;
 }
 
 export interface ConversationListResult {
