@@ -13,7 +13,7 @@ import type {
 // version/variant bits, but Postgres's uuid column (and thus ids already in
 // the database, e.g. seeded rows) accepts any 32-hex-digit UUID regardless.
 const priorityEnum = z.enum(["LOW", "MEDIUM", "HIGH"]);
-const workingStatusEnum = z.enum(["NEW", "ASSIGNED", "WORKING", "INTERESTED", "EXPIRED", "CONVERTED", "CLOSED"]);
+const workingStatusEnum = z.enum(["NEW", "ASSIGNED", "RINGING", "BUSY", "CALL_BACK", "FOLLOW_UP", "SWITCHED_OFF", "DND", "NOT_REACHABLE", "INTERESTED", "NOT_INTERESTED", "CONVERTED"]);
 const assignmentEnum = z.enum(["UNASSIGNED", "ASSIGNED_TO_MANAGER", "ASSIGNED_TO_SALESPERSON"]);
 
 const createLeadSchema = z

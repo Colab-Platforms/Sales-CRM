@@ -23,11 +23,16 @@ enum GroupStatus {
 enum LeadWorkingStatus {
   NEW
   ASSIGNED
-  WORKING
+  RINGING
+  BUSY
+  CALL_BACK
+  FOLLOW_UP
+  SWITCHED_OFF
+  DND
+  NOT_REACHABLE
   INTERESTED
-  EXPIRED
+  NOT_INTERESTED
   CONVERTED
-  CLOSED
 
   @@map("lead_working_status")
 }

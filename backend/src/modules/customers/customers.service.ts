@@ -5,6 +5,7 @@ import { InterestedPeriodStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
+import { statusForRole } from "@/lib/leadStatusView.js";
 import {
   buildCustomerListWhere,
   buildNbaInfo,
@@ -224,7 +225,8 @@ class CustomersService {
     const segment = buildSegmentInfo(lead, lead.interestedPeriods.length > 0, orders, paymentSummary);
 
     return {
-      profile: mapProfile(lead),
+      // A salesperson never sees ASSIGNED (shown as NEW).
+      profile: { ...mapProfile(lead), workingStatus: statusForRole(lead.workingStatus, user.role) },
       segment,
       nextBestAction: buildNbaInfo(orders, segment, paymentSummary),
       paymentSummary,

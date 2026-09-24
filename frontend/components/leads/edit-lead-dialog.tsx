@@ -96,7 +96,8 @@ function EditLeadForm({ lead, onOpenChange, onDone }: { lead: Lead; onOpenChange
         <div className="space-y-1.5">
           <Label htmlFor="edit-lead-status">Status</Label>
           <NativeSelect id="edit-lead-status" value={workingStatus} onChange={(e) => setWorkingStatus(e.target.value as typeof workingStatus)}>
-            {STATUS_ORDER.map((status) => (
+            {/* ASSIGNED is set by assigning a lead; only offered while the lead already has it (never for a salesperson). */}
+            {STATUS_ORDER.filter((status) => status !== "ASSIGNED" || lead.workingStatus === "ASSIGNED").map((status) => (
               <option key={status} value={status}>
                 {STATUS_LABELS[status]}
               </option>

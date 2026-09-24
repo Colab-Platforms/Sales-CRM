@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma.js";
 import { Role, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
 import type { AuthUser } from "@/middlewares/auth.js";
+import { statusForRole } from "@/lib/leadStatusView.js";
 
 type StatusCounts = Record<LeadWorkingStatus, number>;
 
@@ -8,11 +9,16 @@ function emptyStatusCounts(): StatusCounts {
   return {
     NEW: 0,
     ASSIGNED: 0,
-    WORKING: 0,
+    RINGING: 0,
+    BUSY: 0,
+    CALL_BACK: 0,
+    FOLLOW_UP: 0,
+    SWITCHED_OFF: 0,
+    DND: 0,
+    NOT_REACHABLE: 0,
     INTERESTED: 0,
-    EXPIRED: 0,
+    NOT_INTERESTED: 0,
     CONVERTED: 0,
-    CLOSED: 0,
   };
 }
 
@@ -60,11 +66,16 @@ class DashboardService {
       }),
     ]);
 
+    // A salesperson never sees ASSIGNED: those leads count as NEW.
+    const statusCounts = fillStatusCounts(statusRows);
+    statusCounts.NEW += statusCounts.ASSIGNED;
+    statusCounts.ASSIGNED = 0;
+
     return {
       role: Role.SALESPERSON,
       totalLeads,
-      statusCounts: fillStatusCounts(statusRows),
-      recentLeads,
+      statusCounts,
+      recentLeads: recentLeads.map((lead) => ({ ...lead, workingStatus: statusForRole(lead.workingStatus, Role.SALESPERSON) })),
     };
   }
 

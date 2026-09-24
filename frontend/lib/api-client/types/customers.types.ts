@@ -1,6 +1,6 @@
 import type { OrderSource, OrderStatus, PaymentMode, PaymentStatus, PaymentStatusFilter, ShipmentDetail, ShipmentStatus } from "./orders.types";
 
-export type LeadWorkingStatus = "NEW" | "ASSIGNED" | "WORKING" | "INTERESTED" | "EXPIRED" | "CONVERTED" | "CLOSED";
+export type LeadWorkingStatus = "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED";
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH";
 
 // E6.7 Customer Segments - see backend segment.ts/segment.config.ts for the derivation rules.

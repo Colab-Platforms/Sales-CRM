@@ -1,11 +1,16 @@
 export type LeadWorkingStatus =
   | "NEW"
   | "ASSIGNED"
-  | "WORKING"
+  | "RINGING"
+  | "BUSY"
+  | "CALL_BACK"
+  | "FOLLOW_UP"
+  | "SWITCHED_OFF"
+  | "DND"
+  | "NOT_REACHABLE"
   | "INTERESTED"
-  | "EXPIRED"
-  | "CONVERTED"
-  | "CLOSED";
+  | "NOT_INTERESTED"
+  | "CONVERTED";
 
 export type StatusCounts = Record<LeadWorkingStatus, number>;
 

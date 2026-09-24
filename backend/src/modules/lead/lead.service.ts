@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { generateLeadNumber } from "@/utils/leadNumber.js";
+import { statusForRole } from "@/lib/leadStatusView.js";
 import { normalizeMobile, normalizeEmail } from "@/utils/normalize.js";
 import {
   Role,
@@ -68,13 +69,15 @@ const leadListInclude = {
 class LeadService {
   // Salespersons see their calls (status, duration) but can't hear the recording —
   // only managers/admins can listen. Strip the URL out rather than the whole call.
-  private redactRecordingsForRole<T extends { calls: { recording: { recordingUrl: string | null } | null }[] }>(
+  // They also never see the ASSIGNED status (shown as NEW), see statusForRole.
+  private presentForRole<T extends { workingStatus: Lead["workingStatus"]; calls: { recording: { recordingUrl: string | null } | null }[] }>(
     entity: T,
     role: Role,
   ): T {
     if (role !== Role.SALESPERSON) return entity;
     return {
       ...entity,
+      workingStatus: statusForRole(entity.workingStatus, role),
       calls: entity.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call)),
     };
   }
@@ -89,7 +92,12 @@ class LeadService {
     const where: Prisma.LeadWhereInput = { ...this.buildScopeWhere(user) };
 
     if (query.sourceId) where.sourceId = query.sourceId;
-    if (query.workingStatus) where.workingStatus = query.workingStatus as Lead["workingStatus"];
+    if (query.workingStatus) {
+      const status = query.workingStatus as Lead["workingStatus"];
+      // A salesperson's NEW includes leads that are ASSIGNED underneath; they can't filter on ASSIGNED itself.
+      where.workingStatus =
+        user.role === Role.SALESPERSON && (status === "NEW" || status === "ASSIGNED") ? { in: ["NEW", "ASSIGNED"] } : status;
+    }
     where.lifecycleStage = query.lifecycleStage ?? "LEAD";
 
     if (query.assignment === "UNASSIGNED") {
@@ -128,7 +136,7 @@ class LeadService {
     ]);
 
     return {
-      data: data.map((lead) => this.redactRecordingsForRole(lead, user.role)),
+      data: data.map((lead) => this.presentForRole(lead, user.role)),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -156,7 +164,7 @@ class LeadService {
   async getLeadById(user: AuthUser, id: string) {
     const lead = await this.getLeadOrThrow(id);
     this.assertAccess(user, lead);
-    return this.redactRecordingsForRole(lead, user.role);
+    return this.presentForRole(lead, user.role);
   }
 
   async createLead(user: AuthUser, data: CreateLeadBody) {
@@ -226,7 +234,13 @@ class LeadService {
   }
 
   async updateLead(user: AuthUser, id: string, data: UpdateLeadBody) {
-    const lead = await this.getLeadById(user, id);
+    const lead = await this.getLeadOrThrow(id);
+    this.assertAccess(user, lead);
+    if (user.role === Role.SALESPERSON && data.workingStatus === "ASSIGNED") {
+      throw new ApiError("Only a manager or admin can set a lead to Assigned", STATUS_CODES.FORBIDDEN);
+    }
+    // What this user currently sees; leaving it unchanged in the form must not overwrite the real status.
+    const shownStatus = statusForRole(lead.workingStatus, user.role);
 
     const updateData: Prisma.LeadUpdateInput = {
       firstName: data.firstName,
@@ -248,7 +262,7 @@ class LeadService {
     if (data.interestedProductId !== undefined) {
       updateData.interestedProduct = { connect: { id: data.interestedProductId } };
     }
-    if (data.workingStatus !== undefined) updateData.workingStatus = data.workingStatus;
+    if (data.workingStatus !== undefined && data.workingStatus !== shownStatus) updateData.workingStatus = data.workingStatus;
 
     const updated = await prisma.lead.update({ where: { id }, data: updateData, include: leadListInclude });
 
@@ -256,12 +270,12 @@ class LeadService {
       data: {
         leadId: id,
         actorId: user.id,
-        type: data.workingStatus && data.workingStatus !== lead.workingStatus ? ActivityType.STATUS_CHANGE : ActivityType.LEAD_UPDATED,
-        title: data.workingStatus && data.workingStatus !== lead.workingStatus ? `Status changed to ${data.workingStatus}` : "Lead updated",
+        type: data.workingStatus && data.workingStatus !== shownStatus ? ActivityType.STATUS_CHANGE : ActivityType.LEAD_UPDATED,
+        title: data.workingStatus && data.workingStatus !== shownStatus ? `Status changed to ${data.workingStatus}` : "Lead updated",
       },
     });
 
-    return this.redactRecordingsForRole(updated, user.role);
+    return this.presentForRole(updated, user.role);
   }
 
   // Hard-deletes a Lead. The schema already protects real lead history at the DB level -

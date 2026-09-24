@@ -3,21 +3,31 @@ import type { LeadPriority, LeadWorkingStatus, TimelineEventType } from "./api-c
 export const LEAD_STATUS_LABELS: Record<LeadWorkingStatus, string> = {
   NEW: "New",
   ASSIGNED: "Assigned",
-  WORKING: "Working",
+  RINGING: "Ringing",
+  BUSY: "Busy",
+  CALL_BACK: "Call back",
+  FOLLOW_UP: "Follow up",
+  SWITCHED_OFF: "Switched off",
+  DND: "DND",
+  NOT_REACHABLE: "Not reachable",
   INTERESTED: "Interested",
-  EXPIRED: "Expired",
+  NOT_INTERESTED: "Not interested",
   CONVERTED: "Converted",
-  CLOSED: "Closed",
 };
 
 export const LEAD_STATUS_COLORS: Record<LeadWorkingStatus, string> = {
   NEW: "bg-zinc-500/10 text-zinc-500 dark:text-zinc-400",
   ASSIGNED: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
-  WORKING: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  RINGING: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  BUSY: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  CALL_BACK: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  FOLLOW_UP: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+  SWITCHED_OFF: "bg-zinc-500/10 text-zinc-500 dark:text-zinc-400",
+  DND: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  NOT_REACHABLE: "bg-slate-500/10 text-slate-600 dark:text-slate-400",
   INTERESTED: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
-  EXPIRED: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  NOT_INTERESTED: "bg-red-500/10 text-red-600 dark:text-red-400",
   CONVERTED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-  CLOSED: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
 };
 
 export const LEAD_PRIORITY_LABELS: Record<LeadPriority, string> = {

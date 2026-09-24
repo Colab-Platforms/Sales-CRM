@@ -19,7 +19,7 @@ export interface UpdateLeadBody {
   location?: string;
   sourceId?: string;
   interestedProductId?: string;
-  workingStatus?: "NEW" | "ASSIGNED" | "WORKING" | "INTERESTED" | "EXPIRED" | "CONVERTED" | "CLOSED";
+  workingStatus?: "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED";
   priority?: "LOW" | "MEDIUM" | "HIGH";
 }
 
