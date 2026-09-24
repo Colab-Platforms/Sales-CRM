@@ -1,6 +1,7 @@
 "use client";
 
-import { ChevronsUpDown, LogOut } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronsUpDown, LogOut, UserCircle } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -32,6 +33,7 @@ function initials(name: string) {
 export function NavUser({ user }: { user: CurrentUser }) {
   const { isMobile } = useSidebar();
   const { logout } = useAuth();
+  const router = useRouter();
 
   return (
     <SidebarMenu>
@@ -61,6 +63,11 @@ export function NavUser({ user }: { user: CurrentUser }) {
                 </div>
               </DropdownMenuLabel>
             </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => router.push("/dashboard/profile")}>
+              <UserCircle />
+              View Profile
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onClick={() => logout()}>
               <LogOut />

@@ -1,6 +1,6 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { CurrentUser, LoginPayload, LoginResult } from "../types/auth.types";
+import type { CurrentUser, LoginPayload, LoginResult, UserProfile } from "../types/auth.types";
 
 export const authApi = {
   async login(payload: LoginPayload): Promise<LoginResult> {
@@ -10,6 +10,11 @@ export const authApi = {
 
   async me(): Promise<CurrentUser> {
     const res = await apiClient.get<ApiEnvelope<CurrentUser>>("/auth/me");
+    return res.data.data;
+  },
+
+  async getProfile(): Promise<UserProfile> {
+    const res = await apiClient.get<ApiEnvelope<UserProfile>>("/auth/profile");
     return res.data.data;
   },
 };
