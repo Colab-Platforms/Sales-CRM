@@ -103,6 +103,8 @@ class ManagerService {
         passwordHash,
         role: Role.SALESPERSON,
         status: UserStatus.ACTIVE,
+        reportingManagerId: managerId,
+        createdById: managerId,
       },
     });
 
@@ -113,25 +115,44 @@ class ManagerService {
     return toPublicUser(salesperson);
   }
 
-  // Every salesperson this manager has actually added to one of their own
-  // active groups — used for lead-assignment target pickers, where the manager
-  // shouldn't have to pick a group first (that group is implicit per person).
+  // Everyone reporting to this manager — whether the manager grouped them
+  // themselves or admin assigned them as reporting manager — with their current
+  // active group attached if they have one. Salespeople admin just assigned but
+  // that the manager hasn't placed in a group yet show up with groupId: null,
+  // so they're visible immediately instead of being invisible until someone
+  // remembers to add them via "Add existing salesperson". Lead-assignment
+  // pickers filter this same list down to grouped entries, since a lead
+  // assignment always needs a group to attach to.
   async listMySalespersons(managerId: string) {
-    const members = await prisma.groupMember.findMany({
-      where: { isActive: true, group: { managerId, status: GroupStatus.ACTIVE }, user: { status: UserStatus.ACTIVE } },
-      include: {
-        user: { select: { id: true, name: true, email: true, phone: true, status: true, role: true } },
-        group: { select: { id: true, name: true } },
-      },
-      orderBy: { user: { name: "asc" } },
+    const salespersons = await prisma.user.findMany({
+      where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE, reportingManagerId: managerId },
+      select: { id: true, name: true, email: true, phone: true, status: true, role: true },
+      orderBy: { name: "asc" },
     });
 
-    return members.map((m) => ({ ...toPublicUser(m.user), groupId: m.group.id, groupName: m.group.name }));
+    const memberships = await prisma.groupMember.findMany({
+      where: {
+        isActive: true,
+        userId: { in: salespersons.map((sp) => sp.id) },
+        group: { managerId, status: GroupStatus.ACTIVE },
+      },
+      include: { group: { select: { id: true, name: true } } },
+    });
+    const groupByUserId = new Map(memberships.map((m) => [m.userId, m.group]));
+
+    return salespersons.map((sp) => {
+      const group = groupByUserId.get(sp.id);
+      return { ...toPublicUser(sp), groupId: group?.id ?? null, groupName: group?.name ?? null };
+    });
   }
 
-  async listAllSalespersons() {
+  // Salespeople reporting to this manager — either created by the manager
+  // themselves, or created by admin with this manager picked as reporting
+  // manager. This is the candidate pool for "add existing salesperson"; it must
+  // never include salespeople reporting to a different manager.
+  async listAllSalespersons(managerId: string) {
     const salespersons = await prisma.user.findMany({
-      where: { role: Role.SALESPERSON },
+      where: { role: Role.SALESPERSON, reportingManagerId: managerId },
       include: {
         groupMemberships: {
           where: { isActive: true },
@@ -151,7 +172,7 @@ class ManagerService {
     const group = await this.getOwnedGroup(managerId, groupId);
 
     const user = await prisma.user.findUnique({ where: { id: data.userId } });
-    if (!user || user.role !== Role.SALESPERSON) {
+    if (!user || user.role !== Role.SALESPERSON || user.reportingManagerId !== managerId) {
       throw new ApiError("Salesperson not found", STATUS_CODES.NOT_FOUND);
     }
 

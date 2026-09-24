@@ -76,6 +76,6 @@ export interface MySalesperson {
   email: string;
   phone: string | null;
   status: string;
-  groupId: string;
-  groupName: string;
+  groupId: string | null;
+  groupName: string | null;
 }

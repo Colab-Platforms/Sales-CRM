@@ -28,6 +28,9 @@ export function AssignSalespersonDialog({
   const [salespersonId, setSalespersonId] = useState("");
   const [salespersonIds, setSalespersonIds] = useState<Set<string>>(new Set());
 
+  // Everyone reporting to this manager is assignable — self-added or
+  // admin-assigned, whether or not they've been placed in a group yet. A lead
+  // just goes out with no group attached (groupId is nullable) in that case.
   const team = salespersons ?? [];
 
   // This dialog stays mounted between opens (only its content is conditionally
@@ -93,7 +96,7 @@ export function AssignSalespersonDialog({
 
             {!isPending && !error && team.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                You haven&apos;t added any salespeople to your teams yet.
+                No salespeople report to you yet.
               </p>
             ) : null}
 
@@ -110,7 +113,7 @@ export function AssignSalespersonDialog({
                   </option>
                   {team.map((sp) => (
                     <option key={sp.id} value={sp.id}>
-                      {sp.name} — {sp.groupName}
+                      {sp.name} — {sp.groupName ?? "No team"}
                     </option>
                   ))}
                 </NativeSelect>
@@ -129,7 +132,7 @@ export function AssignSalespersonDialog({
                         checked={salespersonIds.has(sp.id)}
                         onChange={(e) => toggleSalesperson(sp.id, e.target.checked)}
                       />
-                      {sp.name} — {sp.groupName}
+                      {sp.name} — {sp.groupName ?? "No team"}
                     </label>
                   ))}
                 </div>

@@ -415,7 +415,7 @@ class LeadService {
   // Same batching strategy as bulkAssignLeadsToManager, for Manager -> Salesperson assignment.
   private async bulkAssignLeadsToSalesperson(
     tx: TxClient,
-    assignments: { lead: Lead; salesperson: User; groupId: string }[],
+    assignments: { lead: Lead; salesperson: User; groupId: string | null }[],
     assignedById: string,
     method: typeof AssignmentType.MANUAL | typeof AssignmentType.ROUND_ROBIN,
   ): Promise<void> {
@@ -427,7 +427,7 @@ class LeadService {
       data: { isCurrent: false, unassignedAt: now },
     });
 
-    const bySalesperson = new Map<string, { ids: string[]; groupId: string }>();
+    const bySalesperson = new Map<string, { ids: string[]; groupId: string | null }>();
     const newLeadIds: string[] = [];
     const assignmentRows: Prisma.LeadAssignmentCreateManyInput[] = [];
     const activityRows: Prisma.ActivityCreateManyInput[] = [];
@@ -548,18 +548,33 @@ class LeadService {
     );
   }
 
-  // Resolves a salesperson id to their active group membership under THIS manager.
-  // The manager picks a person, not a group — the group is implicit, and a
-  // salesperson who isn't currently on this manager's active team is rejected.
+  // Resolves a salesperson id to whoever this manager is allowed to assign leads
+  // to: anyone reporting to them (self-added, or admin-assigned), whether or not
+  // they've been placed in a group yet. If they're an active member of one of
+  // this manager's groups, the lead inherits that group; otherwise it's assigned
+  // with no group (groupId is nullable on Lead precisely for this case).
   private async resolveTeamMember(managerId: string, salespersonId: string) {
     const membership = await prisma.groupMember.findFirst({
       where: { userId: salespersonId, isActive: true, group: { managerId, status: "ACTIVE" } },
       include: { user: true },
     });
-    if (!membership || membership.user.role !== Role.SALESPERSON || membership.user.status !== UserStatus.ACTIVE) {
-      throw new ApiError("Salesperson is not part of your active team", STATUS_CODES.BAD_REQUEST);
+    if (membership) {
+      if (membership.user.role !== Role.SALESPERSON || membership.user.status !== UserStatus.ACTIVE) {
+        throw new ApiError("Salesperson is not part of your team", STATUS_CODES.BAD_REQUEST);
+      }
+      return { user: membership.user, groupId: membership.groupId as string | null };
     }
-    return { user: membership.user, groupId: membership.groupId };
+
+    const salesperson = await prisma.user.findUnique({ where: { id: salespersonId } });
+    if (
+      !salesperson ||
+      salesperson.role !== Role.SALESPERSON ||
+      salesperson.status !== UserStatus.ACTIVE ||
+      salesperson.reportingManagerId !== managerId
+    ) {
+      throw new ApiError("Salesperson is not part of your team", STATUS_CODES.BAD_REQUEST);
+    }
+    return { user: salesperson, groupId: null as string | null };
   }
 
   async bulkAssignSalespersons(managerId: string, body: BulkAssignSalespersonBody) {

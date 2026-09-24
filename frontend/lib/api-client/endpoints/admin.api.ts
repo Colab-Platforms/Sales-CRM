@@ -1,6 +1,13 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { CreateManagerPayload, ManagerUser, UpdateManagerPayload } from "../types/admin.types";
+import type {
+  CreateManagerPayload,
+  CreateSalespersonPayload,
+  ManagerUser,
+  SalespersonUser,
+  UpdateManagerPayload,
+  UpdateSalespersonPayload,
+} from "../types/admin.types";
 
 export const adminApi = {
   async listManagers(): Promise<ManagerUser[]> {
@@ -20,6 +27,21 @@ export const adminApi = {
 
   async deactivateManager(id: string): Promise<ManagerUser> {
     const res = await apiClient.delete<ApiEnvelope<ManagerUser>>(`/admin/managers/${id}`);
+    return res.data.data;
+  },
+
+  async listSalespersons(): Promise<SalespersonUser[]> {
+    const res = await apiClient.get<ApiEnvelope<SalespersonUser[]>>("/admin/salespersons");
+    return res.data.data;
+  },
+
+  async createSalesperson(payload: CreateSalespersonPayload): Promise<SalespersonUser> {
+    const res = await apiClient.post<ApiEnvelope<SalespersonUser>>("/admin/salespersons", payload);
+    return res.data.data;
+  },
+
+  async updateSalesperson(id: string, payload: UpdateSalespersonPayload): Promise<SalespersonUser> {
+    const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(`/admin/salespersons/${id}`, payload);
     return res.data.data;
   },
 };

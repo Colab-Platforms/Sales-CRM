@@ -15,6 +15,19 @@ model User {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  // Who a SALESPERSON works under. Set to the manager themselves when a manager
+  // creates the account, or to whichever manager an admin picks when admin creates
+  // it. This is the sole gate for "can this manager see/add this salesperson" —
+  // separate from Group membership, which tracks which specific group they're in.
+  reportingManagerId String? @map("reporting_manager_id") @db.Uuid
+  reportingManager   User?   @relation("UserReportingManager", fields: [reportingManagerId], references: [id])
+  directReports      User[]  @relation("UserReportingManager")
+
+  // Audit trail: which account (admin or manager) created this user.
+  createdById String? @map("created_by_id") @db.Uuid
+  createdBy   User?   @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers User[] @relation("UserCreatedBy")
+
   groupsManaged Group[] @relation("GroupManager")
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
@@ -56,6 +69,7 @@ model User {
 
   @@index([role])
   @@index([status])
+  @@index([reportingManagerId])
   @@map("users")
 }
 

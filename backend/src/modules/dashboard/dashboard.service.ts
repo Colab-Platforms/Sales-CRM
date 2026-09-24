@@ -98,7 +98,12 @@ class DashboardService {
       }),
     ]);
 
-    const teamMembers = groups.flatMap((g) => g.members.map((m) => m.user));
+    // A salesperson can be an active member of more than one of this manager's
+    // groups, which would otherwise duplicate them in `team` (and break React's
+    // key uniqueness on the dashboard) — dedupe by id, keeping the first hit.
+    const teamMembers = Array.from(
+      new Map(groups.flatMap((g) => g.members.map((m) => m.user)).map((user) => [user.id, user])).values(),
+    );
 
     const team = teamMembers.map((member) => {
       const rows = perSalespersonRows.filter((r) => r.ownerId === member.id);
