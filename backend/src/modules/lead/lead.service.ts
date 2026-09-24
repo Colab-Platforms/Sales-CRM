@@ -59,12 +59,26 @@ const leadListInclude = {
       endedAt: true,
       durationSeconds: true,
       recording: { select: { recordingUrl: true } },
+      agent: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
   },
 } satisfies Prisma.LeadInclude;
 
 class LeadService {
+  // Salespersons see their calls (status, duration) but can't hear the recording —
+  // only managers/admins can listen. Strip the URL out rather than the whole call.
+  private redactRecordingsForRole<T extends { calls: { recording: { recordingUrl: string | null } | null }[] }>(
+    entity: T,
+    role: Role,
+  ): T {
+    if (role !== Role.SALESPERSON) return entity;
+    return {
+      ...entity,
+      calls: entity.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call)),
+    };
+  }
+
   private buildScopeWhere(user: AuthUser): Prisma.LeadWhereInput {
     if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
     if (user.role === Role.SALESPERSON) return { ownerId: user.id };
@@ -76,6 +90,7 @@ class LeadService {
 
     if (query.sourceId) where.sourceId = query.sourceId;
     if (query.workingStatus) where.workingStatus = query.workingStatus as Lead["workingStatus"];
+    where.lifecycleStage = query.lifecycleStage ?? "LEAD";
 
     if (query.assignment === "UNASSIGNED") {
       where.assignedManagerId = null;
@@ -113,7 +128,7 @@ class LeadService {
     ]);
 
     return {
-      data,
+      data: data.map((lead) => this.redactRecordingsForRole(lead, user.role)),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -141,7 +156,7 @@ class LeadService {
   async getLeadById(user: AuthUser, id: string) {
     const lead = await this.getLeadOrThrow(id);
     this.assertAccess(user, lead);
-    return lead;
+    return this.redactRecordingsForRole(lead, user.role);
   }
 
   async createLead(user: AuthUser, data: CreateLeadBody) {
@@ -246,7 +261,7 @@ class LeadService {
       },
     });
 
-    return updated;
+    return this.redactRecordingsForRole(updated, user.role);
   }
 
   // Hard-deletes a Lead. The schema already protects real lead history at the DB level -

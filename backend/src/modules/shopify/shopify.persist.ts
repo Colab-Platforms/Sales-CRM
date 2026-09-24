@@ -3,6 +3,7 @@ import {
   ActivityType,
   ExternalSource,
   LeadWorkingStatus,
+  LifecycleStage,
   OrderStatus,
   PaymentStatus,
   ProductStatus,
@@ -103,6 +104,8 @@ export async function resolveLead(
     if (lead.externalSource === SOURCE && lead.workingStatus === LeadWorkingStatus.NEW && ctx.converted) {
       data.workingStatus = LeadWorkingStatus.CONVERTED;
     }
+    // Any lead that gets a live order is a customer, whatever system it first came from.
+    if (ctx.converted && lead.lifecycleStage !== LifecycleStage.CUSTOMER) data.lifecycleStage = LifecycleStage.CUSTOMER;
     if (!lead.lastActivityAt || lead.lastActivityAt < ctx.activityAt) data.lastActivityAt = ctx.activityAt;
 
     const changed = Object.keys(data).some((k) => k !== "lastActivityAt");
@@ -125,6 +128,9 @@ export async function resolveLead(
       location: identity.location?.slice(0, 255) ?? null,
       sourceId,
       workingStatus: ctx.converted ? LeadWorkingStatus.CONVERTED : LeadWorkingStatus.NEW,
+      lifecycleStage: ctx.converted ? LifecycleStage.CUSTOMER : LifecycleStage.LEAD,
+      // Keep the customer's real signup date so old Shopify customers do not look newly created.
+      ...(identity.createdAt ? { createdAt: identity.createdAt } : {}),
       lastActivityAt: ctx.activityAt,
       externalSource: identity.externalId ? SOURCE : null,
       externalId: identity.externalId,

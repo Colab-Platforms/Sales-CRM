@@ -377,6 +377,7 @@ class OrdersService {
               payments: { create: { amount: fromCents(totalCents), currency: "INR", method: input.paymentMethod, status: "PENDING" } },
             },
           });
+          await tx.lead.update({ where: { id: lead.id }, data: { lifecycleStage: "CUSTOMER" } });
           await tx.activity.create({
             data: {
               leadId: lead.id,

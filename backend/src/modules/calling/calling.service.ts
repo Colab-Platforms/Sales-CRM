@@ -3,7 +3,7 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import { triggerClickToCall } from "./callerdesk.client.js";
-import { CallDirection, CallStatus, VirtualNumberStatus } from "../../../generated/prisma/enums.js";
+import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role } from "../../../generated/prisma/enums.js";
 import type {
   CallerDeskWebhookPayload,
   ClickToCallResult,
@@ -15,8 +15,11 @@ import type { AuthUser } from "@/middlewares/auth.js";
 
 const PROVIDER = "CALLERDESK";
 
-// CallerDesk's webhook `Status` values (from their Call Report docs) mapped to our CallStatus enum.
+// CallerDesk's webhook `Status` values mapped to our CallStatus enum.
+// "answer" confirmed from real webhook traffic (2026-09-23); the rest are still guesses
+// pending real samples — unmapped values fall back to the duration/recording heuristic below.
 const STATUS_MAP: Record<string, CallStatus> = {
+  answer: CallStatus.COMPLETED,
   answered: CallStatus.COMPLETED,
   "agent engaged": CallStatus.AGENT_ANSWERED,
   busy: CallStatus.BUSY,
@@ -24,9 +27,17 @@ const STATUS_MAP: Record<string, CallStatus> = {
   cancel: CallStatus.FAILED,
 };
 
-function mapWebhookStatus(status?: string): CallStatus {
-  if (!status) return CallStatus.FAILED;
-  return STATUS_MAP[status.trim().toLowerCase()] ?? CallStatus.FAILED;
+// Fallback when the raw Status string doesn't match anything in STATUS_MAP (their exact
+// wording was never confirmed against real webhook traffic). A recording or non-zero
+// duration is strong evidence the call actually connected, so don't blindly mark it FAILED —
+// that overwrites a call that clearly succeeded with a wrong status.
+function mapWebhookStatus(status: string | undefined, hasSignalOfConnection: boolean): CallStatus {
+  if (status) {
+    const mapped = STATUS_MAP[status.trim().toLowerCase()];
+    if (mapped) return mapped;
+    logger.warn(`[callerdesk] unrecognized webhook Status="${status}" — falling back on duration/recording signal`);
+  }
+  return hasSignalOfConnection ? CallStatus.COMPLETED : CallStatus.FAILED;
 }
 
 function toSeconds(value: string | number | undefined): number | undefined {
@@ -140,6 +151,19 @@ class CallingService {
         where: { id: call.id },
         data: { providerCallId, status: CallStatus.RINGING_AGENT },
       });
+
+      await prisma.activity.create({
+        data: {
+          leadId: lead.id,
+          actorId: agent.id,
+          type: ActivityType.CALL,
+          referenceType: "CALL",
+          referenceId: call.id,
+          title: "Call initiated",
+          description: `${agent.name} called ${lead.mobile} via ${virtualNumber.displayName ?? virtualNumber.number}`,
+        },
+      });
+
       return { callId: updated.id, status: updated.status };
     } catch (error: any) {
       await prisma.call.update({
@@ -150,13 +174,28 @@ class CallingService {
     }
   }
 
-  async listCallsForLead(leadId: string) {
-    await this.getLeadOrThrow(leadId);
-    return prisma.call.findMany({
+  async listCallsForLead(user: AuthUser, leadId: string) {
+    const lead = await this.getLeadOrThrow(leadId);
+
+    if (user.role === Role.MANAGER && lead.assignedManagerId !== user.id) {
+      throw new ApiError("Lead not found", STATUS_CODES.NOT_FOUND);
+    }
+    if (user.role === Role.SALESPERSON && lead.ownerId !== user.id) {
+      throw new ApiError("Lead not found", STATUS_CODES.NOT_FOUND);
+    }
+
+    const calls = await prisma.call.findMany({
       where: { leadId },
       include: { agent: { select: { id: true, name: true } }, recording: true },
       orderBy: { createdAt: "desc" },
     });
+
+    // Salespersons see their own call log (status, duration) but can't hear the
+    // recording — only managers/admins can listen.
+    if (user.role === Role.SALESPERSON) {
+      return calls.map((call) => (call.recording ? { ...call, recording: { ...call.recording, recordingUrl: null } } : call));
+    }
+    return calls;
   }
 
   verifyWebhookSecret(headers: Record<string, unknown>, query: Record<string, unknown>): boolean {
@@ -181,14 +220,16 @@ class CallingService {
       return;
     }
 
-    const status = mapWebhookStatus(payload.Status);
-    const durationSeconds = toSeconds(payload.CallDuration);
+    logger.info(`[callerdesk] webhook payload for call=${call.id}: ${JSON.stringify(payload)}`);
+
+    const durationSeconds = toSeconds(payload.CallDuration ?? payload.TalkDuration);
+    const status = mapWebhookStatus(payload.Status, Boolean(durationSeconds) || Boolean(payload.CallRecordingUrl));
 
     await prisma.call.update({
       where: { id: call.id },
       data: {
         status,
-        answeredAt: payload.Status?.toLowerCase() === "answered" ? new Date() : call.answeredAt,
+        answeredAt: status === CallStatus.COMPLETED || status === CallStatus.AGENT_ANSWERED ? new Date() : call.answeredAt,
         endedAt: payload.EndTime ? new Date(payload.EndTime) : call.endedAt,
         durationSeconds: durationSeconds ?? call.durationSeconds,
       },
@@ -201,6 +242,23 @@ class CallingService {
         update: { recordingUrl: payload.CallRecordingUrl, durationSeconds },
       });
     }
+
+    await prisma.activity.create({
+      data: {
+        leadId: call.leadId,
+        actorId: call.agentId,
+        type: ActivityType.CALL,
+        referenceType: "CALL",
+        referenceId: call.id,
+        title: `Call ${status.toLowerCase().replace("_", " ")}`,
+        description: [
+          durationSeconds ? `Duration: ${durationSeconds}s` : null,
+          payload.CallRecordingUrl ? `Recording: ${payload.CallRecordingUrl}` : null,
+        ]
+          .filter(Boolean)
+          .join(" · ") || undefined,
+      },
+    });
   }
 }
 

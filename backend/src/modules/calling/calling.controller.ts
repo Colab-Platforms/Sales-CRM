@@ -105,7 +105,7 @@ export const listLeadCalls = async (req: AuthRequest, res: Response): Promise<vo
       sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
       return;
     }
-    const result = await callingService.listCallsForLead(value.leadId);
+    const result = await callingService.listCallsForLead(req.user!, value.leadId);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);

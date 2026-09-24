@@ -32,6 +32,14 @@ enum LeadWorkingStatus {
   @@map("lead_working_status")
 }
 
+// LEAD: an enquiry that has not bought yet. CUSTOMER: has at least one order (set when an order is placed or synced).
+enum LifecycleStage {
+  LEAD
+  CUSTOMER
+
+  @@map("lifecycle_stage")
+}
+
 enum LeadPriority {
   LOW
   MEDIUM

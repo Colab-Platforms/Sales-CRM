@@ -282,6 +282,8 @@ export interface MappedLeadIdentity {
   email: string | null;
   phone: string | null;
   location: string | null;
+  /** When the customer signed up in Shopify. Only known for customer records, not for the identity on an order. */
+  createdAt?: Date | null;
 }
 
 export interface MappedOrder {
@@ -491,6 +493,7 @@ export function mapCustomer(customer: NormalizedShopifyCustomer): MappedLeadIden
     email: customer.email,
     phone: customer.phone,
     location: [customer.city, customer.province].filter(Boolean).join(", ") || null,
+    createdAt: customer.createdAt ? new Date(customer.createdAt) : null,
     externalUpdatedAt: new Date(customer.updatedAt),
   };
 }

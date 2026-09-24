@@ -36,6 +36,8 @@ model Lead {
   workingStatus LeadWorkingStatus @default(NEW) @map("working_status")
   priority      LeadPriority      @default(MEDIUM) @map("priority")
 
+  lifecycleStage LifecycleStage @default(LEAD) @map("lifecycle_stage")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -70,6 +72,7 @@ model Lead {
   @@index([assignedManagerId])
   @@index([importBatchId])
   @@index([workingStatus])
+  @@index([lifecycleStage, createdAt])
   @@index([priority])
   @@index([createdAt])
   @@map("leads")

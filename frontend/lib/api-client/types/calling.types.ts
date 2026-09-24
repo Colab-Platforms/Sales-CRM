@@ -21,6 +21,7 @@ export interface Call {
   endedAt: string | null;
   durationSeconds: number | null;
   recording: { recordingUrl: string | null } | null;
+  agent?: { id: string; name: string };
 }
 
 export interface ClickToCallResult {
