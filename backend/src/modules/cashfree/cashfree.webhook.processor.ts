@@ -5,6 +5,7 @@ import { UUID_PATTERN, safeMessage, type Db, type TxRunner } from "../integratio
 import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { applyPaymentUpdate, linkToUpdate, type PaymentUpdate } from "./cashfree.apply.js";
 import { parseEvent, type CashfreeEvent } from "./cashfree.events.js";
+import { notifyBookingOrderConfirmed } from "../orders/orders.booking.notify.js";
 
 // Turns a stored Cashfree delivery into an update of the CRM payment it belongs to. It only ever updates a payment the
 // CRM itself created (externalSource CASHFREE); a delivery that matches none is ignored, never turned into a new payment.
@@ -86,6 +87,10 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }
+
+        // E5: the payment (and order confirmation) is saved — now send the WhatsApp order confirmation.
+    // Fire-and-forget, at most once per order, never throws; non-E5 orders are ignored inside.
+    if (applied.outcome === "updated" && applied.to === "SUCCESS") void notifyBookingOrderConfirmed(applied.orderId);
     await deps.store.complete(eventId, "PROCESSED", now());
     return "processed";
   } catch (error) {
