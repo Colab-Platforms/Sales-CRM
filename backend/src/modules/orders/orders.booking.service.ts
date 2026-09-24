@@ -58,14 +58,21 @@ export function maxDiscountPercent(): number {
 class OrderBookingService {
   /** US-5.1: find the caller's leads by mobile, only within what this user is allowed to see. */
   async lookupLeads(user: AuthUser, mobile: string) {
-    const normalizedMobile = normalizeMobile(mobile);
-    if (!normalizedMobile) {
+      const normalizedMobile = normalizeMobile(mobile);
+    const last10 = mobile.replace(/\D/g, "").slice(-10);
+    if (!normalizedMobile || last10.length !== 10) {
       throw new ApiError("Enter a valid mobile number", STATUS_CODES.BAD_REQUEST);
     }
 
+    // Leads were saved by two different normalizers over time (with and without +91), so match every common form.
+    const candidates = [...new Set([normalizedMobile, last10, `91${last10}`, `+91${last10}`, `0${last10}`])];
+    const mobileMatch = {
+      OR: [{ normalizedMobile: { in: candidates } }, { mobile: { in: candidates } }],
+    };
+
     const scope = await getLeadScope(user);
     const leads = await prisma.lead.findMany({
-      where: { AND: [scope, { normalizedMobile }] },
+      where: { AND: [scope, mobileMatch] },
       orderBy: { createdAt: "desc" },
       take: 10,
       select: {
@@ -84,8 +91,8 @@ class OrderBookingService {
 
     // Tell the salesperson the number exists elsewhere without revealing anything about that lead.
     const existsForAnotherOwner =
-      leads.length === 0 && (await prisma.lead.count({ where: { normalizedMobile } })) > 0;
-
+      leads.length === 0 && (await prisma.lead.count({ where: mobileMatch })) > 0;
+      
     // US-5.2: the most recent shipping address, so a returning customer's address can be prefilled.
     const withLastAddress = await Promise.all(
       leads.map(async (lead) => {
