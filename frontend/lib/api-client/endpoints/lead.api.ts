@@ -34,6 +34,11 @@ export const leadApi = {
     return res.data.data;
   },
 
+  async deleteLead(id: string): Promise<{ id: string }> {
+    const res = await apiClient.delete<ApiEnvelope<{ id: string }>>(`/lead/leads/${id}`);
+    return res.data.data;
+  },
+
   async getAssignmentHistory(id: string): Promise<LeadAssignmentRecord[]> {
     const res = await apiClient.get<ApiEnvelope<LeadAssignmentRecord[]>>(`/lead/leads/${id}/assignments`);
     return res.data.data;

@@ -249,6 +249,73 @@ class LeadService {
     return updated;
   }
 
+  // Hard-deletes a Lead. The schema already protects real lead history at the DB level -
+  // activities/orders/calls/tasks/interestedPeriods/abandonments/recoveryActions/assignments/
+  // communicationPreferences/whatsAppCampaignRecipients all have an explicit ON DELETE RESTRICT
+  // FK to leads, and would raise a raw Postgres error if deletion were attempted anyway.
+  // whatsAppMessages/whatsAppAutomationRuns are ON DELETE SET NULL instead, so the DB alone
+  // wouldn't stop a delete there - but doing so would silently orphan a customer's WhatsApp
+  // history and Lead -> WhatsApp linking, which is explicitly never allowed to happen. So every
+  // one of these is checked up front and reported as one clear, actionable error, rather than
+  // ever attempting to work around any of them with a cascading delete or a schema change.
+  private async assertLeadIsDeletable(id: string): Promise<void> {
+    const [
+      activityCount,
+      orderCount,
+      callCount,
+      taskCount,
+      interestedPeriodCount,
+      abandonmentCount,
+      recoveryActionCount,
+      assignmentCount,
+      communicationPreferenceCount,
+      whatsAppMessageCount,
+      whatsAppAutomationRunCount,
+      whatsAppCampaignRecipientCount,
+    ] = await Promise.all([
+      prisma.activity.count({ where: { leadId: id } }),
+      prisma.order.count({ where: { leadId: id } }),
+      prisma.call.count({ where: { leadId: id } }),
+      prisma.task.count({ where: { leadId: id } }),
+      prisma.interestedLeadPeriod.count({ where: { leadId: id } }),
+      prisma.abandonment.count({ where: { leadId: id } }),
+      prisma.recoveryAction.count({ where: { leadId: id } }),
+      prisma.leadAssignment.count({ where: { leadId: id } }),
+      prisma.communicationPreference.count({ where: { leadId: id } }),
+      prisma.whatsAppMessage.count({ where: { leadId: id } }),
+      prisma.whatsAppAutomationRun.count({ where: { leadId: id } }),
+      prisma.whatsAppCampaignRecipient.count({ where: { leadId: id } }),
+    ]);
+
+    const blockers: string[] = [];
+    if (activityCount > 0) blockers.push(`${activityCount} activity record(s)`);
+    if (orderCount > 0) blockers.push(`${orderCount} order(s)`);
+    if (callCount > 0) blockers.push(`${callCount} call(s)`);
+    if (taskCount > 0) blockers.push(`${taskCount} task(s)`);
+    if (interestedPeriodCount > 0) blockers.push(`${interestedPeriodCount} interested-period record(s)`);
+    if (abandonmentCount > 0) blockers.push(`${abandonmentCount} abandonment record(s)`);
+    if (recoveryActionCount > 0) blockers.push(`${recoveryActionCount} recovery action(s)`);
+    if (assignmentCount > 0) blockers.push(`${assignmentCount} assignment record(s)`);
+    if (communicationPreferenceCount > 0) blockers.push(`${communicationPreferenceCount} communication preference(s)`);
+    if (whatsAppMessageCount > 0) blockers.push(`${whatsAppMessageCount} WhatsApp message(s)`);
+    if (whatsAppAutomationRunCount > 0) blockers.push(`${whatsAppAutomationRunCount} WhatsApp automation run(s)`);
+    if (whatsAppCampaignRecipientCount > 0) blockers.push(`${whatsAppCampaignRecipientCount} WhatsApp campaign recipient record(s)`);
+
+    if (blockers.length > 0) {
+      throw new ApiError(
+        `Cannot delete this lead: it has existing ${blockers.join(", ")}. Deletion is only allowed for a lead with no recorded history.`,
+        STATUS_CODES.CONFLICT,
+      );
+    }
+  }
+
+  async deleteLead(user: AuthUser, id: string): Promise<{ id: string }> {
+    await this.getLeadById(user, id); // same RBAC scope + 404 as every other single-lead action
+    await this.assertLeadIsDeletable(id);
+    await prisma.lead.delete({ where: { id } });
+    return { id };
+  }
+
   async getAssignmentHistory(user: AuthUser, id: string) {
     await this.getLeadById(user, id);
     return prisma.leadAssignment.findMany({

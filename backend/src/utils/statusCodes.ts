@@ -8,6 +8,7 @@ const STATUS_CODES = {
   NOT_FOUND: 404,
   CONFLICT: 409,
   SERVER_ERROR: 500,
+  SERVICE_UNAVAILABLE: 503,
 } as const;
 
 export default STATUS_CODES;
