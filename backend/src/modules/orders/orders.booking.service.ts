@@ -8,8 +8,6 @@ import { Prisma } from "../../../generated/prisma/client.js";
 import {
   ActivitySource,
   ActivityType,
-  InterestedPeriodStatus,
-  LeadWorkingStatus,
   OrderSource,
   OrderStatus,
   PaymentMethod,
@@ -19,6 +17,8 @@ import { loadShiprocketConfig } from "../shiprocket/shiprocket.config.js";
 import { sharedTokenProvider } from "../shiprocket/shiprocket.token.js";
 import { resolveVariantForOrder, searchBookingCatalog, type ResolvedVariant } from "./orders.booking.shopify.js";
 import type { CreateBookingBody, QuoteBody } from "./orders.booking.validators.js";
+import { markLeadConverted } from "./orders.booking.conversion.js";
+import { notifyBookingOrderConfirmed } from "./orders.booking.notify.js";
 
 // E5 on-call booking service: lead lookup, catalog, serviceability, server-side pricing and order creation.
 
@@ -80,36 +80,6 @@ function generateOrderNumber(): string {
 const isUniqueViolation = (error: unknown): error is { code: string; meta?: unknown } =>
   typeof error === "object" && error !== null && (error as { code?: string }).code === "P2002";
 
-/**
- * US-5.8: CRM side of a successful conversion. Safe to call more than once for the same order.
- * Used at creation for COD, and (later) when Cashfree confirms a payment-link order.
- */
-export async function markLeadConverted(
-  tx: Prisma.TransactionClient,
-  params: { leadId: string; orderId: string; orderNumber: string; actorId: string | null },
-): Promise<void> {
-  const now = new Date();
-  await tx.lead.update({
-    where: { id: params.leadId },
-    data: { workingStatus: LeadWorkingStatus.CONVERTED, lastActivityAt: now },
-  });
-  await tx.interestedLeadPeriod.updateMany({
-    where: { leadId: params.leadId, status: InterestedPeriodStatus.ACTIVE },
-    data: { status: InterestedPeriodStatus.CONVERTED, endedAt: now },
-  });
-  await tx.activity.create({
-    data: {
-      leadId: params.leadId,
-      orderId: params.orderId,
-      actorId: params.actorId,
-      type: ActivityType.ORDER_CONFIRMED,
-      source: params.actorId ? ActivitySource.USER : ActivitySource.SYSTEM,
-      referenceType: "Order",
-      referenceId: params.orderId,
-      title: `Order ${params.orderNumber} confirmed — lead converted`,
-    },
-  });
-}
 
 class OrderBookingService {
   /** US-5.1: find the caller's leads by mobile, only within what this user is allowed to see. */
@@ -125,7 +95,6 @@ class OrderBookingService {
     const mobileMatch = {
       OR: [{ normalizedMobile: { in: candidates } }, { mobile: { in: candidates } }],
     };
-
     const scope = await getLeadScope(user);
     const leads = await prisma.lead.findMany({
       where: { AND: [scope, mobileMatch] },
@@ -406,8 +375,9 @@ class OrderBookingService {
           },
           { timeout: 20_000, maxWait: 10_000 },
         );
-        return { order, duplicate: false };
-      } catch (error) {
+        // Fire-and-forget: the order is already saved; WhatsApp can never undo it.
+        if (order.status === OrderStatus.CONFIRMED) void notifyBookingOrderConfirmed(order.id);
+        return { order, duplicate: false };      } catch (error) {
         if (isUniqueViolation(error)) {
           // A parallel request with the same key won the race: return its order instead of a duplicate.
           if (JSON.stringify(error.meta ?? {}).includes("idempotency")) {

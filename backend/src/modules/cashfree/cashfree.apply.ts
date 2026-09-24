@@ -4,6 +4,7 @@ import { computePaymentBreakdown } from "../orders/orders.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { advisoryLock, asRecord, type Db } from "../integrations/integrations.common.js";
+import { confirmBookingOrderAfterPayment } from "../orders/orders.booking.conversion.js";
 
 // The single place a Cashfree result is applied to a CRM Payment row. Both the webhook processor and the manual
 // "refresh" action go through it, so they can never disagree about what a status change means.
@@ -190,5 +191,9 @@ export async function applyPaymentUpdate(tx: Db, paymentId: string, update: Paym
   }
 
   await tx.activity.createMany({ data: rows });
+    // E5: an on-call payment-link order is confirmed (and its lead converted) the moment its payment succeeds.
+  if (finalStatus === PaymentStatus.SUCCESS) {
+    await confirmBookingOrderAfterPayment(tx, payment.orderId, ctx.actor?.id ?? null);
+  }
   return { outcome: "updated", orderId: payment.orderId, leadId, from, to: finalStatus };
 }
