@@ -8,6 +8,7 @@ import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 import {
   checkBookingServiceability,
+  createBookingOrder,
   getBookingCatalog,
   lookupBookingLeads,
   quoteBooking,
@@ -26,6 +27,7 @@ router.get("/booking/leads", requireAuth, requireRole(...BOOKING_ROLES), lookupB
 router.get("/booking/catalog", requireAuth, requireRole(...BOOKING_ROLES), getBookingCatalog);
 router.get("/booking/serviceability", requireAuth, requireRole(...BOOKING_ROLES), checkBookingServiceability);
 router.post("/booking/quote", requireAuth, requireRole(...BOOKING_ROLES), quoteBooking);
+router.post("/booking/orders", requireAuth, requireRole(...BOOKING_ROLES), createBookingOrder);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);

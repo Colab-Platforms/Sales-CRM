@@ -5,6 +5,7 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import OrderBookingService from "./orders.booking.service.js";
 import {
   validateCatalogQuery,
+  validateCreateBookingBody,
   validateLookupQuery,
   validateQuoteBody,
   validateServiceabilityQuery,
@@ -38,4 +39,10 @@ export async function checkBookingServiceability(req: AuthRequest, res: Response
 export async function quoteBooking(req: AuthRequest, res: Response) {
   const body = valid(validateQuoteBody(req.body));
   res.status(200).json({ success: true, data: await service.quote(body) });
+}
+
+export async function createBookingOrder(req: AuthRequest, res: Response) {
+  const body = valid(validateCreateBookingBody(req.body));
+  const result = await service.createOrder(req.user!, body);
+  res.status(result.duplicate ? 200 : 201).json({ success: true, data: result });
 }
