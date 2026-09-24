@@ -784,6 +784,12 @@ class LeadService {
     let createdCount = 0;
     const usedLeadNumbers = new Set<string>();
 
+    // A manager who imports leads keeps them — the lead lands assigned to
+    // that manager immediately instead of sitting in Admin's unassigned pool.
+    // Admin still sees every lead regardless (ADMIN has unrestricted scope),
+    // and the "via {uploadedBy}" source-column note still reflects who brought it in.
+    const isManagerImport = user.role === Role.MANAGER;
+
     const uniqueLeadNumber = (): string => {
       let leadNumber = generateLeadNumber();
       while (usedLeadNumbers.has(leadNumber)) leadNumber = generateLeadNumber();
@@ -806,6 +812,7 @@ class LeadService {
         location: row.location,
         sourceId: sourceCache.get(row.sourceName?.trim() || "CSV Import"),
         importBatchId: batch.id,
+        assignedManagerId: isManagerImport ? user.id : undefined,
       }));
 
       await prisma.$transaction(
@@ -820,6 +827,32 @@ class LeadService {
               title: "Lead created via CSV import",
             })),
           });
+
+          if (isManagerImport) {
+            const now = new Date();
+            await tx.leadAssignment.createMany({
+              data: leadRows.map((lead) => ({
+                id: randomUUID(),
+                leadId: lead.id,
+                userId: user.id,
+                assignmentType: AssignmentType.MANUAL,
+                assignedById: user.id,
+                assignedAt: now,
+                isCurrent: true,
+              })),
+            });
+            await tx.activity.createMany({
+              data: leadRows.map((lead) => ({
+                leadId: lead.id,
+                actorId: user.id,
+                type: ActivityType.ASSIGNMENT,
+                referenceType: "LeadImportBatch",
+                referenceId: batch.id,
+                title: "Auto-assigned to importing manager",
+                description: "Method: CSV_IMPORT",
+              })),
+            });
+          }
         },
         { timeout: 30000, maxWait: 10000 },
       );
