@@ -2,7 +2,11 @@
 // only, never to AiSensy or Gupshup specifics directly. Mirrors how shopify.client.ts isolates the
 // rest of the app from the Shopify Admin API's own shapes.
 
-export type WhatsAppProviderId = "AISENSY" | "GUPSHUP";
+// "META" (the official WhatsApp Cloud API, called directly) is additive: it never flows through
+// whatsapp.factory.ts's env-based getWhatsAppProvider() - see whatsapp.meta.factory.ts's separate,
+// DB-config-backed loader. Included here only so it can share this type with the generic webhook
+// store/handler/processor (whatsapp.webhook.store.ts etc.), which are already fully provider-id-generic.
+export type WhatsAppProviderId = "AISENSY" | "GUPSHUP" | "META";
 
 export interface SendTemplateMessageMedia {
   /** Must already be a publicly accessible https URL - never a local filesystem path. The CRM has

@@ -34,6 +34,7 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
+    "@google/genai": "^2.24.0",
     "@prisma/adapter-neon": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "bcryptjs": "^3.0.3",

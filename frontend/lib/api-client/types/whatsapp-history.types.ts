@@ -60,6 +60,19 @@ export interface ListConversationsParams {
   search?: string;
 }
 
+export type ConversationMode = "AI" | "HUMAN";
+export type OrderConversationState =
+  | "DISCOVERY"
+  | "PRODUCT_SELECTED"
+  | "QUANTITY_SELECTED"
+  | "CUSTOMER_DETAILS"
+  | "ADDRESS_REQUIRED"
+  | "ADDRESS_CONFIRMED"
+  | "PAYMENT_METHOD"
+  | "ORDER_REVIEW"
+  | "CUSTOMER_CONFIRMED"
+  | "ORDER_CREATED";
+
 export interface ConversationSummary {
   leadId: string;
   leadNumber: string;
@@ -75,6 +88,10 @@ export interface ConversationSummary {
     at: string;
   };
   awaitingReply: boolean;
+  mode: ConversationMode;
+  assignedTo: { id: string; name: string } | null;
+  orderState: OrderConversationState;
+  unreadCount: number;
 }
 
 export interface ConversationListResult {

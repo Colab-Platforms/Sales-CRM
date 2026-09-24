@@ -857,6 +857,9 @@ class LeadService {
       location?: string;
     },
     activityTitle: string,
+    // Defaults to the global client; a caller already inside its own transaction passes it so these
+    // writes see that caller's uncommitted rows (e.g. a Source it just created).
+    client: TxClient | typeof prisma = prisma,
   ) {
     const normalizedMobile = normalizeMobile(data.mobile);
     const normalizedEmail = normalizeEmail(data.email);
@@ -867,7 +870,7 @@ class LeadService {
     // instead of spawning a duplicate.
     const existing =
       normalizedMobile || normalizedEmail
-        ? await prisma.lead.findFirst({
+        ? await client.lead.findFirst({
             where: {
               sourceId,
               OR: [
@@ -879,7 +882,7 @@ class LeadService {
         : null;
 
     if (existing) {
-      const lead = await prisma.lead.update({
+      const lead = await client.lead.update({
         where: { id: existing.id },
         data: {
           firstName: data.firstName || existing.firstName,
@@ -892,7 +895,7 @@ class LeadService {
         },
       });
 
-      await prisma.activity.create({
+      await client.activity.create({
         data: {
           leadId: lead.id,
           type: ActivityType.LEAD_UPDATED,
@@ -915,9 +918,9 @@ class LeadService {
       requirement: data.requirement,
       location: data.location,
       sourceId,
-    });
+    }, client);
 
-    await prisma.activity.create({
+    await client.activity.create({
       data: {
         leadId: lead.id,
         type: ActivityType.LEAD_CREATED,

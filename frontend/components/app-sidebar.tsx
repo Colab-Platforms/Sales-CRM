@@ -22,6 +22,7 @@ import {
   Truck,
   Plug,
   Phone,
+  Settings,
 } from "lucide-react";
 import {
   Sidebar,
@@ -318,6 +319,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           title: "WhatsApp Status",
           href: "/dashboard/whatsapp/status",
           icon: MessageCircle,
+        },
+        {
+          title: "WhatsApp Config",
+          href: "/dashboard/whatsapp/cloud-config",
+          icon: Settings,
         },
         {
           title: "WhatsApp Templates",

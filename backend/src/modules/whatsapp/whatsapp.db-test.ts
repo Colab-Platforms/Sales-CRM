@@ -180,7 +180,7 @@ describe("customer WhatsApp status", () => {
   });
 });
 
-describe("inbound message matching (Phase 6: never invents a customer)", () => {
+describe("inbound message matching and lead creation (never a duplicate for the same number)", () => {
   it("matches an inbound message to the lead with the same normalized phone number", async () => {
     await inRollback(async (tx) => {
       const lead = await makeLead(tx, { normalizedMobile: "+919876500001" });
@@ -201,21 +201,47 @@ describe("inbound message matching (Phase 6: never invents a customer)", () => {
     });
   });
 
-  it("stores a message from an unmatched sender with leadId null, and writes no Activity", async () => {
+  // Phase 6's own behavior changed for this task (WhatsApp Inbox + AI order-taking, Phase 2 -
+  // "if not found, create the appropriate CRM contact/lead using the existing service/model"):
+  // an unmatched sender now gets a real Lead via leadService.createLeadFromSource, the same
+  // Source-attributed pattern Meta/Shopify already use - never a bespoke lead-creation path, and
+  // never a second lead for a second message from the same unmatched number (createLeadFromSource's
+  // own dedup, scoped to the singleton "WhatsApp Inbound" Source).
+  it("creates a new lead for an unmatched sender, attaches the message and Activity to it", async () => {
     await inRollback(async (tx) => {
-      // A before/after delta, not an absolute 0: this shared dev database already has real
-      // WHATSAPP_MESSAGE_RECEIVED Activity rows from live end-to-end AiSensy testing (a real
-      // inbound message that DID match a real lead), unrelated to this test - see
-      // whatsapp.aisensy.webhook.db-test.ts for the same pattern used elsewhere in this module.
-      const activitiesBefore = await tx.activity.count({ where: { type: ActivityType.WHATSAPP_MESSAGE_RECEIVED } });
-
       const svc = new WhatsAppService(tx);
       const unknownNumber = `9${Date.now()}`.slice(0, 10);
       await svc.recordInboundMessage("AISENSY", { providerMessageId: "wamid-unmatched", from: unknownNumber, to: null, messageType: "TEXT", text: "Hello", timestamp: new Date() });
 
-      const stored = await tx.whatsAppMessage.findUniqueOrThrow({ where: { provider_providerMessageId: { provider: "AISENSY", providerMessageId: "wamid-unmatched" } } });
-      assert.equal(stored.leadId, null);
-      assert.equal(await tx.activity.count({ where: { type: ActivityType.WHATSAPP_MESSAGE_RECEIVED } }), activitiesBefore, "no NEW activity - there was no lead to attach one to");
+      const stored = await tx.whatsAppMessage.findUniqueOrThrow({ where: { provider_providerMessageId: { provider: "AISENSY", providerMessageId: "wamid-unmatched" } }, select: { leadId: true } });
+      assert.ok(stored.leadId, "a new lead was created and attached");
+
+      const lead = await tx.lead.findUniqueOrThrow({ where: { id: stored.leadId! }, select: LEAD_SELECT });
+      assert.equal(lead.normalizedMobile, `+91${unknownNumber}`);
+
+      const receivedActivity = await tx.activity.findFirst({ where: { leadId: stored.leadId!, type: ActivityType.WHATSAPP_MESSAGE_RECEIVED } });
+      assert.ok(receivedActivity);
+      const createdActivity = await tx.activity.findFirst({ where: { leadId: stored.leadId!, type: ActivityType.LEAD_CREATED } });
+      assert.ok(createdActivity, "the new lead's own creation is audited too");
+
+      const source = await tx.source.findFirst({ where: { type: "WHATSAPP" }, select: { id: true, name: true } });
+      assert.ok(source, "a singleton WhatsApp Inbound Source backs the new lead");
+    });
+  });
+
+  it("never creates a duplicate lead for a second message from the same still-unmatched number", async () => {
+    await inRollback(async (tx) => {
+      const svc = new WhatsAppService(tx);
+      const unknownNumber = `9${Date.now()}`.slice(0, 10);
+      await svc.recordInboundMessage("AISENSY", { providerMessageId: "wamid-u1", from: unknownNumber, to: null, messageType: "TEXT", text: "Hello", timestamp: new Date() });
+      await svc.recordInboundMessage("AISENSY", { providerMessageId: "wamid-u2", from: unknownNumber, to: null, messageType: "TEXT", text: "Are you open?", timestamp: new Date(Date.now() + 1000) });
+
+      const m1 = await tx.whatsAppMessage.findUniqueOrThrow({ where: { provider_providerMessageId: { provider: "AISENSY", providerMessageId: "wamid-u1" } }, select: { leadId: true } });
+      const m2 = await tx.whatsAppMessage.findUniqueOrThrow({ where: { provider_providerMessageId: { provider: "AISENSY", providerMessageId: "wamid-u2" } }, select: { leadId: true } });
+      assert.equal(m1.leadId, m2.leadId, "the same lead, never a duplicate");
+
+      const source = await tx.source.findFirst({ where: { type: "WHATSAPP" }, select: { id: true } });
+      assert.equal(await tx.lead.count({ where: { sourceId: source!.id, normalizedMobile: `+91${unknownNumber}` } }), 1);
     });
   });
 

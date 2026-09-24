@@ -50,6 +50,9 @@ model User {
   whatsAppTemplatesCreated WhatsAppTemplate[] @relation("WhatsAppTemplateCreatedBy")
   whatsAppAutomationConfigsUpdated WhatsAppAutomationConfig[] @relation("WhatsAppAutomationConfigUpdatedBy")
   whatsAppCampaignsCreated WhatsAppCampaign[] @relation("WhatsAppCampaignCreatedBy")
+  whatsAppConfigsCreated WhatsAppConfig[] @relation("WhatsAppConfigCreatedBy")
+  whatsAppConfigsUpdated WhatsAppConfig[] @relation("WhatsAppConfigUpdatedBy")
+  whatsAppConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignedTo")
 
   @@index([role])
   @@index([status])

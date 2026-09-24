@@ -380,22 +380,27 @@ describe("AiSensy message.created - TEST C: existing contact is reused, never du
   });
 });
 
-describe("AiSensy message.created - TEST D: unknown contact - existing CRM architecture, no fabricated customer", () => {
-  it("stores the WhatsAppMessage with no lead attached, creates no customer, and no Activity", async () => {
+// WhatsApp Inbox + AI order-taking task, Phase 2: recordInboundMessage now creates a real Lead for
+// an unmatched sender (leadService.createLeadFromSource, the same Source-attributed pattern Meta/
+// Shopify already use) instead of leaving the message unattached - this describe block's own
+// behavior changed accordingly; see whatsapp.db-test.ts's equivalent update for the primary path.
+describe("AiSensy message.created - TEST D: unknown contact - creates a new lead, never a fabricated duplicate", () => {
+  it("stores the WhatsAppMessage attached to a newly created lead, and audits both events", async () => {
     await inRollback(async (tx) => {
-      // Deliberately no makeLead() - the payload's phone_number matches nothing in the CRM.
+      // Deliberately no makeLead() - the payload's phone_number matches nothing in the CRM yet.
       const leadsBefore = await tx.lead.count();
-      const activitiesBefore = await tx.activity.count({ where: { type: "WHATSAPP_MESSAGE_RECEIVED" as any } });
 
       const { outcome } = await deliverCreated(tx, realInboundMessageCreatedPayload(), "created-unknown");
-      assert.equal(outcome, "processed"); // the webhook itself is still fully, successfully processed
+      assert.equal(outcome, "processed");
 
-      assert.equal(await tx.lead.count(), leadsBefore, "the existing architecture never auto-creates a lead/customer from an inbound WhatsApp message");
+      assert.equal(await tx.lead.count(), leadsBefore + 1, "exactly one new lead was created for the unmatched number");
       const row = await tx.whatsAppMessage.findFirstOrThrow({ where: { provider: "AISENSY", providerMessageId: INBOUND_WAMID } });
-      assert.equal(row.leadId, null, "message is preserved, just unattached - never guessed onto a customer");
-      // A before/after delta, not an absolute 0: this shared dev database already has real Activity
-      // rows from live end-to-end AiSensy testing (a real message that DID match a real lead).
-      assert.equal(await tx.activity.count({ where: { type: "WHATSAPP_MESSAGE_RECEIVED" as any } }), activitiesBefore, "no NEW Activity without a real customer to attach it to");
+      assert.ok(row.leadId, "the message is attached to the newly created lead, never left orphaned");
+
+      const receivedActivity = await tx.activity.findFirst({ where: { leadId: row.leadId!, type: "WHATSAPP_MESSAGE_RECEIVED" as any } });
+      assert.ok(receivedActivity);
+      const createdActivity = await tx.activity.findFirst({ where: { leadId: row.leadId!, type: ActivityType.LEAD_CREATED } });
+      assert.ok(createdActivity, "the new lead's own creation is audited too");
     });
   });
 });

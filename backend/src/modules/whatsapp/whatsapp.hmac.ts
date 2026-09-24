@@ -26,3 +26,30 @@ export function verifyGupshupToken(header: string | undefined, token: string): b
   const given = Buffer.from(header.trim());
   return given.length === expected.length && timingSafeEqual(given, expected);
 }
+
+// Meta's official WhatsApp Cloud API signs each webhook delivery with X-Hub-Signature-256: the
+// hex-encoded HMAC-SHA256 of the raw request body, prefixed "sha256=", keyed with the app's App
+// Secret (documented Meta Graph API webhook behavior - same scheme Meta uses for every Graph API
+// webhook product, not WhatsApp-specific). Same shape as verifyAiSensyHmac, just with the prefix.
+export function verifyMetaSignature(rawBody: Buffer, header: string | undefined, appSecret: string): boolean {
+  if (!header) return false;
+  const prefix = "sha256=";
+  if (!header.startsWith(prefix)) return false;
+  const expected = Buffer.from(prefix + createHmac("sha256", appSecret).update(rawBody).digest("hex"));
+  const given = Buffer.from(header.trim());
+  return given.length === expected.length && timingSafeEqual(given, expected);
+}
+
+/** Meta's GET webhook verification handshake: pure decision logic, factored out of
+ *  whatsapp.meta.webhook.routes.ts so it is testable without Express or a database. Returns the
+ *  challenge string to echo back on success, or null to respond 403 - never throws. */
+export function resolveMetaWebhookChallenge(
+  query: { mode: unknown; verifyToken: unknown; challenge: unknown },
+  expectedVerifyToken: string | null,
+): string | null {
+  if (query.mode !== "subscribe" || typeof query.challenge !== "string" || !expectedVerifyToken) return null;
+  const given = Buffer.from(String(query.verifyToken ?? ""));
+  const expected = Buffer.from(expectedVerifyToken);
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  return query.challenge;
+}

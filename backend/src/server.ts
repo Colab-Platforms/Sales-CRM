@@ -11,6 +11,7 @@ import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/wha
 import cashfreeWebhookRoutes, { startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
+import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/whatsapp/whatsapp.meta.webhook.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 
@@ -52,6 +53,11 @@ app.use("/api/webhooks/shiprocket", express.raw({ type: "*/*", limit: "5mb" }), 
 // documented for it (see whatsapp.aisensy.webhook.config.ts), so this still reads the raw body only
 // to support the CRM's own optional shared-token safeguard and exact-byte deduplication.
 app.use("/api/webhooks/aisensy", express.raw({ type: "*/*", limit: "5mb" }), aisensyProjectWebhookRoutes);
+// Official Meta WhatsApp Cloud API webhook - a distinct path from /api/webhooks/whatsapp/:provider
+// above (that route's provider selection is synchronous/env-based; this one is DB-config-backed and
+// async - see whatsapp.meta.webhook.routes.ts). Meta signs the exact bytes it sends, same reason as
+// every other raw-body route here.
+app.use("/api/webhooks/whatsapp-cloud", express.raw({ type: "*/*", limit: "5mb" }), whatsappMetaWebhookRoutes);
 
 app.use(
   express.json({
@@ -75,6 +81,7 @@ app.listen(PORT, () => {
   startCashfreeWebhookWorker();
   startShiprocketWebhookWorker();
   startAiSensyProjectWebhookWorker();
+  startMetaWebhookWorker();
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, MessageCircle, MessagesSquare, Search, ShoppingCart } from "lucide-react";
@@ -13,6 +13,9 @@ import { customerDetailHref } from "@/components/orders/orders-table";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { cn } from "@/lib/utils";
 import { whatsappConversationListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
+import { conversationDetailQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
+import { useMarkConversationReadMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
+import { ConversationContextPanel } from "./conversation-context-panel";
 import { useCustomer360 } from "@/hooks/useCustomers";
 import { useAuthStore } from "@/stores/auth-store";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
@@ -50,7 +53,9 @@ function ConversationListPanel({
   }
 
   const params = { page, pageSize: PAGE_SIZE, search: search || undefined };
-  const query = useQuery({ ...whatsappConversationListQueryOptions(params), enabled: Boolean(token) });
+  // 15s polling - the only "live" mechanism this app has (no websocket/SSE), enough to surface a new
+  // inbound message or an AI reply/handoff while the inbox is open.
+  const query = useQuery({ ...whatsappConversationListQueryOptions(params), enabled: Boolean(token), refetchInterval: 15_000 });
   const data = query.data;
   const isLoading = query.isPending && query.fetchStatus !== "idle";
   const error = query.isError ? getErrorMessage(query.error, "Failed to load conversations.") : null;
@@ -115,6 +120,17 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const { data, isLoading, error } = useCustomer360(leadId);
   const [sendOpen, setSendOpen] = useState(false);
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
+  // A lead with messages predating the conversation model has no row yet (404) - free text simply
+  // stays unavailable for it, same as any non-Meta conversation.
+  const conversation = useQuery({ ...conversationDetailQueryOptions(leadId), retry: false });
+  const canSendFreeText = conversation.data?.provider === "META";
+  const markRead = useMarkConversationReadMutation();
+  const unread = conversation.data?.unreadCount ?? 0;
+
+  useEffect(() => {
+    if (unread > 0) markRead.mutate({ leadId, variables: undefined });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when the unread count changes for this conversation
+  }, [leadId, unread]);
 
   return (
     <div className="flex h-full flex-col">
@@ -168,7 +184,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           actually reaches the backend is the template button, which opens the same existing
           SendWhatsAppDialog/sendTemplate() path used everywhere else. */}
       <div className="border-t p-3">
-        <MessageComposer onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
+        <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
       </div>
 
       {data ? (
@@ -192,10 +208,10 @@ export function WhatsAppInboxView() {
       </div>
 
       <Card className="overflow-hidden p-0">
-        <CardContent className="grid h-[calc(100vh-14rem)] min-h-[420px] grid-cols-1 gap-0 p-0 md:grid-cols-[320px_1fr]">
+        <CardContent className="grid h-[calc(100vh-14rem)] min-h-[420px] grid-cols-1 gap-0 p-0 md:grid-cols-[320px_1fr] lg:grid-cols-[320px_1fr_340px]">
           {/* Mobile/tablet: show either the list or the open chat, never both at once - selecting a
-              conversation reveals the chat panel; the header's back button returns here. Desktop
-              (md+) always shows both panels side by side, as a two-pane inbox should. */}
+              conversation reveals the chat panel; the header's back button returns here. md+ shows
+              list + chat side by side; lg+ adds the customer/order context pane on the right. */}
           <div className={cn("min-h-0 border-b md:border-r md:border-b-0", selectedLeadId ? "hidden md:block" : "block")}>
             <ConversationListPanel selectedLeadId={selectedLeadId} onSelect={setSelectedLeadId} />
           </div>
@@ -208,6 +224,9 @@ export function WhatsAppInboxView() {
                 <p className="text-sm">Select a conversation to start.</p>
               </div>
             )}
+          </div>
+          <div className="hidden min-h-0 border-l lg:block">
+            {selectedLeadId ? <ConversationContextPanel leadId={selectedLeadId} /> : null}
           </div>
         </CardContent>
       </Card>

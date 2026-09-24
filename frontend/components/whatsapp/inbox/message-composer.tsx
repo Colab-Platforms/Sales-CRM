@@ -1,23 +1,22 @@
 "use client";
 
 import { useRef, useState, type KeyboardEvent } from "react";
+import { toast } from "sonner";
 import { FileText, Film, Music, Paperclip, Send, Smile, Image as ImageIcon, MessageSquareText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { getErrorMessage } from "@/lib/api-client/client";
+import { useSendConversationTextMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
 
-// Traced against the actual provider before writing any of this UI: the CRM's entire outbound
-// WhatsApp surface (backend/src/modules/whatsapp/whatsapp.provider.ts's WhatsAppProvider interface,
-// implemented by AiSensyProvider) exposes exactly one method - sendTemplateMessage() - which POSTs
-// to AiSensy's Campaign API (https://backend.aisensy.com/campaign/t1/api/v2). That call now
-// documented-ly accepts an optional media: {url, filename} alongside the template/campaign fields -
-// so an Image or Document CAN be attached, but only together with an approved template send (the
-// existing SendWhatsAppDialog, which now has a "media URL" field), never as a free-standing
-// attachment message and never a local file upload (this CRM has no file-hosting service, and the
-// URL must already be public). Video/Audio/File are NOT part of the confirmed payload, so they stay
-// disabled rather than guessed at. Free text still has no endpoint at all, so it still never sends.
+// Traced against the actual provider before writing any of this UI: AiSensy's Campaign API
+// (backend/src/modules/whatsapp/whatsapp.aisensy.provider.ts) and Gupshup's template endpoint both
+// expose only sendTemplateMessage() - no free-text send. The Meta Cloud API provider (added
+// separately) DOES support free text (POST /whatsapp/conversations/:leadId/messages, gated server-
+// side to Meta-only) - so free text is enabled here only when `canSendFreeText` says this
+// conversation's active provider is Meta; otherwise it stays honestly blocked, same as before.
 const FREE_TEXT_BLOCKED =
-  "Free-text messages can't be sent yet - AiSensy's Campaign API (the only API this CRM is connected to) only supports sending pre-approved templates.";
+  "Free-text messages need the Meta WhatsApp Cloud API provider - this conversation's active provider only supports sending pre-approved templates.";
 const UNCONFIRMED_MEDIA_REASON = "Not confirmed supported by AiSensy's Campaign API - only image/document media is documented.";
 
 const EMOJI = ["😀", "😂", "😊", "😍", "🙏", "👍", "👋", "🎉", "❤️", "🔥", "✅", "❌", "📦", "🚚", "💰", "📅", "⏰", "😢", "😮", "🤔"];
@@ -34,10 +33,21 @@ const UNSUPPORTED_ATTACHMENTS: { label: string; icon: typeof ImageIcon }[] = [
   { label: "File", icon: Paperclip },
 ];
 
-export function MessageComposer({ onOpenTemplateSend, disabled }: { onOpenTemplateSend: () => void; disabled: boolean }) {
+export function MessageComposer({
+  leadId,
+  canSendFreeText,
+  onOpenTemplateSend,
+  disabled,
+}: {
+  leadId: string;
+  canSendFreeText: boolean;
+  onOpenTemplateSend: () => void;
+  disabled: boolean;
+}) {
   const [text, setText] = useState("");
   const [blocked, setBlocked] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const sendText = useSendConversationTextMutation();
 
   function autoResize() {
     const el = textareaRef.current;
@@ -48,8 +58,17 @@ export function MessageComposer({ onOpenTemplateSend, disabled }: { onOpenTempla
 
   function handleAttemptSend() {
     if (!text.trim()) return;
-    // Never a fake send: no API call happens here, only an honest explanation of the real limitation.
-    setBlocked(true);
+    if (!canSendFreeText) {
+      // Never a fake send: no API call happens here, only an honest explanation of the real limitation.
+      setBlocked(true);
+      return;
+    }
+    const body = text;
+    setText("");
+    sendText.mutate(
+      { leadId, variables: { text: body } },
+      { onError: (err) => { toast.error(getErrorMessage(err, "Could not send message.")); setText(body); } },
+    );
   }
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -143,7 +162,7 @@ export function MessageComposer({ onOpenTemplateSend, disabled }: { onOpenTempla
           )}
         />
 
-        <Button size="icon" onClick={handleAttemptSend} disabled={disabled || !text.trim()} aria-label="Send">
+        <Button size="icon" onClick={handleAttemptSend} disabled={disabled || !text.trim() || sendText.isPending} aria-label="Send">
           <Send />
         </Button>
       </div>
