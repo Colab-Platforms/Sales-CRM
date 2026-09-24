@@ -59,11 +59,8 @@ CREATE TYPE "product_status" AS ENUM ('ACTIVE', 'INACTIVE');
 CREATE TYPE "source_status" AS ENUM ('ACTIVE', 'INACTIVE');
 
 -- CreateEnum
-<<<<<<<< HEAD:backend/prisma/migrations/20260923065009_initial_schema/migration.sql
 CREATE TYPE "source_type" AS ENUM ('MANUAL', 'CSV', 'META', 'SHOPIFY', 'API');
-========
 CREATE TYPE "source_type" AS ENUM ('MANUAL', 'CSV', 'META', 'SHOPIFY', 'API', 'WHATSAPP');
->>>>>>>> ff903ec5b0df17c8a31f77c4759cacaf1c73d534:backend/prisma/migrations/20260925000000_baseline/migration.sql
 
 -- CreateEnum
 CREATE TYPE "virtual_number_status" AS ENUM ('ACTIVE', 'INACTIVE');
@@ -96,7 +93,6 @@ CREATE TYPE "recovery_action_type" AS ENUM ('CALL', 'CALLBACK', 'CONTINUE_ORDER'
 CREATE TYPE "recovery_action_status" AS ENUM ('PENDING', 'IN_PROGRESS', 'SUCCESS', 'FAILED');
 
 -- CreateEnum
-<<<<<<<< HEAD:backend/prisma/migrations/20260923065009_initial_schema/migration.sql
 CREATE TYPE "activity_type" AS ENUM ('LEAD_CREATED', 'LEAD_UPDATED', 'ASSIGNMENT', 'REASSIGNMENT', 'CALL', 'NOTE', 'STATUS_CHANGE', 'INTERESTED', 'INTERESTED_EXPIRED', 'ORDER_CREATED', 'ORDER_CONFIRMED', 'PAYMENT', 'ABANDONMENT', 'RECOVERY', 'TASK', 'ORDER_STATUS_CHANGED', 'ORDER_CANCELLED', 'PAYMENT_CREATED', 'PAYMENT_STATUS_CHANGED', 'PAYMENT_REFUNDED', 'PAYMENT_MISMATCH_DETECTED', 'SHIPMENT_CREATED', 'SHIPMENT_STATUS_CHANGED', 'TRACKING_UPDATED', 'DISCOUNT_CHANGED', 'WHATSAPP_MESSAGE_SENT', 'WHATSAPP_MESSAGE_RECEIVED', 'WHATSAPP_DELIVERED', 'WHATSAPP_READ', 'WHATSAPP_FAILED', 'WHATSAPP_TEMPLATE_CREATED', 'WHATSAPP_TEMPLATE_UPDATED', 'WHATSAPP_TEMPLATE_STATUS_CHANGED', 'WHATSAPP_TEMPLATE_SYNCED', 'WHATSAPP_CAMPAIGN_CREATED', 'WHATSAPP_CAMPAIGN_LAUNCHED', 'WHATSAPP_CAMPAIGN_CANCELLED', 'WHATSAPP_CAMPAIGN_COMPLETED', 'PAYMENT_LINK_CREATED', 'PAYMENT_LINK_CANCELLED', 'SHIPMENT_AWB_ASSIGNED', 'SHIPMENT_PICKUP_SCHEDULED', 'SHIPMENT_LABEL_GENERATED');
 
 -- CreateEnum
@@ -104,7 +100,6 @@ CREATE TYPE "activity_source" AS ENUM ('USER', 'SHOPIFY_SYNC', 'SHOPIFY_WEBHOOK'
 
 -- CreateEnum
 CREATE TYPE "whatsapp_provider_name" AS ENUM ('AISENSY', 'GUPSHUP');
-========
 CREATE TYPE "activity_type" AS ENUM ('LEAD_CREATED', 'LEAD_UPDATED', 'ASSIGNMENT', 'REASSIGNMENT', 'CALL', 'NOTE', 'STATUS_CHANGE', 'INTERESTED', 'INTERESTED_EXPIRED', 'ORDER_CREATED', 'ORDER_CONFIRMED', 'PAYMENT', 'ABANDONMENT', 'RECOVERY', 'TASK', 'ORDER_STATUS_CHANGED', 'ORDER_CANCELLED', 'PAYMENT_CREATED', 'PAYMENT_STATUS_CHANGED', 'PAYMENT_REFUNDED', 'PAYMENT_MISMATCH_DETECTED', 'SHIPMENT_CREATED', 'SHIPMENT_STATUS_CHANGED', 'TRACKING_UPDATED', 'DISCOUNT_CHANGED', 'WHATSAPP_MESSAGE_SENT', 'WHATSAPP_MESSAGE_RECEIVED', 'WHATSAPP_DELIVERED', 'WHATSAPP_READ', 'WHATSAPP_FAILED', 'WHATSAPP_TEMPLATE_CREATED', 'WHATSAPP_TEMPLATE_UPDATED', 'WHATSAPP_TEMPLATE_STATUS_CHANGED', 'WHATSAPP_TEMPLATE_SYNCED', 'WHATSAPP_CAMPAIGN_CREATED', 'WHATSAPP_CAMPAIGN_LAUNCHED', 'WHATSAPP_CAMPAIGN_CANCELLED', 'WHATSAPP_CAMPAIGN_COMPLETED', 'PAYMENT_LINK_CREATED', 'PAYMENT_LINK_CANCELLED', 'SHIPMENT_AWB_ASSIGNED', 'SHIPMENT_PICKUP_SCHEDULED', 'SHIPMENT_LABEL_GENERATED', 'WHATSAPP_CLOUD_CONFIG_CREATED', 'WHATSAPP_CLOUD_CONFIG_UPDATED', 'WHATSAPP_CLOUD_CONFIG_RESET', 'WHATSAPP_CLOUD_CONFIG_TESTED', 'WHATSAPP_CLOUD_CONFIG_WEBHOOK_VERIFIED', 'CONVERSATION_ASSIGNED', 'CONVERSATION_AI_HANDOFF', 'CONVERSATION_HUMAN_HANDBACK');
 
 -- CreateEnum
@@ -112,21 +107,17 @@ CREATE TYPE "activity_source" AS ENUM ('USER', 'SHOPIFY_SYNC', 'SHOPIFY_WEBHOOK'
 
 -- CreateEnum
 CREATE TYPE "whatsapp_provider_name" AS ENUM ('AISENSY', 'GUPSHUP', 'META');
->>>>>>>> ff903ec5b0df17c8a31f77c4759cacaf1c73d534:backend/prisma/migrations/20260925000000_baseline/migration.sql
 
 -- CreateEnum
 CREATE TYPE "whatsapp_direction" AS ENUM ('INBOUND', 'OUTBOUND');
 
 -- CreateEnum
-<<<<<<<< HEAD:backend/prisma/migrations/20260923065009_initial_schema/migration.sql
-========
 CREATE TYPE "conversation_mode" AS ENUM ('AI', 'HUMAN');
 
 -- CreateEnum
 CREATE TYPE "order_conversation_state" AS ENUM ('DISCOVERY', 'PRODUCT_SELECTED', 'QUANTITY_SELECTED', 'CUSTOMER_DETAILS', 'ADDRESS_REQUIRED', 'ADDRESS_CONFIRMED', 'PAYMENT_METHOD', 'ORDER_REVIEW', 'CUSTOMER_CONFIRMED', 'ORDER_CREATED');
 
 -- CreateEnum
->>>>>>>> ff903ec5b0df17c8a31f77c4759cacaf1c73d534:backend/prisma/migrations/20260925000000_baseline/migration.sql
 CREATE TYPE "whatsapp_message_type" AS ENUM ('TEXT', 'TEMPLATE', 'MEDIA', 'INTERACTIVE', 'OTHER');
 
 -- CreateEnum
@@ -648,11 +639,8 @@ CREATE TABLE "webhook_events" (
     "payload" JSONB NOT NULL,
     "status" "webhook_status" NOT NULL DEFAULT 'RECEIVED',
     "error_message" TEXT,
-<<<<<<<< HEAD:backend/prisma/migrations/20260923065009_initial_schema/migration.sql
-========
     "attempts" INTEGER NOT NULL DEFAULT 0,
     "next_attempt_at" TIMESTAMP(3),
->>>>>>>> ff903ec5b0df17c8a31f77c4759cacaf1c73d534:backend/prisma/migrations/20260925000000_baseline/migration.sql
     "source_id" UUID,
     "received_at" TIMESTAMP(3) NOT NULL,
     "processed_at" TIMESTAMP(3),
@@ -1136,8 +1124,6 @@ CREATE INDEX "webhook_events_source_id_idx" ON "webhook_events"("source_id");
 -- CreateIndex
 CREATE UNIQUE INDEX "webhook_events_provider_external_event_id_key" ON "webhook_events"("provider", "external_event_id");
 
-<<<<<<<< HEAD:backend/prisma/migrations/20260923065009_initial_schema/migration.sql
-========
 -- CreateIndex
 CREATE INDEX "whatsapp_messages_lead_id_idx" ON "whatsapp_messages"("lead_id");
 
@@ -1231,7 +1217,6 @@ CREATE INDEX "whatsapp_conversations_assigned_to_id_idx" ON "whatsapp_conversati
 -- CreateIndex
 CREATE INDEX "whatsapp_conversations_mode_idx" ON "whatsapp_conversations"("mode");
 
->>>>>>>> ff903ec5b0df17c8a31f77c4759cacaf1c73d534:backend/prisma/migrations/20260925000000_baseline/migration.sql
 -- AddForeignKey
 ALTER TABLE "abandonments" ADD CONSTRAINT "abandonments_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES "leads"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
@@ -1384,8 +1369,6 @@ ALTER TABLE "group_members" ADD CONSTRAINT "group_members_user_id_fkey" FOREIGN 
 
 -- AddForeignKey
 ALTER TABLE "webhook_events" ADD CONSTRAINT "webhook_events_source_id_fkey" FOREIGN KEY ("source_id") REFERENCES "sources"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-<<<<<<<< HEAD:backend/prisma/migrations/20260923065009_initial_schema/migration.sql
-========
 
 -- AddForeignKey
 ALTER TABLE "whatsapp_messages" ADD CONSTRAINT "whatsapp_messages_lead_id_fkey" FOREIGN KEY ("lead_id") REFERENCES "leads"("id") ON DELETE SET NULL ON UPDATE CASCADE;
@@ -1449,4 +1432,3 @@ ALTER TABLE "whatsapp_conversations" ADD CONSTRAINT "whatsapp_conversations_assi
 
 -- AddForeignKey
 ALTER TABLE "whatsapp_conversations" ADD CONSTRAINT "whatsapp_conversations_created_order_id_fkey" FOREIGN KEY ("created_order_id") REFERENCES "orders"("id") ON DELETE SET NULL ON UPDATE CASCADE;
->>>>>>>> ff903ec5b0df17c8a31f77c4759cacaf1c73d534:backend/prisma/migrations/20260925000000_baseline/migration.sql

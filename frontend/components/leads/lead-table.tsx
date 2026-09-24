@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Phone } from "lucide-react";
 import Link from "next/link";
-import Link from "next/link";
 import { toast } from "sonner";
 import { Eye, Inbox, Pencil, Trash2 } from "lucide-react";
 import { History } from "lucide-react";

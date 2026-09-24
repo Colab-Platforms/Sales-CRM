@@ -10,7 +10,7 @@ import { prisma } from "../../lib/prisma.js";
 import { ProductType, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import type { ShopifyClient } from "../shopify/shopify.client.js";
-import OrdersService from "./orders.service.js";
+import OrdersService from "../orders/orders.service.js";
 
 class Rollback extends Error {}
 

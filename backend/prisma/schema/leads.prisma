@@ -44,8 +44,12 @@ model Lead {
   lastContactedAt DateTime? @map("last_contacted_at")
   lastActivityAt  DateTime? @map("last_activity_at")
 
+  // Identity in an external system (Shopify). Null for records created inside the CRM.
+  externalSource    ExternalSource? @map("external_source")
+  externalId        String?         @map("external_id") @db.VarChar(100)
+  externalUpdatedAt DateTime?       @map("external_updated_at")
 
-  assignments              LeadAssignment[]
+  assignments             LeadAssignment[]
   communicationPreferences CommunicationPreference[]
   calls                    Call[]
   tasks                    Task[]
@@ -65,6 +69,7 @@ model Lead {
   @@index([ownerId])
   @@index([groupId])
   @@index([assignedManagerId])
+  @@unique([externalSource, externalId])
   @@index([importBatchId])
   @@index([workingStatus])
   @@index([lifecycleStage, createdAt])

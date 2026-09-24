@@ -87,7 +87,7 @@ export function CallHistoryTable({ calls, pagination, onPageChange }: CallHistor
                     </div>
                   </TableCell>
                   <TableCell className="pr-4 text-right">
-                    <Button variant="outline" size="sm" render={<Link href={callDetailHref(call.id)} aria-label="View call" />}>
+                    <Button variant="outline" size="sm" nativeButton={false} render={<Link href={callDetailHref(call.id)} aria-label="View call" />}>
                       <Eye />
                       View
                     </Button>
