@@ -23,6 +23,13 @@ model Order {
 
   discountReason String? @map("discount_reason")
 
+     // --- E5: on-call booking ---
+     idempotencyKey          String?               @unique @map("idempotency_key") @db.VarChar(100)
+     serviceabilityStatus    ServiceabilityStatus? @map("serviceability_status")
+     serviceabilityCheckedAt DateTime?             @map("serviceability_checked_at")
+
+  
+
   // Identity in an external system (Shopify). Null for records created inside the CRM.
   externalSource    ExternalSource? @map("external_source")
   externalId        String?         @map("external_id") @db.VarChar(100)

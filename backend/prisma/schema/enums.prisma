@@ -506,3 +506,12 @@ enum ExternalSource {
 
   @@map("external_source")
 }
+
+
+enum ServiceabilityStatus {
+  SERVICEABLE
+  NOT_SERVICEABLE
+  UNKNOWN
+
+  @@map("serviceability_status")
+}
