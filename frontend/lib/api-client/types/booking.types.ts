@@ -80,3 +80,32 @@ export interface BookingQuote {
   total: string;
   maxDiscountPercent: number;
 }
+
+export type BookingPaymentMethod = "PAYMENT_LINK" | "COD";
+
+export interface CreateBookingRequest {
+  leadId: string;
+  idempotencyKey: string;
+  customer: { firstName: string; lastName?: string; mobile: string; email?: string };
+  address: { line1: string; line2?: string; city: string; state: string; pincode: string };
+  items: BookingItemInput[];
+  discountPercent: number;
+  discountReason?: string;
+  paymentMethod: BookingPaymentMethod;
+  confirmed: true;
+}
+
+export interface BookingOrder {
+  id: string;
+  orderNumber: string;
+  status: string;
+  subtotal: string;
+  discountAmount: string;
+  totalAmount: string;
+  payments: { id: string; method: string | null; status: string }[];
+}
+
+export interface CreateBookingResult {
+  order: BookingOrder;
+  duplicate: boolean;
+}

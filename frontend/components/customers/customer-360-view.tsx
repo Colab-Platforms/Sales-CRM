@@ -72,6 +72,9 @@ export function Customer360View({ leadId }: { leadId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <BackLink />
         <div className="flex flex-wrap gap-2">
+                    <Link href={`/dashboard/orders/new?leadId=${leadId}`} className={buttonVariants({ size: "sm" })}>
+            Create order
+          </Link>
           <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
             <Pencil data-icon="inline-start" />
             Edit

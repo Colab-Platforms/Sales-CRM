@@ -5,6 +5,8 @@ import type {
   BookingProduct,
   BookingQuote,
   BookingQuoteRequest,
+  CreateBookingRequest,
+  CreateBookingResult,
   ServiceabilityResult,
 } from "../types/booking.types";
 
@@ -28,6 +30,11 @@ export const bookingApi = {
 
   async quote(body: BookingQuoteRequest): Promise<BookingQuote> {
     const res = await apiClient.post<ApiEnvelope<BookingQuote>>("/orders/booking/quote", body);
+    return res.data.data;
+  },
+
+  async createOrder(body: CreateBookingRequest): Promise<CreateBookingResult> {
+    const res = await apiClient.post<ApiEnvelope<CreateBookingResult>>("/orders/booking/orders", body);
     return res.data.data;
   },
 };

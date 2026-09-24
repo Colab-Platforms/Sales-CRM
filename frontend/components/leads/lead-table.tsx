@@ -219,6 +219,12 @@ export function LeadTable({
                   </TableCell>
                   <TableCell className="pr-4 text-right">
                     <div className="flex justify-end gap-1">
+                                            <Link
+                        href={`/dashboard/orders/new?leadId=${lead.id}`}
+                        className="inline-flex h-8 items-center rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                      >
+                        Create order
+                      </Link>
                       <Button
                         variant="ghost"
                         size="icon-sm"
