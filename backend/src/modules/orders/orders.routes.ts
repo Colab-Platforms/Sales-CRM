@@ -6,6 +6,12 @@ import { getReconciliation } from "../reconciliation/reconciliation.controller.j
 import { getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders } from "./orders.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
+import {
+  checkBookingServiceability,
+  getBookingCatalog,
+  lookupBookingLeads,
+  quoteBooking,
+} from "./orders.booking.controller.js";
 
 const router = Router();
 
@@ -14,6 +20,12 @@ router.get("/filter-options", requireAuth, getOrderFilterOptions);
 // Revenue & payment reconciliation is an org/team-level financial view, not a single order - only
 // management roles get it, same as the rest of the manager/admin-only reporting endpoints.
 router.get("/reconciliation", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), getReconciliation);
+// --- E5: on-call order booking ---
+const BOOKING_ROLES = [Role.ADMIN, Role.MANAGER, Role.SALESPERSON] as const;
+router.get("/booking/leads", requireAuth, requireRole(...BOOKING_ROLES), lookupBookingLeads);
+router.get("/booking/catalog", requireAuth, requireRole(...BOOKING_ROLES), getBookingCatalog);
+router.get("/booking/serviceability", requireAuth, requireRole(...BOOKING_ROLES), checkBookingServiceability);
+router.post("/booking/quote", requireAuth, requireRole(...BOOKING_ROLES), quoteBooking);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);
