@@ -38,6 +38,11 @@ model Order {
   // Raw external statuses and reconciliation notes, kept so nothing from the source is silently lost.
   metadata Json? @map("metadata")
 
+  // Reverse of WhatsAppConversation.createdOrderId - the AI order-taking conversation that produced
+  // this order, when it was created that way (null for every other order path, including the
+  // existing manual "Create Order" action in the WhatsApp Inbox, which does not set this).
+  conversation WhatsAppConversation?
+
   placedAt    DateTime? @map("placed_at")
   confirmedAt DateTime? @map("confirmed_at")
   cancelledAt DateTime? @map("cancelled_at")

@@ -4,6 +4,11 @@ export interface SendTemplateInput {
   leadId: string;
   templateId: string;
   orderId?: string;
+  /** Optional media attached to this same template send (AiSensy's documented `media: {url,
+   *  filename}` field). Must already be a publicly accessible https URL - the CRM has no
+   *  file-hosting service, so there is no upload here, only a URL the user already has. */
+  mediaUrl?: string;
+  mediaFilename?: string;
 }
 
 export type PreviewTemplateInput = SendTemplateInput;

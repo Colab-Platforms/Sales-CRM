@@ -13,6 +13,8 @@ model WebhookEvent {
 
   errorMessage String? @map("error_message")
 
+  attempts      Int       @default(0) @map("attempts")
+  nextAttemptAt DateTime? @map("next_attempt_at")
   sourceId String? @map("source_id") @db.Uuid
   source   Source? @relation(fields: [sourceId], references: [id])
 

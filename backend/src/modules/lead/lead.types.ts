@@ -30,6 +30,7 @@ export interface ListLeadsQuery {
   limit: number;
   sourceId?: string;
   workingStatus?: string;
+  lifecycleStage?: "LEAD" | "CUSTOMER";
   assignment?: AssignmentFilter;
   managerId?: string;
   salespersonId?: string;

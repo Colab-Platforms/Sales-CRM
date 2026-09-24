@@ -14,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { usePreviewTemplateMutation, useSendTemplateMutation } from "@/lib/api-client/mutations/whatsapp-messaging.mutations";
@@ -36,6 +38,8 @@ interface SendWhatsAppDialogProps {
 export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, orders }: SendWhatsAppDialogProps) {
   const [templateId, setTemplateId] = useState<string>("");
   const [orderId, setOrderId] = useState<string>(NO_ORDER);
+  const [mediaUrl, setMediaUrl] = useState("");
+  const [mediaFilename, setMediaFilename] = useState("");
   const [sendResult, setSendResult] = useState<WhatsAppMessageResult | null>(null);
 
   // Resets on close happen from the same user action that closes the dialog (Cancel, Done, or the
@@ -45,6 +49,8 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
     if (!next) {
       setTemplateId("");
       setOrderId(NO_ORDER);
+      setMediaUrl("");
+      setMediaFilename("");
       setSendResult(null);
     }
     onOpenChange(next);
@@ -76,11 +82,23 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
 
   const preview = previewMutation.data;
   const previewError = previewMutation.isError ? getErrorMessage(previewMutation.error, "Could not preview this message.") : null;
-  const canSend = Boolean(templateId) && Boolean(preview) && !previewMutation.isPending && !sendMutation.isPending && !sendResult;
+
+  // Client-side pre-check only, for a fast/clear error before submitting - the backend
+  // (assertValidMediaUrl) is still the real, authoritative gate against a local/non-public URL.
+  const mediaUrlTrimmed = mediaUrl.trim();
+  const mediaUrlError = mediaUrlTrimmed && !mediaUrlTrimmed.startsWith("https://") ? "Media URL must start with https:// (AiSensy requires a publicly accessible URL)." : null;
+
+  const canSend = Boolean(templateId) && Boolean(preview) && !previewMutation.isPending && !sendMutation.isPending && !sendResult && !mediaUrlError;
 
   function handleSend() {
     sendMutation.mutate(
-      { leadId, templateId, orderId: orderId === NO_ORDER ? undefined : orderId },
+      {
+        leadId,
+        templateId,
+        orderId: orderId === NO_ORDER ? undefined : orderId,
+        mediaUrl: mediaUrlTrimmed || undefined,
+        mediaFilename: mediaFilename.trim() || undefined,
+      },
       {
         onSuccess: (result) => setSendResult(result),
         onError: (error) => toast.error(getErrorMessage(error, "Could not send the message.")),
@@ -165,6 +183,31 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
                   </p>
                 ) : preview ? (
                   <p className="rounded-lg border bg-muted/30 p-3 text-sm whitespace-pre-wrap">{preview.resolvedBody}</p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {templateId ? (
+              <div className="grid gap-1.5 border-t pt-3">
+                <Label htmlFor="wa-media-url">Attach media (optional)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Must already be a public https link (an image, PDF, or similar). This CRM can&apos;t upload a file for you.
+                </p>
+                <Input
+                  id="wa-media-url"
+                  placeholder="https://your-cdn.example.com/file.jpg"
+                  value={mediaUrl}
+                  onChange={(e) => setMediaUrl(e.target.value)}
+                  aria-invalid={Boolean(mediaUrlError)}
+                />
+                {mediaUrlError ? <p className="text-xs text-destructive">{mediaUrlError}</p> : null}
+                {mediaUrlTrimmed ? (
+                  <Input
+                    aria-label="Filename (optional)"
+                    placeholder="Filename (optional), e.g. brochure.pdf"
+                    value={mediaFilename}
+                    onChange={(e) => setMediaFilename(e.target.value)}
+                  />
                 ) : null}
               </div>
             ) : null}

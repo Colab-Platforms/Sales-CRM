@@ -32,6 +32,14 @@ enum LeadWorkingStatus {
   @@map("lead_working_status")
 }
 
+// LEAD: an enquiry that has not bought yet. CUSTOMER: has at least one order (set when an order is placed or synced).
+enum LifecycleStage {
+  LEAD
+  CUSTOMER
+
+  @@map("lifecycle_stage")
+}
+
 enum LeadPriority {
   LOW
   MEDIUM
@@ -172,6 +180,10 @@ enum SourceType {
   META
   SHOPIFY
   API
+  // A lead created from an unmatched inbound WhatsApp sender (whatsapp.service.ts's
+  // recordInboundMessage) - same "external source with a Source row" pattern as META/SHOPIFY,
+  // reusing leadService.createLeadFromSource rather than a bespoke lead-creation path.
+  WHATSAPP
 
   @@map("source_type")
 }
@@ -219,6 +231,7 @@ enum OrderSource {
   WEBSITE
   API
   SHOPIFY
+
 
   @@map("order_source")
 }
@@ -345,6 +358,21 @@ enum ActivityType {
   SHIPMENT_PICKUP_SCHEDULED
   SHIPMENT_LABEL_GENERATED
 
+  // WhatsApp Cloud API (Meta, official) foundation - configuration lifecycle events for the new
+  // WhatsAppConfig row. Distinct from the WHATSAPP_TEMPLATE_* events above (those are about a
+  // message template, not the provider connection itself). Never written with credential values.
+  WHATSAPP_CLOUD_CONFIG_CREATED
+  WHATSAPP_CLOUD_CONFIG_UPDATED
+  WHATSAPP_CLOUD_CONFIG_RESET
+  WHATSAPP_CLOUD_CONFIG_TESTED
+  WHATSAPP_CLOUD_CONFIG_WEBHOOK_VERIFIED
+
+  // WhatsApp Inbox conversation-level events (assignment, AI/human handoff) - distinct from the
+  // message-level WHATSAPP_* events above, which are about one message, not the conversation itself.
+  CONVERSATION_ASSIGNED
+  CONVERSATION_AI_HANDOFF
+  CONVERSATION_HUMAN_HANDBACK
+
   @@map("activity_type")
 }
 
@@ -361,6 +389,10 @@ enum ActivitySource {
   // Provider webhook deliveries, mirroring SHOPIFY_WEBHOOK / WHATSAPP_WEBHOOK.
   CASHFREE_WEBHOOK
   SHIPROCKET_WEBHOOK
+  // A real Meta WhatsApp Cloud API webhook delivery - kept distinct from WHATSAPP_WEBHOOK (which
+  // covers AiSensy's Direct-API relay of the same envelope shape) so the two integrations are never
+  // conflated in the audit trail while both exist side by side.
+  WHATSAPP_CLOUD_WEBHOOK
 
   @@map("activity_source")
 }
@@ -371,6 +403,9 @@ enum ActivitySource {
 enum WhatsAppProviderName {
   AISENSY
   GUPSHUP
+  // Meta's own official WhatsApp Cloud API, called directly (no BSP intermediary) - see
+  // whatsapp.meta.provider.ts. Additive: AISENSY/GUPSHUP sends continue exactly as before.
+  META
 
   @@map("whatsapp_provider_name")
 }
@@ -380,6 +415,33 @@ enum WhatsAppDirection {
   OUTBOUND
 
   @@map("whatsapp_direction")
+}
+
+// WhatsApp Inbox: whether the AI order-taking engine or a human salesperson is currently handling a
+// conversation. Defaults to HUMAN (whatsapp.conversation.service.ts) - a brand-new AI auto-reply
+// capability is opt-in per conversation, never on by default for a real customer.
+enum ConversationMode {
+  AI
+  HUMAN
+
+  @@map("conversation_mode")
+}
+
+// WhatsApp Inbox AI order-taking state machine (whatsapp.order-conversation.service.ts). Strictly
+// forward-advancing, one step per turn - never skipped, never inferred from a single message alone.
+enum OrderConversationState {
+  DISCOVERY
+  PRODUCT_SELECTED
+  QUANTITY_SELECTED
+  CUSTOMER_DETAILS
+  ADDRESS_REQUIRED
+  ADDRESS_CONFIRMED
+  PAYMENT_METHOD
+  ORDER_REVIEW
+  CUSTOMER_CONFIRMED
+  ORDER_CREATED
+
+  @@map("order_conversation_state")
 }
 
 // Only the shapes the CRM actually understands and stores. An inbound message the parser cannot

@@ -49,6 +49,7 @@ const listLeadsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20),
   sourceId: z.string().uuid().optional(),
   workingStatus: workingStatusEnum.optional(),
+  lifecycleStage: z.enum(["LEAD", "CUSTOMER"]).optional(),
   assignment: assignmentEnum.optional(),
   managerId: z.string().uuid().optional(),
   salespersonId: z.string().uuid().optional(),

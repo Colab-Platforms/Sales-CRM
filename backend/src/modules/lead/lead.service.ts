@@ -59,12 +59,26 @@ const leadListInclude = {
       endedAt: true,
       durationSeconds: true,
       recording: { select: { recordingUrl: true } },
+      agent: { select: { id: true, name: true } },
     },
     orderBy: { createdAt: "desc" },
   },
 } satisfies Prisma.LeadInclude;
 
 class LeadService {
+  // Salespersons see their calls (status, duration) but can't hear the recording —
+  // only managers/admins can listen. Strip the URL out rather than the whole call.
+  private redactRecordingsForRole<T extends { calls: { recording: { recordingUrl: string | null } | null }[] }>(
+    entity: T,
+    role: Role,
+  ): T {
+    if (role !== Role.SALESPERSON) return entity;
+    return {
+      ...entity,
+      calls: entity.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call)),
+    };
+  }
+
   private buildScopeWhere(user: AuthUser): Prisma.LeadWhereInput {
     if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
     if (user.role === Role.SALESPERSON) return { ownerId: user.id };
@@ -76,6 +90,7 @@ class LeadService {
 
     if (query.sourceId) where.sourceId = query.sourceId;
     if (query.workingStatus) where.workingStatus = query.workingStatus as Lead["workingStatus"];
+    where.lifecycleStage = query.lifecycleStage ?? "LEAD";
 
     if (query.assignment === "UNASSIGNED") {
       where.assignedManagerId = null;
@@ -113,7 +128,7 @@ class LeadService {
     ]);
 
     return {
-      data,
+      data: data.map((lead) => this.redactRecordingsForRole(lead, user.role)),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -141,7 +156,7 @@ class LeadService {
   async getLeadById(user: AuthUser, id: string) {
     const lead = await this.getLeadOrThrow(id);
     this.assertAccess(user, lead);
-    return lead;
+    return this.redactRecordingsForRole(lead, user.role);
   }
 
   async createLead(user: AuthUser, data: CreateLeadBody) {
@@ -246,7 +261,74 @@ class LeadService {
       },
     });
 
-    return updated;
+    return this.redactRecordingsForRole(updated, user.role);
+  }
+
+  // Hard-deletes a Lead. The schema already protects real lead history at the DB level -
+  // activities/orders/calls/tasks/interestedPeriods/abandonments/recoveryActions/assignments/
+  // communicationPreferences/whatsAppCampaignRecipients all have an explicit ON DELETE RESTRICT
+  // FK to leads, and would raise a raw Postgres error if deletion were attempted anyway.
+  // whatsAppMessages/whatsAppAutomationRuns are ON DELETE SET NULL instead, so the DB alone
+  // wouldn't stop a delete there - but doing so would silently orphan a customer's WhatsApp
+  // history and Lead -> WhatsApp linking, which is explicitly never allowed to happen. So every
+  // one of these is checked up front and reported as one clear, actionable error, rather than
+  // ever attempting to work around any of them with a cascading delete or a schema change.
+  private async assertLeadIsDeletable(id: string): Promise<void> {
+    const [
+      activityCount,
+      orderCount,
+      callCount,
+      taskCount,
+      interestedPeriodCount,
+      abandonmentCount,
+      recoveryActionCount,
+      assignmentCount,
+      communicationPreferenceCount,
+      whatsAppMessageCount,
+      whatsAppAutomationRunCount,
+      whatsAppCampaignRecipientCount,
+    ] = await Promise.all([
+      prisma.activity.count({ where: { leadId: id } }),
+      prisma.order.count({ where: { leadId: id } }),
+      prisma.call.count({ where: { leadId: id } }),
+      prisma.task.count({ where: { leadId: id } }),
+      prisma.interestedLeadPeriod.count({ where: { leadId: id } }),
+      prisma.abandonment.count({ where: { leadId: id } }),
+      prisma.recoveryAction.count({ where: { leadId: id } }),
+      prisma.leadAssignment.count({ where: { leadId: id } }),
+      prisma.communicationPreference.count({ where: { leadId: id } }),
+      prisma.whatsAppMessage.count({ where: { leadId: id } }),
+      prisma.whatsAppAutomationRun.count({ where: { leadId: id } }),
+      prisma.whatsAppCampaignRecipient.count({ where: { leadId: id } }),
+    ]);
+
+    const blockers: string[] = [];
+    if (activityCount > 0) blockers.push(`${activityCount} activity record(s)`);
+    if (orderCount > 0) blockers.push(`${orderCount} order(s)`);
+    if (callCount > 0) blockers.push(`${callCount} call(s)`);
+    if (taskCount > 0) blockers.push(`${taskCount} task(s)`);
+    if (interestedPeriodCount > 0) blockers.push(`${interestedPeriodCount} interested-period record(s)`);
+    if (abandonmentCount > 0) blockers.push(`${abandonmentCount} abandonment record(s)`);
+    if (recoveryActionCount > 0) blockers.push(`${recoveryActionCount} recovery action(s)`);
+    if (assignmentCount > 0) blockers.push(`${assignmentCount} assignment record(s)`);
+    if (communicationPreferenceCount > 0) blockers.push(`${communicationPreferenceCount} communication preference(s)`);
+    if (whatsAppMessageCount > 0) blockers.push(`${whatsAppMessageCount} WhatsApp message(s)`);
+    if (whatsAppAutomationRunCount > 0) blockers.push(`${whatsAppAutomationRunCount} WhatsApp automation run(s)`);
+    if (whatsAppCampaignRecipientCount > 0) blockers.push(`${whatsAppCampaignRecipientCount} WhatsApp campaign recipient record(s)`);
+
+    if (blockers.length > 0) {
+      throw new ApiError(
+        `Cannot delete this lead: it has existing ${blockers.join(", ")}. Deletion is only allowed for a lead with no recorded history.`,
+        STATUS_CODES.CONFLICT,
+      );
+    }
+  }
+
+  async deleteLead(user: AuthUser, id: string): Promise<{ id: string }> {
+    await this.getLeadById(user, id); // same RBAC scope + 404 as every other single-lead action
+    await this.assertLeadIsDeletable(id);
+    await prisma.lead.delete({ where: { id } });
+    return { id };
   }
 
   async getAssignmentHistory(user: AuthUser, id: string) {
@@ -790,6 +872,9 @@ class LeadService {
       location?: string;
     },
     activityTitle: string,
+    // Defaults to the global client; a caller already inside its own transaction passes it so these
+    // writes see that caller's uncommitted rows (e.g. a Source it just created).
+    client: TxClient | typeof prisma = prisma,
   ) {
     const normalizedMobile = normalizeMobile(data.mobile);
     const normalizedEmail = normalizeEmail(data.email);
@@ -800,7 +885,7 @@ class LeadService {
     // instead of spawning a duplicate.
     const existing =
       normalizedMobile || normalizedEmail
-        ? await prisma.lead.findFirst({
+        ? await client.lead.findFirst({
             where: {
               sourceId,
               OR: [
@@ -812,7 +897,7 @@ class LeadService {
         : null;
 
     if (existing) {
-      const lead = await prisma.lead.update({
+      const lead = await client.lead.update({
         where: { id: existing.id },
         data: {
           firstName: data.firstName || existing.firstName,
@@ -825,7 +910,7 @@ class LeadService {
         },
       });
 
-      await prisma.activity.create({
+      await client.activity.create({
         data: {
           leadId: lead.id,
           type: ActivityType.LEAD_UPDATED,
@@ -848,9 +933,9 @@ class LeadService {
       requirement: data.requirement,
       location: data.location,
       sourceId,
-    });
+    }, client);
 
-    await prisma.activity.create({
+    await client.activity.create({
       data: {
         leadId: lead.id,
         type: ActivityType.LEAD_CREATED,
