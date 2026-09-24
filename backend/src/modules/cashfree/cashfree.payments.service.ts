@@ -14,6 +14,7 @@ import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, t
 import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE } from "./cashfree.apply.js";
 import { CashfreeClient, type CashfreeLink, type CreateLinkRequest } from "./cashfree.client.js";
 import { CashfreeConfigError, isCashfreeEnabled, loadCashfreeConfig, type CashfreeConfig } from "./cashfree.config.js";
+import { notifyBookingOrderConfirmed } from "../orders/orders.booking.notify.js";
 
 // Creates and manages Cashfree payment links for an existing CRM order. The order is the business reference: no Shopify
 // order is ever created, and the Payment row this makes is the same row the webhook later updates, so reconciliation
@@ -344,10 +345,14 @@ class CashfreePaymentsService {
       throw new ApiError(error instanceof ProviderHttpError ? `Cashfree did not return the link: ${error.message}` : "Cashfree returned an unexpected answer", BAD_GATEWAY);
     }
 
-    return this.runner.$transaction(async (tx) => {
-      await applyPaymentUpdate(tx, paymentId, linkToUpdate(link), { source: ActivitySource.USER, actor: user, now: this.now() });
-      return this.toResult(await tx.payment.findUniqueOrThrow({ where: { id: paymentId }, select: PAYMENT_SELECT }), false, config);
+        const outcome = await this.runner.$transaction(async (tx) => {
+      const applied = await applyPaymentUpdate(tx, paymentId, linkToUpdate(link), { source: ActivitySource.USER, actor: user, now: this.now() });
+      const result = this.toResult(await tx.payment.findUniqueOrThrow({ where: { id: paymentId }, select: PAYMENT_SELECT }), false, config);
+      return { applied, result };
     });
+    // E5: once saved, send the WhatsApp order confirmation if this refresh just confirmed the payment (at most once, never throws).
+    if (outcome.applied.outcome === "updated" && outcome.applied.to === "SUCCESS") void notifyBookingOrderConfirmed(outcome.applied.orderId);
+    return outcome.result;
   }
 
   // ---------------------------------------------------------------- WhatsApp
