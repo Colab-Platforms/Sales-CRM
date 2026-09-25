@@ -21,6 +21,8 @@ export interface UpdateLeadBody {
   interestedProductId?: string;
   workingStatus?: "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED";
   priority?: "LOW" | "MEDIUM" | "HIGH";
+  // Required when workingStatus changes to CALL_BACK or FOLLOW_UP: when to remind the salesperson.
+  followUpAt?: string;
 }
 
 export type AssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";

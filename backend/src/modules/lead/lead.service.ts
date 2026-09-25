@@ -5,6 +5,7 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { generateLeadNumber } from "@/utils/leadNumber.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
+import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { normalizeMobile, normalizeEmail } from "@/utils/normalize.js";
 import {
   Role,
@@ -12,6 +13,8 @@ import {
   ImportBatchStatus,
   AssignmentType,
   ActivityType,
+  TaskType,
+  TaskStatus,
 } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import type { User, Lead } from "../../../generated/prisma/client.js";
@@ -49,6 +52,14 @@ const leadListInclude = {
   assignedManager: { select: { id: true, name: true, email: true } },
   group: { select: { id: true, name: true } },
   importBatch: { select: { fileName: true, uploadedBy: { select: { id: true, name: true, role: true } } } },
+  // The lead's pending call back / follow up reminder (at most one - scheduling a new one replaces it),
+  // so the UI can show the time that's currently set and pre-fill it when rescheduling.
+  tasks: {
+    where: { status: TaskStatus.PENDING, type: { in: [...FOLLOW_UP_TASK_TYPES] } },
+    select: { id: true, type: true, scheduledAt: true },
+    orderBy: { scheduledAt: "asc" },
+    take: 1,
+  },
   calls: {
     select: {
       id: true,
@@ -264,17 +275,45 @@ class LeadService {
     if (data.interestedProductId !== undefined) {
       updateData.interestedProduct = { connect: { id: data.interestedProductId } };
     }
-    if (data.workingStatus !== undefined && data.workingStatus !== shownStatus) updateData.workingStatus = data.workingStatus;
+    const statusChanged = data.workingStatus !== undefined && data.workingStatus !== shownStatus;
+    if (statusChanged) updateData.workingStatus = data.workingStatus;
 
-    const updated = await prisma.lead.update({ where: { id }, data: updateData, include: leadListInclude });
+    // Call back / follow up always carry a reminder time: required when switching to one, and
+    // accepted on its own to reschedule while the lead already has that status.
+    const resultingStatus = statusChanged ? data.workingStatus! : lead.workingStatus;
+    const isFollowUpStatus = resultingStatus === "CALL_BACK" || resultingStatus === "FOLLOW_UP";
+    const followUpAt =
+      isFollowUpStatus && (statusChanged || data.followUpAt)
+        ? parseFollowUpAt(data.followUpAt, resultingStatus === "CALL_BACK" ? "call back" : "follow up")
+        : null;
 
-    await prisma.activity.create({
-      data: {
-        leadId: id,
-        actorId: user.id,
-        type: data.workingStatus && data.workingStatus !== shownStatus ? ActivityType.STATUS_CHANGE : ActivityType.LEAD_UPDATED,
-        title: data.workingStatus && data.workingStatus !== shownStatus ? `Status changed to ${data.workingStatus}` : "Lead updated",
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.lead.update({ where: { id }, data: updateData, include: leadListInclude });
+
+      if (followUpAt) {
+        await scheduleFollowUp(tx, {
+          leadId: id,
+          leadName: [row.firstName, row.lastName].filter(Boolean).join(" "),
+          assignedToId: row.ownerId ?? user.id,
+          actor: { id: user.id, role: user.role },
+          type: resultingStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
+          scheduledAt: followUpAt,
+        });
+      } else if (statusChanged) {
+        // Moved on to another status - any reminder still pending on the lead has been dealt with.
+        await completePendingFollowUps(tx, id);
+      }
+
+      await tx.activity.create({
+        data: {
+          leadId: id,
+          actorId: user.id,
+          type: statusChanged ? ActivityType.STATUS_CHANGE : ActivityType.LEAD_UPDATED,
+          title: statusChanged ? `Status changed to ${data.workingStatus}` : "Lead updated",
+        },
+      });
+
+      return row;
     });
 
     return this.presentForRole(updated, user.role);
