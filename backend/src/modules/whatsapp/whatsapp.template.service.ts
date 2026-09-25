@@ -6,6 +6,7 @@ import { ActivitySource, ActivityType, Role, WhatsAppTemplateStatus } from "../.
 import type { Prisma } from "../../../generated/prisma/client.js";
 import type { DbClient } from "@/lib/leadScope.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
+import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { NormalizedTemplate, WhatsAppProvider } from "./whatsapp.provider.js";
 import { extractTemplateVariables } from "./whatsapp.template.variables.js";
@@ -49,6 +50,8 @@ class WhatsAppTemplateService {
   constructor(
     private readonly db: DbClient = prisma,
     private readonly getProvider: () => WhatsAppProvider | null = getWhatsAppProvider,
+    // Meta's provider is DB-config-backed (Settings -> WhatsApp Config); only used when a Meta sync is requested explicitly.
+    private readonly getMeta?: () => Promise<WhatsAppProvider | null>,
   ) {}
 
   async listTemplates(user: AuthUser, query: ListTemplatesQuery): Promise<TemplateListResult> {
@@ -166,9 +169,17 @@ class WhatsAppTemplateService {
     return mapTemplate(row);
   }
 
-  async syncTemplates(user: AuthUser): Promise<TemplateSyncSummary> {
-    const provider = this.getProvider();
-    if (!provider) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+  /** Syncs templates from the legacy env-configured provider (unchanged), or - when `only` is "META" - from the active
+   *  Meta WhatsApp Cloud API config. A synced Meta template is what makes it APPROVED and sendable. */
+  async syncTemplates(user: AuthUser, only?: "META"): Promise<TemplateSyncSummary> {
+    let provider: WhatsAppProvider | null;
+    if (only === "META") {
+      provider = this.getMeta ? await this.getMeta() : await getMetaWhatsAppProvider(this.db);
+      if (!provider) throw new ApiError("Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
+    } else {
+      provider = this.getProvider();
+      if (!provider) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+    }
 
     let result;
     try {

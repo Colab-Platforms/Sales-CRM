@@ -162,9 +162,16 @@ describe("RBAC: a salesperson only sees approved templates", () => {
       const adminIds = adminList.items.map((t) => t.id);
       assert.ok([seeded.draft.id, seeded.pending.id, seeded.approved.id, seeded.rejected.id].every((id) => adminIds.includes(id)));
 
+      // Unscoped, a SALESPERSON legitimately sees every real APPROVED template too (this task's own live test added
+      // several) - not just this test's seeded one - so what is actually being asserted (APPROVED-only visibility)
+      // is checked by containment/exclusion, and the "exactly this one" claim is scoped with `search` on its unique name.
       const repList = await svc.listTemplates(as(rep, Role.SALESPERSON), { page: 1, pageSize: 50 });
       const repIds = repList.items.map((t) => t.id);
-      assert.deepEqual(repIds, [seeded.approved.id]);
+      assert.ok(repIds.includes(seeded.approved.id));
+      assert.ok(![seeded.draft.id, seeded.pending.id, seeded.rejected.id].some((id) => repIds.includes(id)));
+
+      const repScoped = await svc.listTemplates(as(rep, Role.SALESPERSON), { page: 1, pageSize: 50, search: seeded.approved.name });
+      assert.deepEqual(repScoped.items.map((t) => t.id), [seeded.approved.id]);
     });
   });
 
@@ -226,7 +233,9 @@ describe("template sync", () => {
       assert.deepEqual(second, { provider: "GUPSHUP", supported: true, created: 0, updated: 0, unchanged: 1, total: 1 });
 
       assert.equal(await tx.whatsAppTemplate.count({ where: { provider: "GUPSHUP", providerTemplateId } }), 1, "no duplicate row from the second sync");
-      assert.equal(await tx.activity.count({ where: { type: ActivityType.WHATSAPP_TEMPLATE_SYNCED, leadId: null } }), 2);
+      // Scoped to this freshly-created admin's own actorId, not a global count - real syncs run by other
+      // users (this task's own live Meta sync included) also write WHATSAPP_TEMPLATE_SYNCED activities.
+      assert.equal(await tx.activity.count({ where: { type: ActivityType.WHATSAPP_TEMPLATE_SYNCED, leadId: null, actorId: admin.id } }), 2);
     });
   });
 
@@ -254,9 +263,12 @@ describe("template sync", () => {
     await inRollback(async (tx) => {
       const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx, () => fakeProvider());
+      // A before/after count, not an absolute 0 - real templates (AiSensy/Gupshup/Meta) already exist in the
+      // (shared) database; "creating nothing" means this call adds none, not that the table is empty.
+      const before = await tx.whatsAppTemplate.count();
       const result = await svc.syncTemplates(as(admin, Role.ADMIN));
       assert.deepEqual(result, { provider: "AISENSY", supported: false, reason: "not configured", created: 0, updated: 0, unchanged: 0, total: 0 });
-      assert.equal(await tx.whatsAppTemplate.count(), 0);
+      assert.equal(await tx.whatsAppTemplate.count(), before);
     });
   });
 

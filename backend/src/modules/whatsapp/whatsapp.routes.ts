@@ -43,6 +43,7 @@ import {
   markConversationRead,
   returnConversationToAi,
   sendConversationText,
+  getMessagingCapability,
 } from "./whatsapp.conversation.controller.js";
 import { searchCatalog } from "./whatsapp.catalog.controller.js";
 
@@ -96,6 +97,7 @@ router.post("/conversations/:leadId/read", requireAuth, markConversationRead);
 router.post("/conversations/:leadId/assign", requireAuth, assignConversation);
 router.post("/conversations/:leadId/handoff", requireAuth, handoffConversation);
 router.post("/conversations/:leadId/ai-mode", requireAuth, returnConversationToAi);
+router.get("/conversations/:leadId/capability", requireAuth, getMessagingCapability);
 router.post("/conversations/:leadId/messages", requireAuth, sendConversationText);
 
 // Thin wrapper over the existing product catalog (products.service.ts) - see whatsapp.catalog.controller.ts.

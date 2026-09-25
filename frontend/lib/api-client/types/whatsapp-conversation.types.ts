@@ -34,3 +34,15 @@ export interface OrderDraftResult {
   orderState: OrderConversationState;
   orderDraft: OrderDraft | null;
 }
+
+export type FreeTextBlockReason = "PROVIDER_NOT_META" | "META_NOT_CONFIGURED" | "SERVICE_WINDOW_CLOSED";
+
+/** Server-decided messaging state for a conversation (GET /whatsapp/conversations/:leadId/capability). */
+export interface MessagingCapability {
+  activeProvider: "AISENSY" | "GUPSHUP" | "META" | null;
+  activeProviderLabel: string | null;
+  freeText: { allowed: boolean; reason: FreeTextBlockReason | null; message: string | null };
+  serviceWindow: { open: boolean; lastInboundAt: string | null; expiresAt: string | null };
+  /** The provider a template send to this customer would go through (or why it can't be sent). */
+  templates: { provider: "AISENSY" | "GUPSHUP" | "META" | null; message: string | null };
+}

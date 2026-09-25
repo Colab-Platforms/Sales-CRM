@@ -542,13 +542,19 @@ describe("centralized shipment listing", () => {
       const order = await makeOrder(tx, lead.id);
       const created = await svc.createShipment(as(manager, Role.MANAGER), order.id, DIMS);
 
-      const strangerList = await svc.listShipments(as(stranger, Role.MANAGER), { page: 1, pageSize: 25 });
+      const orderNumber = (await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { orderNumber: true } })).orderNumber;
+
+      // Scoped to this test's own order number: a stranger manager should find nothing regardless of what else
+      // exists in the (shared) database, and an ADMIN's unscoped view can contain other real shipments too, so the
+      // search filter - not an unscoped page length - is what actually isolates this one record.
+      const strangerList = await svc.listShipments(as(stranger, Role.MANAGER), { page: 1, pageSize: 25, search: orderNumber });
       assert.equal(strangerList.items.length, 0);
       await assert.rejects(svc.getShipmentDetail(as(stranger, Role.MANAGER), created.id), /Shipment not found/);
       assert.deepEqual((await svc.getFilterOptions(as(stranger, Role.MANAGER))).couriers, []);
 
-      const adminList = await svc.listShipments(as(admin, Role.ADMIN), { page: 1, pageSize: 25 });
+      const adminList = await svc.listShipments(as(admin, Role.ADMIN), { page: 1, pageSize: 25, search: orderNumber });
       assert.equal(adminList.items.length, 1);
+      assert.equal(adminList.items[0].id, created.id);
     });
   });
 

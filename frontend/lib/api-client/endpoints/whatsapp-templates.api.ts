@@ -26,8 +26,8 @@ export const whatsappTemplatesApi = {
     const res = await apiClient.patch<ApiEnvelope<WhatsAppTemplate>>(`/whatsapp/templates/${id}`, input);
     return res.data.data;
   },
-  async sync(): Promise<TemplateSyncSummary> {
-    const res = await apiClient.post<ApiEnvelope<TemplateSyncSummary>>("/whatsapp/templates/sync");
+  async sync(provider?: "META"): Promise<TemplateSyncSummary> {
+    const res = await apiClient.post<ApiEnvelope<TemplateSyncSummary>>("/whatsapp/templates/sync", provider ? { provider } : undefined);
     return res.data.data;
   },
 };

@@ -65,8 +65,8 @@ export function WhatsAppTemplatesView() {
   });
 
   const syncMutation = useSyncTemplatesMutation();
-  function handleSync() {
-    syncMutation.mutate(undefined, {
+  function handleSync(provider?: "META") {
+    syncMutation.mutate(provider, {
       onSuccess: (result) => {
         if (!result.supported) {
           toast.info(result.reason ?? `${result.provider} does not support template sync.`);
@@ -87,9 +87,15 @@ export function WhatsAppTemplatesView() {
         </div>
         {canManage ? (
           <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={handleSync} disabled={syncMutation.isPending}>
+            <Button variant="outline" onClick={() => handleSync()} disabled={syncMutation.isPending}>
               <RefreshCw data-icon="inline-start" className={syncMutation.isPending ? "animate-spin" : undefined} />
               Sync from provider
+            </Button>
+            {/* Meta templates come from Settings -> WhatsApp Config, not the env-configured provider; only an APPROVED synced
+                Meta template can be sent to a conversation that is on Meta. */}
+            <Button variant="outline" onClick={() => handleSync("META")} disabled={syncMutation.isPending}>
+              <RefreshCw data-icon="inline-start" className={syncMutation.isPending ? "animate-spin" : undefined} />
+              Sync Meta templates
             </Button>
             <Button
               onClick={() => {

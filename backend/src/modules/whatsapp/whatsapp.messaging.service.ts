@@ -11,6 +11,9 @@ import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
+import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
+import { findConversationProvider } from "./whatsapp.conversation-provider.js";
+import { PROVIDER_DISPLAY_NAMES } from "./whatsapp.freetext.service.js";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
 import type { OrderConfirmationTestResult, PreviewTemplateInput, SendOrderConfirmationTestInput, SendTemplateInput, TemplatePreviewResult } from "./whatsapp.messaging.types.js";
 import { resolveTemplateVariables, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
@@ -144,7 +147,61 @@ class WhatsAppMessagingService {
   constructor(
     private readonly db: DbClient = prisma,
     private readonly getProvider: () => WhatsAppProvider | null = getWhatsAppProvider,
+    // Meta's provider is DB-config-backed (Settings -> WhatsApp Config), not env-based like getProvider, so it is looked
+    // up separately - and only when a conversation is actually on Meta. Injectable for tests.
+    private readonly getMeta?: () => Promise<WhatsAppProvider | null>,
   ) {}
+
+  private metaProvider(): Promise<WhatsAppProvider | null> {
+    return this.getMeta ? this.getMeta() : getMetaWhatsAppProvider(this.db);
+  }
+
+  /** Which provider a template send goes through.
+   *  - System senders (lifecycle automation, campaigns): the legacy env-configured provider, exactly as before.
+   *  - A signed-in user: the provider the lead's conversation is on (same resolver the free-text capability uses),
+   *    never overridden by the global WHATSAPP_PROVIDER. META -> the active Meta config; AISENSY/GUPSHUP -> the
+   *    legacy provider, but only if it really is that provider (never silently sent through the other one).
+   *  - A lead with no WhatsApp history at all: the legacy provider if configured (unchanged behavior), else Meta. */
+  private async resolveSendProvider(actor: SendActor, leadId: string): Promise<{ provider: WhatsAppProvider; fromConversation: boolean }> {
+    const legacy = this.getProvider();
+    if (actor.kind === "system") {
+      if (!legacy) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+      return { provider: legacy, fromConversation: false };
+    }
+
+    const { provider: conversationProvider } = await findConversationProvider(this.db, leadId);
+
+    if (conversationProvider === "META") {
+      const meta = await this.metaProvider();
+      if (!meta) throw new ApiError("This conversation is on Meta Cloud API, but Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
+      return { provider: meta, fromConversation: true };
+    }
+
+    if (conversationProvider) {
+      if (!legacy) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+      if (legacy.id !== conversationProvider) {
+        throw new ApiError(`This conversation is on ${PROVIDER_DISPLAY_NAMES[conversationProvider]}, but ${PROVIDER_DISPLAY_NAMES[conversationProvider]} is not the configured provider (${PROVIDER_DISPLAY_NAMES[legacy.id]} is), so a template cannot be sent from here.`, STATUS_CODES.BAD_REQUEST);
+      }
+      return { provider: legacy, fromConversation: true };
+    }
+
+    if (legacy) return { provider: legacy, fromConversation: false };
+    const meta = await this.metaProvider();
+    if (meta) return { provider: meta, fromConversation: false };
+    throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+  }
+
+  /** Which provider a template sent by this user to this lead would go through - the same resolution send() uses -
+   *  or, when it cannot be sent, why. Never throws for a not-configured/mismatched provider; powers the Send Template dialog. */
+  async describeTemplateProvider(user: AuthUser, leadId: string): Promise<{ provider: WhatsAppProvider["id"] | null; message: string | null }> {
+    try {
+      const { provider } = await this.resolveSendProvider({ kind: "user", user }, leadId);
+      return { provider: provider.id, message: null };
+    } catch (error) {
+      if (error instanceof ApiError) return { provider: null, message: error.message };
+      throw error;
+    }
+  }
 
   async previewTemplate(user: AuthUser, input: PreviewTemplateInput): Promise<TemplatePreviewResult> {
     const { template, resolution } = await this.loadAndResolve({ kind: "user", user }, input, { requireProviderMatch: false });
@@ -226,12 +283,12 @@ class WhatsAppMessagingService {
   }
 
   private async send(actor: SendActor, input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
-    const { lead, order, template, resolution } = await this.loadAndResolve(actor, input, { requireProviderMatch: true });
+    const { lead, order, template, resolution, provider } = await this.loadAndResolve(actor, input, { requireProviderMatch: true });
     if (resolution.errors.length > 0) throw new ApiError(resolution.errors[0], STATUS_CODES.BAD_REQUEST);
     if (!lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
     if (input.mediaUrl) assertValidMediaUrl(input.mediaUrl); // fail fast, before any provider call or DB write
 
-    const provider = this.getProvider()!; // loadAndResolve already confirmed this is non-null and matches the template
+    if (!provider) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE); // unreachable: requireProviderMatch resolved one
 
     // Duplicate-send guard: an identical send (same customer, template, order context) moments ago
     // returns that earlier attempt instead of sending again - never a new blocking window, and a
@@ -252,7 +309,11 @@ class WhatsAppMessagingService {
     const variableOrder = Array.isArray(template.variables) ? (template.variables as string[]) : [];
     const positionalParams = variableOrder.map((name) => resolution.values[name]);
     const contactName = fullName(lead.firstName, lead.lastName);
-    const providerTemplateName = template.providerTemplateId ?? template.name;
+    // AiSensy's Campaign API is addressed by providerTemplateId (its own campaign identifier) - unchanged. Meta's Send
+    // Message API takes the template's actual NAME (e.g. "hello_world"), never its numeric template id (what
+    // providerTemplateId holds for a Meta-synced template) - sending that id 404s ("Meta Cloud API rejected the
+    // template message (HTTP 404)"), confirmed live against a real Meta template before this fix.
+    const providerTemplateName = provider.id === "META" ? template.name : (template.providerTemplateId ?? template.name);
     // The actual text this send resolved to and attempted to deliver - the same rendering
     // previewTemplate() already shows before sending. Bug fix: this was never persisted to
     // WhatsAppMessage.body (an existing column, already selected/returned everywhere), so every
@@ -268,7 +329,7 @@ class WhatsAppMessagingService {
     let providerMessageId: string | null = null;
     let sendError: WhatsAppSendError | null = null;
     try {
-      const result = await provider.sendTemplateMessage({ to: lead.normalizedMobile, templateName: providerTemplateName, params: positionalParams, contactName, media });
+      const result = await provider.sendTemplateMessage({ to: lead.normalizedMobile, templateName: providerTemplateName, params: positionalParams, contactName, media, ...(provider.id === "META" ? { languageCode: template.language } : {}) });
       providerMessageId = result.providerMessageId;
     } catch (error) {
       if (error instanceof WhatsAppSendError) sendError = error;
@@ -344,7 +405,7 @@ class WhatsAppMessagingService {
     actor: SendActor,
     input: PreviewTemplateInput,
     opts: { requireProviderMatch: boolean },
-  ): Promise<{ lead: LeadRow; order: OrderRow | null; template: TemplateRow; resolution: { values: Record<string, string>; errors: string[] } }> {
+  ): Promise<{ lead: LeadRow; order: OrderRow | null; template: TemplateRow; resolution: { values: Record<string, string>; errors: string[] }; provider: WhatsAppProvider | null }> {
     // A human caller only ever reaches a lead already inside their own RBAC scope (E7.1's rule for
     // this endpoint). A system caller (E7.6) already resolved this exact lead from the business
     // event itself - the same direct-by-id trust level shopify.persist.ts's own lead lookups use -
@@ -361,11 +422,17 @@ class WhatsAppMessagingService {
       throw new ApiError(TEMPLATE_STATUS_MESSAGES[template.status] ?? "This template cannot be sent.", STATUS_CODES.BAD_REQUEST);
     }
 
+    let provider: WhatsAppProvider | null = null;
     if (opts.requireProviderMatch) {
-      const provider = this.getProvider();
-      if (!provider) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+      const resolved = await this.resolveSendProvider(actor, lead.id);
+      provider = resolved.provider;
       if (provider.id !== template.provider) {
-        throw new ApiError(`This template belongs to ${template.provider}, but the configured provider is ${provider.id}.`, STATUS_CODES.BAD_REQUEST);
+        throw new ApiError(
+          resolved.fromConversation
+            ? `This template belongs to ${template.provider}, but this conversation's provider is ${provider.id}. Choose a ${PROVIDER_DISPLAY_NAMES[provider.id]} template.`
+            : `This template belongs to ${template.provider}, but the configured provider is ${provider.id}.`,
+          STATUS_CODES.BAD_REQUEST,
+        );
       }
     }
 
@@ -394,7 +461,7 @@ class WhatsAppMessagingService {
     };
 
     const resolution = resolveTemplateVariables(variableNames, ctx);
-    return { lead, order, template, resolution };
+    return { lead, order, template, resolution, provider };
   }
 }
 

@@ -13,7 +13,8 @@ import { customerDetailHref } from "@/components/orders/orders-table";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { cn } from "@/lib/utils";
 import { whatsappConversationListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
-import { conversationDetailQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
+import { conversationDetailQueryOptions, messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
+import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 import { useMarkConversationReadMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
 import { ConversationContextPanel } from "./conversation-context-panel";
 import { useCustomer360 } from "@/hooks/useCustomers";
@@ -120,10 +121,12 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const { data, isLoading, error } = useCustomer360(leadId);
   const [sendOpen, setSendOpen] = useState(false);
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
-  // A lead with messages predating the conversation model has no row yet (404) - free text simply
-  // stays unavailable for it, same as any non-Meta conversation.
+  // A lead with messages predating the conversation model has no conversation row yet (404), so the detail query can be empty.
+  // Whether free text is allowed is decided by the backend (active provider + Meta 24-hour service window) and only
+  // displayed here - never inferred from the conversation row.
   const conversation = useQuery({ ...conversationDetailQueryOptions(leadId), retry: false });
-  const canSendFreeText = conversation.data?.provider === "META";
+  const capability = useQuery({ ...messagingCapabilityQueryOptions(leadId), retry: false }).data;
+  const canSendFreeText = capability?.freeText.allowed ?? false;
   const markRead = useMarkConversationReadMutation();
   const unread = conversation.data?.unreadCount ?? 0;
 
@@ -152,6 +155,18 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
               <p className="truncate text-xs text-muted-foreground">
                 {data.profile.mobile ?? "No phone on file"} · {data.profile.leadNumber}
               </p>
+              {capability ? (
+                <p className="truncate text-xs text-muted-foreground" data-testid="conversation-provider">
+                  Provider: <span className="font-medium text-foreground">{capability.activeProvider ? (PROVIDER_LABELS[capability.activeProvider] ?? capability.activeProvider) : "None yet"}</span>
+                  {capability.activeProvider === "META"
+                    ? capability.serviceWindow.open && capability.serviceWindow.expiresAt
+                      ? ` · Service window open until ${new Date(capability.serviceWindow.expiresAt).toLocaleString()}`
+                      : " · Service window closed - templates only"
+                    : capability.activeProvider
+                      ? " · Templates only"
+                      : ""}
+                </p>
+              ) : null}
             </div>
           )}
         </div>
@@ -184,7 +199,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           actually reaches the backend is the template button, which opens the same existing
           SendWhatsAppDialog/sendTemplate() path used everywhere else. */}
       <div className="border-t p-3">
-        <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
+        <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} blockedMessage={capability?.freeText.message ?? null} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
       </div>
 
       {data ? (

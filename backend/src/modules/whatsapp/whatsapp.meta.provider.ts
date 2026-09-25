@@ -129,7 +129,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
       {
         to: input.to,
         type: "template",
-        template: { name: input.templateName, language: { code: "en" }, components },
+        template: { name: input.templateName, language: { code: input.languageCode ?? "en" }, components },
       },
       "template",
     );

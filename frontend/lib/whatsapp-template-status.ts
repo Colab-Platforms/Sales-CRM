@@ -18,4 +18,4 @@ export const TEMPLATE_STATUS_COLORS: Record<WhatsAppTemplateStatus, string> = {
 
 export const TEMPLATE_STATUS_ORDER: WhatsAppTemplateStatus[] = ["DRAFT", "PENDING", "APPROVED", "REJECTED", "DISABLED"];
 
-export const PROVIDER_LABELS: Record<string, string> = { AISENSY: "AiSensy", GUPSHUP: "Gupshup" };
+export const PROVIDER_LABELS: Record<string, string> = { AISENSY: "AiSensy", GUPSHUP: "Gupshup", META: "Meta Cloud API" };

@@ -10,6 +10,7 @@ function useConversationAction<TVariables = void>(fn: (leadId: string, variables
     mutationFn: ({ leadId, variables }) => fn(leadId, variables),
     onSuccess: (_data, { leadId }) => {
       queryClient.invalidateQueries({ queryKey: whatsappConversationKeys.detail(leadId) });
+      queryClient.invalidateQueries({ queryKey: whatsappConversationKeys.capability(leadId) });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
   });

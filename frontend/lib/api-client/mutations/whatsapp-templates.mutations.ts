@@ -25,8 +25,8 @@ export function useUpdateTemplateMutation() {
 
 export function useSyncTemplatesMutation() {
   const queryClient = useQueryClient();
-  return useMutation<TemplateSyncSummary, unknown, void>({
-    mutationFn: () => whatsappTemplatesApi.sync(),
+  return useMutation<TemplateSyncSummary, unknown, "META" | undefined>({
+    mutationFn: (provider) => whatsappTemplatesApi.sync(provider),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: whatsappTemplateKeys.all });
     },

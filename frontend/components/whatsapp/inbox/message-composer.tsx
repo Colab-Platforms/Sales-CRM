@@ -13,10 +13,9 @@ import { useSendConversationTextMutation } from "@/lib/api-client/mutations/what
 // (backend/src/modules/whatsapp/whatsapp.aisensy.provider.ts) and Gupshup's template endpoint both
 // expose only sendTemplateMessage() - no free-text send. The Meta Cloud API provider (added
 // separately) DOES support free text (POST /whatsapp/conversations/:leadId/messages, gated server-
-// side to Meta-only) - so free text is enabled here only when `canSendFreeText` says this
-// conversation's active provider is Meta; otherwise it stays honestly blocked, same as before.
-const FREE_TEXT_BLOCKED =
-  "Free-text messages need the Meta WhatsApp Cloud API provider - this conversation's active provider only supports sending pre-approved templates.";
+// side to Meta-only AND to Meta's 24-hour service window) - so free text is enabled here only when the backend's
+// capability check (`canSendFreeText`) allows it; otherwise it stays honestly blocked with the backend's reason.
+const FREE_TEXT_BLOCKED_FALLBACK = "Free-text messages are not available for this conversation right now. Send an approved template instead.";
 const UNCONFIRMED_MEDIA_REASON = "Not confirmed supported by AiSensy's Campaign API - only image/document media is documented.";
 
 const EMOJI = ["😀", "😂", "😊", "😍", "🙏", "👍", "👋", "🎉", "❤️", "🔥", "✅", "❌", "📦", "🚚", "💰", "📅", "⏰", "😢", "😮", "🤔"];
@@ -36,11 +35,14 @@ const UNSUPPORTED_ATTACHMENTS: { label: string; icon: typeof ImageIcon }[] = [
 export function MessageComposer({
   leadId,
   canSendFreeText,
+  blockedMessage,
   onOpenTemplateSend,
   disabled,
 }: {
   leadId: string;
   canSendFreeText: boolean;
+  /** The backend's explanation of why free text is unavailable (wrong provider / closed 24-hour window / Meta not configured). */
+  blockedMessage?: string | null;
   onOpenTemplateSend: () => void;
   disabled: boolean;
 }) {
@@ -88,7 +90,7 @@ export function MessageComposer({
     <div className="flex flex-col gap-1.5">
       {blocked ? (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-          <span>{FREE_TEXT_BLOCKED}</span>
+          <span>{blockedMessage ?? FREE_TEXT_BLOCKED_FALLBACK}</span>
           <button type="button" onClick={onOpenTemplateSend} className="shrink-0 font-medium underline underline-offset-2">
             Use a template instead
           </button>

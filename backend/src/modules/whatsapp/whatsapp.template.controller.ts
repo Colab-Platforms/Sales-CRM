@@ -75,7 +75,9 @@ export const updateTemplate = async (req: AuthRequest, res: Response): Promise<v
 
 export const syncTemplates = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const result = await templateService.syncTemplates(req.user!);
+    // Optional body { provider: "META" } syncs from the Meta Cloud API config; no body keeps the legacy provider sync.
+    const only = req.body?.provider === "META" ? "META" : undefined;
+    const result = await templateService.syncTemplates(req.user!, only);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);

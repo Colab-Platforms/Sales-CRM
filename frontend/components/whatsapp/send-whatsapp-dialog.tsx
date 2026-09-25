@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { getErrorMessage } from "@/lib/api-client/client";
 import { usePreviewTemplateMutation, useSendTemplateMutation } from "@/lib/api-client/mutations/whatsapp-messaging.mutations";
 import { whatsappTemplateListQueryOptions } from "@/lib/api-client/queries/whatsapp-templates.queries";
+import { messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
 import type { CustomerOrderSummary } from "@/lib/api-client/types/customers.types";
 import type { WhatsAppMessageResult } from "@/lib/api-client/types/whatsapp-messaging.types";
 import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
@@ -60,7 +61,15 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
     ...whatsappTemplateListQueryOptions({ page: 1, pageSize: 100, status: "APPROVED" }),
     enabled: open,
   });
-  const templates = useMemo(() => templatesQuery.data?.items ?? [], [templatesQuery.data]);
+  // Only templates belonging to the provider this customer's conversation is on can be sent (the backend enforces the
+  // same rule): a Meta conversation never offers an AiSensy template, and vice versa.
+  const capabilityQuery = useQuery({ ...messagingCapabilityQueryOptions(leadId), enabled: open, retry: false });
+  const templateProvider = capabilityQuery.data?.templates.provider ?? null;
+  const templateBlockedMessage = capabilityQuery.data?.templates.message ?? null;
+  const templates = useMemo(() => {
+    const all = templatesQuery.data?.items ?? [];
+    return templateProvider ? all.filter((t) => t.provider === templateProvider) : all;
+  }, [templatesQuery.data, templateProvider]);
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? null;
 
   const previewMutation = usePreviewTemplateMutation();
@@ -125,8 +134,14 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
               <label className="text-sm font-medium">Template</label>
               {templatesQuery.isPending ? (
                 <p className="text-sm text-muted-foreground">Loading templates…</p>
+              ) : templateBlockedMessage ? (
+                <p role="alert" className="text-sm text-amber-700 dark:text-amber-400">{templateBlockedMessage}</p>
               ) : templates.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No approved templates are available yet.</p>
+                <p className="text-sm text-muted-foreground">
+                  {templateProvider === "META"
+                    ? "No approved Meta templates yet. An admin can sync them from WhatsApp → Templates → Sync Meta templates."
+                    : "No approved templates are available yet."}
+                </p>
               ) : (
                 <Select value={templateId || null} items={templateItems} onValueChange={(v) => setTemplateId(v ?? "")}>
                   <SelectTrigger>
