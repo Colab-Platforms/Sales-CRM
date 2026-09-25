@@ -522,11 +522,19 @@ export function NewOrderView() {
                         onClick={() => setOpenProductId(open ? null : p.id)}
                       >
                         <span className="font-medium">{p.title}</span>
-                        <span className="shrink-0 text-xs text-muted-foreground">
-                          {sellable.length === 0 ? "Out of stock" : fromPrice !== null ? `from ${inr(fromPrice)}` : ""}
-                          {" · "}
-                          {open ? "Hide" : "Choose"}
+                                                <span className="flex shrink-0 items-center gap-2 text-sm">
+                          <span
+                            className={
+                              sellable.length === 0 ? "text-muted-foreground" : "font-semibold text-foreground"
+                            }
+                          >
+                            {sellable.length === 0 ? "Out of stock" : fromPrice !== null ? `from ${inr(fromPrice)}` : ""}
+                          </span>
+                          <span className="rounded-md border border-primary px-2.5 py-0.5 text-xs font-semibold text-primary">
+                            {open ? "Hide" : "Choose"}
+                          </span>
                         </span>
+                        
                       </button>
                       {open && (
                         <div className="flex flex-col gap-2 bg-muted/30 px-3 py-2">
