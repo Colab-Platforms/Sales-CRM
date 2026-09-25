@@ -8,6 +8,7 @@ import type {
   VirtualNumberRecord,
   CreateVirtualNumberPayload,
   UpdateVirtualNumberPayload,
+  ClickToCallResult,
 } from "../types/calling.types";
 
 export const callingApi = {
@@ -18,6 +19,13 @@ export const callingApi = {
 
   async listAllVirtualNumbers(): Promise<VirtualNumberRecord[]> {
     const res = await apiClient.get<ApiEnvelope<VirtualNumberRecord[]>>("/calling/virtual-numbers/all");
+    return res.data.data;
+  },
+
+   async initiateCall(leadId: string, virtualNumberId: string): Promise<ClickToCallResult> {
+    const res = await apiClient.post<ApiEnvelope<ClickToCallResult>>(`/calling/leads/${leadId}/click-to-call`, {
+      virtualNumberId,
+    });
     return res.data.data;
   },
 

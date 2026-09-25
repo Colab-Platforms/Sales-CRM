@@ -22,6 +22,12 @@ export interface CallOutcomeOption {
   requiresNote: boolean;
 }
 
+
+export interface ClickToCallResult {
+  callId: string;
+  status: CallStatus;
+}
+
 export interface Call {
   id: string;
   provider: string;

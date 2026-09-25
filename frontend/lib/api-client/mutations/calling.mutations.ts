@@ -9,7 +9,19 @@ import type {
   VirtualNumberRecord,
   CreateVirtualNumberPayload,
   UpdateVirtualNumberPayload,
+  ClickToCallResult,
 } from "../types/calling.types";
+
+export function useInitiateCallMutation(leadId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<ClickToCallResult, unknown, string>({
+    mutationFn: (virtualNumberId) => callingApi.initiateCall(leadId, virtualNumberId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(leadId) });
+    },
+  });
+}
 
 export function useSubmitCallOutcomeMutation(leadId: string) {
   const queryClient = useQueryClient();
