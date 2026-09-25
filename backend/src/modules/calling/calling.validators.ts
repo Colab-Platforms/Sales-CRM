@@ -17,6 +17,7 @@ const initiateCallBodySchema = z.object({
 const submitCallOutcomeSchema = z.object({
   outcomeId: z.string().uuid(),
   notes: z.string().trim().max(2000).optional(),
+  followUpAt: z.string().datetime({ offset: true }).optional(),
 });
 
 const virtualNumberIdParamSchema = z.object({

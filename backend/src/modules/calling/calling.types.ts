@@ -6,6 +6,8 @@ export interface ClickToCallResult {
 export interface SubmitCallOutcomeBody {
   outcomeId: string;
   notes?: string;
+  // Required when the outcome needs a follow-up (call back / follow up): when to remind the salesperson.
+  followUpAt?: string;
 }
 
 export interface VirtualNumberSummary {
