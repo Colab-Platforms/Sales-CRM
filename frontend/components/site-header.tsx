@@ -3,6 +3,7 @@
 import { usePathname } from "next/navigation";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
+import { FollowUpBell } from "@/components/follow-ups/follow-up-bell";
 
 const SEGMENT_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
@@ -40,6 +41,9 @@ export function SiteHeader() {
         ))}
         <span className="truncate font-bold capitalize">{current}</span>
       </nav>
+      <div className="ml-auto">
+        <FollowUpBell />
+      </div>
     </header>
   );
 }

@@ -45,6 +45,8 @@ export interface ClickToCallResult {
 export interface SubmitCallOutcomePayload {
   outcomeId: string;
   notes?: string;
+  /** ISO time to remind the salesperson; required for call back / follow up outcomes. */
+  followUpAt?: string;
 }
 
 export interface VirtualNumber {

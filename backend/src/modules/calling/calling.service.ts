@@ -3,8 +3,9 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import { triggerClickToCall } from "./callerdesk.client.js";
-import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role } from "../../../generated/prisma/enums.js";
+import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType } from "../../../generated/prisma/enums.js";
 import { OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
+import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import type {
   CallerDeskWebhookPayload,
   ClickToCallResult,
@@ -240,9 +241,25 @@ class CallingService {
     }
 
     const newStatus = OUTCOME_LEAD_STATUS[outcome.code];
+    // Call back / follow up outcomes need a time to remind the salesperson at.
+    const followUpAt = outcome.requiresFollowup ? parseFollowUpAt(data.followUpAt, outcome.name.toLowerCase()) : null;
 
     await prisma.$transaction(async (tx) => {
       await tx.call.update({ where: { id: callId }, data: { outcomeId: outcome.id, notes: data.notes?.trim() || null } });
+
+      // This call answers whatever reminder was pending on the lead; a new one replaces it if needed.
+      await completePendingFollowUps(tx, call.lead.id);
+      if (followUpAt) {
+        await scheduleFollowUp(tx, {
+          leadId: call.lead.id,
+          leadName: [call.lead.firstName, call.lead.lastName].filter(Boolean).join(" "),
+          assignedToId: call.lead.ownerId ?? user.id,
+          actor: { id: user.id, role: user.role },
+          type: newStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
+          scheduledAt: followUpAt,
+          note: data.notes,
+        });
+      }
 
       if (newStatus && newStatus !== call.lead.workingStatus) {
         await tx.lead.update({ where: { id: call.lead.id }, data: { workingStatus: newStatus } });

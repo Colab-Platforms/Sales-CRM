@@ -1,5 +1,6 @@
 import type { LeadWorkingStatus } from "./dashboard.types";
 import type { Call } from "./calling.types";
+import type { LeadFollowUp } from "./tasks.types";
 
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH";
 export type AssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
@@ -44,6 +45,8 @@ export interface Lead {
   group: LeadGroupRef | null;
   importBatch: LeadImportBatchRef | null;
   calls: Call[];
+  /** The lead's pending call back / follow up reminder - empty when none is scheduled. */
+  tasks: LeadFollowUp[];
 }
 
 export interface LeadListPagination {
@@ -89,6 +92,8 @@ export interface UpdateLeadPayload {
   location?: string;
   workingStatus?: LeadWorkingStatus;
   priority?: LeadPriority;
+  /** ISO time to remind the salesperson; required when switching to CALL_BACK or FOLLOW_UP. */
+  followUpAt?: string;
 }
 
 export interface LeadAssignmentRecord {

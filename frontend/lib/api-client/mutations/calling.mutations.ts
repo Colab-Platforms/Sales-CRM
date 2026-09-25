@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { callingApi } from "../endpoints/calling.api";
 import { callingKeys } from "../queries/calling.queries";
 import { leadKeys } from "../queries/lead.queries";
+import { tasksKeys } from "../queries/tasks.queries";
 import type {
   Call,
   ClickToCallResult,
@@ -31,6 +32,8 @@ export function useSubmitCallOutcomeMutation(leadId: string) {
       queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(leadId) });
       // The outcome can change the lead's status, which the leads list/detail also show.
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
+      // Logging a call closes the lead's pending reminder and may schedule a new one.
+      queryClient.invalidateQueries({ queryKey: tasksKeys.all });
     },
   });
 }

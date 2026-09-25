@@ -13,6 +13,7 @@ import paymentsRoutes from "@modules/cashfree/cashfree.routes.js";
 import shipmentsRoutes from "@modules/shiprocket/shiprocket.routes.js";
 import integrationsRoutes from "@modules/integrations/integrations.routes.js";
 import callingRoutes from "@modules/calling/calling.routes.js";
+import tasksRoutes from "@modules/tasks/tasks.routes.js";
 
 const router = Router();
 
@@ -32,7 +33,8 @@ router.use("/whatsapp", whatsappRoutes);
 router.use("/payments", paymentsRoutes);
 router.use("/shipments", shipmentsRoutes);
 router.use("/integrations", integrationsRoutes);
-router.use("/lead", leadRoutes);                          // add with the other router.use lines
+router.use("/lead", leadRoutes);                         
 router.use("/calling", callingRoutes);
+router.use("/tasks", tasksRoutes);
 
 export default router;
