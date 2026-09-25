@@ -13,6 +13,9 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FollowUpTimePicker } from "@/components/follow-ups/follow-up-time-picker";
+import { localInputToIso, toLocalInputValue } from "@/components/follow-ups/follow-up-utils";
+import { useFollowUpConflict } from "@/components/follow-ups/use-follow-up-conflict";
 import type { Lead, LeadPriority } from "@/lib/api-client/types/lead.types";
 
 const PRIORITY_OPTIONS: { value: LeadPriority; label: string }[] = [
@@ -33,6 +36,19 @@ function EditLeadForm({ lead, onOpenChange, onDone }: { lead: Lead; onOpenChange
   const [location, setLocation] = useState(lead.location ?? "");
   const [priority, setPriority] = useState<LeadPriority>(lead.priority);
   const [workingStatus, setWorkingStatus] = useState(lead.workingStatus);
+  const existing = lead.tasks[0];
+  const existingValue = existing ? toLocalInputValue(new Date(existing.scheduledAt)) : "";
+  const isFollowUpStatus = workingStatus === "CALL_BACK" || workingStatus === "FOLLOW_UP";
+  const statusChanged = workingStatus !== lead.workingStatus;
+  // A lead already on call back / follow up starts from the time that's set now, so it can be moved.
+  const [followUpAt, setFollowUpAt] = useState(lead.workingStatus === "CALL_BACK" || lead.workingStatus === "FOLLOW_UP" ? existingValue : "");
+  // Switching to call back / follow up needs a reminder time (the backend rejects it otherwise).
+  const needsFollowUpTime = isFollowUpStatus && statusChanged;
+  const showFollowUpPicker = isFollowUpStatus && (statusChanged || Boolean(existing));
+  const followUpIso = localInputToIso(followUpAt);
+  // Only send a time when it's needed or actually changed - re-saving other fields leaves the reminder alone.
+  const sendFollowUp = showFollowUpPicker && Boolean(followUpIso) && (statusChanged || followUpAt !== existingValue);
+  const { conflict: timeTaken } = useFollowUpConflict(lead.id, sendFollowUp ? followUpAt : "");
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -48,6 +64,7 @@ function EditLeadForm({ lead, onOpenChange, onDone }: { lead: Lead; onOpenChange
           location: location || undefined,
           priority,
           workingStatus,
+          followUpAt: sendFollowUp ? followUpIso : undefined,
         },
       },
       {
@@ -116,13 +133,25 @@ function EditLeadForm({ lead, onOpenChange, onDone }: { lead: Lead; onOpenChange
         </div>
       </div>
 
+      {showFollowUpPicker ? (
+        <FollowUpTimePicker
+          id="edit-lead-follow-up-at"
+          leadId={lead.id}
+          current={existing}
+          label={`${needsFollowUpTime ? "When should you" : "Reschedule your"} ${workingStatus === "CALL_BACK" ? "call back" : "follow up"}${needsFollowUpTime ? "?" : ""}`}
+          value={followUpAt}
+          onChange={setFollowUpAt}
+          disabled={updateLead.isPending}
+        />
+      ) : null}
+
       {updateLead.error ? <p className="text-sm text-destructive">{getErrorMessage(updateLead.error, "Failed to update lead.")}</p> : null}
 
       <DialogFooter>
         <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={updateLead.isPending}>
           Cancel
         </Button>
-        <Button type="submit" disabled={updateLead.isPending || !firstName || (!mobile && !email)}>
+        <Button type="submit" disabled={updateLead.isPending || !firstName || (!mobile && !email) || (needsFollowUpTime && !followUpIso) || (sendFollowUp && Boolean(timeTaken))}>
           {updateLead.isPending ? "Saving..." : "Save Changes"}
         </Button>
       </DialogFooter>
