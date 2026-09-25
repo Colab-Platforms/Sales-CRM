@@ -28,6 +28,7 @@ export interface ConversationDetail {
   lastAiHandoffReason: string | null;
   createdOrderId: string | null;
   unreadCount: number;
+  archived: boolean;
 }
 
 export interface OrderDraftResult {

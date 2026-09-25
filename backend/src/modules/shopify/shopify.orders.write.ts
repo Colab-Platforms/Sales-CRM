@@ -22,9 +22,25 @@ export class ShopifyOrderCreateError extends Error {
   }
 }
 
+/**
+ * The one place a Shopify ProductVariant id is put into the shape orderCreate requires: a global id
+ * ("gid://shopify/ProductVariant/<n>"). The CRM stores the catalog's variant ids NUMERIC (the sync strips the
+ * "gid://..." prefix - see shopify.money.ts's gidToId), so a numeric id is converted here, at the integration
+ * boundary; an id that is already a ProductVariant GID is returned unchanged.
+ *
+ * Anything else is refused BEFORE Shopify is called - in particular a GID of another type (e.g. a Product id) or a
+ * non-numeric CRM id, which must never be silently turned into a variant id.
+ */
+export function toShopifyProductVariantGid(id: string): string {
+  const value = String(id ?? "").trim();
+  if (/^gid:\/\/shopify\/ProductVariant\/\d+$/.test(value)) return value;
+  if (/^\d+$/.test(value)) return `gid://shopify/ProductVariant/${value}`;
+  throw new ShopifyOrderCreateError(`"${value.slice(0, 60)}" is not a valid Shopify product variant id (expected a numeric variant id or a gid://shopify/ProductVariant/<id>).`);
+}
+
 export interface ShopifyOrderCreateLineItem {
-  /** Shopify's own variant GID (the CRM's ProductVariant.externalId), for a cataloged, already
-   *  Shopify-linked product/variant. */
+  /** A Shopify variant id of a cataloged, already Shopify-linked product/variant: the numeric id the CRM stores
+   *  (ProductVariant.externalId) or an already-valid ProductVariant GID. Converted by toShopifyProductVariantGid. */
   variantId?: string;
   /** Used only when there is no variantId - a plain custom line item Shopify has never seen before.
    *  Requires priceAmount, since a custom line item has no catalog price to look up. */
@@ -90,10 +106,11 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
     }
   }
 
+  // Resolved for every item up front, so an invalid id fails clearly before any request is built or sent.
   const order = {
     lineItems: input.lineItems.map((item) =>
       item.variantId
-        ? { variantId: item.variantId, quantity: item.quantity }
+        ? { variantId: toShopifyProductVariantGid(item.variantId), quantity: item.quantity }
         : { title: item.title, quantity: item.quantity, priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } } },
     ),
     email: input.email,
@@ -117,4 +134,59 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
   if (!data.orderCreate.order) throw new ShopifyOrderCreateError("Shopify did not return a created order");
 
   return { shopifyOrderId: data.orderCreate.order.id, shopifyOrderName: data.orderCreate.order.name };
+}
+
+// orderCancel - added for CRM order cancellation (Cancel/Revert). Same write scope (write_orders)
+// as orderCreate above; no refund and no restock are requested here (the CRM never assumes a
+// cancellation implies money moved or stock returned - see orders.service.ts's cancelOrder, which
+// only ever changes Payment.refundedAt/refundedAmount when a real refund actually happened), and the
+// customer is not emailed by Shopify itself since the CRM handles its own WhatsApp/customer comms.
+export class ShopifyOrderCancelError extends Error {
+  constructor(
+    message: string,
+    readonly raw?: unknown,
+  ) {
+    super(message);
+    this.name = "ShopifyOrderCancelError";
+  }
+}
+
+export interface ShopifyOrderCancelResult {
+  shopifyOrderId: string;
+  cancelledAt: string | null;
+}
+
+const ORDER_CANCEL_MUTATION = `
+  mutation crmOrderCancel($orderId: ID!, $reason: OrderCancelReason!, $refund: Boolean!, $restock: Boolean!, $notifyCustomer: Boolean) {
+    orderCancel(orderId: $orderId, reason: $reason, refund: $refund, restock: $restock, notifyCustomer: $notifyCustomer) {
+      job { id done }
+      orderCancelUserErrors { field message }
+    }
+  }
+`;
+
+interface OrderCancelResponse {
+  orderCancel: {
+    job: { id: string; done: boolean } | null;
+    orderCancelUserErrors: { field: string[] | null; message: string }[];
+  };
+}
+
+/** Cancels an already-created Shopify order by its GID (Order.externalId). Never refunds, never
+ *  restocks, never emails the customer - the CRM makes those decisions separately, if at all. Shopify
+ *  processes the cancel asynchronously (a job), so `cancelledAt` here is best-effort/not always set;
+ *  the CRM's own Order.cancelledAt (set by the caller) is the authoritative timestamp either way. */
+export async function cancelShopifyOrder(client: ShopifyClient, shopifyOrderId: string): Promise<ShopifyOrderCancelResult> {
+  let data: OrderCancelResponse;
+  try {
+    data = await client.query<OrderCancelResponse>(ORDER_CANCEL_MUTATION, { orderId: shopifyOrderId, reason: "OTHER", refund: false, restock: false, notifyCustomer: false });
+  } catch (error) {
+    if (error instanceof ShopifyGraphQLError) throw new ShopifyOrderCancelError(error.message, error);
+    throw error;
+  }
+
+  const userErrors = data.orderCancel.orderCancelUserErrors;
+  if (userErrors.length > 0) throw new ShopifyOrderCancelError(userErrors.map((e) => e.message).join("; "), userErrors);
+
+  return { shopifyOrderId, cancelledAt: data.orderCancel.job?.done ? new Date().toISOString() : null };
 }

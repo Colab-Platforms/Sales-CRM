@@ -3,7 +3,7 @@ import { ordersApi } from "../endpoints/orders.api";
 import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { CreateManualOrderInput, CreateManualOrderResult, ShopifyPushResult } from "../types/orders.types";
+import type { CancelOrderInput, CancelOrderResult, CreateManualOrderInput, CreateManualOrderResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -17,6 +17,18 @@ export function useCreateOrderMutation() {
       queryClient.invalidateQueries({ queryKey: customersKeys.detail(variables.leadId) });
       queryClient.invalidateQueries({ queryKey: [...customersKeys.all, "timeline", variables.leadId] });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
+    },
+  });
+}
+
+export function useCancelOrderMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<CancelOrderResult, unknown, { orderId: string } & CancelOrderInput>({
+    mutationFn: ({ orderId, ...input }) => ordersApi.cancel(orderId, input),
+    onSuccess: (result, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: customersKeys.detail(result.order.customer.leadId) });
     },
   });
 }

@@ -32,6 +32,16 @@ export function useReturnConversationToAiMutation() {
   return useConversationAction<void>((leadId) => whatsappConversationApi.returnToAi(leadId));
 }
 
+// Archive/unarchive change which list a conversation appears in, so the conversation LIST (whatsappHistoryKeys)
+// is invalidated as well as this conversation's own detail (useConversationAction already does both).
+export function useArchiveConversationMutation() {
+  return useConversationAction<void>((leadId) => whatsappConversationApi.archive(leadId));
+}
+
+export function useUnarchiveConversationMutation() {
+  return useConversationAction<void>((leadId) => whatsappConversationApi.unarchive(leadId));
+}
+
 export function useSendConversationTextMutation() {
   return useConversationAction<{ text: string }>((leadId, { text }) => whatsappConversationApi.sendText(leadId, text));
 }

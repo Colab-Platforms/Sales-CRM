@@ -254,7 +254,16 @@ class WhatsAppService {
       if (!m.leadId || byLead.has(m.leadId)) continue;
       byLead.set(m.leadId, m);
     }
-    const conversations = [...byLead.values()]; // already newest-first, since `recent` was fetched newest-first and only the first occurrence per lead is kept
+    const deduped = [...byLead.values()]; // already newest-first, since `recent` was fetched newest-first and only the first occurrence per lead is kept
+
+    // Archived conversations are hidden from the normal inbox (default/archived=false) - or, with
+    // ?archived=true, ONLY archived ones are shown. See WhatsAppConversationService.archivedLeadIds
+    // for why this is a derived check, not a stored column: no schema change, and a new message
+    // arriving after an archive automatically un-archives it for free.
+    const lastMessageAtByLead = new Map(deduped.map((m) => [m.leadId!, m.createdAt]));
+    const archivedLeadIds = await this.conversationService.archivedLeadIds([...lastMessageAtByLead.keys()], lastMessageAtByLead);
+    const showArchived = query.archived === true;
+    const conversations = deduped.filter((m) => archivedLeadIds.has(m.leadId!) === showArchived);
 
     const totalItems = conversations.length;
     const page = conversations.slice((query.page - 1) * query.pageSize, query.page * query.pageSize);
@@ -297,6 +306,7 @@ class WhatsAppService {
         assignedTo: conversation?.assignedTo ?? null,
         orderState: conversation?.orderState ?? "DISCOVERY",
         unreadCount: unreadByLead.get(m.leadId!) ?? 0,
+        archived: archivedLeadIds.has(m.leadId!),
       };
     });
 

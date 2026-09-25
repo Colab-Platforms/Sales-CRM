@@ -29,6 +29,14 @@ export const whatsappConversationApi = {
   async sendText(leadId: string, text: string): Promise<void> {
     await apiClient.post(`/whatsapp/conversations/${leadId}/messages`, { text });
   },
+  async archive(leadId: string): Promise<{ archived: boolean }> {
+    const res = await apiClient.post<ApiEnvelope<{ archived: boolean }>>(`/whatsapp/conversations/${leadId}/archive`);
+    return res.data.data;
+  },
+  async unarchive(leadId: string): Promise<{ archived: boolean }> {
+    const res = await apiClient.post<ApiEnvelope<{ archived: boolean }>>(`/whatsapp/conversations/${leadId}/unarchive`);
+    return res.data.data;
+  },
   async getOrderDraft(leadId: string): Promise<OrderDraftResult> {
     const res = await apiClient.get<ApiEnvelope<OrderDraftResult>>(`/whatsapp/orders/${leadId}/draft`);
     return res.data.data;

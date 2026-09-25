@@ -62,6 +62,7 @@ const ORDER_SELECT = {
   status: true,
   currency: true,
   totalAmount: true,
+  items: { select: { productNameSnapshot: true, variantNameSnapshot: true, quantity: true }, orderBy: [{ createdAt: "asc" as const }, { id: "asc" as const }] },
   payments: { select: { status: true, method: true, amount: true, refundedAmount: true, paymentUrl: true, paymentExpiresAt: true }, orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }] },
   shipments: {
     select: { status: true, courier: true, trackingNumber: true, trackingUrl: true, shippedAt: true, deliveredAt: true, expectedDeliveryAt: true },
@@ -456,6 +457,7 @@ class WhatsAppMessagingService {
             totalAmount: order.totalAmount.toString(),
             payments: order.payments.map((p) => ({ status: p.status, method: p.method, amount: p.amount.toString(), refundedAmount: p.refundedAmount?.toString() ?? null, paymentUrl: p.paymentUrl, paymentExpiresAt: p.paymentExpiresAt })),
             latestShipment: order.shipments[0] ?? null,
+            items: order.items.map((i) => ({ productName: i.productNameSnapshot, variantName: i.variantNameSnapshot, quantity: i.quantity })),
           }
         : null,
     };

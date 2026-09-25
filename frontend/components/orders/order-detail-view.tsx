@@ -22,6 +22,7 @@ import { customerDetailHref } from "./orders-table";
 import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
+import { CancelOrderButton, OrderPaymentSummary } from "./cancel-order-button";
 import { CreatePaymentLinkButton, PaymentLinkPanel } from "./payment-link-panel";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import { ReconciliationStatusBadge } from "./reconciliation-status-badge";
@@ -132,6 +133,12 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           <OrderStatusBadge status={order.status} />
           <PaymentStatusBadge status={order.paymentStatus} />
           {order.paymentMode ? <Badge variant="outline">{PAYMENT_MODE_LABELS[order.paymentMode]}</Badge> : null}
+          <Badge variant="outline" title="Whether this order exists in Shopify">
+            Shopify: {order.externalNumber ? order.externalNumber : "not linked"}
+          </Badge>
+          <div className="ml-auto">
+            <CancelOrderButton order={order} />
+          </div>
         </div>
         <p className="text-sm text-muted-foreground">Placed on {formatDateTime(order.placedAt ?? order.createdAt)}</p>
       </div>
@@ -260,6 +267,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           <CardTitle>Payment</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <OrderPaymentSummary order={order} />
           <CreatePaymentLinkButton order={order} />
           {order.payments.length === 0 ? (
             <p className="text-sm text-muted-foreground">No payment has been recorded for this order yet.</p>

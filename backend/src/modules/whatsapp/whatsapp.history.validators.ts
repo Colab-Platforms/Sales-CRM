@@ -27,6 +27,7 @@ const listConversationsQuerySchema = z.object({
   page: z.coerce.number({ error: "page must be a number" }).int().min(1, "page must be 1 or more").default(1),
   pageSize: z.coerce.number({ error: "pageSize must be a number" }).int().min(1).max(100, "pageSize must be between 1 and 100").default(20),
   search: optional(z.string().trim().max(100, "search must be 100 characters or fewer")),
+  archived: optional(z.coerce.boolean()),
 });
 
 export const validateListMessagesQuery = (query: unknown) => validateSchema<ListMessagesQuery>(listMessagesQuerySchema, query);

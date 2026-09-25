@@ -58,6 +58,8 @@ export interface ListConversationsParams {
   page: number;
   pageSize: number;
   search?: string;
+  // false/omitted: the normal inbox (archived hidden). true: only archived conversations.
+  archived?: boolean;
 }
 
 export type ConversationMode = "AI" | "HUMAN";
@@ -92,6 +94,7 @@ export interface ConversationSummary {
   assignedTo: { id: string; name: string } | null;
   orderState: OrderConversationState;
   unreadCount: number;
+  archived: boolean;
 }
 
 export interface ConversationListResult {

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, MessageCircle, MessagesSquare, Search, ShoppingCart } from "lucide-react";
+import { Archive, ArchiveRestore, ArrowLeft, MessageCircle, MessagesSquare, Search, ShoppingCart } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,9 @@ import { cn } from "@/lib/utils";
 import { whatsappConversationListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
 import { conversationDetailQueryOptions, messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
 import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
-import { useMarkConversationReadMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
+import { useArchiveConversationMutation, useMarkConversationReadMutation, useUnarchiveConversationMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
+import { toast } from "sonner";
 import { ConversationContextPanel } from "./conversation-context-panel";
 import { useCustomer360 } from "@/hooks/useCustomers";
 import { useAuthStore } from "@/stores/auth-store";
@@ -41,6 +43,11 @@ function ConversationListPanel({
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  // Active (default) vs Archived: the backend decides what "archived" means - this only asks for the right list.
+  const [archivedView, setArchivedView] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<{ leadId: string; name: string; archived: boolean } | null>(null);
+  const archive = useArchiveConversationMutation();
+  const unarchive = useUnarchiveConversationMutation();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   // Same debounce idiom as send-whatsapp-dialog.tsx's template preview - avoids firing a request per keystroke.
@@ -53,7 +60,23 @@ function ConversationListPanel({
     }, SEARCH_DEBOUNCE_MS);
   }
 
-  const params = { page, pageSize: PAGE_SIZE, search: search || undefined };
+  const params = { page, pageSize: PAGE_SIZE, search: search || undefined, archived: archivedView || undefined };
+
+  function confirmArchiveToggle() {
+    if (!archiveTarget) return;
+    const mutation = archiveTarget.archived ? unarchive : archive;
+    mutation.mutate(
+      { leadId: archiveTarget.leadId, variables: undefined },
+      {
+        onSuccess: () => {
+          toast.success(archiveTarget.archived ? "Conversation restored to the inbox." : "Conversation archived. The customer, orders and payments were not affected.");
+          if (selectedLeadId === archiveTarget.leadId) onSelect("");
+          setArchiveTarget(null);
+        },
+        onError: (error) => toast.error(getErrorMessage(error, "Could not update the conversation.")),
+      },
+    );
+  }
   // 15s polling - the only "live" mechanism this app has (no websocket/SSE), enough to surface a new
   // inbound message or an AI reply/handoff while the inbox is open.
   const query = useQuery({ ...whatsappConversationListQueryOptions(params), enabled: Boolean(token), refetchInterval: 15_000 });
@@ -64,6 +87,23 @@ function ConversationListPanel({
   return (
     <div className={cn("flex h-full flex-col", className)}>
       <div className="border-b p-3">
+        <div className="mb-2 flex gap-1 text-xs" role="tablist" aria-label="Inbox view">
+          {([false, true] as const).map((isArchived) => (
+            <button
+              key={String(isArchived)}
+              type="button"
+              role="tab"
+              aria-selected={archivedView === isArchived}
+              onClick={() => {
+                setArchivedView(isArchived);
+                setPage(1);
+              }}
+              className={cn("rounded-full px-3 py-1 font-medium transition-colors", archivedView === isArchived ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}
+            >
+              {isArchived ? "Archived" : "Inbox"}
+            </button>
+          ))}
+        </div>
         <div className="relative">
           <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -91,7 +131,7 @@ function ConversationListPanel({
           <div className="flex flex-col items-center gap-2 p-8 text-center">
             <MessagesSquare className="size-8 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">
-              {search ? "No conversations match your search." : "No WhatsApp conversations yet."}
+              {search ? "No conversations match your search." : archivedView ? "No archived conversations." : "No WhatsApp conversations yet."}
             </p>
           </div>
         ) : (
@@ -102,6 +142,7 @@ function ConversationListPanel({
                 conversation={conversation}
                 selected={conversation.leadId === selectedLeadId}
                 onSelect={() => onSelect(conversation.leadId)}
+                onArchiveToggle={() => setArchiveTarget({ leadId: conversation.leadId, name: conversation.name, archived: conversation.archived })}
               />
             ))}
           </ul>
@@ -113,6 +154,21 @@ function ConversationListPanel({
           <OrdersPagination pagination={data.pagination} onPageChange={setPage} disabled={query.isFetching} />
         </div>
       ) : null}
+
+      <ConfirmActionDialog
+        open={archiveTarget !== null}
+        onOpenChange={(next) => (next ? undefined : setArchiveTarget(null))}
+        title={archiveTarget?.archived ? "Restore this conversation?" : "Archive this conversation?"}
+        description={
+          archiveTarget?.archived
+            ? `${archiveTarget.name}'s conversation will move back to your inbox.`
+            : "It leaves your inbox and moves to Archived. The customer, orders, payments and message history are not deleted, and a new message from the customer brings it back automatically."
+        }
+        confirmLabel={archiveTarget?.archived ? "Restore" : "Archive"}
+        pendingLabel={archiveTarget?.archived ? "Restoring…" : "Archiving…"}
+        pending={archive.isPending || unarchive.isPending}
+        onConfirm={confirmArchiveToggle}
+      />
     </div>
   );
 }
@@ -129,6 +185,27 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const canSendFreeText = capability?.freeText.allowed ?? false;
   const markRead = useMarkConversationReadMutation();
   const unread = conversation.data?.unreadCount ?? 0;
+  const archiveMutation = useArchiveConversationMutation();
+  const unarchiveMutation = useUnarchiveConversationMutation();
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  // "Delete" is deliberately not offered: nothing here deletes messages. Archiving is the safe removal, and the
+  // backend (not this component) decides what archived means.
+  const isArchived = conversation.data?.archived ?? false;
+
+  function confirmArchive() {
+    const mutation = isArchived ? unarchiveMutation : archiveMutation;
+    mutation.mutate(
+      { leadId, variables: undefined },
+      {
+        onSuccess: () => {
+          toast.success(isArchived ? "Conversation restored to the inbox." : "Conversation archived. The customer, orders and payments were not affected.");
+          setArchiveOpen(false);
+          onBack();
+        },
+        onError: (err) => toast.error(getErrorMessage(err, "Could not update the conversation.")),
+      },
+    );
+  }
 
   useEffect(() => {
     if (unread > 0) markRead.mutate({ leadId, variables: undefined });
@@ -177,6 +254,12 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
               WhatsApp-only order record. Server-side RBAC (getLeadScope) is the real gate; this
               button is just always shown, since a conversation is only open here if it's already in
               the caller's scope. */}
+          {conversation.data ? (
+            <Button size="sm" variant="outline" onClick={() => setArchiveOpen(true)} title={isArchived ? "Restore to inbox" : "Archive conversation"}>
+              {isArchived ? <ArchiveRestore data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
+              {isArchived ? "Unarchive" : "Archive"}
+            </Button>
+          ) : null}
           <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!data}>
             <ShoppingCart data-icon="inline-start" />
             Create Order
@@ -201,6 +284,17 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
       <div className="border-t p-3">
         <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} blockedMessage={capability?.freeText.message ?? null} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
       </div>
+
+      <ConfirmActionDialog
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
+        title={isArchived ? "Restore this conversation?" : "Archive this conversation?"}
+        description={isArchived ? "It will move back to your inbox." : "It leaves your inbox and moves to Archived. The customer, orders, payments and message history are not deleted, and a new message from the customer brings it back automatically."}
+        confirmLabel={isArchived ? "Restore" : "Archive"}
+        pendingLabel={isArchived ? "Restoring…" : "Archiving…"}
+        pending={archiveMutation.isPending || unarchiveMutation.isPending}
+        onConfirm={confirmArchive}
+      />
 
       {data ? (
         <>

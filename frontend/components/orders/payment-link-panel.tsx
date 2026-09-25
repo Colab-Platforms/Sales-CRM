@@ -2,11 +2,11 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Ban, Copy, Link2, MessageCircle, RefreshCw } from "lucide-react";
+import { Ban, Copy, ExternalLink, Link2, MessageCircle, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { useCancelPaymentLinkMutation, useCreatePaymentLinkMutation, useRefreshPaymentMutation } from "@/lib/api-client/mutations/integrations.mutations";
+import { useCancelPaymentLinkMutation, useCreatePaymentLinkMutation, useRefreshPaymentMutation, useSendPaymentLinkAutoMutation } from "@/lib/api-client/mutations/integrations.mutations";
 import { integrationStatusQueryOptions } from "@/lib/api-client/queries/integrations.queries";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
@@ -37,6 +37,8 @@ export function CreatePaymentLinkButton({ order }: { order: OrderDetail }) {
   const create = useCreatePaymentLinkMutation();
   const pending = Number(order.outstandingAmount);
   const hasOpenLink = order.payments.some((p) => isOpenPaymentLink(p));
+  // A prepaid order that has no live link yet (creation failed or was never possible) is a RETRY, not a first attempt.
+  const isRetry = order.status === "PENDING_PAYMENT" && !hasOpenLink;
 
   if (!cashfree?.configured || CLOSED_ORDER_STATUSES.has(order.status) || !(pending > 0) || hasOpenLink) return null;
 
@@ -57,7 +59,7 @@ export function CreatePaymentLinkButton({ order }: { order: OrderDetail }) {
       </p>
       <Button type="button" size="sm" onClick={handleCreate} disabled={create.isPending}>
         <Link2 data-icon="inline-start" />
-        {create.isPending ? "Creating…" : "Create payment link"}
+        {create.isPending ? "Creating…" : isRetry ? "Retry Cashfree payment link" : "Create payment link"}
       </Button>
     </div>
   );
@@ -69,6 +71,7 @@ export function PaymentLinkPanel({ payment, order }: { payment: PaymentDetail; o
   const [sendOpen, setSendOpen] = useState(false);
   const refresh = useRefreshPaymentMutation();
   const cancel = useCancelPaymentLinkMutation();
+  const quickSend = useSendPaymentLinkAutoMutation();
 
   if (payment.source !== "CASHFREE") return null;
   const open = isOpenPaymentLink(payment);
@@ -82,6 +85,18 @@ export function PaymentLinkPanel({ payment, order }: { payment: PaymentDetail; o
     } catch {
       toast.error("Could not copy the link. Select and copy it manually.");
     }
+  }
+
+  // The backend decides how to send (Meta free text in its 24-hour window, else the provider's approved template) - the
+  // frontend never picks a provider. The link itself is reused; nothing new is created at Cashfree.
+  function handleQuickSend() {
+    quickSend.mutate(
+      { paymentId: payment.id },
+      {
+        onSuccess: (result) => toast.success(`Payment link sent via ${result.provider ?? "WhatsApp"} (${result.via === "FREE_TEXT" ? "free text" : "approved template"}).`),
+        onError: (error) => toast.error(getErrorMessage(error, "Could not send the payment link.")),
+      },
+    );
   }
 
   function handleRefresh() {
@@ -118,9 +133,16 @@ export function PaymentLinkPanel({ payment, order }: { payment: PaymentDetail; o
             <Copy data-icon="inline-start" />
             Copy link
           </Button>
-          <Button type="button" size="sm" onClick={() => setSendOpen(true)}>
+          <a href={payment.paymentUrl} target="_blank" rel="noopener noreferrer" className="inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-xs font-medium hover:bg-muted">
+            <ExternalLink className="size-3.5" />
+            Open
+          </a>
+          <Button type="button" size="sm" onClick={handleQuickSend} disabled={quickSend.isPending}>
             <MessageCircle data-icon="inline-start" />
-            Send on WhatsApp
+            {quickSend.isPending ? "Sending…" : "Send on WhatsApp"}
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => setSendOpen(true)}>
+            Send with template…
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={handleRefresh} disabled={refresh.isPending}>
             <RefreshCw data-icon="inline-start" />

@@ -1,6 +1,8 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
+  CancelOrderInput,
+  CancelOrderResult,
   CreateManualOrderInput,
   CreateManualOrderResult,
   OrderDetail,
@@ -25,6 +27,11 @@ export const ordersApi = {
 
   async create(input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
     const res = await apiClient.post<ApiEnvelope<CreateManualOrderResult>>("/orders", input);
+    return res.data.data;
+  },
+
+  async cancel(orderId: string, input: CancelOrderInput): Promise<CancelOrderResult> {
+    const res = await apiClient.post<ApiEnvelope<CancelOrderResult>>(`/orders/${orderId}/cancel`, input);
     return res.data.data;
   },
 

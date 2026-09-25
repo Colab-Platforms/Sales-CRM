@@ -1,3 +1,4 @@
+import { Archive, ArchiveRestore } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/order-status";
 import { MessageStatusBadge } from "../conversation/message-status-badge";
@@ -24,18 +25,22 @@ export function ConversationListItem({
   conversation,
   selected,
   onSelect,
+  onArchiveToggle,
 }: {
   conversation: ConversationSummary;
   selected: boolean;
   onSelect: () => void;
+  /** Asks the parent to archive (or, in the Archived view, restore) this conversation - the parent owns the confirmation. */
+  onArchiveToggle?: () => void;
 }) {
   const { lastMessage } = conversation;
   const preview =
     lastMessage.body ||
     (lastMessage.templateName ? `Template: ${lastMessage.templateName}` : lastMessage.messageType === "TEMPLATE" ? "(template message)" : "—");
 
+  const archiveLabel = conversation.archived ? "Restore to inbox" : "Archive conversation";
   return (
-    <li>
+    <li className="group relative">
       <button
         type="button"
         onClick={onSelect}
@@ -88,6 +93,17 @@ export function ConversationListItem({
           </div>
         </div>
       </button>
+      {onArchiveToggle ? (
+        <button
+          type="button"
+          onClick={onArchiveToggle}
+          aria-label={archiveLabel}
+          title={archiveLabel}
+          className="absolute right-2 bottom-2 rounded-md p-1 text-muted-foreground opacity-100 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover:opacity-100"
+        >
+          {conversation.archived ? <ArchiveRestore className="size-4" /> : <Archive className="size-4" />}
+        </button>
+      ) : null}
     </li>
   );
 }

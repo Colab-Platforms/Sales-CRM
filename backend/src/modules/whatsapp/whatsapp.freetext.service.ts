@@ -82,7 +82,7 @@ class WhatsAppFreeTextService {
 
   /** Sends a free-text message through Meta - only when the conversation's active provider is META, Meta is
    *  configured, and the 24-hour service window is open. Otherwise refuses (400) and sends nothing. */
-  async sendText(lead: { id: string; normalizedMobile: string }, text: string, sentById: string): Promise<{ id: string }> {
+  async sendText(lead: { id: string; normalizedMobile: string }, text: string, sentById: string, orderId?: string): Promise<{ id: string }> {
     const { capability, meta } = await this.getCapability(lead.id);
     if (!capability.freeText.allowed || !meta) throw new ApiError(capability.freeText.message ?? "Free-text messages cannot be sent for this conversation.", STATUS_CODES.BAD_REQUEST);
 
@@ -95,6 +95,7 @@ class WhatsAppFreeTextService {
         messageType: "TEXT",
         status: result.providerMessageId ? "SENT" : "QUEUED",
         leadId: lead.id,
+        orderId: orderId ?? null,
         toNumber: lead.normalizedMobile,
         normalizedContact: lead.normalizedMobile,
         body: text,

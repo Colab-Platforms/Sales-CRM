@@ -60,6 +60,8 @@ export interface ListConversationsQuery {
   pageSize: number;
   /** Matches against the lead's name/mobile - same idea as the history list's own `search`, scoped to contacts instead of message bodies. */
   search?: string;
+  /** false/omitted (default): the normal inbox, archived conversations hidden. true: only archived ones. */
+  archived?: boolean;
 }
 
 export interface ConversationSummary {
@@ -84,6 +86,7 @@ export interface ConversationSummary {
   assignedTo: { id: string; name: string } | null;
   orderState: OrderConversationState;
   unreadCount: number;
+  archived: boolean;
 }
 
 export interface ConversationListResult {

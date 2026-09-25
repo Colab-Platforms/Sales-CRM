@@ -71,6 +71,27 @@ export const returnConversationToAi = async (req: AuthRequest, res: Response): P
   }
 };
 
+// Delete/archive: never deletes the lead, orders, payments or message history - only hides the
+// conversation from the normal inbox list (see WhatsAppConversationService's own comment on how,
+// with no schema change). Callable from both the open conversation and the inbox list.
+export const archiveConversation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await conversationService.archiveConversation(req.user!, req.params.leadId as string);
+    sendResponse(res, true, result, "Conversation removed from the inbox. The customer, orders and payment records were not affected.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const unarchiveConversation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await conversationService.unarchiveConversation(req.user!, req.params.leadId as string);
+    sendResponse(res, true, result, "Conversation restored to the inbox.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 /** Free-text send. WhatsAppFreeTextService decides (server-side, never trusting the client) whether it is
  *  allowed: the conversation's active provider must be Meta AND Meta's 24-hour customer-service window must be
  *  open. AiSensy/Gupshup conversations keep their template-only behavior. */
