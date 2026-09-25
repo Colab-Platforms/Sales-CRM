@@ -3,7 +3,6 @@ import type { ApiEnvelope } from "../types/common.types";
 import type {
   Call,
   CallOutcomeOption,
-  ClickToCallResult,
   SubmitCallOutcomePayload,
   VirtualNumber,
   VirtualNumberRecord,
@@ -34,13 +33,6 @@ export const callingApi = {
 
   async deleteVirtualNumber(id: string): Promise<void> {
     await apiClient.delete(`/calling/virtual-numbers/${id}`);
-  },
-
-  async initiateCall(leadId: string, virtualNumberId: string): Promise<ClickToCallResult> {
-    const res = await apiClient.post<ApiEnvelope<ClickToCallResult>>(`/calling/leads/${leadId}/click-to-call`, {
-      virtualNumberId,
-    });
-    return res.data.data;
   },
 
   async listLeadCalls(leadId: string): Promise<Call[]> {

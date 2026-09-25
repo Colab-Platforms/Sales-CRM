@@ -37,11 +37,6 @@ export interface Call {
   outcome: { id: string; name: string; code: string } | null;
 }
 
-export interface ClickToCallResult {
-  callId: string;
-  status: CallStatus;
-}
-
 export interface SubmitCallOutcomePayload {
   outcomeId: string;
   notes?: string;

@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Phone, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Inbox, Pencil, Trash2 } from "lucide-react";
+import { Eye, Inbox, Pencil, Trash2 } from "lucide-react";
 import { History } from "lucide-react";
 import {
   Table,
@@ -29,8 +29,9 @@ import {
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { customerDetailHref } from "@/components/orders/orders-table";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
-import { useInitiateCallMutation, useSubmitCallOutcomeMutation } from "@/lib/api-client/mutations/calling.mutations";
-import { virtualNumbersQueryOptions, callOutcomesQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
+import { useSubmitCallOutcomeMutation } from "@/lib/api-client/mutations/calling.mutations";
+import { useInitiateCallMutation } from "@/lib/api-client/mutations/calls.mutations";
+import { callingKeys, callOutcomesQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import { EditLeadDialog } from "./edit-lead-dialog";
@@ -279,48 +280,36 @@ function ActiveCallDialog({ lead, callId, onClose }: { lead: Lead; callId: strin
   );
 }
 
+// Same path as Lead Details -> Call Customer: POST /api/calls. The backend picks the caller (the signed-in
+// user), the business number, and owns the duplicate-call guard and provider correlation, so there is no
+// line picker here and no second outbound implementation.
 function ClickToCallButton({ lead }: { lead: Lead }) {
-  const initiateCall = useInitiateCallMutation(lead.id);
-  const { data: virtualNumbers = [] } = useQuery(virtualNumbersQueryOptions());
-  const [virtualNumberId, setVirtualNumberId] = useState("");
+  const queryClient = useQueryClient();
+  const initiateCall = useInitiateCallMutation();
   const [activeCallId, setActiveCallId] = useState<string | null>(null);
-  const selected = virtualNumberId || virtualNumbers[0]?.id || "";
 
   if (!lead.mobile) return null;
 
   return (
     <div className="flex items-center gap-1">
-      <NativeSelect
-        size="sm"
-        aria-label="Call from virtual number"
-        className="text-xs"
-        wrapperClassName="w-28"
-        value={selected}
-        disabled={initiateCall.isPending || virtualNumbers.length === 0}
-        onChange={(e) => setVirtualNumberId(e.target.value)}
-      >
-        {virtualNumbers.length === 0 ? <option value="">No line</option> : null}
-        {virtualNumbers.map((vn) => (
-          <option key={vn.id} value={vn.id}>
-            {vn.displayName ?? vn.number}
-          </option>
-        ))}
-      </NativeSelect>
       <Button
         variant="ghost"
         size="icon"
         className="size-6"
         aria-label={`Call ${lead.firstName}`}
-        disabled={initiateCall.isPending || !selected}
+        disabled={initiateCall.isPending}
         onClick={() =>
-          initiateCall.mutate(selected, {
-            onSuccess: (result) => {
-              toast.success("Calling your phone now — hold on.");
-              setActiveCallId(result.callId);
+          initiateCall.mutate(
+            { leadId: lead.id },
+            {
+              onSuccess: (result) => {
+                toast.success("Calling your phone now — hold on.");
+                setActiveCallId(result.callId);
+                queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(lead.id) });
+              },
+              onError: (error) => toast.error(getErrorMessage(error, "Failed to start call.")),
             },
-            onError: (error) =>
-              toast.error(getErrorMessage(error, "Failed to start call.")),
-          })
+          )
         }
       >
         <Phone className="size-3.5" />
@@ -332,7 +321,8 @@ function ClickToCallButton({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadStatusSelect({ lead }: { lead: Lead }) {
+// Exported so the Lead Details page reuses the exact same status-change control (and its mutation).
+export function LeadStatusSelect({ lead }: { lead: Lead }) {
   const updateLead = useUpdateLeadMutation();
 
   return (
@@ -360,6 +350,10 @@ function LeadStatusSelect({ lead }: { lead: Lead }) {
       ))}
     </NativeSelect>
   );
+}
+
+export function leadDetailHref(id: string) {
+  return `/dashboard/leads/${id}`;
 }
 
 interface LeadTableProps {
@@ -505,6 +499,14 @@ export function LeadTable({
                   </TableCell>
                   <TableCell className="pr-4 text-right">
                     <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        nativeButton={false}
+                        render={<Link href={leadDetailHref(lead.id)} aria-label={`View ${lead.firstName}`} />}
+                      >
+                        <Eye />
+                      </Button>
                       <Button
                         variant="ghost"
                         size="icon-sm"

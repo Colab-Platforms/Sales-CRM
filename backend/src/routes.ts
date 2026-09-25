@@ -13,8 +13,15 @@ import paymentsRoutes from "@modules/cashfree/cashfree.routes.js";
 import shipmentsRoutes from "@modules/shiprocket/shiprocket.routes.js";
 import integrationsRoutes from "@modules/integrations/integrations.routes.js";
 import callingRoutes from "@modules/calling/calling.routes.js";
+import exotelIvrRoutes from "@modules/webhooks/exotel/exotelIvr.routes.js";
+import callerDeskRoutes from "@modules/webhooks/callerdesk/callerdesk.routes.js";
+import callRoutes from "@modules/call/call.routes.js";
 
 const router = Router();
+
+// Provider webhooks: system-to-system, deliberately not behind requireAuth (see each controller).
+router.use("/webhooks/exotel", exotelIvrRoutes);
+router.use("/webhooks/callerdesk", callerDeskRoutes);
 
 router.get("/health", (_req, res) => {
   res.status(200).json({ success: true, message: "ok" });
@@ -34,5 +41,6 @@ router.use("/shipments", shipmentsRoutes);
 router.use("/integrations", integrationsRoutes);
 router.use("/lead", leadRoutes);                          // add with the other router.use lines
 router.use("/calling", callingRoutes);
+router.use("/calls", callRoutes);
 
 export default router;
