@@ -7,6 +7,7 @@ import { Separator } from "@/components/ui/separator";
 const SEGMENT_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   leads: "Leads",
+  calling: "Call History",
   team: "Team",
   salespersons: "Salespersons",
   users: "Managers",
