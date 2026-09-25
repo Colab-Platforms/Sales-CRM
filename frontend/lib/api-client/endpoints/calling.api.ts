@@ -2,7 +2,9 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
   Call,
+  CallOutcomeOption,
   ClickToCallResult,
+  SubmitCallOutcomePayload,
   VirtualNumber,
   VirtualNumberRecord,
   CreateVirtualNumberPayload,
@@ -43,6 +45,16 @@ export const callingApi = {
 
   async listLeadCalls(leadId: string): Promise<Call[]> {
     const res = await apiClient.get<ApiEnvelope<Call[]>>(`/calling/leads/${leadId}/calls`);
+    return res.data.data;
+  },
+
+  async listCallOutcomes(): Promise<CallOutcomeOption[]> {
+    const res = await apiClient.get<ApiEnvelope<CallOutcomeOption[]>>("/calling/call-outcomes");
+    return res.data.data;
+  },
+
+  async submitCallOutcome(callId: string, payload: SubmitCallOutcomePayload): Promise<Call> {
+    const res = await apiClient.patch<ApiEnvelope<Call>>(`/calling/calls/${callId}/outcome`, payload);
     return res.data.data;
   },
 };

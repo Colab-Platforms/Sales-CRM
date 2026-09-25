@@ -10,6 +10,8 @@ import {
   validateVirtualNumberIdParamSchema,
   validateCreateVirtualNumberSchema,
   validateUpdateVirtualNumberSchema,
+  validateCallIdParamSchema,
+  validateSubmitCallOutcomeSchema,
 } from "./calling.validators.js";
 
 const callingService = new CallingService();
@@ -107,6 +109,34 @@ export const listLeadCalls = async (req: AuthRequest, res: Response): Promise<vo
     }
     const result = await callingService.listCallsForLead(req.user!, value.leadId);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listCallOutcomes = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await callingService.listCallOutcomes();
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const submitCallOutcome = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error: paramError, value: params } = validateCallIdParamSchema(req.params);
+    if (paramError) {
+      sendResponse(res, false, null, paramError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const { error: bodyError, value: body } = validateSubmitCallOutcomeSchema(req.body);
+    if (bodyError) {
+      sendResponse(res, false, null, bodyError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await callingService.submitCallOutcome(req.user!, params.id, body);
+    sendResponse(res, true, result, "Call outcome saved.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

@@ -61,6 +61,8 @@ const leadListInclude = {
       durationSeconds: true,
       recording: { select: { recordingUrl: true } },
       agent: { select: { id: true, name: true } },
+      notes: true,
+      outcome: { select: { id: true, name: true, code: true } },
     },
     orderBy: { createdAt: "desc" },
   },

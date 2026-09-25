@@ -1,8 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { callingApi } from "../endpoints/calling.api";
 import { callingKeys } from "../queries/calling.queries";
+import { leadKeys } from "../queries/lead.queries";
 import type {
+  Call,
   ClickToCallResult,
+  SubmitCallOutcomePayload,
   VirtualNumberRecord,
   CreateVirtualNumberPayload,
   UpdateVirtualNumberPayload,
@@ -15,6 +18,19 @@ export function useInitiateCallMutation(leadId: string) {
     mutationFn: (virtualNumberId) => callingApi.initiateCall(leadId, virtualNumberId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(leadId) });
+    },
+  });
+}
+
+export function useSubmitCallOutcomeMutation(leadId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<Call, unknown, { callId: string; payload: SubmitCallOutcomePayload }>({
+    mutationFn: ({ callId, payload }) => callingApi.submitCallOutcome(callId, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(leadId) });
+      // The outcome can change the lead's status, which the leads list/detail also show.
+      queryClient.invalidateQueries({ queryKey: leadKeys.all });
     },
   });
 }

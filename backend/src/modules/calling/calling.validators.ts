@@ -1,13 +1,22 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
-import type { CreateVirtualNumberBody, UpdateVirtualNumberBody } from "./calling.types.js";
+import type { CreateVirtualNumberBody, SubmitCallOutcomeBody, UpdateVirtualNumberBody } from "./calling.types.js";
 
 const leadIdParamSchema = z.object({
   leadId: z.string().uuid(),
 });
 
+const callIdParamSchema = z.object({
+  id: z.string().uuid(),
+});
+
 const initiateCallBodySchema = z.object({
   virtualNumberId: z.string().uuid(),
+});
+
+const submitCallOutcomeSchema = z.object({
+  outcomeId: z.string().uuid(),
+  notes: z.string().trim().max(2000).optional(),
 });
 
 const virtualNumberIdParamSchema = z.object({
@@ -34,6 +43,12 @@ const updateVirtualNumberSchema = z
 
 export const validateLeadIdParamSchema = (params: unknown) =>
   validateSchema<{ leadId: string }>(leadIdParamSchema, params);
+
+export const validateCallIdParamSchema = (params: unknown) =>
+  validateSchema<{ id: string }>(callIdParamSchema, params);
+
+export const validateSubmitCallOutcomeSchema = (body: unknown) =>
+  validateSchema<SubmitCallOutcomeBody>(submitCallOutcomeSchema, body);
 
 export const validateInitiateCallBodySchema = (body: unknown) =>
   validateSchema<{ virtualNumberId: string }>(initiateCallBodySchema, body);
