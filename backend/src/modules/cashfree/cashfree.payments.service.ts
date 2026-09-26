@@ -9,6 +9,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown, fullName, scopedOrderWhere } from "../orders/orders.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import WhatsAppMessagingService from "../whatsapp/whatsapp.messaging.service.js";
+import { notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 import type { WhatsAppMessageSummary } from "../whatsapp/whatsapp.types.js";
 import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE } from "./cashfree.apply.js";
@@ -44,6 +45,8 @@ export interface ServiceDeps {
   config?: () => CashfreeConfig;
   client?: (config: CashfreeConfig) => CashfreeApi;
   messaging?: () => Pick<WhatsAppMessagingService, "sendTemplate">;
+  /** Test seam for the provider-aware send (fake Meta/template senders). */
+  notifyDeps?: import("../whatsapp/whatsapp.order-notify.service.js").OrderNotifyDeps;
   now?: () => Date;
 }
 
@@ -70,7 +73,7 @@ const PAYMENT_SELECT = {
   externalId: true,
   paymentUrl: true,
   paymentExpiresAt: true,
-  order: { select: { id: true, leadId: true, orderNumber: true } },
+  order: { select: { id: true, leadId: true, orderNumber: true, lead: { select: { normalizedMobile: true, firstName: true, lastName: true } }, items: { select: { productNameSnapshot: true, variantNameSnapshot: true, quantity: true }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] } } },
 } satisfies Prisma.PaymentSelect;
 
 type PaymentRow = Prisma.PaymentGetPayload<{ select: typeof PAYMENT_SELECT }>;
@@ -371,6 +374,30 @@ class CashfreePaymentsService {
 
     const messaging = this.deps.messaging ? this.deps.messaging() : new WhatsAppMessagingService();
     return messaging.sendTemplate(user, { leadId: payment.order.leadId, templateId, orderId: payment.orderId });
+  }
+
+  /**
+   * Provider-aware send with NO template chosen by the caller: prefers Meta free text when the
+   * customer's 24-hour service window is open (never on AiSensy/Gupshup, whose free-text rules are
+   * unchanged), otherwise falls back to an approved template for whichever provider the conversation
+   * is on. Used by the "send" action when the caller does not pick a template explicitly; the existing
+   * sendPaymentLinkWhatsApp (explicit templateId) is untouched for callers that do pick one.
+   */
+  async sendPaymentLinkAuto(user: AuthUser, paymentId: string): Promise<OrderNotifyResult> {
+    const payment = await this.runner.$transaction((tx) => this.loadPayment(tx, user, paymentId));
+    if (!OPEN.has(payment.status) || !payment.paymentUrl) throw new ApiError("There is no open payment link to send for this payment", STATUS_CODES.CONFLICT);
+    if (payment.paymentExpiresAt && payment.paymentExpiresAt <= this.now()) throw new ApiError("This payment link has expired. Create a new one.", STATUS_CODES.CONFLICT);
+
+    return this.runner.$transaction(async (tx) => {
+      const result = await notifyPaymentLink(
+        tx,
+        user,
+        { leadId: payment.order.leadId, orderId: payment.orderId, normalizedMobile: payment.order.lead.normalizedMobile, orderNumber: payment.order.orderNumber, paymentUrl: payment.paymentUrl!, amount: fromCents(toCents(payment.amount.toString())), currency: payment.currency, customerName: fullName(payment.order.lead.firstName, payment.order.lead.lastName), items: payment.order.items.map((i) => ({ name: i.productNameSnapshot, variant: i.variantNameSnapshot, quantity: i.quantity })) },
+        this.deps.notifyDeps,
+      );
+      await recordOrderNotification(tx, payment.orderId, result, this.now());
+      return result;
+    });
   }
 }
 

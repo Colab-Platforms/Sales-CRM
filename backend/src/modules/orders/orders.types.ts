@@ -1,5 +1,6 @@
 import type { ExternalSource, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { ReconciliationStatus } from "../reconciliation/reconciliation.types.js";
+import type { OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 
 // How the customer pays: cash on delivery, or up front by any other method. Null when the method is not known.
 export type PaymentMode = "COD" | "PREPAID";
@@ -26,6 +27,10 @@ export interface CreateManualOrderInput {
   leadId: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
+  // Frontend-generated (e.g. crypto.randomUUID(), one per order attempt, reused across retries of that
+  // SAME attempt) - see OrdersService.createManualOrder's own comment for why this is an in-memory,
+  // per-process guard against a double submit (double-click/double Enter), not a durable DB constraint.
+  idempotencyKey?: string;
   shippingAddress?: {
     name?: string;
     line1?: string;
@@ -52,11 +57,74 @@ export interface ShopifyPushResult {
   reason?: string;
 }
 
-// The combined, honest result of "create a CRM order, then best-effort try to push it to Shopify" -
-// each half's own real outcome, never a single flag that papers over a partial failure.
+// The combined, honest result of "create a CRM order, then best-effort try to push it to Shopify,
+// then best-effort try to collect payment / notify the customer" - each half's own real outcome,
+// never a single flag that papers over a partial failure. `paymentLink`/`whatsapp` are only set when
+// relevant to this order's payment method - both are null for a COD order that has nothing to collect.
 export interface CreateManualOrderResult {
   order: OrderDetail;
   shopify: ShopifyPushResult;
+  paymentLink: OrderPaymentLinkResult | null;
+  whatsapp: OrderNotifyResult;
+}
+
+// Kept intentionally narrow (not the full CashfreePaymentsService PaymentLinkResult, which this
+// module has no reason to depend on) - just what the order-creation response needs to show.
+export interface OrderPaymentLinkResult {
+  status: "created" | "reused" | "failed";
+  paymentId?: string;
+  paymentUrl?: string | null;
+  expiresAt?: Date | null;
+  /** Set only when status is "failed" - Cashfree not configured, or a real provider error. */
+  reason?: string;
+}
+
+export type ShopifyCancelStatus = "cancelled" | "failed" | "not_linked";
+
+export interface ShopifyCancelResult {
+  status: ShopifyCancelStatus;
+  reason?: string;
+}
+
+// The last customer WhatsApp notification about this order (COD confirmation / payment link), as remembered on the order.
+export interface OrderWhatsAppNotification {
+  sent: boolean;
+  via: "FREE_TEXT" | "TEMPLATE" | null;
+  provider: "META" | "AISENSY" | "GUPSHUP" | null;
+  reason?: string;
+  at: string;
+}
+
+// none: no Cashfree link on the order (e.g. COD). cancelled: the unpaid link was cancelled. paid: a payment already
+// succeeded - nothing was cancelled or refunded. failed: an unpaid link is still active (retry by cancelling again).
+export type PaymentLinkCancelStatus = "none" | "cancelled" | "paid" | "failed";
+
+export interface PaymentLinkCancelResult {
+  status: PaymentLinkCancelStatus;
+  reason?: string;
+}
+
+export interface LastShippingAddress {
+  name: string;
+  line1: string;
+  line2: string;
+  city: string;
+  state: string;
+  pincode: string;
+  phone: string;
+}
+
+export interface CancelOrderInput {
+  reason?: string;
+}
+
+export interface CancelOrderResult {
+  order: OrderDetail;
+  shopify: ShopifyCancelResult;
+  paymentLink: PaymentLinkCancelResult;
+  /** true when the order was ALREADY cancelled before this call (idempotent no-op on the CRM side) -
+   *  the Shopify half may still have been retried; see cancelOrder's own comment. */
+  alreadyCancelled: boolean;
 }
 
 export interface ListOrdersQuery {
@@ -120,6 +188,13 @@ export interface OrderDetail {
   shippingAddress: Record<string, string | null> | null;
   shippingPincode: string | null;
   cancelReason: string | null;
+  shopifyCancellation: ShopifyCancelResult | null;
+  // Last Cashfree-link cancellation outcome (Order.metadata); the live state is derivable from `payments`.
+  paymentLinkCancellation: PaymentLinkCancelResult | null;
+  // Last Shopify payment-reconciliation outcome (Order.metadata) - set once a Cashfree payment on this order settles.
+  shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // Null when nothing was ever sent/attempted. Only a safe reason is stored (never a URL or credential).
+  whatsappNotification: OrderWhatsAppNotification | null;
   createdAt: Date;
   placedAt: Date | null;
   confirmedAt: Date | null;

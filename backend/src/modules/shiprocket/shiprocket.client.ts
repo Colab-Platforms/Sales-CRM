@@ -240,6 +240,21 @@ export function parseOrdersPage(json: unknown): OrdersPage {
   };
 }
 
+export interface ServiceabilityCourier { rate: number | null; days: number | null }
+
+/** Shiprocket answers "no courier serves this lane" either with HTTP 404 or with status 404 inside a 200 body. */
+export function parseServiceabilityResponse(json: unknown): { couriers: ServiceabilityCourier[] } {
+  const body = asRecord(json);
+  if (Number(body.status) === 404) return { couriers: [] };
+  const list = asRecord(body.data).available_courier_companies;
+  const items = Array.isArray(list) ? list.map(asRecord) : [];
+  const num = (v: unknown) => {
+    const n = Number(v);
+    return v !== null && v !== undefined && v !== "" && Number.isFinite(n) ? n : null;
+  };
+  return { couriers: items.map((c) => ({ rate: num(c.rate ?? c.freight_charge), days: num(c.estimated_delivery_days) })) };
+}
+
 export class ShiprocketClient {
   private readonly tokens: ShiprocketTokenProvider;
 
@@ -267,6 +282,22 @@ export class ShiprocketClient {
         throw error;
       }
     }
+  }
+
+  /** The postcode of a saved pickup location (matched by name, case-insensitively), or null if there is no such location. */
+  async getPickupPostcode(pickupLocation: string): Promise<string | null> {
+    const body = asRecord(await this.call("GET", "/settings/company/pickup"));
+    const list = asRecord(body.data).shipping_address;
+    const wanted = pickupLocation.trim().toLowerCase();
+    const match = (Array.isArray(list) ? list.map(asRecord) : []).find((l) => String(l.pickup_location ?? "").trim().toLowerCase() === wanted);
+    const pin = String(match?.pin_code ?? match?.postcode ?? "").replace(/\D/g, "");
+    return pin.length === 6 ? pin : null;
+  }
+
+  /** Which couriers can carry a parcel of this weight from the pickup postcode to the delivery postcode (read-only). */
+  async checkServiceability(input: { pickupPostcode: string; deliveryPostcode: string; cod: boolean; weightKg: number }): Promise<{ couriers: ServiceabilityCourier[] }> {
+    const query = new URLSearchParams({ pickup_postcode: input.pickupPostcode, delivery_postcode: input.deliveryPostcode, cod: input.cod ? "1" : "0", weight: String(input.weightKg) });
+    return parseServiceabilityResponse(await this.call("GET", `/courier/serviceability/?${query.toString()}`));
   }
 
   async createOrder(request: CreateOrderRequest): Promise<CreatedOrder> {

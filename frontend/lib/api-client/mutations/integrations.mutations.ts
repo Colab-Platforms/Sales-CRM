@@ -8,6 +8,7 @@ import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
 import { whatsappKeys } from "../queries/whatsapp.queries";
 import type { CreateShipmentInput, PaymentLinkResult, ShipmentActionResult } from "../types/integrations.types";
 import type { WhatsAppMessageResult } from "../types/whatsapp-messaging.types";
+import type { OrderNotifyResult } from "../types/orders.types";
 
 // A payment or shipment change shows up in the order itself, its list and status, the reconciliation totals and the audit
 // trail - so all of those are refreshed together.
@@ -34,6 +35,20 @@ export function useRefreshPaymentMutation() {
 export function useCancelPaymentLinkMutation() {
   const refresh = useRefreshOrderData();
   return useMutation<PaymentLinkResult, unknown, string>({ mutationFn: (paymentId) => integrationsApi.cancelPaymentLink(paymentId), onSuccess: refresh });
+}
+
+export function useSendPaymentLinkAutoMutation() {
+  const queryClient = useQueryClient();
+  const refresh = useRefreshOrderData();
+  return useMutation<OrderNotifyResult, unknown, { paymentId: string }>({
+    mutationFn: ({ paymentId }) => integrationsApi.sendPaymentLinkAuto(paymentId),
+    // The order page shows the remembered outcome, so it is refreshed on success AND on a "not sent" answer.
+    onSettled: () => {
+      refresh();
+      queryClient.invalidateQueries({ queryKey: whatsappKeys.all });
+      queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
+    },
+  });
 }
 
 export function useSendPaymentLinkMutation() {

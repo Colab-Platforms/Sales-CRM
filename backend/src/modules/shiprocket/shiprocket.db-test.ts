@@ -153,6 +153,22 @@ describe("creating a shipment", () => {
     });
   });
 
+  it("blocks shipment creation for a prepaid order until Cashfree actually confirms payment", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.SALESPERSON, status: OrderStatus.PENDING_PAYMENT, totalAmount: "649.00", shippingAddress: ADDRESS, shippingPincode: "411001" }, select: { id: true } });
+      await tx.orderItem.create({ data: { orderId: order.id, productNameSnapshot: "Herbal Tea", skuSnapshot: "HT-250", quantity: 2, unitPrice: "300.00", totalPrice: "600.00" } });
+      await tx.payment.create({ data: { orderId: order.id, amount: "649.00", status: PaymentStatus.PENDING, method: PaymentMethod.PAYMENT_LINK } });
+      const fake = fakeApi();
+      await assert.rejects(service(runner, fake.api).createShipment(as(manager, Role.MANAGER), order.id, DIMS), (e: { statusCode: number; message: string }) => e.statusCode === 400 && /payment has not been confirmed/.test(e.message));
+      assert.equal(fake.calls.create.length, 0);
+
+      await tx.payment.updateMany({ where: { orderId: order.id }, data: { status: PaymentStatus.SUCCESS } });
+      const result = await service(runner, fake.api).createShipment(as(manager, Role.MANAGER), order.id, DIMS);
+      assert.equal(result.paymentMethod, "Prepaid");
+    });
+  });
+
   it("says exactly what is missing before anything reaches Shiprocket", async () => {
     await inRollback(async (tx, runner) => {
       const { manager, lead } = await managerWithLead(tx);
@@ -542,13 +558,19 @@ describe("centralized shipment listing", () => {
       const order = await makeOrder(tx, lead.id);
       const created = await svc.createShipment(as(manager, Role.MANAGER), order.id, DIMS);
 
-      const strangerList = await svc.listShipments(as(stranger, Role.MANAGER), { page: 1, pageSize: 25 });
+      const orderNumber = (await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { orderNumber: true } })).orderNumber;
+
+      // Scoped to this test's own order number: a stranger manager should find nothing regardless of what else
+      // exists in the (shared) database, and an ADMIN's unscoped view can contain other real shipments too, so the
+      // search filter - not an unscoped page length - is what actually isolates this one record.
+      const strangerList = await svc.listShipments(as(stranger, Role.MANAGER), { page: 1, pageSize: 25, search: orderNumber });
       assert.equal(strangerList.items.length, 0);
       await assert.rejects(svc.getShipmentDetail(as(stranger, Role.MANAGER), created.id), /Shipment not found/);
       assert.deepEqual((await svc.getFilterOptions(as(stranger, Role.MANAGER))).couriers, []);
 
-      const adminList = await svc.listShipments(as(admin, Role.ADMIN), { page: 1, pageSize: 25 });
+      const adminList = await svc.listShipments(as(admin, Role.ADMIN), { page: 1, pageSize: 25, search: orderNumber });
       assert.equal(adminList.items.length, 1);
+      assert.equal(adminList.items[0].id, created.id);
     });
   });
 

@@ -89,6 +89,8 @@ export interface CreateManualOrderInput {
   leadId: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
+  // One per order ATTEMPT (reused across retries of that same attempt) - the backend collapses a double submit with the same key into one order.
+  idempotencyKey?: string;
   shippingAddress?: {
     name?: string;
     line1?: string;
@@ -113,9 +115,60 @@ export interface ShopifyPushResult {
   reason?: string;
 }
 
+export type ShopifyCancelStatus = "cancelled" | "failed" | "not_linked";
+
+export interface ShopifyCancelResult {
+  status: ShopifyCancelStatus;
+  reason?: string;
+}
+
+export type OrderPaymentLinkStatus = "created" | "reused" | "failed";
+
+// Only what the order-creation response needs to show - not the full Cashfree PaymentLinkResult.
+export interface OrderPaymentLinkResult {
+  status: OrderPaymentLinkStatus;
+  paymentId?: string;
+  paymentUrl?: string | null;
+  expiresAt?: string | null;
+  reason?: string;
+}
+
+export type OrderNotifyVia = "FREE_TEXT" | "TEMPLATE";
+export type WhatsAppProviderName = "META" | "AISENSY" | "GUPSHUP";
+
+export interface OrderNotifyResult {
+  sent: boolean;
+  via: OrderNotifyVia | null;
+  provider: WhatsAppProviderName | null;
+  reason?: string;
+}
+
 export interface CreateManualOrderResult {
   order: OrderDetail;
   shopify: ShopifyPushResult;
+  // null only when the order's payment method has nothing to collect via Cashfree (e.g. COD).
+  paymentLink: OrderPaymentLinkResult | null;
+  whatsapp: OrderNotifyResult;
+}
+
+// none: no Cashfree link (e.g. COD). cancelled: the unpaid link was cancelled. paid: already paid - nothing cancelled or
+// refunded. failed: an unpaid link is still active; cancelling again retries it.
+export type PaymentLinkCancelStatus = "none" | "cancelled" | "paid" | "failed";
+
+export interface PaymentLinkCancelResult {
+  status: PaymentLinkCancelStatus;
+  reason?: string;
+}
+
+export interface CancelOrderInput {
+  reason?: string;
+}
+
+export interface CancelOrderResult {
+  order: OrderDetail;
+  shopify: ShopifyCancelResult;
+  paymentLink: PaymentLinkCancelResult;
+  alreadyCancelled: boolean;
 }
 
 export interface OrdersListParams {
@@ -212,6 +265,14 @@ export interface OrderDetail {
   shippingAddress: Record<string, string | null> | null;
   shippingPincode: string | null;
   cancelReason: string | null;
+  // Last Shopify-cancellation outcome the backend recorded (null if never cancelled / never attempted).
+  shopifyCancellation: ShopifyCancelResult | null;
+  // Last Cashfree-link cancellation outcome the backend recorded (null if none was attempted).
+  paymentLinkCancellation: PaymentLinkCancelResult | null;
+  // Last Shopify payment-reconciliation outcome (set once a Cashfree payment on this order settles).
+  shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // The last customer WhatsApp notification about this order as remembered by the backend (null = never attempted).
+  whatsappNotification: (OrderNotifyResult & { at: string }) | null;
   createdAt: string;
   placedAt: string | null;
   confirmedAt: string | null;

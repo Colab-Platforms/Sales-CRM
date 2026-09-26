@@ -345,6 +345,7 @@ enum ActivityType {
   WHATSAPP_TEMPLATE_UPDATED
   WHATSAPP_TEMPLATE_STATUS_CHANGED
   WHATSAPP_TEMPLATE_SYNCED
+  WHATSAPP_TEMPLATE_DELETED
 
   // E7.7 Campaign & Bulk Messaging: campaign-level lifecycle events, not tied to any one customer
   // (null leadId, same convention as the WHATSAPP_TEMPLATE_* rows above). A campaign's individual

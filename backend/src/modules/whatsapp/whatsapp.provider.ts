@@ -31,6 +31,9 @@ export interface SendTemplateMessageInput {
    *  field), not as a separate free-standing media message. A provider that doesn't support this
    *  (e.g. Gupshup, not yet wired for it) is free to ignore it. */
   media?: SendTemplateMessageMedia;
+  /** The template's approved language code (e.g. "en_US", "hi"). Meta requires it to match the approved template;
+   *  AiSensy/Gupshup ignore it. */
+  languageCode?: string;
 }
 
 export interface SendTemplateMessageResult {

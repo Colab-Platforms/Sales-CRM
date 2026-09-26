@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
 import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
-import { NO_PAYMENT, type CreateManualOrderInput, type ListOrdersQuery } from "./orders.types.js";
+import { NO_PAYMENT, type CancelOrderInput, type CreateManualOrderInput, type ListOrdersQuery } from "./orders.types.js";
 
 // The frontend omits empty filters, but treat `?status=` as "not set" too.
 const optional = <T extends z.ZodType>(schema: T) =>
@@ -55,14 +55,15 @@ const createManualOrderSchema = z.object({
       line2: optional(z.string().trim().max(255)),
       city: optional(z.string().trim().max(100)),
       state: optional(z.string().trim().max(100)),
-      pincode: optional(z.string().trim().max(12)),
+      pincode: optional(z.string().trim().regex(/^[1-9]\d{5}$/, "Pincode must be a valid 6-digit Indian pincode")),
       phone: optional(z.string().trim().max(20)),
     }),
   ),
-  shippingPincode: optional(z.string().trim().max(12)),
+  shippingPincode: optional(z.string().trim().regex(/^[1-9]\d{5}$/, "Pincode must be a valid 6-digit Indian pincode")),
   shippingAmount: optional(money("shippingAmount")),
   discountAmount: optional(money("discountAmount")),
   discountReason: optional(z.string().trim().max(255)),
+  idempotencyKey: optional(z.string().trim().min(8).max(100)),
 });
 
 export const validateCreateManualOrder = (body: unknown) => validateSchema<CreateManualOrderInput>(createManualOrderSchema, body);
@@ -72,3 +73,9 @@ export const validateListOrdersQuery = (query: unknown) =>
 
 export const validateOrderIdParams = (params: unknown) =>
   validateSchema<{ id: string }>(orderIdParamsSchema, params);
+
+const cancelOrderSchema = z.object({
+  reason: optional(z.string().trim().max(500, "reason must be 500 characters or fewer")),
+});
+
+export const validateCancelOrder = (body: unknown) => validateSchema<CancelOrderInput>(cancelOrderSchema, body);

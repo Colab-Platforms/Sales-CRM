@@ -20,6 +20,8 @@ import AuditService from "../audit/audit.service.js";
 import CustomersService from "../customers/customers.service.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
 import WhatsAppService from "./whatsapp.service.js";
+import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
+import { MetaCloudApiProvider } from "./whatsapp.meta.provider.js";
 
 class Rollback extends Error {}
 
@@ -346,6 +348,63 @@ describe("WhatsApp events reach Customer 360 and the Audit Trail without duplica
       const auditResult = await audit.getCustomerAudit(as(admin, Role.ADMIN), lead.id, { page: 1, pageSize: 50 });
       assert.equal(auditResult.items.filter((a) => a.type === "WHATSAPP_MESSAGE_SENT").length, 1);
       assert.equal(auditResult.items.filter((a) => a.type === "WHATSAPP_DELIVERED").length, 1);
+    });
+  });
+});
+
+// Regression (reported for a real customer, +91 93216 14025): a customer who already has an AISENSY conversation and AiSensy history messages the Meta-connected
+// number. The Meta webhook (wa_id has no "+", the CRM stores "+91 93216 14025") must resolve to the SAME lead, be saved
+// as provider META, flip the (single) conversation to META, and open the Meta service window - without touching the
+// AiSensy history, and without any manual provider change.
+describe("Meta inbound for a customer who already has an AiSensy conversation", () => {
+  const META_CREDS = { phoneNumberId: "pn-1", businessAccountId: "waba-1", accessToken: "unused", appSecret: "unused", verifyToken: "unused", graphApiVersion: "v21.0" };
+  const metaWebhook = (waId: string, wamid: string, ts: Date) => ({
+    object: "whatsapp_business_account",
+    entry: [{ id: "waba-1", changes: [{ field: "messages", value: {
+      messaging_product: "whatsapp",
+      metadata: { display_phone_number: "15551822677", phone_number_id: "pn-1" },
+      contacts: [{ profile: { name: "Customer" }, wa_id: waId }],
+      messages: [{ from: waId, id: wamid, timestamp: String(Math.floor(ts.getTime() / 1000)), type: "text", text: { body: "Hello on the Meta number" } }],
+    } }] }],
+  });
+
+  it("saves the message as META on the same lead, flips the conversation to META, and allows free text inside the window", async () => {
+    await inRollback(async (tx) => {
+      // A unique number per run (the shared dev DB holds real leads - the matcher correctly prefers the oldest lead for a real number).
+      const ten = "9" + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
+      const waId = "91" + ten;
+      const lead = await makeLead(tx, { mobile: "+91 " + ten.slice(0, 5) + " " + ten.slice(5), normalizedMobile: "+" + waId });
+      await tx.whatsAppMessage.create({ data: { provider: "AISENSY", providerMessageId: `ais-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId: lead.id, fromNumber: waId, normalizedContact: "+" + waId, body: "earlier AiSensy message", receivedAt: new Date(Date.now() - 3600_000) } });
+      await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: "AISENSY" } });
+
+      const meta = new MetaCloudApiProvider(META_CREDS);
+      const wamid = `wamid.${uid()}`;
+      const parsed = meta.parseIncomingWebhook(metaWebhook(waId, wamid, new Date()));
+      assert.equal(parsed.length, 1);
+
+      const svc = new WhatsAppService(tx, () => fakeProvider());
+      await svc.recordInboundMessage("META", parsed[0]!);
+
+      const saved = await tx.whatsAppMessage.findUniqueOrThrow({ where: { provider_providerMessageId: { provider: "META", providerMessageId: wamid } }, select: { provider: true, leadId: true, direction: true } });
+      assert.equal(saved.provider, "META");
+      assert.equal(saved.leadId, lead.id, "resolved to the existing lead, not a new one");
+      assert.equal(await tx.lead.count({ where: { normalizedMobile: "+" + waId } }), 1);
+
+      const conversations = await tx.whatsAppConversation.findMany({ where: { leadId: lead.id }, select: { provider: true } });
+      assert.deepEqual(conversations, [{ provider: "META" }], "one conversation, now on META");
+
+      // The earlier AiSensy history is untouched.
+      assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id, provider: "AISENSY" } }), 1);
+
+      // A repeat delivery of the same Meta message changes nothing.
+      await svc.recordInboundMessage("META", parsed[0]!);
+      assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id, provider: "META" } }), 1);
+
+      const freeText = new WhatsAppFreeTextService(tx, async () => meta);
+      const { capability } = await freeText.getCapability(lead.id);
+      assert.equal(capability.activeProvider, "META");
+      assert.equal(capability.serviceWindow.open, true);
+      assert.equal(capability.freeText.allowed, true);
     });
   });
 });

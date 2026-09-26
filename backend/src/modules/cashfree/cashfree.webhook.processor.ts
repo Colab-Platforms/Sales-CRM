@@ -1,10 +1,12 @@
-import { ActivitySource } from "../../../generated/prisma/enums.js";
+import { ActivitySource, PaymentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { logger } from "@/utils/logger.js";
 import { UUID_PATTERN, safeMessage, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { applyPaymentUpdate, linkToUpdate, type PaymentUpdate } from "./cashfree.apply.js";
 import { parseEvent, type CashfreeEvent } from "./cashfree.events.js";
+import { sendPaymentSuccessNotification, syncShopifyPayment } from "./cashfree.payment-success.js";
+import type { ShopifyClient } from "../shopify/shopify.client.js";
 
 // Turns a stored Cashfree delivery into an update of the CRM payment it belongs to. It only ever updates a payment the
 // CRM itself created (externalSource CASHFREE); a delivery that matches none is ignored, never turned into a new payment.
@@ -15,6 +17,8 @@ export interface CashfreeProcessorDeps {
   store: WebhookStore;
   runner: TxRunner;
   now?: () => Date;
+  /** Injectable so tests never construct a real Shopify client - same pattern as OrdersService's getShopifyClient. */
+  getShopifyClient?: () => ShopifyClient;
 }
 
 /** What a delivery means for the payment, or null when it changes nothing (a failed attempt on a link that is still payable, a dropped checkout). */
@@ -86,6 +90,23 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }
+
+    // Best-effort follow-ups to a newly-SUCCESSFUL payment (Shopify reconciliation + "payment received" WhatsApp
+    // notice). Neither can undo the payment above regardless of outcome - each runs in its own transaction, and a
+    // failure here is only logged, never turned into a webhook retry (the payment itself was already applied).
+    if (applied.outcome === "updated" && applied.to === PaymentStatus.SUCCESS) {
+      try {
+        await deps.runner.$transaction((tx) => syncShopifyPayment(tx, applied.orderId, { source: ActivitySource.CASHFREE_WEBHOOK, now: now(), getShopifyClient: deps.getShopifyClient }));
+      } catch (error) {
+        logger.warn(`Shopify payment sync errored for order ${applied.orderId}: ${safeMessage(error instanceof Error ? error.message : String(error))}`);
+      }
+      try {
+        await deps.runner.$transaction((tx) => sendPaymentSuccessNotification(tx, applied.orderId, now()));
+      } catch (error) {
+        logger.warn(`Payment-success WhatsApp notification errored for order ${applied.orderId}: ${safeMessage(error instanceof Error ? error.message : String(error))}`);
+      }
+    }
+
     await deps.store.complete(eventId, "PROCESSED", now());
     return "processed";
   } catch (error) {

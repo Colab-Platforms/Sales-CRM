@@ -14,6 +14,7 @@ import shipmentsRoutes from "@modules/shiprocket/shiprocket.routes.js";
 import integrationsRoutes from "@modules/integrations/integrations.routes.js";
 import callingRoutes from "@modules/calling/calling.routes.js";
 import tasksRoutes from "@modules/tasks/tasks.routes.js";
+import deliveryRoutes from "@modules/delivery/delivery.routes.js";
 
 const router = Router();
 
@@ -36,5 +37,6 @@ router.use("/integrations", integrationsRoutes);
 router.use("/lead", leadRoutes);                         
 router.use("/calling", callingRoutes);
 router.use("/tasks", tasksRoutes);
+router.use("/delivery", deliveryRoutes);
 
 export default router;

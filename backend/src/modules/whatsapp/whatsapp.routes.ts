@@ -12,6 +12,7 @@ import {
 import { previewTemplateMessage, sendOrderConfirmationTest, sendTemplateMessage as sendTemplateMessageV2 } from "./whatsapp.messaging.controller.js";
 import {
   createTemplate,
+  deleteTemplate,
   getTemplate,
   listTemplates,
   syncTemplates,
@@ -35,6 +36,7 @@ import {
   updateCampaign,
 } from "./whatsapp.campaign.controller.js";
 import {
+  archiveConversation,
   assignConversation,
   confirmOrderDraft,
   getConversationDetail,
@@ -43,6 +45,8 @@ import {
   markConversationRead,
   returnConversationToAi,
   sendConversationText,
+  getMessagingCapability,
+  unarchiveConversation,
 } from "./whatsapp.conversation.controller.js";
 import { searchCatalog } from "./whatsapp.catalog.controller.js";
 
@@ -61,6 +65,7 @@ router.post("/templates/sync", requireAuth, requireRole(Role.ADMIN), syncTemplat
 router.post("/templates", requireAuth, requireRole(Role.ADMIN), createTemplate);
 router.get("/templates/:id", requireAuth, getTemplate);
 router.patch("/templates/:id", requireAuth, requireRole(Role.ADMIN), updateTemplate);
+router.delete("/templates/:id", requireAuth, requireRole(Role.ADMIN), deleteTemplate);
 
 // E7.3 Template-Based Messaging. Same RBAC as "/send" above (lead scope decides who can message
 // which customer, not a role gate) - an ADMIN/MANAGER/SALESPERSON can all send, scoped to the
@@ -96,6 +101,11 @@ router.post("/conversations/:leadId/read", requireAuth, markConversationRead);
 router.post("/conversations/:leadId/assign", requireAuth, assignConversation);
 router.post("/conversations/:leadId/handoff", requireAuth, handoffConversation);
 router.post("/conversations/:leadId/ai-mode", requireAuth, returnConversationToAi);
+// Delete/archive - reachable from both the inbox list and the open conversation. Same RBAC as every
+// other conversation action (assertAccess inside the service): lead-scope or the conversation's own assignee.
+router.post("/conversations/:leadId/archive", requireAuth, archiveConversation);
+router.post("/conversations/:leadId/unarchive", requireAuth, unarchiveConversation);
+router.get("/conversations/:leadId/capability", requireAuth, getMessagingCapability);
 router.post("/conversations/:leadId/messages", requireAuth, sendConversationText);
 
 // Thin wrapper over the existing product catalog (products.service.ts) - see whatsapp.catalog.controller.ts.

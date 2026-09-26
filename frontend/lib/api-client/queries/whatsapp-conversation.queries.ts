@@ -4,6 +4,7 @@ import { whatsappConversationApi } from "../endpoints/whatsapp-conversation.api"
 export const whatsappConversationKeys = {
   all: ["whatsapp-conversation"] as const,
   detail: (leadId: string) => [...whatsappConversationKeys.all, "detail", leadId] as const,
+  capability: (leadId: string) => [...whatsappConversationKeys.all, "capability", leadId] as const,
   draft: (leadId: string) => [...whatsappConversationKeys.all, "draft", leadId] as const,
 };
 
@@ -21,6 +22,15 @@ export function orderDraftQueryOptions(leadId: string) {
   return queryOptions({
     queryKey: whatsappConversationKeys.draft(leadId),
     queryFn: () => whatsappConversationApi.getOrderDraft(leadId),
+    refetchInterval: 15_000,
+  });
+}
+
+export function messagingCapabilityQueryOptions(leadId: string) {
+  return queryOptions({
+    queryKey: whatsappConversationKeys.capability(leadId),
+    queryFn: () => whatsappConversationApi.getCapability(leadId),
+    // A new Meta inbound flips the provider / reopens the 24-hour window while the pane is open; same cadence as the detail query.
     refetchInterval: 15_000,
   });
 }

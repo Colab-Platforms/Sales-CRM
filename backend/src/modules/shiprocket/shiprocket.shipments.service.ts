@@ -4,9 +4,9 @@ import { getLeadScope } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { ActivitySource, ActivityType, OrderStatus, ShipmentStatus, type PaymentStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, OrderStatus, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { computePaymentBreakdown, fullName, scopedOrderWhere } from "../orders/orders.filters.js";
+import { computePaymentBreakdown, derivePaymentMode, fullName, scopedOrderWhere } from "../orders/orders.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { applyShipmentUpdate, shipmentOrderLockKey, SHIPMENT_REFERENCE_TYPE } from "./shiprocket.apply.js";
@@ -354,12 +354,19 @@ class ShiprocketShipmentsService {
         shippingAddress: true,
         lead: { select: { id: true, firstName: true, lastName: true, mobile: true, normalizedMobile: true, email: true } },
         items: { select: { productNameSnapshot: true, variantNameSnapshot: true, skuSnapshot: true, quantity: true, unitPrice: true, discountAmount: true, taxAmount: true } },
-        payments: { select: { status: true, amount: true, refundedAmount: true } },
+        payments: { select: { status: true, method: true, amount: true, refundedAmount: true } },
         shipments: { where: { externalSource: "SHIPROCKET" }, orderBy: { createdAt: "desc" }, select: { id: true, status: true, metadata: true, externalId: true, createdAt: true } },
       },
     });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     if (BLOCKED_ORDER_STATUSES.has(order.status)) throw new ApiError(`A shipment can not be created for a ${order.status.toLowerCase()} order`, STATUS_CODES.BAD_REQUEST);
+
+    // A prepaid order (any PAYMENT_LINK payment) is not ready for fulfilment until Cashfree actually confirms one of
+    // them SUCCESS - enforced here, not just left to the UI, so this can never be bypassed by calling the API directly.
+    // A COD order has no such gate: COD money is collected on delivery by design.
+    if (derivePaymentMode(order.payments) === "PREPAID" && !order.payments.some((p) => p.status === PaymentStatus.SUCCESS)) {
+      throw new ApiError("This order is prepaid and payment has not been confirmed yet - a shipment can only be created once payment succeeds.", STATUS_CODES.BAD_REQUEST);
+    }
 
     // A reserved row that never got a Shiprocket id is a creation that died half-way (a crash between reserving the row
     // and hearing back). Nobody can act on it, so after a grace period it is closed as "outcome unknown" instead of

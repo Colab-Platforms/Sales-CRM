@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { whatsappTemplatesApi } from "../endpoints/whatsapp-templates.api";
 import { whatsappTemplateKeys } from "../queries/whatsapp-templates.queries";
-import type { CreateTemplateInput, TemplateSyncSummary, UpdateTemplateInput, WhatsAppTemplate } from "../types/whatsapp-templates.types";
+import type { CreateTemplateInput, DeleteTemplateResult, TemplateSyncSummary, UpdateTemplateInput, WhatsAppTemplate } from "../types/whatsapp-templates.types";
 
 export function useCreateTemplateMutation() {
   const queryClient = useQueryClient();
@@ -23,10 +23,20 @@ export function useUpdateTemplateMutation() {
   });
 }
 
+export function useDeleteTemplateMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<DeleteTemplateResult, unknown, string>({
+    mutationFn: (id) => whatsappTemplatesApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: whatsappTemplateKeys.all });
+    },
+  });
+}
+
 export function useSyncTemplatesMutation() {
   const queryClient = useQueryClient();
-  return useMutation<TemplateSyncSummary, unknown, void>({
-    mutationFn: () => whatsappTemplatesApi.sync(),
+  return useMutation<TemplateSyncSummary, unknown, "META" | undefined>({
+    mutationFn: (provider) => whatsappTemplatesApi.sync(provider),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: whatsappTemplateKeys.all });
     },

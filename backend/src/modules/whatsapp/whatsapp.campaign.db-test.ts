@@ -161,11 +161,15 @@ describe("audience filtering and preview", () => {
     await inRollback(async (tx) => {
       const a = await admin(tx);
       const { campaign } = services(tx);
-      for (let i = 0; i < 8; i++) await makeLead(tx);
+      // Scoped to this test's own leads via `search` - an unfiltered {} preview would also match every real lead
+      // already in the (shared) database, which is not this test's concern and not stable to assert an exact count on.
+      const tag = `Audience${uid().slice(0, 8)}`;
+      for (let i = 0; i < 8; i++) await makeLead(tx, { firstName: tag });
 
-      const preview = await campaign.previewAudience(as(a, Role.ADMIN), {});
-      assert.ok(preview.count >= 8);
+      const preview = await campaign.previewAudience(as(a, Role.ADMIN), { search: tag });
+      assert.equal(preview.count, 8);
       assert.ok(preview.sample.length <= 5, "never returns more than the small sample size");
+      assert.ok(preview.sample.every((s) => s.leadId));
     });
   });
 

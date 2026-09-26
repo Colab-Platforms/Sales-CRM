@@ -8,6 +8,7 @@ import { PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated
 import { computePaymentBreakdown, fullName } from "../orders/orders.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
+import { formatMoneyForMessage, summarizeItems } from "./whatsapp.order-message.js";
 
 export interface ResolverLeadContext {
   firstName: string;
@@ -45,6 +46,8 @@ export interface ResolverOrderContext {
   totalAmount: string;
   payments: ResolverPaymentContext[];
   latestShipment: ResolverShipmentContext | null;
+  /** Product lines as the customer knows them (name, variant, quantity) - for {{product_summary}}. */
+  items?: { productName: string; variantName: string | null; quantity: number }[];
 }
 
 export interface VariableResolutionContext {
@@ -104,6 +107,14 @@ const REGISTRY: Record<string, Resolver> = {
   // A resolved value is only ever the real link of a real, still-open payment - never a guess - so a template using
   // these fails validation (rather than sending a dead link) when the order has no open link.
   payment_link: (ctx) => openPaymentLink(ctx)?.paymentUrl ?? null,
+  // "Skin, Hair & Nail Gummies (1 Jar) × 1, Brain Fuel Capsules × 2" - real product names and quantities, never ids.
+  product_summary: (ctx) => (ctx.order?.items?.length ? summarizeItems(ctx.order.items.map((i) => ({ name: i.productName, variant: i.variantName, quantity: i.quantity }))) : null),
+  // What the customer is asked to pay: the open payment link's amount when there is one, else the order total.
+  amount: (ctx) => {
+    if (!ctx.order) return null;
+    const link = openPaymentLink(ctx);
+    return formatMoneyForMessage(link ? fromCents(toCents(link.amount)) : ctx.order.totalAmount, ctx.order.currency);
+  },
   payment_amount: (ctx) => {
     const link = openPaymentLink(ctx);
     return link && ctx.order ? formatCurrency(fromCents(toCents(link.amount)), ctx.order.currency) : null; // two decimals, exactly what the customer will be asked to pay
@@ -121,7 +132,7 @@ const REGISTRY: Record<string, Resolver> = {
 /** The variable names this CRM can currently resolve, for the frontend to explain what a template needs. */
 export const RESOLVABLE_VARIABLES = Object.keys(REGISTRY);
 /** Variables that only ever resolve from order data - used to decide whether order selection is required. */
-export const ORDER_ONLY_VARIABLES = new Set(["order_number", "order_status", "order_amount", "outstanding_amount", "payment_status", "payment_link", "payment_amount", "tracking_number", "tracking_url", "courier", "shipment_status", "shipped_date", "delivery_date", "expected_delivery_date"]);
+export const ORDER_ONLY_VARIABLES = new Set(["order_number", "order_status", "order_amount", "product_summary", "amount", "outstanding_amount", "payment_status", "payment_link", "payment_amount", "tracking_number", "tracking_url", "courier", "shipment_status", "shipped_date", "delivery_date", "expected_delivery_date"]);
 
 export interface VariableResolutionResult {
   values: Record<string, string>;
