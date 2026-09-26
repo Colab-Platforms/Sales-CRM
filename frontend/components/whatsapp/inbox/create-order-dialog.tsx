@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { formatMoney } from "@/lib/order-status";
 import { CreateShipmentDialog } from "@/components/orders/create-shipment-dialog";
 import type { CreateManualOrderItemInput, CreateManualOrderResult } from "@/lib/api-client/types/orders.types";
 import {
+  CreateOrderProgress,
   CustomerBar,
   ItemCard,
   ItemsSection,
@@ -30,6 +31,7 @@ import {
   ORDER_TYPES,
   pincodeUiState,
   placeMatches,
+  submitSteps,
   type AddressDraft,
   type DraftItem,
   type OrderType,
@@ -70,6 +72,16 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
   const createOrder = useCreateOrderMutation();
   const pushToShopify = usePushOrderToShopifyMutation();
+
+  // A visual read of typical submit progress while the single create-order request is in flight (the backend answers
+  // in one round trip, not a stream) - advances on a timer and holds at the last step until the real response lands.
+  const steps = useMemo(() => submitSteps(orderType), [orderType]);
+  const [stepIndex, setStepIndex] = useState(0);
+  useEffect(() => {
+    if (!createOrder.isPending) return;
+    const timer = setInterval(() => setStepIndex((i) => Math.min(i + 1, steps.length - 1)), 900);
+    return () => clearInterval(timer);
+  }, [createOrder.isPending, steps.length]);
 
   // ---- address: what the salesperson typed wins; otherwise the last order's address; otherwise the pincode's own place.
   const pincode = edits.pincode ?? last?.pincode ?? "";
@@ -115,6 +127,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
       setShippingAmount("");
       setResult(null);
       setShipmentOpen(false);
+      setStepIndex(0);
       createOrder.reset();
       idempotencyKey.current = crypto.randomUUID();
     }
@@ -199,6 +212,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     // Synchronous guard: two rapid clicks/Enters can both run before `isPending` re-renders.
     if (submittingRef.current || createOrder.isPending) return;
     submittingRef.current = true;
+    setStepIndex(0);
     createOrder.mutate(
       {
         leadId,
@@ -298,6 +312,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                   {getErrorMessage(createOrder.error, "Could not create the order.")}
                 </p>
               ) : null}
+              {createOrder.isPending ? <CreateOrderProgress steps={steps} activeIndex={stepIndex} /> : null}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button type="button" variant="outline" onClick={() => setStep("form")} disabled={createOrder.isPending}>
                   Back

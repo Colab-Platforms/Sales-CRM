@@ -191,6 +191,8 @@ export interface OrderDetail {
   shopifyCancellation: ShopifyCancelResult | null;
   // Last Cashfree-link cancellation outcome (Order.metadata); the live state is derivable from `payments`.
   paymentLinkCancellation: PaymentLinkCancelResult | null;
+  // Last Shopify payment-reconciliation outcome (Order.metadata) - set once a Cashfree payment on this order settles.
+  shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // Null when nothing was ever sent/attempted. Only a safe reason is stored (never a URL or credential).
   whatsappNotification: OrderWhatsAppNotification | null;
   createdAt: Date;

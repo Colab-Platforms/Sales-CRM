@@ -16,8 +16,9 @@ describe("payment-link WhatsApp message", () => {
   });
 
   it("is the professional Ayush Wellness structure, not the raw one-liner", () => {
-    assert.ok(message.startsWith("Hi Vishwaa 👋"), "greets by first name");
-    for (const part of ["Your order has been created successfully.", "Order: CRM-MUGTXF0Y-3GIP", "Items:", "Payment: Pending", "Please complete your payment securely using the link below:", "Once payment is completed, we'll proceed with your order.", "Thank you for choosing Ayush Wellness ❤️"]) {
+    assert.ok(message.startsWith("Payment Link for Your Order 💳"), "has the friendly header");
+    assert.ok(message.includes("Hi Vishwaa,"), "greets by first name");
+    for (const part of ["Your order CRM-MUGTXF0Y-3GIP has been created successfully.", "Items:", "Payment: Pending", "Please complete your payment using the secure link below:", "Once payment is completed, we'll process your order.", "Thank you for choosing Ayush Wellness."]) {
       assert.ok(message.includes(part), part);
     }
     assert.equal(message.includes("Please complete your payment of"), false);
@@ -41,7 +42,7 @@ describe("payment-link WhatsApp message", () => {
 
   it("falls back gracefully without a name or items", () => {
     const m = buildPaymentLinkMessage({ orderNumber: "CRM-1", amount: "1199.00", currency: "INR", paymentUrl: URL });
-    assert.ok(m.startsWith("Hi there 👋"));
+    assert.ok(m.includes("Hi there,"));
     assert.equal(m.includes("Items:"), false);
     assert.ok(m.includes("₹1,199"));
   });
@@ -50,7 +51,8 @@ describe("payment-link WhatsApp message", () => {
 describe("COD confirmation message", () => {
   it("has the same voice, the items, the total and how the customer pays", () => {
     const m = buildOrderConfirmationMessage({ customerName: "Priya Shah", orderNumber: "CRM-9", items: [{ name: "Herbal Tea", quantity: 3 }], amount: "1047.00", currency: "INR" });
-    assert.ok(m.includes("Hi Priya 👋") && m.includes("• Herbal Tea × 3") && m.includes("Cash on Delivery") && m.includes("₹1,047") && m.includes("Ayush Wellness"));
+    assert.ok(m.startsWith("Order Confirmed 🎉"));
+    assert.ok(m.includes("Hi Priya,") && m.includes("• Herbal Tea × 3") && m.includes("Cash on Delivery") && m.includes("₹1,047") && m.includes("Ayush Wellness"));
   });
 });
 

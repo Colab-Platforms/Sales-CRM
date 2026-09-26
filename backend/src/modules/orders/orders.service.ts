@@ -13,6 +13,7 @@ import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
+import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 import {
   buildOrderWhere,
@@ -263,6 +264,7 @@ class OrdersService {
       // Last Shopify-cancellation outcome recorded by cancelOrder (Order.metadata) - lets the UI offer a retry after a reload.
       shopifyCancellation: ((order.metadata as Record<string, unknown> | null)?.shopifyCancellation as ShopifyCancelResult | undefined) ?? null,
       paymentLinkCancellation: ((order.metadata as Record<string, unknown> | null)?.paymentLinkCancellation as PaymentLinkCancelResult | undefined) ?? null,
+      shopifyPaymentSync: ((order.metadata as Record<string, unknown> | null)?.shopifyPaymentSync as OrderDetail["shopifyPaymentSync"] | undefined) ?? null,
       whatsappNotification: ((order.metadata as Record<string, unknown> | null)?.whatsappNotification as OrderWhatsAppNotification | undefined) ?? null,
       createdAt: order.createdAt,
       placedAt: order.placedAt,
@@ -626,6 +628,18 @@ class OrdersService {
       if (error instanceof ShopifyOrderCreateError) return { status: "failed", reason: error.message };
       throw error;
     }
+  }
+
+  // Manual "Retry Shopify payment sync" action for the order page - the same idempotent reconciliation the Cashfree
+  // webhook already triggers automatically on a successful payment, callable again if that first attempt failed
+  // (Shopify was briefly down, the order was not yet linked, etc). Same lead-scope RBAC as every other single-order
+  // action here; syncShopifyPayment itself is the single choke point, so this can never diverge from what the
+  // webhook does or double-sync.
+  async retryShopifyPaymentSync(user: AuthUser, orderId: string): Promise<ShopifyPaymentSyncResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    return syncShopifyPayment(this.db, orderId, { source: ActivitySource.USER, actor: { id: user.id, role: user.role } });
   }
 
   // Cancel/Revert (accidental order protection). Never deletes the order, its items, payments, or

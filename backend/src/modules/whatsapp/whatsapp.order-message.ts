@@ -29,7 +29,13 @@ export function summarizeItems(items: MessageItem[]): string {
 const firstName = (name: string | undefined) => (name ?? "").trim().split(/\s+/)[0] || "there";
 
 export function buildPaymentLinkMessage(input: { customerName?: string; orderNumber: string; items?: MessageItem[]; amount: string; currency: string; paymentUrl: string }): string {
-  const lines = [`Hi ${firstName(input.customerName)} 👋`, "", "Your order has been created successfully.", "", `Order: ${input.orderNumber}`];
+  const lines = [
+    "Payment Link for Your Order 💳",
+    "",
+    `Hi ${firstName(input.customerName)},`,
+    "",
+    `Your order ${input.orderNumber} has been created successfully.`,
+  ];
   if (input.items?.length) lines.push("", "Items:", ...input.items.map((i) => `• ${itemLabel(i)}`));
   lines.push(
     "",
@@ -37,19 +43,36 @@ export function buildPaymentLinkMessage(input: { customerName?: string; orderNum
     "",
     "Payment: Pending",
     "",
-    "Please complete your payment securely using the link below:",
+    "Please complete your payment using the secure link below:",
     input.paymentUrl,
     "",
-    "Once payment is completed, we'll proceed with your order.",
+    "Once payment is completed, we'll process your order.",
     "",
-    `Thank you for choosing ${BRAND} ❤️`,
+    `Thank you for choosing ${BRAND}.`,
   );
   return lines.join("\n");
 }
 
 export function buildOrderConfirmationMessage(input: { customerName?: string; orderNumber: string; items?: MessageItem[]; amount: string; currency: string }): string {
-  const lines = [`Hi ${firstName(input.customerName)} 👋`, "", "Your order has been confirmed.", "", `Order: ${input.orderNumber}`];
+  const lines = [
+    "Order Confirmed 🎉",
+    "",
+    `Hi ${firstName(input.customerName)},`,
+    "",
+    "Your order has been successfully placed.",
+    "",
+    `Order: ${input.orderNumber}`,
+  ];
   if (input.items?.length) lines.push("", "Items:", ...input.items.map((i) => `• ${itemLabel(i)}`));
-  lines.push("", `Total: ${formatMoneyForMessage(input.amount, input.currency)}`, "", "Payment: Cash on Delivery - pay when your order arrives.", "", `Thank you for choosing ${BRAND} ❤️`);
+  lines.push(
+    "",
+    `Total: ${formatMoneyForMessage(input.amount, input.currency)}`,
+    "",
+    "Payment: Cash on Delivery",
+    "",
+    "We'll keep you updated on your order status.",
+    "",
+    `Thank you for choosing ${BRAND}.`,
+  );
   return lines.join("\n");
 }

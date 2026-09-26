@@ -153,6 +153,22 @@ describe("creating a shipment", () => {
     });
   });
 
+  it("blocks shipment creation for a prepaid order until Cashfree actually confirms payment", async () => {
+    await inRollback(async (tx, runner) => {
+      const { manager, lead } = await managerWithLead(tx);
+      const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.SALESPERSON, status: OrderStatus.PENDING_PAYMENT, totalAmount: "649.00", shippingAddress: ADDRESS, shippingPincode: "411001" }, select: { id: true } });
+      await tx.orderItem.create({ data: { orderId: order.id, productNameSnapshot: "Herbal Tea", skuSnapshot: "HT-250", quantity: 2, unitPrice: "300.00", totalPrice: "600.00" } });
+      await tx.payment.create({ data: { orderId: order.id, amount: "649.00", status: PaymentStatus.PENDING, method: PaymentMethod.PAYMENT_LINK } });
+      const fake = fakeApi();
+      await assert.rejects(service(runner, fake.api).createShipment(as(manager, Role.MANAGER), order.id, DIMS), (e: { statusCode: number; message: string }) => e.statusCode === 400 && /payment has not been confirmed/.test(e.message));
+      assert.equal(fake.calls.create.length, 0);
+
+      await tx.payment.updateMany({ where: { orderId: order.id }, data: { status: PaymentStatus.SUCCESS } });
+      const result = await service(runner, fake.api).createShipment(as(manager, Role.MANAGER), order.id, DIMS);
+      assert.equal(result.paymentMethod, "Prepaid");
+    });
+  });
+
   it("says exactly what is missing before anything reaches Shiprocket", async () => {
     await inRollback(async (tx, runner) => {
       const { manager, lead } = await managerWithLead(tx);

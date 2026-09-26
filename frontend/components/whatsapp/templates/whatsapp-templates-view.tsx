@@ -11,6 +11,7 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { useSyncTemplatesMutation } from "@/lib/api-client/mutations/whatsapp-templates.mutations";
 import { useAuthStore } from "@/stores/auth-store";
 import type { WhatsAppTemplate } from "@/lib/api-client/types/whatsapp-templates.types";
+import { DeleteTemplateDialog } from "./delete-template-dialog";
 import { TemplateDetailDialog } from "./template-detail-dialog";
 import { TemplateFormDialog } from "./template-form-dialog";
 import { TemplatesFiltersBar, type TemplateFilters } from "./templates-filters";
@@ -30,6 +31,7 @@ export function WhatsAppTemplatesView() {
   const [selected, setSelected] = useState<WhatsAppTemplate | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<WhatsAppTemplate | undefined>(undefined);
+  const [deleting, setDeleting] = useState<WhatsAppTemplate | null>(null);
 
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimer.current), []);
@@ -71,7 +73,8 @@ export function WhatsAppTemplatesView() {
         if (!result.supported) {
           toast.info(result.reason ?? `${result.provider} does not support template sync.`);
         } else {
-          toast.success(`Synced: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged.`);
+          const disabledNote = result.disabledMissing > 0 ? `, ${result.disabledMissing} disabled (no longer at the provider)` : "";
+          toast.success(`Synced: ${result.created} created, ${result.updated} updated, ${result.unchanged} unchanged${disabledNote}.`);
         }
       },
       onError: (err) => toast.error(getErrorMessage(err, "Sync failed.")),
@@ -133,7 +136,17 @@ export function WhatsAppTemplatesView() {
             </p>
           ) : (
             <>
-              <TemplatesTable items={data?.items ?? []} isFetching={isFetching} onSelect={setSelected} />
+              <TemplatesTable
+                items={data?.items ?? []}
+                isFetching={isFetching}
+                canManage={canManage}
+                onSelect={setSelected}
+                onEdit={(t) => {
+                  setEditing(t);
+                  setFormOpen(true);
+                }}
+                onDelete={setDeleting}
+              />
               {data ? <OrdersPagination pagination={data.pagination} onPageChange={setPage} disabled={isFetching} /> : null}
             </>
           )}
@@ -149,9 +162,15 @@ export function WhatsAppTemplatesView() {
           setEditing(t);
           setFormOpen(true);
         }}
+        onDelete={(t) => {
+          setSelected(null);
+          setDeleting(t);
+        }}
       />
 
       {canManage ? <TemplateFormDialog open={formOpen} onOpenChange={setFormOpen} template={editing} /> : null}
+
+      <DeleteTemplateDialog template={deleting} onOpenChange={(open) => !open && setDeleting(null)} />
     </div>
   );
 }

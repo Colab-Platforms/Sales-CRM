@@ -190,3 +190,69 @@ export async function cancelShopifyOrder(client: ShopifyClient, shopifyOrderId: 
 
   return { shopifyOrderId, cancelledAt: data.orderCancel.job?.done ? new Date().toISOString() : null };
 }
+
+// --- Payment reconciliation --------------------------------------------------------------------------------------
+// Marks an EXISTING Shopify order's outstanding balance as paid, once the CRM's own Cashfree payment has settled.
+// Never creates a second Shopify order (it takes the already-linked Order.externalId), never chooses an amount
+// (orderMarkAsPaid just clears the order's own outstanding balance - the CRM never tells Shopify what was paid,
+// so a partial/mismatched amount can never be forced through this call), and never issues a refund. Uses the same
+// `write_orders` scope already confirmed granted for orderCreate/orderCancel above - no new scope needed.
+export class ShopifyOrderMarkAsPaidError extends Error {
+  constructor(
+    message: string,
+    readonly raw?: unknown,
+  ) {
+    super(message);
+    this.name = "ShopifyOrderMarkAsPaidError";
+  }
+}
+
+const ORDER_MARK_AS_PAID_MUTATION = `
+  mutation crmOrderMarkAsPaid($input: OrderMarkAsPaidInput!) {
+    orderMarkAsPaid(input: $input) {
+      order { id displayFinancialStatus }
+      userErrors { field message }
+    }
+  }
+`;
+
+interface OrderMarkAsPaidResponse {
+  orderMarkAsPaid: {
+    order: { id: string; displayFinancialStatus: string } | null;
+    userErrors: { field: string[] | null; message: string }[];
+  };
+}
+
+export interface ShopifyOrderMarkAsPaidResult {
+  shopifyOrderId: string;
+  financialStatus: string | null;
+}
+
+/** Order.externalId is a full GID when the CRM itself created the Shopify order (createShopifyOrder returns the GID
+ *  as-is), but a bare numeric id when the order instead came FROM Shopify sync (shopify.money.ts's gidToId strips the
+ *  prefix on the way in). Both are valid here - only something that is neither is refused before Shopify is called. */
+export function toShopifyOrderGid(id: string): string {
+  const value = String(id ?? "").trim();
+  if (/^gid:\/\/shopify\/Order\/\d+$/.test(value)) return value;
+  if (/^\d+$/.test(value)) return `gid://shopify/Order/${value}`;
+  throw new ShopifyOrderMarkAsPaidError(`"${value.slice(0, 60)}" is not a valid Shopify order id (expected a numeric order id or a gid://shopify/Order/<id>).`);
+}
+
+/** Idempotent from Shopify's own side: calling this again on an order already marked paid is a no-op (Shopify
+ *  reports it already paid rather than erroring), so a retried reconciliation can never double-charge or duplicate
+ *  anything. */
+export async function markShopifyOrderPaid(client: ShopifyClient, shopifyOrderId: string): Promise<ShopifyOrderMarkAsPaidResult> {
+  const gid = toShopifyOrderGid(shopifyOrderId);
+  let data: OrderMarkAsPaidResponse;
+  try {
+    data = await client.query<OrderMarkAsPaidResponse>(ORDER_MARK_AS_PAID_MUTATION, { input: { id: gid } });
+  } catch (error) {
+    if (error instanceof ShopifyGraphQLError) throw new ShopifyOrderMarkAsPaidError(error.message, error);
+    throw error;
+  }
+
+  const userErrors = data.orderMarkAsPaid.userErrors;
+  if (userErrors.length > 0) throw new ShopifyOrderMarkAsPaidError(userErrors.map((e) => e.message).join("; "), userErrors);
+
+  return { shopifyOrderId, financialStatus: data.orderMarkAsPaid.order?.displayFinancialStatus ?? null };
+}

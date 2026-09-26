@@ -11,7 +11,9 @@ import { ActivitySource, ActivityType, OrderSource, OrderStatus, PaymentMethod, 
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { ProviderHttpError, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { memoryStore } from "../integrations/integrations.testutil.js";
-import { codOrderNode, money, normalized, orderNode, rawLineItem, rawTransaction } from "../shopify/shopify.fixtures.js";
+import { codOrderNode, ENV as SHOPIFY_ENV, money, normalized, orderNode, rawLineItem, rawTransaction } from "../shopify/shopify.fixtures.js";
+import { ShopifyClient } from "../shopify/shopify.client.js";
+import { loadShopifyConfig } from "../shopify/shopify.config.js";
 import { upsertOrder } from "../shopify/shopify.persist.js";
 import ReconciliationService from "../reconciliation/reconciliation.service.js";
 import WhatsAppMessagingService from "../whatsapp/whatsapp.messaging.service.js";
@@ -20,6 +22,7 @@ import type { CashfreeLink } from "./cashfree.client.js";
 import { loadCashfreeConfig } from "./cashfree.config.js";
 import CashfreePaymentsService, { type CashfreeApi } from "./cashfree.payments.service.js";
 import { processCashfreeEvent } from "./cashfree.webhook.processor.js";
+import { sendPaymentSuccessNotification, syncShopifyPayment } from "./cashfree.payment-success.js";
 
 class Rollback extends Error {}
 
@@ -92,10 +95,10 @@ const cashfreePayments = (tx: Db, orderId: string) => tx.payment.findMany({ wher
 const activityTypes = async (tx: Db, orderId: string) => (await tx.activity.findMany({ where: { orderId }, select: { type: true } })).map((a) => a.type);
 
 /** Delivers one webhook payload through the real store + processor, exactly as the route would. */
-async function deliver(_tx: Db, runner: TxRunner, payload: unknown, deliveryKey = uid()) {
+async function deliver(_tx: Db, runner: TxRunner, payload: unknown, deliveryKey = uid(), getShopifyClient?: () => ShopifyClient) {
   const { store, rows } = memoryStore();
   const { id } = await store.record({ eventType: String((payload as { type?: string }).type), externalEventId: deliveryKey, payload });
-  const outcome = await processCashfreeEvent(id, { store, runner });
+  const outcome = await processCashfreeEvent(id, { store, runner, getShopifyClient });
   return { outcome, row: rows[0] };
 }
 
@@ -556,6 +559,114 @@ describe("sending the payment link through WhatsApp", () => {
       await deliver(tx, runner, linkPaid(link.linkId));
       await assert.rejects(svc.sendPaymentLinkWhatsApp(user, link.paymentId, good.id), /no open payment link/);
       assert.equal(sent.length, 0);
+    });
+  });
+});
+
+describe("payment-success follow-ups (Shopify reconciliation + 'payment received' WhatsApp)", () => {
+  const SHOPIFY_CONFIG = loadShopifyConfig(SHOPIFY_ENV);
+  const shopifyFetch =
+    (impl: (body: { query: string; variables: Record<string, unknown> }) => unknown) =>
+    (async (_url: unknown, init: { body: string }) => new Response(JSON.stringify({ data: impl(JSON.parse(init.body)) }), { status: 200, headers: { "content-type": "application/json" } })) as unknown as typeof fetch;
+  const shopifyClient = (impl: Parameters<typeof shopifyFetch>[0]) => () => new ShopifyClient(SHOPIFY_CONFIG, { fetchImpl: shopifyFetch(impl) });
+
+  const provider = (sent: { params: string[]; to: string }[]): WhatsAppProvider => ({
+    id: "AISENSY",
+    sendTemplateMessage: async (input) => {
+      sent.push({ params: input.params, to: input.to });
+      return { providerMessageId: `wamid-${uid()}`, raw: {} };
+    },
+    verifyWebhook: () => true,
+    parseIncomingWebhook: () => [],
+    parseDeliveryStatusWebhook: () => [],
+    listTemplates: async () => ({ supported: false, reason: "n/a" }),
+  });
+
+  async function markedAsSuccess(tx: Db, runner: TxRunner, orderOverrides: Partial<Prisma.OrderUncheckedCreateInput> = {}, getShopifyClient?: () => ShopifyClient) {
+    const rep = await makeRep(tx);
+    const lead = await makeLead(tx, rep.id, { normalizedMobile: "+919876543210" });
+    const order = await makeOrder(tx, lead.id, orderOverrides);
+    const user = as(rep, Role.SALESPERSON);
+    const svc = service(runner, fakeApi().api);
+    const link = await svc.createPaymentLink(user, order.id);
+    const { outcome } = await deliver(tx, runner, linkPaid(link.linkId, "649.00"), uid(), getShopifyClient);
+    return { rep, lead, order, link, outcome };
+  }
+
+  it("marks the already-linked Shopify order as paid exactly once, and never a second Shopify order", async () => {
+    await inRollback(async (tx, runner) => {
+      const calls: unknown[] = [];
+      const getClient = shopifyClient((body) => {
+        calls.push(body.variables);
+        return { orderMarkAsPaid: { order: { id: (body.variables.input as { id: string }).id, displayFinancialStatus: "PAID" }, userErrors: [] } };
+      });
+      const { order, link, outcome } = await markedAsSuccess(tx, runner, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/999" }, getClient);
+      assert.equal(outcome, "processed");
+      assert.equal(calls.length, 1);
+      assert.deepEqual(calls[0], { input: { id: "gid://shopify/Order/999" } });
+
+      const row = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { metadata: true } });
+      assert.equal((row.metadata as Record<string, any>).shopifyPaymentSync.status, "synced");
+      assert.equal(await tx.activity.count({ where: { orderId: order.id, title: { contains: "Shopify payment synced" } } }), 1);
+
+      // A redelivered/duplicate webhook for a payment already SUCCESS is an "unchanged" transition (see
+      // cashfree.apply.ts's canTransition) - the Shopify sync follow-up is only ever triggered by a real
+      // PENDING/FAILED -> SUCCESS transition, so it can never be triggered twice for the same order.
+      await deliver(tx, runner, linkPaid(link.linkId, "649.00"), uid(), getClient);
+      assert.equal(calls.length, 1);
+    });
+  });
+
+  it("is a no-op ('not_linked') for an order that was never pushed to Shopify - and never crashes the webhook", async () => {
+    await inRollback(async (tx, runner) => {
+      const { order, outcome } = await markedAsSuccess(tx, runner);
+      assert.equal(outcome, "processed");
+      const row = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { metadata: true } });
+      assert.equal((row.metadata as Record<string, any> | null)?.shopifyPaymentSync, undefined);
+    });
+  });
+
+  it("records a Shopify-side failure without touching the CRM payment, and a manual retry can still succeed", async () => {
+    await inRollback(async (tx, runner) => {
+      let fail = true;
+      const getClient = shopifyClient(() => (fail ? { orderMarkAsPaid: { order: null, userErrors: [{ field: null, message: "Order not found" }] } } : { orderMarkAsPaid: { order: { id: "gid://shopify/Order/999", displayFinancialStatus: "PAID" }, userErrors: [] } }));
+      const { order } = await markedAsSuccess(tx, runner, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/999" }, getClient);
+
+      let row = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { metadata: true, status: true } });
+      assert.equal((row.metadata as Record<string, any>).shopifyPaymentSync.status, "failed");
+      assert.equal(row.status, OrderStatus.CONFIRMED, "the CRM order/payment is unaffected by a Shopify-side failure");
+      const payment = await cashfreePayments(tx, order.id);
+      assert.equal(payment[0]!.status, PaymentStatus.SUCCESS, "Payment stays SUCCESS - Shopify sync never undoes it");
+
+      // Retry (the order-page action), same as retryShopifyPaymentSync would call.
+      fail = false;
+      const retried = await syncShopifyPayment(tx, order.id, { source: ActivitySource.USER, getShopifyClient: getClient });
+      assert.equal(retried.status, "synced");
+      row = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { metadata: true, status: true } });
+      assert.equal((row.metadata as Record<string, any>).shopifyPaymentSync.status, "synced");
+    });
+  });
+
+  it("sends 'payment received' once through the customer's actual WhatsApp conversation, never twice for the same order", async () => {
+    await inRollback(async (tx) => {
+      const rep = await makeRep(tx);
+      const lead = await makeLead(tx, rep.id, { normalizedMobile: "+919876543210" });
+      const order = await makeOrder(tx, lead.id);
+      // Gives the lead a WhatsApp history on AISENSY, so findConversationProvider resolves one.
+      await tx.whatsAppMessage.create({ data: { leadId: lead.id, provider: "AISENSY", providerMessageId: `in-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", fromNumber: "919876543210", normalizedContact: "+919876543210", body: "hi", receivedAt: new Date() } });
+      await tx.whatsAppTemplate.create({ data: { name: `t_${uid()}`, provider: "AISENSY", language: "en", body: "Paid {{amount}}", variables: ["amount"], status: WhatsAppTemplateStatus.APPROVED } });
+
+      const sent: { params: string[]; to: string }[] = [];
+      const messaging = () => new WhatsAppMessagingService(tx, () => provider(sent));
+
+      await sendPaymentSuccessNotification(tx, order.id, new Date(), { messaging: messaging() });
+      await sendPaymentSuccessNotification(tx, order.id, new Date(), { messaging: messaging() }); // a retried webhook must not re-send
+
+      assert.equal(sent.length, 1);
+      const row = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { metadata: true } });
+      const meta = row.metadata as Record<string, any>;
+      assert.ok(meta.paymentSuccessNotifiedAt);
+      assert.equal(meta.paymentSuccessNotification.sent, true);
     });
   });
 });

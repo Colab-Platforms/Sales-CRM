@@ -63,7 +63,12 @@ async function setup(tx: Db, runner: TxRunner, s: Setup, apiOver: Partial<Cashfr
   await tx.whatsAppMessage.create({ data: { provider: s.provider, providerMessageId: `in-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId: lead.id, fromNumber: "919000000123", normalizedContact: "+919000000123", body: "hi", createdAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR), receivedAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR) } });
   const templateIds: string[] = [];
   for (const t of s.templates ?? []) {
-    const row = await tx.whatsAppTemplate.create({ data: { name: `zz_${uid()}`, provider: t.provider, language: "en", body: "x {{payment_link}}", variables: t.variables, status: t.status ?? "APPROVED" }, select: { id: true } });
+    // A real APPROVED META/GUPSHUP template only ever exists because a sync set a providerTemplateId (see
+    // upsertSyncedTemplate) - AiSensy is the one provider where that is never true by design.
+    const row = await tx.whatsAppTemplate.create({
+      data: { name: `zz_${uid()}`, provider: t.provider, language: "en", body: "x {{payment_link}}", variables: t.variables, status: t.status ?? "APPROVED", providerTemplateId: t.provider === "AISENSY" ? null : `zz-provider-${uid()}` },
+      select: { id: true },
+    });
     templateIds.push(row.id);
   }
   const product = await tx.product.create({ data: { name: "Herbal Tea", type: ProductType.PRODUCT, sku: `SKU-${uid()}`, basePrice: "1199.00" }, select: { id: true } });
@@ -119,7 +124,8 @@ describe("prepaid order -> Cashfree link -> WhatsApp (Meta, window open)", () =>
       assert.ok(t.sentTexts[0]!.includes(url), "the actual Cashfree URL");
       assert.ok(t.sentTexts[0]!.includes(r.order.orderNumber), "the order number");
       const text = t.sentTexts[0]!;
-      assert.ok(text.startsWith("Hi Priya 👋"), "greets the customer by name");
+      assert.ok(text.startsWith("Payment Link for Your Order 💳"), "has the friendly header");
+      assert.ok(text.includes("Hi Priya,"), "greets the customer by name");
       assert.ok(text.includes("• Herbal Tea × 1"), "the real product name and quantity");
       assert.ok(text.includes("Total: ₹1,199"), "the payable amount");
       assert.ok(text.includes("Payment: Pending") && text.includes("Ayush Wellness"));

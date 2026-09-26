@@ -522,6 +522,42 @@ export function SummaryCard({ data, action, className }: { data: SummaryData; ac
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
+// submit progress
+
+/** The steps an order submission actually goes through server-side, in order. COD never touches Cashfree. This
+ *  drives the checklist shown while the single create-order request is in flight - it is a best-effort visual read
+ *  of typical progress (the backend answers in one round trip, not a stream), so the current step advances on a
+ *  timer and simply holds at the last one until the real response arrives; it is not a claim of a live server event. */
+export function submitSteps(orderType: OrderType): string[] {
+  return orderType === "COD"
+    ? ["Creating CRM order…", "Creating Shopify order…", "Sending WhatsApp notification…"]
+    : ["Creating CRM order…", "Creating Shopify order…", "Creating Cashfree payment link…", "Sending WhatsApp notification…"];
+}
+
+export function CreateOrderProgress({ steps, activeIndex }: { steps: string[]; activeIndex: number }) {
+  return (
+    <div className="grid gap-2 rounded-xl border-[1.5px] border-border bg-card p-4" role="status" aria-live="polite" data-testid="create-order-progress">
+      {steps.map((label, i) => {
+        const done = i < activeIndex;
+        const active = i === activeIndex;
+        return (
+          <div key={label} className="flex items-center gap-2 text-sm">
+            {done ? (
+              <CircleCheck className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            ) : active ? (
+              <Loader2 className="size-4 shrink-0 animate-spin text-primary" />
+            ) : (
+              <span className="size-4 shrink-0 rounded-full border border-border" />
+            )}
+            <span className={cn(done ? "text-muted-foreground line-through" : active ? "font-medium text-foreground" : "text-muted-foreground")}>{label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
 // result
 
 type StepState = "ok" | "warn" | "fail" | "info";

@@ -23,7 +23,7 @@ import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { CancelOrderButton, OrderPaymentSummary } from "./cancel-order-button";
-import { CreatePaymentLinkButton, PaymentLinkPanel } from "./payment-link-panel";
+import { CreatePaymentLinkButton, PaymentLinkPanel, ShopifyPaymentSyncStatus } from "./payment-link-panel";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import { ReconciliationStatusBadge } from "./reconciliation-status-badge";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
@@ -269,6 +269,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
         <CardContent className="space-y-3">
           <OrderPaymentSummary order={order} />
           <CreatePaymentLinkButton order={order} />
+          <ShopifyPaymentSyncStatus order={order} />
           {order.payments.length === 0 ? (
             <p className="text-sm text-muted-foreground">No payment has been recorded for this order yet.</p>
           ) : (

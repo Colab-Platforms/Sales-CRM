@@ -269,6 +269,8 @@ export interface OrderDetail {
   shopifyCancellation: ShopifyCancelResult | null;
   // Last Cashfree-link cancellation outcome the backend recorded (null if none was attempted).
   paymentLinkCancellation: PaymentLinkCancelResult | null;
+  // Last Shopify payment-reconciliation outcome (set once a Cashfree payment on this order settles).
+  shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // The last customer WhatsApp notification about this order as remembered by the backend (null = never attempted).
   whatsappNotification: (OrderNotifyResult & { at: string }) | null;
   createdAt: string;

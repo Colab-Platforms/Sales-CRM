@@ -85,6 +85,21 @@ export const pushOrderToShopify = async (req: AuthRequest, res: Response): Promi
   }
 };
 
+// Manual retry of Shopify payment reconciliation. RBAC is server-side (getLeadScope inside the service method).
+export const retryShopifyPaymentSync = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateOrderIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await ordersService.retryShopifyPaymentSync(req.user!, value.id);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 // Cancel/Revert. RBAC is server-side (getLeadScope inside cancelOrder), the same convention as every
 // other single-order action here - the route-level role gate is only the coarse "can this role ever
 // manage orders" check.

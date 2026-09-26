@@ -3,7 +3,7 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
-import { cancelOrder, createOrder, getLastShippingAddress, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify } from "./orders.controller.js";
+import { cancelOrder, createOrder, getLastShippingAddress, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShopifyPaymentSync } from "./orders.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 
@@ -26,6 +26,7 @@ router.get("/:id/audit", requireAuth, getOrderAudit);
 // both use getLeadScope), never just which roles can reach the route.
 router.post("/", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createOrder);
 router.post("/:id/shopify-order", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), pushOrderToShopify);
+router.post("/:id/shopify-payment-sync/retry", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), retryShopifyPaymentSync);
 // Cancel/Revert - same role set as creating an order (order-management permission); real scoping is
 // server-side (see cancelOrder). Never physically deletes anything.
 router.post("/:id/cancel", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), cancelOrder);

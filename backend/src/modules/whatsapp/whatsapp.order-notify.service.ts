@@ -43,12 +43,25 @@ export interface OrderNotifyDeps {
 }
 
 /** The first APPROVED template for this provider whose variables include every name in `mustInclude`. */
+/** Whether an APPROVED row is actually safe to send: a synced Gupshup/Meta template is only ever APPROVED with a
+ *  real providerTemplateId (upsertSyncedTemplate always sets one - that is the whole point of a sync), so a
+ *  APPROVED-but-no-providerTemplateId row for either can only mean corrupted/tampered data, never a legitimate
+ *  state, and is refused rather than sent blind. AiSensy is the one deliberate exception: its Campaign API has no
+ *  template-listing endpoint at all (see whatsapp.aisensy.provider.ts), so an AiSensy template can be marked
+ *  APPROVED only by a human confirming it is live in the AiSensy dashboard - it never has a providerTemplateId by
+ *  design (see the WhatsAppTemplate model's own comment), and that absence must not disqualify it. */
+function isSendEligible(t: { provider: WhatsAppProviderName; providerTemplateId: string | null }): boolean {
+  return t.provider === "AISENSY" || Boolean(t.providerTemplateId);
+}
+
 async function findApprovedTemplate(db: DbClient, provider: WhatsAppProviderName, mustInclude: string[], prefer: string[] = []): Promise<{ id: string } | null> {
-  const candidates = await db.whatsAppTemplate.findMany({
-    where: { provider, status: "APPROVED" },
-    select: { id: true, name: true, variables: true },
-    orderBy: [{ name: "asc" }],
-  });
+  const candidates = (
+    await db.whatsAppTemplate.findMany({
+      where: { provider, status: "APPROVED" },
+      select: { id: true, name: true, variables: true, providerTemplateId: true, provider: true },
+      orderBy: [{ name: "asc" }],
+    })
+  ).filter(isSendEligible);
   // The existing shared naming convention (ORDER_CONFIRMATION_TEMPLATE_NAME) wins if present for this
   // provider, so an admin who follows that convention gets exactly the intended template, not just
   // whichever APPROVED one happens to sort first.
@@ -142,4 +155,35 @@ export async function notifyPaymentLink(
 ): Promise<OrderNotifyResult> {
   const freeTextBody = buildPaymentLinkMessage({ customerName: params.customerName, orderNumber: params.orderNumber, items: params.items, amount: params.amount, currency: params.currency, paymentUrl: params.paymentUrl });
   return sendViaFreeTextOrTemplate(db, user, { ...params, freeTextBody, templateVariables: ["payment_link"], preferVariables: PAYMENT_LINK_PREFERRED_VARIABLES }, deps);
+}
+
+const PAYMENT_SUCCESS_PREFERRED_VARIABLES = ["customer_name", "order_number", "product_summary", "amount"];
+
+/** "Payment received" - sent once a Cashfree payment actually settles (never for COD, which is never
+ *  "received" up front). Triggered from the Cashfree webhook, which has no authenticated user, so - unlike
+ *  the confirmation/payment-link notifications above - this is TEMPLATE-ONLY, sent as the system actor
+ *  (WhatsAppMessagingService.sendTemplateAsSystem), the same actor convention already used by
+ *  LifecycleAutomationService/WhatsAppCampaignService for non-user-initiated sends. It does not attempt Meta
+ *  free text: that path needs a real `AuthUser` for `sentById`, which a webhook does not have. */
+export async function notifyPaymentSuccess(
+  db: DbClient,
+  params: { leadId: string; orderId: string; orderNumber: string; amount: string; currency: string; customerName?: string; items?: MessageItem[] },
+  deps: OrderNotifyDeps = {},
+): Promise<OrderNotifyResult> {
+  try {
+    const { provider } = await findConversationProvider(db, params.leadId);
+    if (!provider) return { sent: false, via: null, provider: null, reason: "This customer has no WhatsApp conversation yet." };
+
+    const template = await findApprovedTemplate(db, provider, ["amount"], PAYMENT_SUCCESS_PREFERRED_VARIABLES);
+    if (!template) {
+      return { sent: false, via: null, provider, reason: `No approved ${provider} template with the required variables (amount) is configured for a payment-received notice.` };
+    }
+
+    const messaging = deps.messaging ?? new WhatsAppMessagingService(db);
+    const result = await messaging.sendTemplateAsSystem({ leadId: params.leadId, templateId: template.id, orderId: params.orderId });
+    if (result.status === "FAILED") return { sent: false, via: "TEMPLATE", provider, reason: result.errorMessage ?? `${provider} rejected the message` };
+    return { sent: true, via: "TEMPLATE", provider };
+  } catch (error) {
+    return { sent: false, via: null, provider: null, reason: error instanceof Error ? error.message : "WhatsApp notification failed" };
+  }
 }

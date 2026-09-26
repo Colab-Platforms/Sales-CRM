@@ -123,3 +123,57 @@ describe("notifyPaymentLink", () => {
     assert.match(result.reason ?? "", /payment_link/);
   });
 });
+
+describe("send eligibility - an APPROVED row is only actually sendable when it could really have gotten that status", () => {
+  // The full positive path (a GUPSHUP/AISENSY template that IS eligible actually completing a send) is covered
+  // end-to-end against a real database in orders.prepaid-flow.db-test.ts's "Meta window closed, and AiSensy/Gupshup"
+  // suite - this fake db supports only enough of the model surface for the routing/matching decision itself, not a
+  // full send (lead/order lookups, etc), so eligibility is proven here by what gets REFUSED and why.
+
+  it("a GUPSHUP APPROVED template with no providerTemplateId is refused - APPROVED can only ever come from a real sync, which always sets one", async () => {
+    const db = fakeDb({
+      conversations: [{ leadId: "lead-1", provider: "GUPSHUP" }],
+      templates: [{ id: "t1", provider: "GUPSHUP", status: "APPROVED", name: "x", variables: ["payment_link"], language: "en", body: "{{payment_link}}", providerTemplateId: null }],
+    });
+    const result = await notifyPaymentLink(db, USER, linkParams, {});
+    assert.equal(result.sent, false);
+    assert.match(result.reason ?? "", /payment_link/, "reads as 'no eligible template', the same as if none existed at all");
+  });
+
+  it("the same template WITH a providerTemplateId IS found as a candidate (eligibility, not the variable/name matching, is what changes)", async () => {
+    const dbIneligible = fakeDb({
+      conversations: [{ leadId: "lead-1", provider: "GUPSHUP" }],
+      templates: [{ id: "t1", provider: "GUPSHUP", status: "APPROVED", name: "x", variables: ["payment_link"], language: "en", body: "{{payment_link}}", providerTemplateId: null }],
+    });
+    const dbEligible = fakeDb({
+      conversations: [{ leadId: "lead-1", provider: "GUPSHUP" }],
+      templates: [{ id: "t1", provider: "GUPSHUP", status: "APPROVED", name: "x", variables: ["payment_link"], language: "en", body: "{{payment_link}}", providerTemplateId: "gs-123" }],
+    });
+    const ineligible = await notifyPaymentLink(dbIneligible, USER, linkParams, {});
+    const eligible = await notifyPaymentLink(dbEligible, USER, linkParams, {});
+    // Both attempt a send once past the eligibility check (this fake has no lead/order rows, so the send itself
+    // errors out) - the meaningful difference is that the eligible one gets PAST "no template found" at all.
+    assert.match(ineligible.reason ?? "", /payment_link/);
+    assert.equal(/payment_link/.test(eligible.reason ?? ""), false);
+  });
+
+  it("an AiSensy APPROVED template with NO providerTemplateId is still an eligible candidate - that is its normal, only possible shape (dashboard-only provider)", async () => {
+    const db = fakeDb({
+      conversations: [{ leadId: "lead-1", provider: "AISENSY" }],
+      templates: [{ id: "t1", provider: "AISENSY", status: "APPROVED", name: "x", variables: ["payment_link"], language: "en", body: "{{payment_link}}", providerTemplateId: null }],
+    });
+    const result = await notifyPaymentLink(db, USER, linkParams, {});
+    assert.equal(/payment_link/.test(result.reason ?? ""), false, "found a candidate - AiSensy is exempt from the providerTemplateId requirement");
+  });
+
+  it("PENDING/REJECTED/DISABLED templates are never candidates regardless of providerTemplateId", async () => {
+    for (const status of ["PENDING", "REJECTED", "DISABLED"]) {
+      const db = fakeDb({
+        conversations: [{ leadId: "lead-1", provider: "GUPSHUP" }],
+        templates: [{ id: "t1", provider: "GUPSHUP", status, name: "x", variables: ["payment_link"], language: "en", body: "{{payment_link}}", providerTemplateId: "gs-123" }],
+      });
+      const result = await notifyPaymentLink(db, USER, linkParams, {});
+      assert.equal(result.sent, false, status);
+    }
+  });
+});

@@ -12,6 +12,7 @@ import {
 import { previewTemplateMessage, sendOrderConfirmationTest, sendTemplateMessage as sendTemplateMessageV2 } from "./whatsapp.messaging.controller.js";
 import {
   createTemplate,
+  deleteTemplate,
   getTemplate,
   listTemplates,
   syncTemplates,
@@ -64,6 +65,7 @@ router.post("/templates/sync", requireAuth, requireRole(Role.ADMIN), syncTemplat
 router.post("/templates", requireAuth, requireRole(Role.ADMIN), createTemplate);
 router.get("/templates/:id", requireAuth, getTemplate);
 router.patch("/templates/:id", requireAuth, requireRole(Role.ADMIN), updateTemplate);
+router.delete("/templates/:id", requireAuth, requireRole(Role.ADMIN), deleteTemplate);
 
 // E7.3 Template-Based Messaging. Same RBAC as "/send" above (lead scope decides who can message
 // which customer, not a role gate) - an ADMIN/MANAGER/SALESPERSON can all send, scoped to the

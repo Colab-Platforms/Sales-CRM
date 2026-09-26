@@ -43,3 +43,13 @@ export function usePushOrderToShopifyMutation() {
     },
   });
 }
+
+export function useRetryShopifyPaymentSyncMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<{ status: "synced" | "not_linked" | "failed"; reason?: string }, unknown, string>({
+    mutationFn: (orderId) => ordersApi.retryShopifyPaymentSync(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}

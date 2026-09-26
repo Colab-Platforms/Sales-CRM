@@ -40,6 +40,11 @@ export const ordersApi = {
     return res.data.data;
   },
 
+  async retryShopifyPaymentSync(orderId: string): Promise<{ status: "synced" | "not_linked" | "failed"; reason?: string }> {
+    const res = await apiClient.post<ApiEnvelope<{ status: "synced" | "not_linked" | "failed"; reason?: string }>>(`/orders/${orderId}/shopify-payment-sync/retry`);
+    return res.data.data;
+  },
+
   async getStatusHistory(id: string): Promise<OrderStatusHistory> {
     const res = await apiClient.get<ApiEnvelope<OrderStatusHistory>>(`/orders/${id}/status-history`);
     return res.data.data;
