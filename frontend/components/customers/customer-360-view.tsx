@@ -95,7 +95,10 @@ export function Customer360View({ leadId }: { leadId: string }) {
       <CustomerOrdersList orders={data.orders} />
       <WhatsAppConversation leadId={leadId} />
       <CustomerTimeline leadId={leadId} />
-      <div>
+      <div className="flex flex-wrap gap-x-6 gap-y-1">
+        <Link href={`/dashboard/leads/${leadId}`} className="text-sm text-primary hover:underline">
+          View lead & assignment history
+        </Link>
         <Link href={`/dashboard/audit?leadId=${leadId}`} className="text-sm text-primary hover:underline">
           View full audit trail for this customer
         </Link>

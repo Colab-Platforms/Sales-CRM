@@ -39,7 +39,7 @@ export function useUpdateLeadMutation() {
       const previous = queryClient.getQueriesData<LeadListResult>({ queryKey: leadKeys.all });
 
       queryClient.setQueriesData<LeadListResult>({ queryKey: leadKeys.all }, (old) => {
-        if (!old) return old;
+        if (!old || !Array.isArray(old.data)) return old;
         return {
           ...old,
           data: old.data.map((lead) => (lead.id === id ? { ...lead, ...payload } : lead)),
