@@ -6,7 +6,7 @@ import type {
   BookingQuote,
   BookingQuoteRequest,
   CreateBookingRequest,
-  CreateBookingResult,
+  CreateBookingResponse,
   ServiceabilityResult,
 } from "../types/booking.types";
 
@@ -33,8 +33,8 @@ export const bookingApi = {
     return res.data.data;
   },
 
-  async createOrder(body: CreateBookingRequest): Promise<CreateBookingResult> {
-    const res = await apiClient.post<ApiEnvelope<CreateBookingResult>>("/orders/booking/orders", body);
+  async createOrder(body: CreateBookingRequest): Promise<CreateBookingResponse> {
+    const res = await apiClient.post<ApiEnvelope<CreateBookingResponse>>("/orders/booking/orders", body);
     return res.data.data;
   },
 };

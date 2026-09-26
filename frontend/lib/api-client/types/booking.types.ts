@@ -109,3 +109,22 @@ export interface CreateBookingResult {
   order: BookingOrder;
   duplicate: boolean;
 }
+
+export interface BookingPaymentLink {
+  paymentId: string;
+  orderId: string;
+  linkId: string;
+  amount: string;
+  currency: string;
+  status: string;
+  paymentUrl: string | null;
+  expiresAt: string | null;
+  reused: boolean;
+  webhookRegistered: boolean;
+}
+
+export interface CreateBookingResponse extends CreateBookingResult {
+  paymentLink: BookingPaymentLink | null;
+  paymentLinkError: string | null;
+  whatsApp: { sent: boolean; reason: string | null } | null;
+}

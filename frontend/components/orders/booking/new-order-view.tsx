@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -18,9 +17,10 @@ import type {
   BookingLead,
   BookingLookupResult,
   BookingPaymentMethod,
-  CreateBookingResult,
+  CreateBookingResponse,
   ServiceabilityResult,
 } from "@/lib/api-client/types/booking.types";
+import { BookingSuccess } from "./booking-success";
 
 // E5 on-call order booking, laid out in call order:
 // 1 customer + quick pincode check -> 2 products -> 3 contact & delivery address -> 4 payment,
@@ -125,7 +125,7 @@ export function NewOrderView() {
   const [readBack, setReadBack] = useState(false);
   // One key per order attempt: retries reuse it, so the server returns the same order instead of a duplicate.
   const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
-  const [placed, setPlaced] = useState<CreateBookingResult | null>(null);
+  const [placed, setPlaced] = useState<CreateBookingResponse | null>(null);
 
   function selectLead(l: BookingLead) {
     setLead(l);
@@ -310,53 +310,13 @@ export function NewOrderView() {
     setIdempotencyKey(crypto.randomUUID());
   }
 
+  const placeLabel = placeMutation.isPending
+    ? "Placing order…"
+    : (paymentMethod === "PAYMENT_LINK" ? "Place order & create payment link" : "Place order") +
+      (quote ? " · " + inr(quote.total) : "");
+
   // ---------- after placing ----------
-  if (placed) {
-    const payment = placed.order.payments[0];
-    return (
-      <div className="flex flex-col gap-6 p-4 md:p-6">
-        <Card className="max-w-xl">
-          <CardHeader>
-            <CardTitle>Order {placed.order.orderNumber} placed</CardTitle>
-            <CardDescription>
-              {placed.duplicate ? "This order had already been placed — no duplicate was created." : "Saved to the CRM."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 text-sm">
-            <div className="flex justify-between">
-              <span>Status</span>
-              <Badge>{placed.order.status}</Badge>
-            </div>
-            <div className="flex justify-between">
-              <span>Total</span>
-              <span className="font-semibold">{inr(placed.order.totalAmount)}</span>
-            </div>
-            {payment && (
-              <div className="flex justify-between">
-                <span>Payment</span>
-                <span>
-                  {payment.method} · {payment.status}
-                </span>
-              </div>
-            )}
-            {placed.order.status === "PENDING_PAYMENT" && (
-              <p className="text-amber-600">
-                Awaiting payment. Open the order to send the Cashfree payment link to the customer.
-              </p>
-            )}
-            <div className="flex gap-2 pt-2">
-              <Link href={`/dashboard/orders/${placed.order.id}`}>
-                <Button type="button">Open order</Button>
-              </Link>
-              <Button type="button" variant="outline" onClick={startAnotherOrder}>
-                Start another order
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  if (placed) return <BookingSuccess placed={placed} onStartAnother={startAnotherOrder} />;
 
   // ---------- booking form ----------
   return (
@@ -522,19 +482,18 @@ export function NewOrderView() {
                         onClick={() => setOpenProductId(open ? null : p.id)}
                       >
                         <span className="font-medium">{p.title}</span>
-                                                <span className="flex shrink-0 items-center gap-2 text-sm">
+                        <span className="flex shrink-0 items-center gap-2 text-sm">
                           <span
                             className={
                               sellable.length === 0 ? "text-muted-foreground" : "font-semibold text-foreground"
                             }
                           >
-                            {sellable.length === 0 ? "Out of stock" : fromPrice !== null ? `from ${inr(fromPrice)}` : ""}
+                            {sellable.length === 0 ? "Out of stock" : fromPrice !== null ? "from " + inr(fromPrice) : ""}
                           </span>
                           <span className="rounded-md border border-primary px-2.5 py-0.5 text-xs font-semibold text-primary">
                             {open ? "Hide" : "Choose"}
                           </span>
                         </span>
-                        
                       </button>
                       {open && (
                         <div className="flex flex-col gap-2 bg-muted/30 px-3 py-2">
@@ -578,7 +537,7 @@ export function NewOrderView() {
                       return (
                         <div key={i.variantGid} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
                           <span>
-                            {info ? `${info.productTitle} · ${info.variantTitle}` : "Product"}
+                            {info ? info.productTitle + " · " + info.variantTitle : "Product"}
                             {info && <span className="text-muted-foreground"> · {inr(info.price)}</span>}
                           </span>
                           <div className="flex items-center gap-2">
@@ -671,7 +630,7 @@ export function NewOrderView() {
               <p className="w-full pt-1 text-xs text-muted-foreground">
                 {paymentMethod === "COD"
                   ? "Customer pays the courier on delivery."
-                  : "After placing, send the Cashfree payment link from the order page."}
+                  : "A Cashfree payment link (fixed amount, any UPI app) is created when you place the order."}
               </p>
             </CardContent>
           </Card>
@@ -693,7 +652,7 @@ export function NewOrderView() {
                 return (
                   <div key={i.variantGid} className="flex justify-between gap-2">
                     <span>
-                      {info ? `${info.productTitle} · ${info.variantTitle}` : "Product"} × {i.quantity}
+                      {info ? info.productTitle + " · " + info.variantTitle : "Product"} × {i.quantity}
                     </span>
                     <span className="shrink-0">{line ? inr(line.lineTotal) : "…"}</span>
                   </div>
@@ -711,7 +670,7 @@ export function NewOrderView() {
                     <span>{inr(quote.subtotal)}</span>
                   </div>
                   <div className="flex items-center justify-between gap-2">
-                    <span>Discount % {maxDiscount === 0 ? "(off)" : `(max ${maxDiscount})`}</span>
+                    <span>Discount % {maxDiscount === 0 ? "(off)" : "(max " + maxDiscount + ")"}</span>
                     <Input
                       className="h-8 w-20"
                       type="number"
@@ -777,7 +736,7 @@ export function NewOrderView() {
                 disabled={missing.length > 0 || notServiceable || !readBack || !quote || placeMutation.isPending}
                 onClick={() => placeMutation.mutate()}
               >
-                {placeMutation.isPending ? "Placing order…" : `Place order${quote ? ` · ${inr(quote.total)}` : ""}`}
+                {placeLabel}
               </Button>
             </CardContent>
           </Card>
