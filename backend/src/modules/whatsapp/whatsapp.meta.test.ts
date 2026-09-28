@@ -179,10 +179,43 @@ describe("MetaCloudApiProvider", () => {
     assert.deepEqual(captured.template.components, [{ type: "body", parameters: [{ type: "text", text: "Ravi" }, { type: "text", text: "SHP-1" }] }]);
   });
 
-  it("throws WhatsAppSendError on a non-2xx, non-retryable response without crashing", async () => {
-    const fetchImpl = (async () => jsonResponse(400, { error: { message: "bad recipient" } })) as typeof fetch;
+  // Every template this CRM submits to Meta uses parameter_format: "named" (whatsapp.template.meta-payload.ts) -
+  // sending it positional-only is exactly the real-world HTTP 400 this fixes.
+  it("sends named body parameters when paramNames is given, matching how this CRM's own templates are created", async () => {
+    let captured: any = null;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      captured = JSON.parse(init.body as string);
+      return jsonResponse(200, { messages: [{ id: "wamid.OUT3" }] });
+    }) as typeof fetch;
+    await new MetaCloudApiProvider(credentials(), { fetchImpl }).sendTemplateMessage({
+      to: "+91",
+      templateName: "webinar_registration_confirmation",
+      params: ["Vishwa", "AyushWellness Webinar", "28 Sep 2026", "7:00 PM IST"],
+      paramNames: ["customer_name", "webinar_name", "webinar_date", "webinar_time"],
+    });
+    assert.deepEqual(captured.template.components, [
+      {
+        type: "body",
+        parameters: [
+          { type: "text", parameter_name: "customer_name", text: "Vishwa" },
+          { type: "text", parameter_name: "webinar_name", text: "AyushWellness Webinar" },
+          { type: "text", parameter_name: "webinar_date", text: "28 Sep 2026" },
+          { type: "text", parameter_name: "webinar_time", text: "7:00 PM IST" },
+        ],
+      },
+    ]);
+  });
+
+  it("throws WhatsAppSendError on a non-2xx, non-retryable response without crashing, and surfaces Meta's real error detail", async () => {
+    const fetchImpl = (async () => jsonResponse(400, { error: { message: "bad recipient", code: 100, error_subcode: 33 } })) as typeof fetch;
     const provider = new MetaCloudApiProvider(credentials(), { fetchImpl });
-    await assert.rejects(() => provider.sendText({ to: "+91", body: "hi" }), WhatsAppSendError);
+    await assert.rejects(() => provider.sendText({ to: "+91", body: "hi" }), (e: unknown) => e instanceof WhatsAppSendError && /bad recipient/.test(e.message) && /code 100/.test(e.message) && /subcode 33/.test(e.message));
+  });
+
+  it("never includes the access token or Authorization header in a thrown error's message", async () => {
+    const fetchImpl = (async () => jsonResponse(400, { error: { message: "Invalid parameter" } })) as typeof fetch;
+    const provider = new MetaCloudApiProvider(credentials(), { fetchImpl });
+    await assert.rejects(() => provider.sendText({ to: "+91", body: "hi" }), (e: unknown) => e instanceof WhatsAppSendError && !e.message.includes("EAA-super-secret-token") && !e.message.includes("Bearer"));
   });
 
   it("throws WhatsAppSendError when the network call itself fails on every attempt", async () => {

@@ -1,13 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Copy, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -15,10 +17,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { useCancelCampaignMutation, useLaunchCampaignMutation } from "@/lib/api-client/mutations/whatsapp-campaigns.mutations";
-import { whatsappCampaignDetailQueryOptions, whatsappCampaignRecipientsQueryOptions } from "@/lib/api-client/queries/whatsapp-campaigns.queries";
+import { useCancelCampaignMutation, useDuplicateCampaignMutation, useLaunchCampaignMutation, useUpdateCampaignMutation } from "@/lib/api-client/mutations/whatsapp-campaigns.mutations";
+import { whatsappCampaignDetailQueryOptions, whatsappCampaignKeys, whatsappCampaignRecipientsQueryOptions } from "@/lib/api-client/queries/whatsapp-campaigns.queries";
 import type { WhatsAppCampaignRecipientStatus } from "@/lib/api-client/types/whatsapp-campaigns.types";
 import { CAMPAIGN_STATUS_COLORS, CAMPAIGN_STATUS_LABELS, RECIPIENT_STATUS_COLORS, RECIPIENT_STATUS_LABELS } from "@/lib/whatsapp-campaign-status";
+import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 import { MESSAGE_STATUS_COLORS, MESSAGE_STATUS_LABELS } from "@/lib/whatsapp-message-status";
 import { formatDateTime } from "@/lib/order-status";
 import { useAuthStore } from "@/stores/auth-store";
@@ -39,15 +42,24 @@ function StatCard({ label, value }: { label: string; value: number }) {
 export function WhatsAppCampaignDetailView({ id }: { id: string }) {
   const user = useAuthStore((s) => s.user);
   const isAdmin = user?.role === "ADMIN";
+  const router = useRouter();
+  const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const [recipientStatus, setRecipientStatus] = useState<WhatsAppCampaignRecipientStatus | undefined>(undefined);
   const [scheduleAt, setScheduleAt] = useState("");
+  const [confirmSendNow, setConfirmSendNow] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
 
   const detailQuery = useQuery({ ...whatsappCampaignDetailQueryOptions(id), enabled: Boolean(user) });
   const recipientsQuery = useQuery({ ...whatsappCampaignRecipientsQueryOptions(id, { page, pageSize: PAGE_SIZE, status: recipientStatus }), enabled: Boolean(user) });
 
   const launchMutation = useLaunchCampaignMutation();
   const cancelMutation = useCancelCampaignMutation();
+  const duplicateMutation = useDuplicateCampaignMutation();
+  const updateMutation = useUpdateCampaignMutation();
 
   if (detailQuery.isPending) {
     return (
@@ -77,7 +89,10 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
     launchMutation.mutate(
       { id, input: { scheduledAt } },
       {
-        onSuccess: () => toast.success(now ? "Campaign launched." : "Campaign scheduled."),
+        onSuccess: () => {
+          toast.success(now ? "Campaign launched." : "Campaign scheduled.");
+          setConfirmSendNow(false);
+        },
         onError: (err) => toast.error(getErrorMessage(err, "Failed to launch campaign.")),
       },
     );
@@ -85,9 +100,43 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
 
   function handleCancel() {
     cancelMutation.mutate(id, {
-      onSuccess: () => toast.success("Campaign cancelled."),
+      onSuccess: () => {
+        toast.success("Campaign cancelled.");
+        setConfirmCancel(false);
+      },
       onError: (err) => toast.error(getErrorMessage(err, "Failed to cancel campaign.")),
     });
+  }
+
+  function handleDuplicate() {
+    duplicateMutation.mutate(id, {
+      onSuccess: (copy) => {
+        toast.success("Campaign duplicated as a new draft.");
+        queryClient.invalidateQueries({ queryKey: whatsappCampaignKeys.all });
+        router.push(`/dashboard/whatsapp/campaigns/${copy.id}`);
+      },
+      onError: (err) => toast.error(getErrorMessage(err, "Could not duplicate the campaign.")),
+    });
+  }
+
+  function startEditing() {
+    if (!detailQuery.data) return;
+    setEditName(detailQuery.data.name);
+    setEditDescription(detailQuery.data.description ?? "");
+    setIsEditing(true);
+  }
+
+  function saveEdits() {
+    updateMutation.mutate(
+      { id, input: { name: editName, description: editDescription || undefined } },
+      {
+        onSuccess: () => {
+          toast.success("Campaign updated.");
+          setIsEditing(false);
+        },
+        onError: (err) => toast.error(getErrorMessage(err, "Could not update the campaign.")),
+      },
+    );
   }
 
   return (
@@ -97,12 +146,42 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
         Back to campaigns
       </Link>
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
-          {campaign.description ? <p className="text-sm text-muted-foreground">{campaign.description}</p> : null}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        {isEditing ? (
+          <div className="grid w-full max-w-md gap-2">
+            <Input value={editName} onChange={(e) => setEditName(e.target.value)} maxLength={150} aria-label="Campaign name" />
+            <Input value={editDescription} onChange={(e) => setEditDescription(e.target.value)} placeholder="Description (optional)" aria-label="Campaign description" />
+            <div className="flex gap-2">
+              <Button size="sm" onClick={saveEdits} disabled={updateMutation.isPending || !editName.trim()}>
+                {updateMutation.isPending ? "Saving…" : "Save"}
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setIsEditing(false)} disabled={updateMutation.isPending}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-semibold tracking-tight">{campaign.name}</h1>
+              {isAdmin && campaign.status === "DRAFT" ? (
+                <Button variant="ghost" size="icon-sm" onClick={startEditing} aria-label="Edit campaign name/description">
+                  <Pencil className="size-4" />
+                </Button>
+              ) : null}
+            </div>
+            {campaign.description ? <p className="text-sm text-muted-foreground">{campaign.description}</p> : null}
+          </div>
+        )}
+        <div className="flex items-center gap-2">
+          <Badge className={CAMPAIGN_STATUS_COLORS[campaign.status]}>{CAMPAIGN_STATUS_LABELS[campaign.status]}</Badge>
+          {isAdmin ? (
+            <Button variant="outline" size="sm" onClick={handleDuplicate} disabled={duplicateMutation.isPending}>
+              <Copy data-icon="inline-start" />
+              Duplicate
+            </Button>
+          ) : null}
         </div>
-        <Badge className={CAMPAIGN_STATUS_COLORS[campaign.status]}>{CAMPAIGN_STATUS_LABELS[campaign.status]}</Badge>
       </div>
 
       {campaign.status === "FAILED" && campaign.failureReason ? (
@@ -135,6 +214,9 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
             <span className="text-muted-foreground">Template:</span> {campaign.template?.name ?? "—"}
           </p>
           <p>
+            <span className="text-muted-foreground">Provider:</span> {campaign.template ? (PROVIDER_LABELS[campaign.template.provider] ?? campaign.template.provider) : "—"}
+          </p>
+          <p>
             <span className="text-muted-foreground">Created by:</span> {campaign.createdBy?.name ?? "—"}
           </p>
           <p>
@@ -165,7 +247,7 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
           <CardContent className="flex flex-wrap items-end gap-3">
             {canLaunch ? (
               <>
-                <Button onClick={() => handleLaunch(true)} disabled={launchMutation.isPending}>
+                <Button onClick={() => setConfirmSendNow(true)} disabled={launchMutation.isPending}>
                   Send now
                 </Button>
                 <div className="space-y-1.5">
@@ -180,7 +262,7 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
               </>
             ) : null}
             {canCancel ? (
-              <Button variant="destructive" onClick={handleCancel} disabled={cancelMutation.isPending}>
+              <Button variant="destructive" onClick={() => setConfirmCancel(true)} disabled={cancelMutation.isPending}>
                 Cancel campaign
               </Button>
             ) : null}
@@ -256,6 +338,29 @@ export function WhatsAppCampaignDetailView({ id }: { id: string }) {
           )}
         </CardContent>
       </Card>
+
+      <ConfirmActionDialog
+        open={confirmSendNow}
+        onOpenChange={setConfirmSendNow}
+        title="Send this campaign now?"
+        description={`This will immediately start sending "${campaign.name}" to every eligible recipient (opted-out and invalid-number contacts are already excluded). This cannot be undone once messages start going out.`}
+        confirmLabel="Send now"
+        pendingLabel="Sending…"
+        pending={launchMutation.isPending}
+        onConfirm={() => handleLaunch(true)}
+      />
+
+      <ConfirmActionDialog
+        open={confirmCancel}
+        onOpenChange={setConfirmCancel}
+        title="Cancel this campaign?"
+        description="Any recipient not yet processed will be skipped. Messages already sent are never affected or recalled, and this cannot be undone."
+        confirmLabel="Cancel campaign"
+        pendingLabel="Cancelling…"
+        pending={cancelMutation.isPending}
+        destructive
+        onConfirm={handleCancel}
+      />
     </div>
   );
 }

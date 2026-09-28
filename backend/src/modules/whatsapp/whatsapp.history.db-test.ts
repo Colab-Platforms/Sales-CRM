@@ -405,6 +405,21 @@ describe("central WhatsApp inbox: listConversations", () => {
     });
   });
 
+  // Part 7 (WhatsApp Inbox): a deactivated customer drops out of the active Inbox entirely (see
+  // buildConversationWhere) - their message history stays reachable through Customer 360's own timeline.
+  it("excludes a deactivated customer's conversation from the Inbox list", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const uniqueName = `DeactChat${uid().slice(0, 8)}`;
+      const lead = await makeLead(tx, { firstName: uniqueName, workingStatus: "DEACTIVATED" });
+      await makeMessage(tx, { leadId: lead.id });
+      const svc = new WhatsAppService(tx);
+
+      const result = await svc.listConversations(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: uniqueName });
+      assert.deepEqual(result.items, []);
+    });
+  });
+
   it("returns an empty page (not an error) when a search matches no lead", async () => {
     // Scoped via `search` rather than asserting a bare empty result: the dev DB this suite runs
     // against already has real, pre-existing committed WhatsApp messages (from earlier real

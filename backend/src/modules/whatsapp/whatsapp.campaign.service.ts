@@ -40,7 +40,7 @@ const CAMPAIGN_SELECT = {
   name: true,
   description: true,
   status: true,
-  template: { select: { id: true, name: true, status: true } },
+  template: { select: { id: true, name: true, status: true, provider: true } },
   createdBy: { select: { id: true, name: true } },
   scheduledAt: true,
   startedAt: true,
@@ -70,15 +70,32 @@ class WhatsAppCampaignService {
   }
 
   /** Every matching customer within the caller's RBAC scope, split by whether they have a mobile number on file. */
-  async resolveAudience(user: AuthUser, filters: AudienceFilters): Promise<{ matched: CustomerListItem[]; excludedNoMobile: number }> {
+  async resolveAudience(user: AuthUser, filters: AudienceFilters): Promise<{ matched: CustomerListItem[]; excludedNoMobile: number; excludedOptedOut: number }> {
     const all = await this.customers.resolveMatchingCustomers(user, filters);
-    const matched = all.filter((c) => c.mobile !== null && c.mobile.trim() !== "");
-    return { matched, excludedNoMobile: all.length - matched.length };
+    const withMobile = all.filter((c) => c.mobile !== null && c.mobile.trim() !== "");
+
+    // A lead who has explicitly opted OUT of WhatsApp (CommunicationPreference) is never a campaign recipient,
+    // regardless of any other filter - this is a compliance requirement, not a segmentation choice, so it is
+    // enforced here rather than left to whoever builds a filter. UNKNOWN/OPTED_IN/no-row-at-all all still match -
+    // only an explicit opt-out excludes.
+    const optedOut = withMobile.length
+      ? new Set(
+          (
+            await this.db.communicationPreference.findMany({
+              where: { leadId: { in: withMobile.map((c) => c.leadId) }, channel: "WHATSAPP", status: "OPTED_OUT" },
+              select: { leadId: true },
+            })
+          ).map((p) => p.leadId),
+        )
+      : new Set<string>();
+    const matched = withMobile.filter((c) => !optedOut.has(c.leadId));
+
+    return { matched, excludedNoMobile: all.length - withMobile.length, excludedOptedOut: optedOut.size };
   }
 
   async previewAudience(user: AuthUser, filters: AudienceFilters): Promise<AudiencePreview> {
-    const { matched, excludedNoMobile } = await this.resolveAudience(user, filters);
-    return { count: matched.length, sample: matched.slice(0, PREVIEW_SAMPLE_SIZE), excludedNoMobile };
+    const { matched, excludedNoMobile, excludedOptedOut } = await this.resolveAudience(user, filters);
+    return { count: matched.length, sample: matched.slice(0, PREVIEW_SAMPLE_SIZE), excludedNoMobile, excludedOptedOut };
   }
 
   async createCampaign(user: AuthUser, input: CreateCampaignInput): Promise<CampaignDetail> {
@@ -97,6 +114,17 @@ class WhatsAppCampaignService {
 
     await this.writeActivity(user, ActivityType.WHATSAPP_CAMPAIGN_CREATED, row.id, `Campaign "${row.name}" created`);
     return this.toDetail(row, input.filters);
+  }
+
+  // Always makes a fresh DRAFT - never copies recipients, scheduling, or lifecycle timestamps, so a duplicate can
+  // never be mistaken for a re-run of the original's actual send (that would defeat the campaignId+leadId unique
+  // constraint's whole point on a genuinely new campaign row anyway - a duplicate gets its own id and its own
+  // audience resolved fresh at ITS OWN launch time). Reuses createCampaign's own validation (template still
+  // APPROVED) rather than duplicating it, so a duplicated campaign can never skip that check.
+  async duplicateCampaign(user: AuthUser, id: string): Promise<CampaignDetail> {
+    const existing = await this.db.whatsAppCampaign.findUnique({ where: { id }, select: { name: true, description: true, templateId: true, filters: true } });
+    if (!existing) throw new ApiError("Campaign not found", STATUS_CODES.NOT_FOUND);
+    return this.createCampaign(user, { name: `${existing.name} (copy)`, description: existing.description ?? undefined, templateId: existing.templateId, filters: existing.filters as AudienceFilters });
   }
 
   async updateCampaign(user: AuthUser, id: string, input: UpdateCampaignInput): Promise<CampaignDetail> {
@@ -130,7 +158,13 @@ class WhatsAppCampaignService {
 
   async listCampaigns(user: AuthUser, query: ListCampaignsQuery): Promise<CampaignListResult> {
     void user;
-    const where: Prisma.WhatsAppCampaignWhereInput = query.status ? { status: query.status } : {};
+    const and: Prisma.WhatsAppCampaignWhereInput[] = [];
+    if (query.status) and.push({ status: query.status });
+    if (query.search) and.push({ name: { contains: query.search, mode: "insensitive" } });
+    if (query.provider) and.push({ template: { provider: query.provider } });
+    if (query.createdFrom) and.push({ createdAt: { gte: query.createdFrom } });
+    if (query.createdTo) and.push({ createdAt: { lte: query.createdTo } });
+    const where: Prisma.WhatsAppCampaignWhereInput = and.length > 0 ? { AND: and } : {};
     const [totalItems, rows] = await Promise.all([
       this.db.whatsAppCampaign.count({ where }),
       this.db.whatsAppCampaign.findMany({
@@ -215,12 +249,13 @@ class WhatsAppCampaignService {
     await this.assertTemplateApproved(campaign.templateId);
 
     const filters = campaign.filters as AudienceFilters;
-    const { matched, excludedNoMobile } = await this.resolveAudience(user, filters);
+    const { matched, excludedNoMobile, excludedOptedOut } = await this.resolveAudience(user, filters);
     if (matched.length === 0) {
-      throw new ApiError(
-        `No eligible recipients match this campaign's filters${excludedNoMobile > 0 ? ` (${excludedNoMobile} matched but have no WhatsApp/mobile number on file)` : ""}.`,
-        STATUS_CODES.BAD_REQUEST,
-      );
+      const reasons = [
+        excludedNoMobile > 0 ? `${excludedNoMobile} have no WhatsApp/mobile number on file` : null,
+        excludedOptedOut > 0 ? `${excludedOptedOut} have opted out of WhatsApp` : null,
+      ].filter((r): r is string => r !== null);
+      throw new ApiError(`No eligible recipients match this campaign's filters${reasons.length > 0 ? ` (${reasons.join("; ")})` : ""}.`, STATUS_CODES.BAD_REQUEST);
     }
 
     const leadIds = matched.map((m) => m.leadId);

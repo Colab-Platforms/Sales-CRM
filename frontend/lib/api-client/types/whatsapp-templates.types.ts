@@ -24,6 +24,11 @@ export interface TemplateComponents {
   footer?: string;
   buttons?: TemplateButton[];
   bodyExamples?: Record<string, string>;
+  submission?: {
+    submittedAt: string;
+    lastSyncedAt?: string;
+    rejectionReason?: string | null;
+  };
 }
 
 export interface TemplateUsage {
@@ -109,4 +114,11 @@ export interface TemplateSyncSummary {
 export interface DeleteTemplateResult {
   id: string;
   deleted: true;
+}
+
+export interface SubmitTemplateResult {
+  id: string;
+  providerTemplateId: string;
+  status: WhatsAppTemplateStatus;
+  alreadySubmitted: boolean;
 }
