@@ -60,7 +60,7 @@ export function TemplateDetailDialog({ template: initial, onOpenChange, canManag
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {template.name}
-            <TemplateStatusBadge status={template.status} />
+            <TemplateStatusBadge status={template.status} provider={template.provider} />
             <Badge variant="outline" className="font-normal text-muted-foreground">
               {isProviderReported(template) ? `Synced from ${PROVIDER_LABELS[template.provider] ?? template.provider}` : "Local draft only"}
             </Badge>
@@ -114,6 +114,16 @@ export function TemplateDetailDialog({ template: initial, onOpenChange, canManag
               <p className="mt-1 text-muted-foreground">None</p>
             )}
           </div>
+
+          {template.status === "REJECTED" ? (
+            <p role="alert" className="rounded-lg bg-rose-500/10 p-2.5 text-xs text-rose-700 dark:text-rose-400">
+              Rejected by {PROVIDER_LABELS[template.provider] ?? template.provider}
+              {template.components?.submission?.rejectionReason ? `: ${template.components.submission.rejectionReason}` : " (no reason was reported)"}
+            </p>
+          ) : null}
+          {template.status === "PENDING" && template.provider === "META" ? (
+            <p className="rounded-lg bg-amber-500/10 p-2.5 text-xs text-amber-700 dark:text-amber-400">Submitted to Meta and waiting for review. Use Sync Meta templates to refresh its status - it can be used for messaging only once approved.</p>
+          ) : null}
 
           {template.components?.header ? (
             <div>

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { ShoppingBag } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { orderDetailHref } from "@/components/orders/orders-table";
@@ -8,15 +9,48 @@ import { ShipmentStatusBadge } from "@/components/orders/shipment-status-badge";
 import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import type { CustomerOrderSummary } from "@/lib/api-client/types/customers.types";
 
-export function CustomerOrdersList({ orders }: { orders: CustomerOrderSummary[] }) {
+// The WhatsApp Inbox's right panel (~340px wide) cannot fit the 7-column table below without
+// horizontal scroll or clipped text - `compact` renders the same fields as stacked per-order cards
+// instead. Never a second data source: same CustomerOrderSummary[], just a narrower layout.
+function CompactOrderRow({ order }: { order: CustomerOrderSummary }) {
   return (
-    <Card>
+    <div className="rounded-lg border p-2.5 text-sm">
+      <div className="flex items-center justify-between gap-2">
+        <Link href={orderDetailHref(order.id)} className="font-medium hover:underline">
+          {order.orderNumber}
+        </Link>
+        <span className="tabular-nums">{formatMoney(order.totalAmount, order.currency)}</span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+        <OrderStatusBadge status={order.status} />
+        <PaymentStatusBadge status={order.paymentStatus} />
+        {order.latestShipment ? <ShipmentStatusBadge status={order.latestShipment.status} /> : null}
+      </div>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        {ORDER_SOURCE_LABELS[order.source]} · {formatDate(order.createdAt)}
+      </p>
+    </div>
+  );
+}
+
+export function CustomerOrdersList({ orders, compact }: { orders: CustomerOrderSummary[]; compact?: boolean }) {
+  return (
+    <Card size={compact ? "sm" : "default"}>
       <CardHeader>
-        <CardTitle>Orders</CardTitle>
+        <CardTitle className={compact ? "flex items-center gap-2 text-sm" : "flex items-center gap-2"}>
+          {compact ? <ShoppingBag className="size-3.5" /> : null}
+          Orders{orders.length > 0 ? ` (${orders.length})` : ""}
+        </CardTitle>
       </CardHeader>
       <CardContent>
         {orders.length === 0 ? (
           <p className="text-sm text-muted-foreground">This customer has no orders yet.</p>
+        ) : compact ? (
+          <div className="space-y-2">
+            {orders.map((order) => (
+              <CompactOrderRow key={order.id} order={order} />
+            ))}
+          </div>
         ) : (
           <Table>
             <TableHeader>

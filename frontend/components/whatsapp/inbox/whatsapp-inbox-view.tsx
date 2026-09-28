@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, ArrowLeft, MessageCircle, MessagesSquare, Search, ShoppingCart } from "lucide-react";
+import { ArrowLeft, MessagesSquare, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -22,9 +22,11 @@ import { ConversationContextPanel } from "./conversation-context-panel";
 import { useCustomer360 } from "@/hooks/useCustomers";
 import { useAuthStore } from "@/stores/auth-store";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
+import { DeleteCustomerDialog } from "@/components/customers/delete-customer-dialog";
 import { ConversationChat } from "./conversation-chat";
 import { ConversationListItem } from "./conversation-list-item";
 import { CreateOrderDialog } from "./create-order-dialog";
+import { BulkSendDialog } from "./bulk-send-dialog";
 import { MessageComposer } from "./message-composer";
 
 const PAGE_SIZE = 25;
@@ -49,6 +51,26 @@ function ConversationListPanel({
   const archive = useArchiveConversationMutation();
   const unarchive = useUnarchiveConversationMutation();
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Part 3 (WhatsApp Inbox): selection mode for bulk-sending a template to several selected chats at
+  // once. Off by default so the normal "click a chat to open it" behavior is unaffected.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkSendOpen, setBulkSendOpen] = useState(false);
+
+  function toggleSelectionMode() {
+    setSelectionMode((prev) => !prev);
+    setSelectedIds(new Set());
+  }
+
+  function toggleOne(leadId: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(leadId)) next.delete(leadId);
+      else next.add(leadId);
+      return next;
+    });
+  }
 
   // Same debounce idiom as send-whatsapp-dialog.tsx's template preview - avoids firing a request per keystroke.
   function handleSearchChange(value: string) {
@@ -87,23 +109,44 @@ function ConversationListPanel({
   return (
     <div className={cn("flex h-full flex-col", className)}>
       <div className="border-b p-3">
-        <div className="mb-2 flex gap-1 text-xs" role="tablist" aria-label="Inbox view">
-          {([false, true] as const).map((isArchived) => (
-            <button
-              key={String(isArchived)}
-              type="button"
-              role="tab"
-              aria-selected={archivedView === isArchived}
-              onClick={() => {
-                setArchivedView(isArchived);
-                setPage(1);
-              }}
-              className={cn("rounded-full px-3 py-1 font-medium transition-colors", archivedView === isArchived ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}
-            >
-              {isArchived ? "Archived" : "Inbox"}
-            </button>
-          ))}
+        <div className="mb-2 flex items-center justify-between gap-1">
+          <div className="flex gap-1 text-xs" role="tablist" aria-label="Inbox view">
+            {([false, true] as const).map((isArchived) => (
+              <button
+                key={String(isArchived)}
+                type="button"
+                role="tab"
+                aria-selected={archivedView === isArchived}
+                onClick={() => {
+                  setArchivedView(isArchived);
+                  setPage(1);
+                }}
+                className={cn("rounded-full px-3 py-1 font-medium transition-colors", archivedView === isArchived ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:bg-muted")}
+              >
+                {isArchived ? "Archived" : "Inbox"}
+              </button>
+            ))}
+          </div>
+          <Button type="button" size="sm" variant={selectionMode ? "secondary" : "ghost"} onClick={toggleSelectionMode}>
+            {selectionMode ? "Cancel" : "Select"}
+          </Button>
         </div>
+        {selectionMode ? (
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/50 px-2 py-1.5 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="font-medium">{selectedIds.size} chat{selectedIds.size === 1 ? "" : "s"} selected</span>
+              <button type="button" className="text-primary hover:underline" onClick={() => setSelectedIds(new Set((data?.items ?? []).map((c) => c.leadId)))}>
+                Select all
+              </button>
+              <button type="button" className="text-muted-foreground hover:underline" onClick={() => setSelectedIds(new Set())}>
+                Clear selection
+              </button>
+            </div>
+            <Button type="button" size="sm" disabled={selectedIds.size === 0} onClick={() => setBulkSendOpen(true)}>
+              Send Template
+            </Button>
+          </div>
+        ) : null}
         <div className="relative">
           <Search className="absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -143,6 +186,9 @@ function ConversationListPanel({
                 selected={conversation.leadId === selectedLeadId}
                 onSelect={() => onSelect(conversation.leadId)}
                 onArchiveToggle={() => setArchiveTarget({ leadId: conversation.leadId, name: conversation.name, archived: conversation.archived })}
+                selectionMode={selectionMode}
+                checked={selectedIds.has(conversation.leadId)}
+                onToggleSelect={() => toggleOne(conversation.leadId)}
               />
             ))}
           </ul>
@@ -169,6 +215,16 @@ function ConversationListPanel({
         pending={archive.isPending || unarchive.isPending}
         onConfirm={confirmArchiveToggle}
       />
+
+      <BulkSendDialog
+        open={bulkSendOpen}
+        onOpenChange={setBulkSendOpen}
+        leadIds={Array.from(selectedIds)}
+        onSent={() => {
+          setSelectionMode(false);
+          setSelectedIds(new Set());
+        }}
+      />
     </div>
   );
 }
@@ -188,8 +244,10 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const archiveMutation = useArchiveConversationMutation();
   const unarchiveMutation = useUnarchiveConversationMutation();
   const [archiveOpen, setArchiveOpen] = useState(false);
-  // "Delete" is deliberately not offered: nothing here deletes messages. Archiving is the safe removal, and the
-  // backend (not this component) decides what archived means.
+  const [deleteCustomerOpen, setDeleteCustomerOpen] = useState(false);
+  // "Delete Chat" reuses the existing archive/unarchive infrastructure (Part 7): nothing here ever
+  // deletes messages. Archiving is the safe removal that already exists end-to-end, and the backend
+  // (not this component) decides what "archived" means.
   const isArchived = conversation.data?.archived ?? false;
 
   function confirmArchive() {
@@ -198,7 +256,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
       { leadId, variables: undefined },
       {
         onSuccess: () => {
-          toast.success(isArchived ? "Conversation restored to the inbox." : "Conversation archived. The customer, orders and payments were not affected.");
+          toast.success(isArchived ? "Conversation restored to the inbox." : "Conversation deleted from your active Inbox. Customer and order records were not deleted.");
           setArchiveOpen(false);
           onBack();
         },
@@ -213,85 +271,97 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   }, [leadId, unread]);
 
   return (
-    <div className="flex h-full flex-col">
-      {/* Sticky header: back (mobile only), name/mobile/lead number, link to Customer 360, Send WhatsApp. */}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
-        <div className="flex min-w-0 items-center gap-2">
-          <Button variant="ghost" size="icon-sm" className="md:hidden" onClick={onBack} aria-label="Back to conversations">
-            <ArrowLeft />
-          </Button>
-          {isLoading ? (
-            <Skeleton className="h-6 w-40" />
-          ) : error || !data ? (
-            <p className="text-sm text-destructive">{error ?? "Failed to load this customer."}</p>
-          ) : (
-            <div className="min-w-0">
-              <Link href={customerDetailHref(leadId)} className="truncate font-semibold hover:underline">
-                {data.profile.name}
-              </Link>
-              <p className="truncate text-xs text-muted-foreground">
-                {data.profile.mobile ?? "No phone on file"} · {data.profile.leadNumber}
-              </p>
-              {capability ? (
-                <p className="truncate text-xs text-muted-foreground" data-testid="conversation-provider">
-                  Provider: <span className="font-medium text-foreground">{capability.activeProvider ? (PROVIDER_LABELS[capability.activeProvider] ?? capability.activeProvider) : "None yet"}</span>
-                  {capability.activeProvider === "META"
-                    ? capability.serviceWindow.open && capability.serviceWindow.expiresAt
-                      ? ` · Service window open until ${new Date(capability.serviceWindow.expiresAt).toLocaleString()}`
-                      : " · Service window closed - templates only"
-                    : capability.activeProvider
-                      ? " · Templates only"
-                      : ""}
-                </p>
-              ) : null}
-            </div>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {/* E7.8 (WhatsApp -> CRM Order): identifies the lead from this open conversation
-              automatically (leadId, already the whole panel's own prop) and reuses the exact same
-              Order model / createManualOrder service every other order comes from - never a
-              WhatsApp-only order record. Server-side RBAC (getLeadScope) is the real gate; this
-              button is just always shown, since a conversation is only open here if it's already in
-              the caller's scope. */}
-          {conversation.data ? (
-            <Button size="sm" variant="outline" onClick={() => setArchiveOpen(true)} title={isArchived ? "Restore to inbox" : "Archive conversation"}>
-              {isArchived ? <ArchiveRestore data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
-              {isArchived ? "Unarchive" : "Archive"}
+    <div className="flex h-full min-h-0">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        {/* Sticky header: back (mobile only), name/mobile/lead number, provider/service-window info.
+            Create Order, Send WhatsApp, Delete Chat and Delete Customer live in the Actions card on
+            the right (Part 6) - always visible below, never lg-only, since it sits in this same flex row. */}
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+          <div className="flex min-w-0 items-center gap-2">
+            <Button variant="ghost" size="icon-sm" className="md:hidden" onClick={onBack} aria-label="Back to conversations">
+              <ArrowLeft />
             </Button>
-          ) : null}
-          <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!data}>
-            <ShoppingCart data-icon="inline-start" />
-            Create Order
-          </Button>
-          <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data?.profile.mobile}>
-            <MessageCircle data-icon="inline-start" />
-            Send WhatsApp
-          </Button>
+            {isLoading ? (
+              <Skeleton className="h-6 w-40" />
+            ) : error || !data ? (
+              <p className="text-sm text-destructive">{error ?? "Failed to load this customer."}</p>
+            ) : (
+              <div className="min-w-0">
+                <Link href={customerDetailHref(leadId)} className="truncate font-semibold hover:underline">
+                  {data.profile.name}
+                </Link>
+                <p className="truncate text-xs text-muted-foreground">
+                  {data.profile.mobile ?? "No phone on file"} · {data.profile.leadNumber}
+                </p>
+                {capability ? (
+                  <p className="truncate text-xs text-muted-foreground" data-testid="conversation-provider">
+                    Provider: <span className="font-medium text-foreground">{capability.activeProvider ? (PROVIDER_LABELS[capability.activeProvider] ?? capability.activeProvider) : "None yet"}</span>
+                    {capability.activeProvider === "META"
+                      ? capability.serviceWindow.open && capability.serviceWindow.expiresAt
+                        ? ` · Service window open until ${new Date(capability.serviceWindow.expiresAt).toLocaleString()}`
+                        : " · Service window closed - templates only"
+                      : capability.activeProvider
+                        ? " · Templates only"
+                        : ""}
+                  </p>
+                ) : null}
+              </div>
+            )}
+          </div>
+          {/* Below lg there is no right panel at all (see the Actions card at the bottom of this
+              component), so the same actions stay reachable here instead of disappearing. */}
+          <div className="flex gap-2 lg:hidden">
+            <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!data}>
+              Create Order
+            </Button>
+            <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data?.profile.mobile}>
+              Send WhatsApp
+            </Button>
+            {conversation.data ? (
+              <Button size="sm" variant="outline" onClick={() => setArchiveOpen(true)}>
+                {isArchived ? "Restore Chat" : "Delete Chat"}
+              </Button>
+            ) : null}
+            <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteCustomerOpen(true)} disabled={!data}>
+              Delete Customer
+            </Button>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1">
+          <ConversationChat leadId={leadId} />
+        </div>
+
+        {/* Sticky composer: a real, typable text box (per spec), but AiSensy's Campaign API - the
+            only API this CRM sends through - has no free-text or media endpoint, only
+            sendTemplateMessage(). MessageComposer never fakes a send for either; the only action that
+            actually reaches the backend is the template button, which opens the same existing
+            SendWhatsAppDialog/sendTemplate() path used everywhere else. */}
+        <div className="border-t p-3">
+          <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} blockedMessage={capability?.freeText.message ?? null} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
         </div>
       </div>
 
-      {/* Scrollable chat area; the composer trigger lives in a sticky footer below it. */}
-      <div className="min-h-0 flex-1">
-        <ConversationChat leadId={leadId} />
-      </div>
-
-      {/* Sticky composer: a real, typable text box (per spec), but AiSensy's Campaign API - the
-          only API this CRM sends through - has no free-text or media endpoint, only
-          sendTemplateMessage(). MessageComposer never fakes a send for either; the only action that
-          actually reaches the backend is the template button, which opens the same existing
-          SendWhatsAppDialog/sendTemplate() path used everywhere else. */}
-      <div className="border-t p-3">
-        <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} blockedMessage={capability?.freeText.message ?? null} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
+      <div className="hidden min-h-0 w-[340px] shrink-0 border-l lg:block">
+        <ConversationContextPanel
+          leadId={leadId}
+          canSendWhatsApp={Boolean(data?.profile.mobile)}
+          onSendWhatsApp={() => setSendOpen(true)}
+          onCreateOrder={() => setCreateOrderOpen(true)}
+          isArchived={isArchived}
+          onDeleteChat={() => setArchiveOpen(true)}
+          onDeleteCustomer={() => setDeleteCustomerOpen(true)}
+        />
       </div>
 
       <ConfirmActionDialog
         open={archiveOpen}
         onOpenChange={setArchiveOpen}
-        title={isArchived ? "Restore this conversation?" : "Archive this conversation?"}
-        description={isArchived ? "It will move back to your inbox." : "It leaves your inbox and moves to Archived. The customer, orders, payments and message history are not deleted, and a new message from the customer brings it back automatically."}
-        confirmLabel={isArchived ? "Restore" : "Archive"}
-        pendingLabel={isArchived ? "Restoring…" : "Archiving…"}
+        title={isArchived ? "Restore this conversation?" : "Delete conversation?"}
+        description={isArchived ? "It will move back to your inbox." : "This will remove this conversation from the active Inbox. Customer and order records will not be deleted."}
+        confirmLabel={isArchived ? "Restore" : "Delete Chat"}
+        pendingLabel={isArchived ? "Restoring…" : "Deleting…"}
+        destructive={!isArchived}
         pending={archiveMutation.isPending || unarchiveMutation.isPending}
         onConfirm={confirmArchive}
       />
@@ -300,6 +370,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
         <>
           <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={data.profile.name} orders={data.orders} />
           <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={leadId} customerName={data.profile.name} customerMobile={data.profile.mobile} />
+          <DeleteCustomerDialog open={deleteCustomerOpen} onOpenChange={setDeleteCustomerOpen} leadId={leadId} customerName={data.profile.name} onDeactivated={onBack} />
         </>
       ) : null}
     </div>
@@ -317,10 +388,11 @@ export function WhatsAppInboxView() {
       </div>
 
       <Card className="overflow-hidden p-0">
-        <CardContent className="grid h-[calc(100vh-14rem)] min-h-[420px] grid-cols-1 gap-0 p-0 md:grid-cols-[320px_1fr] lg:grid-cols-[320px_1fr_340px]">
+        <CardContent className="grid h-[calc(100vh-14rem)] min-h-[420px] grid-cols-1 gap-0 p-0 md:grid-cols-[320px_1fr]">
           {/* Mobile/tablet: show either the list or the open chat, never both at once - selecting a
               conversation reveals the chat panel; the header's back button returns here. md+ shows
-              list + chat side by side; lg+ adds the customer/order context pane on the right. */}
+              list + chat side by side; the customer/order context pane (inside ConversationDetailPanel)
+              only appears at lg+, since it needs the extra width. */}
           <div className={cn("min-h-0 border-b md:border-r md:border-b-0", selectedLeadId ? "hidden md:block" : "block")}>
             <ConversationListPanel selectedLeadId={selectedLeadId} onSelect={setSelectedLeadId} />
           </div>
@@ -333,9 +405,6 @@ export function WhatsAppInboxView() {
                 <p className="text-sm">Select a conversation to start.</p>
               </div>
             )}
-          </div>
-          <div className="hidden min-h-0 border-l lg:block">
-            {selectedLeadId ? <ConversationContextPanel leadId={selectedLeadId} /> : null}
           </div>
         </CardContent>
       </Card>

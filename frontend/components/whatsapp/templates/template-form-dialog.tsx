@@ -11,11 +11,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { useCreateTemplateMutation, useUpdateTemplateMutation } from "@/lib/api-client/mutations/whatsapp-templates.mutations";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
+import { useCreateTemplateMutation, useSubmitTemplateToMetaMutation, useUpdateTemplateMutation } from "@/lib/api-client/mutations/whatsapp-templates.mutations";
 import { whatsappCloudConfigQueryOptions } from "@/lib/api-client/queries/whatsapp-cloud-config.queries";
 import { whatsappStatusQueryOptions } from "@/lib/api-client/queries/whatsapp.queries";
 import { cn } from "@/lib/utils";
-import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
+import { META_STATUS_LABELS, PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 import {
   BODY_MAX,
   BUTTON_TEXT_MAX,
@@ -33,7 +34,7 @@ import {
   substituteExamples,
 } from "@/lib/whatsapp-template-builder";
 import { useAuthStore } from "@/stores/auth-store";
-import type { TemplateButton, TemplateButtonType, TemplateComponents, TemplateHeader, TemplateHeaderType, WhatsAppProvider, WhatsAppTemplate } from "@/lib/api-client/types/whatsapp-templates.types";
+import type { TemplateButton, TemplateButtonType, TemplateComponents, TemplateHeader, TemplateHeaderType, SubmitTemplateResult, WhatsAppProvider, WhatsAppTemplate } from "@/lib/api-client/types/whatsapp-templates.types";
 
 const textareaClass =
   "w-full min-w-0 resize-y rounded-lg border border-input bg-transparent px-2.5 py-1.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 dark:bg-input/30";
@@ -114,9 +115,12 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
   const [buttons, setButtons] = useState<TemplateButton[]>(template?.components?.buttons ?? []);
   const [examples, setExamples] = useState<Record<string, string>>(template?.components?.bodyExamples ?? {});
 
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [submitResult, setSubmitResult] = useState<SubmitTemplateResult | null>(null);
+  const submitMutation = useSubmitTemplateToMetaMutation();
   const createMutation = useCreateTemplateMutation();
   const updateMutation = useUpdateTemplateMutation();
-  const pending = createMutation.isPending || updateMutation.isPending;
+  const pending = createMutation.isPending || updateMutation.isPending || submitMutation.isPending;
   const variables = useMemo(() => extractVariables(body), [body]);
 
   // Drop example values for variables no longer in the body, and never lose one still present.
@@ -163,25 +167,45 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
     };
   }
 
+  // Saves the template locally (create or update), then hands its id to `then`. Used by both Save Draft and Submit to Meta.
+  function save(then: (id: string) => void) {
+    const components = buildComponents();
+    const onError = (error: unknown) => toast.error(getErrorMessage(error, "Could not save the template."));
+    if (isEdit && template) {
+      updateMutation.mutate({ id: template.id, input: { name, category: category || undefined, language, body, components: components ?? null } }, { onSuccess: () => then(template.id), onError });
+    } else {
+      createMutation.mutate({ name, provider, category: category || undefined, language, body, components }, { onSuccess: (created) => then(created.id), onError });
+    }
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!formValid) {
       setNameTouched(true);
       return;
     }
-    const components = buildComponents();
-    const onSuccess = () => {
-      toast.success(isEdit ? "Template updated." : "Saved as draft. Submit/approval must be completed through the configured provider flow (Sync from provider / Sync Meta templates).");
+    save(() => {
+      toast.success(isEdit ? "Template updated." : provider === "META" ? "Saved as a local draft - not yet submitted to Meta." : "Saved as draft. Submit/approval must be completed through the configured provider flow.");
       onOpenChange(false);
       onSaved?.();
-    };
-    const onError = (error: unknown) => toast.error(getErrorMessage(error, "Could not save the template."));
+    });
+  }
 
-    if (isEdit && template) {
-      updateMutation.mutate({ id: template.id, input: { name, category: category || undefined, language, body, components: components ?? null } }, { onSuccess, onError });
-    } else {
-      createMutation.mutate({ name, provider, category: category || undefined, language, body, components }, { onSuccess, onError });
-    }
+  function handleConfirmedSubmit() {
+    save((id) =>
+      submitMutation.mutate(id, {
+        onSuccess: (result) => {
+          setConfirmOpen(false);
+          setSubmitResult(result);
+          onSaved?.();
+        },
+        // The draft itself WAS saved above - only the Meta submission failed, and it is still a local draft.
+        onError: (error) => {
+          setConfirmOpen(false);
+          toast.error(getErrorMessage(error, "Meta submission failed."));
+        },
+      }),
+    );
   }
 
   function updateButton(index: number, patch: Partial<TemplateButton>) {
@@ -203,7 +227,9 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
             <DialogDescription>
               {isEdit
                 ? "Local details only - this does not change the template's status with the provider."
-                : "No provider in this CRM can create a real WhatsApp template through its API today (Meta/AiSensy/Gupshup only ever sync existing ones in). This is saved as a local draft - use it as a reference when you create the real template in the provider's own console, then Sync to bring in its approved status."}
+                : provider === "META"
+                  ? "Save it as a local draft, or submit it to Meta for review. Submission does not mean approval - Meta reviews it, and its status is brought in by Sync Meta templates."
+                  : "This provider has no template-creation API in this CRM. It is saved as a local draft - use it as a reference when you create the real template in the provider's own console, then Sync to bring in its approved status."}
             </DialogDescription>
           </DialogHeader>
 
@@ -403,9 +429,72 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
             <Button type="submit" disabled={pending || !formValid}>
               {pending ? "Saving…" : isEdit ? "Save changes" : "Save draft"}
             </Button>
+            {provider === "META" && (!template || template.status === "DRAFT" || template.status === "REJECTED") ? (
+              <Button type="button" disabled={pending || !formValid} onClick={() => setConfirmOpen(true)}>
+                Submit to Meta for Approval
+              </Button>
+            ) : null}
           </DialogFooter>
         </form>
       </DialogContent>
+
+      <ConfirmActionDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title="Submit this template to Meta for approval?"
+        description={
+          <>
+            Template: <span className="font-mono text-foreground">{name}</span>
+            <br />
+            Category: {category ? category.charAt(0) + category.slice(1).toLowerCase() : "not set"}
+            <br />
+            Language: {LANGUAGE_OPTIONS.find((l) => l.code === language)?.label ?? language}
+            <br />
+            Once submitted, Meta will review the template. Submission does not mean approval.
+          </>
+        }
+        confirmLabel="Submit to Meta"
+        pendingLabel="Submitting…"
+        pending={pending}
+        onConfirm={handleConfirmedSubmit}
+      />
+
+      <Dialog
+        open={submitResult !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setSubmitResult(null);
+            reset();
+            onOpenChange(false);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[440px]">
+          <DialogHeader>
+            <DialogTitle>{submitResult?.alreadySubmitted ? "Already submitted to Meta" : "Template submitted to Meta"}</DialogTitle>
+            <DialogDescription>
+              Template: <span className="font-mono text-foreground">{name}</span>
+              <br />
+              Status: {submitResult ? META_STATUS_LABELS[submitResult.status] : ""}
+              <br />
+              Meta Template ID: <span className="font-mono text-foreground">{submitResult?.providerTemplateId}</span>
+              <br />
+              The template can be used for messaging only after Meta approves it. Use Sync Meta templates to refresh its status.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              onClick={() => {
+                setSubmitResult(null);
+                reset();
+                onOpenChange(false);
+              }}
+            >
+              Done
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   );
 }

@@ -137,25 +137,55 @@ export const ORDER_ONLY_VARIABLES = new Set(["order_number", "order_status", "or
 export interface VariableResolutionResult {
   values: Record<string, string>;
   errors: string[];
+  /** One entry per requested variable, in order - the single shared source of truth for how the Send WhatsApp UI,
+   *  bulk send review, and the backend all agree on what a template needs. `source: "crm"` means this CRM can
+   *  resolve it automatically from the lead/order (customer_name, order_number, ...); `source: "manual"` means no
+   *  automatic source exists for a variable with this name - it is a normal, real variable of THIS template (every
+   *  name here always comes from that template's own body), just one only a person can supply a value for (e.g. a
+   *  one-off campaign detail like webinar_name). Never "unknown": a variable's name is only ever taken from the
+   *  template it belongs to. */
+  fields: TemplateVariableField[];
 }
 
-export function resolveTemplateVariables(variableNames: string[], ctx: VariableResolutionContext): VariableResolutionResult {
+export type VariableSource = "crm" | "manual";
+
+export interface TemplateVariableField {
+  name: string;
+  source: VariableSource;
+  /** The resolved value - from CRM data for `source: "crm"`, from `manualValues` for `source: "manual"` - or null
+   *  when nothing is available yet (a CRM variable with no order selected, or a manual variable nobody has typed a
+   *  value for). */
+  value: string | null;
+}
+
+/** Whether this CRM has ANY automatic data source for a variable with this name - independent of whether a value
+ *  is actually available for a specific lead/order right now. Used by the frontend (and this module) to label a
+ *  field "Auto-filled" vs "Required input" before a value is even computed. */
+export function classifyVariable(name: string): VariableSource {
+  return name in REGISTRY ? "crm" : "manual";
+}
+
+/** `manualValues` supplies a value for any variable by name - normally used for the ones with no CRM source
+ *  (`source: "manual"`), but a manually-typed value always wins even for a CRM-resolvable one (a person can
+ *  override an auto-filled value before sending), matching the Send WhatsApp UI's own editable fields. */
+export function resolveTemplateVariables(variableNames: string[], ctx: VariableResolutionContext, manualValues: Record<string, string> = {}): VariableResolutionResult {
   const values: Record<string, string> = {};
   const errors: string[] = [];
+  const fields: TemplateVariableField[] = [];
 
   for (const name of variableNames) {
-    const resolver = REGISTRY[name];
-    if (!resolver) {
-      errors.push(`Unknown template variable: ${name}`);
+    const manual = manualValues[name]?.trim();
+    const source = classifyVariable(name);
+    const resolved = manual ? manual : source === "crm" ? REGISTRY[name]!(ctx) : null;
+
+    if (resolved === null || resolved === "") {
+      errors.push(`Value required for ${name}`);
+      fields.push({ name, source, value: null });
       continue;
     }
-    const value = resolver(ctx);
-    if (value === null || value === "") {
-      errors.push(`Missing value for variable: ${name}`);
-      continue;
-    }
-    values[name] = value;
+    values[name] = resolved;
+    fields.push({ name, source, value: resolved });
   }
 
-  return { values, errors };
+  return { values, errors, fields };
 }

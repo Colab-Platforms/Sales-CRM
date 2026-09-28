@@ -22,7 +22,7 @@ import { usePreviewTemplateMutation, useSendTemplateMutation } from "@/lib/api-c
 import { whatsappTemplateListQueryOptions } from "@/lib/api-client/queries/whatsapp-templates.queries";
 import { messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
 import type { CustomerOrderSummary } from "@/lib/api-client/types/customers.types";
-import type { WhatsAppMessageResult } from "@/lib/api-client/types/whatsapp-messaging.types";
+import type { TemplateVariableField, WhatsAppMessageResult } from "@/lib/api-client/types/whatsapp-messaging.types";
 import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 
 const PREVIEW_DEBOUNCE_MS = 300;
@@ -41,6 +41,7 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
   const [orderId, setOrderId] = useState<string>(NO_ORDER);
   const [mediaUrl, setMediaUrl] = useState("");
   const [mediaFilename, setMediaFilename] = useState("");
+  const [manualValues, setManualValues] = useState<Record<string, string>>({});
   const [sendResult, setSendResult] = useState<WhatsAppMessageResult | null>(null);
 
   // Resets on close happen from the same user action that closes the dialog (Cancel, Done, or the
@@ -52,9 +53,17 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
       setOrderId(NO_ORDER);
       setMediaUrl("");
       setMediaFilename("");
+      setManualValues({});
       setSendResult(null);
     }
     onOpenChange(next);
+  }
+
+  // A different template has different variables entirely - values typed for one template are never
+  // carried over as if they meant the same thing for another.
+  function handleTemplateChange(next: string) {
+    setTemplateId(next);
+    setManualValues({});
   }
 
   const templatesQuery = useQuery({
@@ -80,11 +89,11 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
   useEffect(() => {
     if (!templateId) return;
     const timer = setTimeout(() => {
-      previewMutation.mutate({ leadId, templateId, orderId: orderId === NO_ORDER ? undefined : orderId });
+      previewMutation.mutate({ leadId, templateId, orderId: orderId === NO_ORDER ? undefined : orderId, manualValues });
     }, PREVIEW_DEBOUNCE_MS);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [templateId, orderId, leadId]);
+  }, [templateId, orderId, leadId, manualValues]);
 
   const templateItems = useMemo(() => Object.fromEntries(templates.map((t) => [t.id, `${t.name} (${PROVIDER_LABELS[t.provider] ?? t.provider})`])), [templates]);
   const orderItems = useMemo(() => ({ [NO_ORDER]: "No order", ...Object.fromEntries(orders.map((o) => [o.id, o.orderNumber])) }), [orders]);
@@ -92,12 +101,26 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
   const preview = previewMutation.data;
   const previewError = previewMutation.isError ? getErrorMessage(previewMutation.error, "Could not preview this message.") : null;
 
+  // Before the first preview response comes back (or if it errored), fall back to the template's own
+  // variable list so the fields render immediately - every one defaults to "auto-filled" until the
+  // backend's classification (the single source of truth - see whatsapp.variable-resolver.ts's
+  // classifyVariable) says otherwise.
+  const fields: TemplateVariableField[] = preview?.fields ?? (selectedTemplate?.variables.map((name) => ({ name, source: "crm" as const, value: null })) ?? []);
+  const missingRequiredFields = fields.filter((f) => f.value === null);
+
   // Client-side pre-check only, for a fast/clear error before submitting - the backend
   // (assertValidMediaUrl) is still the real, authoritative gate against a local/non-public URL.
   const mediaUrlTrimmed = mediaUrl.trim();
   const mediaUrlError = mediaUrlTrimmed && !mediaUrlTrimmed.startsWith("https://") ? "Media URL must start with https:// (AiSensy requires a publicly accessible URL)." : null;
 
-  const canSend = Boolean(templateId) && Boolean(preview) && !previewMutation.isPending && !sendMutation.isPending && !sendResult && !mediaUrlError;
+  const canSend =
+    Boolean(templateId) &&
+    Boolean(preview) &&
+    missingRequiredFields.length === 0 &&
+    !previewMutation.isPending &&
+    !sendMutation.isPending &&
+    !sendResult &&
+    !mediaUrlError;
 
   function handleSend() {
     sendMutation.mutate(
@@ -107,6 +130,7 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
         orderId: orderId === NO_ORDER ? undefined : orderId,
         mediaUrl: mediaUrlTrimmed || undefined,
         mediaFilename: mediaFilename.trim() || undefined,
+        manualValues,
       },
       {
         onSuccess: (result) => setSendResult(result),
@@ -143,7 +167,7 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
                     : "No approved templates are available yet."}
                 </p>
               ) : (
-                <Select value={templateId || null} items={templateItems} onValueChange={(v) => setTemplateId(v ?? "")}>
+                <Select value={templateId || null} items={templateItems} onValueChange={(v) => handleTemplateChange(v ?? "")}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select an approved template" />
                   </SelectTrigger>
@@ -157,6 +181,18 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
                 </Select>
               )}
             </div>
+
+            {selectedTemplate ? (
+              <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium">{selectedTemplate.name}</p>
+                  <p className="text-xs text-muted-foreground">{PROVIDER_LABELS[selectedTemplate.provider] ?? selectedTemplate.provider}</p>
+                </div>
+                <Badge variant="secondary" className="bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                  Approved
+                </Badge>
+              </div>
+            ) : null}
 
             {templateId && selectedTemplate && selectedTemplate.variables.length > 0 && orders.length > 0 ? (
               <div className="grid gap-1.5">
@@ -177,12 +213,31 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
               </div>
             ) : null}
 
-            {templateId && selectedTemplate && selectedTemplate.variables.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {selectedTemplate.variables.map((v) => (
-                  <Badge key={v} variant="secondary" className="font-normal">
-                    {`{{${v}}}`} · auto-filled
-                  </Badge>
+            {templateId && fields.length > 0 ? (
+              <div className="grid gap-2.5">
+                <label className="text-sm font-medium">Variables</label>
+                {fields.map((field) => (
+                  <div key={field.name} className="grid gap-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs text-muted-foreground">{`{{${field.name}}}`}</span>
+                      {field.source === "crm" ? (
+                        <Badge variant="secondary" className="font-normal">
+                          Auto-filled
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="border-amber-400 font-normal text-amber-700 dark:text-amber-400">
+                          Required input
+                        </Badge>
+                      )}
+                    </div>
+                    <Input
+                      value={manualValues[field.name] ?? field.value ?? ""}
+                      placeholder={field.source === "crm" ? "Resolved automatically from customer/order data" : `Enter a value for ${field.name}`}
+                      onChange={(e) => setManualValues((prev) => ({ ...prev, [field.name]: e.target.value }))}
+                      aria-invalid={field.value === null}
+                    />
+                    {field.value === null ? <p className="text-xs text-destructive">Value required for {field.name}</p> : null}
+                  </div>
                 ))}
               </div>
             ) : null}

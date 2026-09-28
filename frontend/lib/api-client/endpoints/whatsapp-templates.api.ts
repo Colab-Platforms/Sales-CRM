@@ -4,6 +4,7 @@ import type {
   CreateTemplateInput,
   DeleteTemplateResult,
   ListTemplatesParams,
+  SubmitTemplateResult,
   TemplateListResult,
   TemplateSyncSummary,
   UpdateTemplateInput,
@@ -33,6 +34,10 @@ export const whatsappTemplatesApi = {
   },
   async remove(id: string): Promise<DeleteTemplateResult> {
     const res = await apiClient.delete<ApiEnvelope<DeleteTemplateResult>>(`/whatsapp/templates/${id}`);
+    return res.data.data;
+  },
+  async submitToMeta(id: string): Promise<SubmitTemplateResult> {
+    const res = await apiClient.post<ApiEnvelope<SubmitTemplateResult>>(`/whatsapp/templates/${id}/submit`);
     return res.data.data;
   },
 };

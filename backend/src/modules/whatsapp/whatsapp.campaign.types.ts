@@ -42,7 +42,7 @@ export interface CampaignSummary {
   name: string;
   description: string | null;
   status: WhatsAppCampaignStatus;
-  template: { id: string; name: string; status: string } | null;
+  template: { id: string; name: string; status: string; provider: string } | null;
   createdBy: { id: string; name: string } | null;
   scheduledAt: string | null;
   startedAt: string | null;
@@ -62,12 +62,19 @@ export interface AudiencePreview {
   count: number;
   sample: CustomerListItem[];
   excludedNoMobile: number;
+  /** Excluded because CommunicationPreference marks them explicitly OPTED_OUT of WhatsApp - a compliance
+   *  exclusion, never overridable by a filter. */
+  excludedOptedOut: number;
 }
 
 export interface ListCampaignsQuery {
   page: number;
   pageSize: number;
   status?: WhatsAppCampaignStatus;
+  search?: string;
+  provider?: "AISENSY" | "GUPSHUP" | "META";
+  createdFrom?: Date;
+  createdTo?: Date;
 }
 
 export interface CampaignListResult {

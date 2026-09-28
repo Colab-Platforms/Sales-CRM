@@ -10,6 +10,9 @@ const sendTemplateSchema = z.object({
   // service (assertValidMediaUrl), where it can give a specific, actionable error message.
   mediaUrl: z.string().trim().min(1, "mediaUrl must not be empty").max(2048).optional(),
   mediaFilename: z.string().trim().min(1).max(255).optional(),
+  // Keys are the template's own variable names; a name this CRM has no CRM data source for (see
+  // whatsapp.variable-resolver.ts's classifyVariable) can ONLY be filled this way.
+  manualValues: z.record(z.string(), z.string().max(1000)).optional(),
 });
 
 export const validateSendTemplate = (body: unknown) => validateSchema<SendTemplateInput>(sendTemplateSchema, body);

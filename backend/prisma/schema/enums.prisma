@@ -33,6 +33,12 @@ enum LeadWorkingStatus {
   INTERESTED
   NOT_INTERESTED
   CONVERTED
+  // A soft-deleted/deactivated customer profile (Part 8, WhatsApp Inbox improvements): Lead has no
+  // cascading delete from any related table (orders, conversations, messages, campaigns, activities
+  // all reference it), so a real DELETE is unsafe. This one enum value is the whole schema change -
+  // no new column/table - and every existing list/assignment query that filters LeadWorkingStatus
+  // simply needs to exclude it, exactly like any other terminal status.
+  DEACTIVATED
 
   @@map("lead_working_status")
 }

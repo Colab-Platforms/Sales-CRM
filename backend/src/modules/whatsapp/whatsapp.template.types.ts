@@ -33,6 +33,21 @@ export interface TemplateComponents {
   /** Example values for the body's {{name}} placeholders, keyed by name - shown in the live preview and useful
    *  context for whoever manually re-creates this template in the provider's own console. */
   bodyExamples?: Record<string, string>;
+  /** Bookkeeping for a real Meta submission - never rendered as part of the template itself, only read back to show
+   *  submission history. Reuses this existing JSON field rather than a new column: this is metadata ABOUT the
+   *  template's Meta lifecycle, not a template component. */
+  submission?: {
+    submittedAt: string;
+    lastSyncedAt?: string;
+    rejectionReason?: string | null;
+  };
+}
+
+export interface SubmitTemplateResult {
+  id: string;
+  providerTemplateId: string;
+  status: WhatsAppTemplateStatus;
+  alreadySubmitted: boolean;
 }
 
 export interface CreateTemplateInput {

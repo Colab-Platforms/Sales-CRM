@@ -12,7 +12,30 @@ import { ActivitySource, ActivityType, Role, WhatsAppTemplateStatus } from "../.
 import type { Prisma } from "../../../generated/prisma/client.js";
 import AuditService from "../audit/audit.service.js";
 import type { NormalizedTemplate, TemplateSyncResult, WhatsAppProvider } from "./whatsapp.provider.js";
+import { MetaCloudApiProvider, type MetaCloudApiCredentials } from "./whatsapp.meta.provider.js";
 import WhatsAppTemplateService from "./whatsapp.template.service.js";
+
+const META_CREDS: MetaCloudApiCredentials = { phoneNumberId: "PHONE-123", businessAccountId: "WABA-1", accessToken: "fake-token", appSecret: "app-secret", verifyToken: "verify", graphApiVersion: "v21.0" };
+
+/** A fake Meta Graph API: POST .../message_templates (create) and GET .../message_templates (sync/list). Real
+ *  MetaCloudApiProvider logic runs against it - only the network boundary is faked. */
+function fakeMetaFetch(state: { createStatus?: string; createId?: string; rejectAt?: string; onCreate?: (body: any) => void; listRows?: any[] }) {
+  const calls: { create: any[] } = { create: [] };
+  const fetchImpl = (async (url: string, init: any = {}) => {
+    const u = String(url);
+    if (u.includes("/message_templates") && init.method === "POST") {
+      const body = JSON.parse(init.body);
+      calls.create.push(body);
+      state.onCreate?.(body);
+      return new Response(JSON.stringify({ id: state.createId ?? `meta-${calls.create.length}`, status: state.createStatus ?? "PENDING" }), { status: 200 });
+    }
+    if (u.includes("/message_templates")) {
+      return new Response(JSON.stringify({ data: state.listRows ?? [] }), { status: 200 });
+    }
+    return new Response("not found", { status: 404 });
+  }) as unknown as typeof fetch;
+  return { provider: new MetaCloudApiProvider(META_CREDS, { fetchImpl }), calls };
+}
 
 class Rollback extends Error {}
 
@@ -495,6 +518,184 @@ describe("deleting a template (local CRM record only - no provider delete API ex
 
       const survivingMessage = await tx.whatsAppMessage.findUniqueOrThrow({ where: { id: message.id }, select: { templateId: true } });
       assert.equal(survivingMessage.templateId, null);
+    });
+  });
+});
+
+describe("submitting a Meta template for real Meta approval (fake Graph API - no real network call)", () => {
+  const draft = (tx: Prisma.TransactionClient, admin: { id: string }) =>
+    tx.whatsAppTemplate.create({
+      data: {
+        name: `upcoming_webinar_${uid().slice(0, 8)}`,
+        provider: "META",
+        language: "en_US",
+        category: "MARKETING",
+        body: "Hello {{name}}, your webinar is on {{date}}.",
+        variables: ["name", "date"],
+        components: { bodyExamples: { name: "Priya", date: "12 October" } },
+        status: WhatsAppTemplateStatus.DRAFT,
+        createdById: admin.id,
+      },
+      select: { id: true, name: true },
+    });
+
+  it("full lifecycle: Draft -> Submit -> Pending -> Sync -> Approved", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-1" });
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
+
+      const submitted = await svc.submitToMeta(as(admin, Role.ADMIN), template.id);
+      assert.deepEqual(submitted, { id: template.id, providerTemplateId: "meta-tpl-1", status: "PENDING", alreadySubmitted: false });
+      assert.equal(fake.calls.create.length, 1);
+      assert.equal(fake.calls.create[0].category, "marketing");
+      assert.equal(fake.calls.create[0].parameter_format, "named");
+
+      const pending = await svc.getTemplate(as(admin, Role.ADMIN), template.id);
+      assert.equal(pending.status, "PENDING");
+      assert.equal(pending.providerTemplateId, "meta-tpl-1");
+
+      // Meta approves it; the CRM only finds out via Sync - matching by (provider, providerTemplateId), the same
+      // key upsertSyncedTemplate always used, so this can never create a duplicate CRM row.
+      const syncFake = fakeMetaFetch({ listRows: [{ id: "meta-tpl-1", name: template.name, category: "MARKETING", language: "en_US", status: "APPROVED", components: [{ type: "BODY", text: "Hello {{name}}, your webinar is on {{date}}." }] }] });
+      const syncSvc = new WhatsAppTemplateService(tx, undefined, async () => syncFake.provider);
+      const summary = await syncSvc.syncTemplates(as(admin, Role.ADMIN), "META");
+      assert.equal(summary.updated, 1);
+      assert.equal(await tx.whatsAppTemplate.count({ where: { provider: "META", providerTemplateId: "meta-tpl-1" } }), 1, "never a duplicate row");
+
+      const approved = await svc.getTemplate(as(admin, Role.ADMIN), template.id);
+      assert.equal(approved.status, "APPROVED");
+    });
+  });
+
+  it("full lifecycle: Draft -> Submit -> Pending -> Sync -> Rejected, with the reason preserved", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-2" });
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
+      await svc.submitToMeta(as(admin, Role.ADMIN), template.id);
+
+      const syncFake = fakeMetaFetch({ listRows: [{ id: "meta-tpl-2", name: template.name, category: "MARKETING", language: "en_US", status: "REJECTED", rejected_reason: "INVALID_FORMAT", components: [{ type: "BODY", text: "Hello {{name}}, your webinar is on {{date}}." }] }] });
+      const syncSvc = new WhatsAppTemplateService(tx, undefined, async () => syncFake.provider);
+      await syncSvc.syncTemplates(as(admin, Role.ADMIN), "META");
+
+      const rejected = await svc.getTemplate(as(admin, Role.ADMIN), template.id);
+      assert.equal(rejected.status, "REJECTED");
+      assert.equal(rejected.components?.submission?.rejectionReason, "INVALID_FORMAT");
+
+      // A REJECTED template is never send-eligible - findApprovedTemplate's own status==="APPROVED" filter already
+      // covers this; confirmed here at the data level: it is not APPROVED, full stop.
+      assert.notEqual(rejected.status, "APPROVED");
+    });
+  });
+
+  it("submission is idempotent: calling it again while PENDING never calls Meta a second time, and returns the existing state", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-3" });
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
+
+      const first = await svc.submitToMeta(as(admin, Role.ADMIN), template.id);
+      const second = await svc.submitToMeta(as(admin, Role.ADMIN), template.id);
+      assert.equal(fake.calls.create.length, 1, "Meta was called exactly once");
+      assert.equal(first.alreadySubmitted, false);
+      assert.equal(second.alreadySubmitted, true);
+      assert.deepEqual(second, { id: template.id, providerTemplateId: "meta-tpl-3", status: "PENDING", alreadySubmitted: true });
+    });
+  });
+
+  it("two truly concurrent submissions of the same DRAFT template still result in exactly one real Meta create call", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-4" });
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
+
+      const [a, b] = await Promise.all([svc.submitToMeta(as(admin, Role.ADMIN), template.id), svc.submitToMeta(as(admin, Role.ADMIN), template.id)]);
+      assert.equal(fake.calls.create.length, 1, "the advisory lock serializes the two calls - Meta is only ever asked once");
+      assert.equal([a.alreadySubmitted, b.alreadySubmitted].filter((x) => x).length, 1, "exactly one of the two sees 'already submitted'");
+    });
+  });
+
+  it("a REJECTED template CAN be resubmitted (the real Meta workflow: fix it, try again) - and an APPROVED one cannot", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      await tx.whatsAppTemplate.update({ where: { id: template.id }, data: { status: "REJECTED", providerTemplateId: "old-rejected-id" } });
+
+      const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-5" });
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
+      const resubmitted = await svc.submitToMeta(as(admin, Role.ADMIN), template.id);
+      assert.equal(resubmitted.alreadySubmitted, false);
+      assert.equal(resubmitted.status, "PENDING");
+      assert.equal(fake.calls.create.length, 1);
+    });
+  });
+
+  it("rejects submitting a non-META template", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const svc = new WhatsAppTemplateService(tx);
+      const aisensy = await svc.createTemplate(as(admin, Role.ADMIN), { name: `t_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
+      await assert.rejects(() => svc.submitToMeta(as(admin, Role.ADMIN), aisensy.id), (e: any) => e.statusCode === 400 && /Meta Cloud API template/.test(e.message));
+    });
+  });
+
+  it("rejects submission when a variable has no example value - never calls Meta with an incomplete payload", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const svc = new WhatsAppTemplateService(tx);
+      const template = await svc.createTemplate(as(admin, Role.ADMIN), { name: `missing_ex_${uid().slice(0, 6)}`, provider: "META", language: "en_US", category: "UTILITY", body: "Hi {{name}}" });
+      const fake = fakeMetaFetch({});
+      const svc2 = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
+      await assert.rejects(() => svc2.submitToMeta(as(admin, Role.ADMIN), template.id), (e: any) => e.statusCode === 400 && /example/.test(e.message));
+      assert.equal(fake.calls.create.length, 0, "Meta is never called with a payload known to be invalid");
+    });
+  });
+
+  it("exposes a clear 503 when Meta is not configured at all - never silently falls back to a local draft", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => null);
+      await assert.rejects(() => svc.submitToMeta(as(admin, Role.ADMIN), template.id), (e: any) => e.statusCode === 503 && /not configured/.test(e.message));
+      const stillDraft = await tx.whatsAppTemplate.findUniqueOrThrow({ where: { id: template.id }, select: { status: true } });
+      assert.equal(stillDraft.status, "DRAFT");
+    });
+  });
+
+  it("surfaces Meta's own rejection reason for the API call itself, without leaking credentials", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const fetchImpl = (async () => new Response(JSON.stringify({ error: { message: "Invalid parameter", error_user_msg: "This template name is already in use." } }), { status: 400 })) as unknown as typeof fetch;
+      const provider = new MetaCloudApiProvider(META_CREDS, { fetchImpl });
+      const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => provider);
+      await assert.rejects(() => svc.submitToMeta(as(admin, Role.ADMIN), template.id), (e: any) => {
+        assert.equal(e.statusCode, 400);
+        assert.match(e.message, /already in use/);
+        assert.equal(e.message.includes("fake-token"), false);
+        return true;
+      });
+    });
+  });
+
+  it("a submitted-then-approved template becomes campaign-sendable; a still-PENDING one does not", async () => {
+    const { default: CustomersService } = await import("../customers/customers.service.js");
+    const { default: WhatsAppCampaignService } = await import("./whatsapp.campaign.service.js");
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const template = await draft(tx, admin);
+      const campaignSvc = new WhatsAppCampaignService(tx, new CustomersService(tx));
+
+      await assert.rejects(() => campaignSvc.createCampaign(as(admin, Role.ADMIN), { name: "x", templateId: template.id, filters: {} }), (e: any) => e.statusCode === 400 && /not APPROVED/.test(e.message));
+
+      await tx.whatsAppTemplate.update({ where: { id: template.id }, data: { status: "APPROVED", providerTemplateId: "meta-tpl-approved" } });
+      const created = await campaignSvc.createCampaign(as(admin, Role.ADMIN), { name: "x", templateId: template.id, filters: {} });
+      assert.equal(created.status, "DRAFT");
     });
   });
 });

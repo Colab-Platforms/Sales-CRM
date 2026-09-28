@@ -43,6 +43,20 @@ export const createCampaign = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
+export const duplicateCampaign = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCampaignIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await campaignService.duplicateCampaign(req.user!, value.id);
+    sendResponse(res, true, result, "OK", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const updateCampaign = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error: idError, value: idValue } = validateCampaignIdParams(req.params);

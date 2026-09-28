@@ -7,10 +7,12 @@ import { Prisma } from "../../../generated/prisma/client.js";
 import type { DbClient } from "@/lib/leadScope.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
+import type { MetaCloudApiProvider } from "./whatsapp.meta.provider.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { NormalizedTemplate, WhatsAppProvider } from "./whatsapp.provider.js";
+import { buildMetaTemplatePayload } from "./whatsapp.template.meta-payload.js";
 import { extractTemplateVariables } from "./whatsapp.template.variables.js";
-import type { CreateTemplateInput, DeleteTemplateResult, ListTemplatesQuery, TemplateComponents, TemplateListResult, TemplateSummary, TemplateSyncSummary, UpdateTemplateInput } from "./whatsapp.template.types.js";
+import type { CreateTemplateInput, DeleteTemplateResult, ListTemplatesQuery, SubmitTemplateResult, TemplateComponents, TemplateListResult, TemplateSummary, TemplateSyncSummary, UpdateTemplateInput } from "./whatsapp.template.types.js";
 
 const TEMPLATE_SELECT = {
   id: true,
@@ -57,6 +59,10 @@ class WhatsAppTemplateService {
     private readonly getProvider: () => WhatsAppProvider | null = getWhatsAppProvider,
     // Meta's provider is DB-config-backed (Settings -> WhatsApp Config); only used when a Meta sync is requested explicitly.
     private readonly getMeta?: () => Promise<WhatsAppProvider | null>,
+    // Typed as the concrete class (not the generic WhatsAppProvider) because submitToMeta needs createTemplate(),
+    // which is Meta-specific and deliberately not part of the shared WhatsAppProvider interface - kept separate
+    // from `getMeta` above so existing tests injecting a plain WhatsAppProvider-shaped fake there are unaffected.
+    private readonly getMetaProvider: () => Promise<MetaCloudApiProvider | null> = () => getMetaWhatsAppProvider(),
   ) {}
 
   async listTemplates(user: AuthUser, query: ListTemplatesQuery): Promise<TemplateListResult> {
@@ -218,6 +224,88 @@ class WhatsAppTemplateService {
     return { id, deleted: true };
   }
 
+  // Submits a local Meta template to the real Meta Graph API for review. Submission success means Meta ACCEPTED it
+  // FOR REVIEW - never that it is approved; the status this sets is whatever Meta itself reports (normally PENDING),
+  // read through the exact same status vocabulary syncTemplates() already uses, so the two paths can never disagree.
+  //
+  // Idempotent against a double-click or two concurrent calls: the whole check-and-submit runs under an advisory
+  // lock keyed to this template's id, inside one transaction, so a second call that arrives while the first is
+  // still in flight blocks until the first commits, then sees the already-updated status and returns it without
+  // calling Meta again. Once a template is PENDING or APPROVED, calling this again is a safe no-op that just
+  // reports the current state - it never re-submits. A REJECTED template CAN be resubmitted (the real Meta
+  // workflow: fix the template, try again).
+  async submitToMeta(user: AuthUser, id: string): Promise<SubmitTemplateResult> {
+    const existing = await this.db.whatsAppTemplate.findUnique({ where: { id }, select: TEMPLATE_SELECT });
+    if (!existing) throw new ApiError("Template not found", STATUS_CODES.NOT_FOUND);
+    if (existing.provider !== "META") throw new ApiError("Only a Meta Cloud API template can be submitted to Meta.", STATUS_CODES.BAD_REQUEST);
+
+    if (existing.status === "PENDING" || existing.status === "APPROVED") {
+      return { id, providerTemplateId: existing.providerTemplateId ?? "", status: existing.status, alreadySubmitted: true };
+    }
+    if (existing.status !== "DRAFT" && existing.status !== "REJECTED") {
+      throw new ApiError(`This template is ${existing.status} and cannot be submitted to Meta.`, STATUS_CODES.BAD_REQUEST);
+    }
+
+    const { payload, errors } = buildMetaTemplatePayload({
+      name: existing.name,
+      category: existing.category,
+      language: existing.language,
+      body: existing.body,
+      variables: Array.isArray(existing.variables) ? (existing.variables as string[]) : [],
+      components: existing.components && typeof existing.components === "object" && !Array.isArray(existing.components) ? (existing.components as unknown as TemplateComponents) : null,
+    });
+    if (!payload) throw new ApiError(errors[0] ?? "This template cannot be submitted to Meta.", STATUS_CODES.BAD_REQUEST);
+
+    // Atomic claim: a single conditional UPDATE, exactly like WhatsAppCampaignService's launch guard - the only
+    // caller whose statement actually runs while the row still shows DRAFT/REJECTED wins; a second, truly
+    // concurrent call (double-click, retried request) sees count===0 and reports the winner's outcome instead of
+    // ever calling Meta itself. This is what actually prevents two real Meta template-create calls, not the read
+    // that came before it.
+    const claim = await this.db.whatsAppTemplate.updateMany({ where: { id, status: existing.status }, data: { status: WhatsAppTemplateStatus.PENDING } });
+    if (claim.count === 0) {
+      const current = await this.db.whatsAppTemplate.findUniqueOrThrow({ where: { id }, select: { status: true, providerTemplateId: true } });
+      return { id, providerTemplateId: current.providerTemplateId ?? existing.providerTemplateId ?? "", status: current.status, alreadySubmitted: true };
+    }
+
+    const meta = await this.getMetaProvider();
+    if (!meta) {
+      await this.db.whatsAppTemplate.updateMany({ where: { id, status: WhatsAppTemplateStatus.PENDING }, data: { status: existing.status } }); // revert the claim - never leave it stuck PENDING with nothing actually submitted
+      throw new ApiError("Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
+    }
+
+    let result;
+    try {
+      result = await meta.createTemplate(payload as unknown as Record<string, unknown>);
+    } catch (error) {
+      await this.db.whatsAppTemplate.updateMany({ where: { id, status: WhatsAppTemplateStatus.PENDING }, data: { status: existing.status } }); // revert - Meta never actually accepted it
+      throw error instanceof WhatsAppSendError ? new ApiError(error.message, STATUS_CODES.BAD_REQUEST) : error;
+    }
+
+    const now = new Date();
+    const existingComponents = (existing.components as TemplateComponents | null) ?? {};
+    const components: TemplateComponents = { ...existingComponents, submission: { submittedAt: now.toISOString(), rejectionReason: result.rejectedReason } };
+
+    let row;
+    try {
+      row = await this.db.whatsAppTemplate.update({
+        where: { id },
+        data: { providerTemplateId: result.providerTemplateId, externalId: result.providerTemplateId, status: result.status, components: components as unknown as Prisma.InputJsonValue, lastSyncedAt: now },
+        select: TEMPLATE_SELECT,
+      });
+    } catch (error) {
+      // Meta already accepted the template and returned an id at this point - a P2002 here means another row
+      // already claims that (provider, providerTemplateId) pair, which should be structurally impossible for a
+      // freshly-created Meta template id, but is surfaced clearly rather than as a raw constraint error either way.
+      if (error instanceof Object && "code" in error && error.code === "P2002") {
+        throw new ApiError("Meta returned a template id that is already recorded against a different CRM template - contact support before retrying.", STATUS_CODES.CONFLICT);
+      }
+      throw error;
+    }
+
+    await this.recordActivity(user, ActivityType.WHATSAPP_TEMPLATE_UPDATED, row.id, "WhatsApp template submitted to Meta for approval", `${row.name} -> Meta template id ${result.providerTemplateId} (${result.status})`);
+    return { id, providerTemplateId: result.providerTemplateId, status: result.status, alreadySubmitted: false };
+  }
+
   /** Syncs templates from the legacy env-configured provider (unchanged), or - when `only` is "META" - from the active
    *  Meta WhatsApp Cloud API config. A synced Meta template is what makes it APPROVED and sendable. */
   async syncTemplates(user: AuthUser, only?: "META"): Promise<TemplateSyncSummary> {
@@ -292,14 +380,23 @@ class WhatsAppTemplateService {
     const category = t.category || existing?.category || null;
     const quality = t.quality || existing?.quality || null;
     const externalId = t.externalId || existing?.externalId || null;
-    const data = { name: t.name, category, language: t.language, body: t.body, variables, status, quality, externalId, lastSyncedAt: syncedAt };
+    // The one narrow exception to "sync never touches components": a REJECTED status's reason is genuinely
+    // provider-reported information that normally only becomes known through a later sync (Meta reviews
+    // asynchronously - a template is virtually always PENDING with no reason yet at submission time), recorded
+    // under its own `submission` sub-key so header/footer/buttons/bodyExamples are still never touched.
+    const existingComponents = (existing?.components as TemplateComponents | null) ?? null;
+    const components =
+      t.rejectedReason !== undefined && t.rejectedReason !== null
+        ? ({ ...existingComponents, submission: { ...existingComponents?.submission, submittedAt: existingComponents?.submission?.submittedAt ?? syncedAt.toISOString(), rejectionReason: t.rejectedReason } } as unknown as Prisma.InputJsonValue)
+        : undefined;
+    const data = { name: t.name, category, language: t.language, body: t.body, variables, status, quality, externalId, lastSyncedAt: syncedAt, ...(components !== undefined ? { components } : {}) };
 
     if (!existing) {
       await this.db.whatsAppTemplate.create({ data: { ...data, provider, providerTemplateId: t.providerTemplateId } });
       return "created";
     }
 
-    const changed = existing.name !== t.name || existing.category !== category || existing.language !== t.language || existing.body !== t.body || existing.status !== status || existing.quality !== quality || existing.externalId !== externalId;
+    const changed = existing.name !== t.name || existing.category !== category || existing.language !== t.language || existing.body !== t.body || existing.status !== status || existing.quality !== quality || existing.externalId !== externalId || components !== undefined;
     await this.db.whatsAppTemplate.update({ where: { id: existing.id }, data });
     return changed ? "updated" : "unchanged";
   }

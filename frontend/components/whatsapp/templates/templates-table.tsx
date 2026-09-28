@@ -95,7 +95,7 @@ export function TemplatesTable({ items, isFetching, canManage, onSelect, onEdit,
             <TableCell className="text-muted-foreground">{t.language}</TableCell>
             <TableCell className="text-muted-foreground">{t.variables.length > 0 ? t.variables.length : "—"}</TableCell>
             <TableCell>
-              <TemplateStatusBadge status={t.status} />
+              <TemplateStatusBadge status={t.status} provider={t.provider} />
               <div className="mt-0.5 text-[11px] text-muted-foreground">Updated {formatDate(t.updatedAt)}</div>
             </TableCell>
             {canManage ? (

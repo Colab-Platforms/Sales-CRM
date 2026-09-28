@@ -1,6 +1,6 @@
 import type { OrderSource, OrderStatus, PaymentMode, PaymentStatus, PaymentStatusFilter, ShipmentDetail, ShipmentStatus } from "./orders.types";
 
-export type LeadWorkingStatus = "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED";
+export type LeadWorkingStatus = "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED" | "DEACTIVATED";
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH";
 
 // E6.7 Customer Segments - see backend segment.ts/segment.config.ts for the derivation rules.
@@ -52,6 +52,16 @@ export interface NextBestActionInfo {
     successfulOrderCount: number;
     daysSinceLastOrder: number | null;
   };
+}
+
+// Part 8 (WhatsApp Inbox): shown in the "Delete Customer" confirmation dialog before anyone commits -
+// every related record type that a hard delete would have touched, so the user knows exactly what
+// stays intact (nothing is ever deleted; the profile is only marked DEACTIVATED).
+export interface CustomerDeactivationImpact {
+  orders: number;
+  conversations: number;
+  messages: number;
+  campaignRecipients: number;
 }
 
 export interface CustomerProfile {

@@ -72,3 +72,34 @@ export const getCustomerTimeline = async (req: AuthRequest, res: Response): Prom
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
+
+// Part 8 (WhatsApp Inbox): what the "Delete Customer" confirmation dialog shows before anyone commits.
+export const getCustomerDeactivationImpact = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCustomerIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await customersService.getDeactivationImpact(req.user!, value.leadId);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const deactivateCustomer = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCustomerIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await customersService.deactivateCustomer(req.user!, value.leadId);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};

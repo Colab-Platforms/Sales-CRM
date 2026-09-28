@@ -196,6 +196,13 @@ export function buildSegmentInfo(
 export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId" | "dateFrom" | "dateTo" | "search">, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
   const and: Prisma.LeadWhereInput[] = [];
 
+  // A deactivated customer (Part 8, WhatsApp Inbox: "Delete Customer") is never removed from the
+  // database, but it must stop appearing in every operational funnel that reads this same list -
+  // the customer list itself, campaign/bulk-send audience resolution (resolveMatchingCustomers below
+  // is what both of those call), and (via a direct workingStatus check) the WhatsApp Inbox and
+  // dashboard counts. Their record/history stays fully reachable via a direct Customer 360 lookup,
+  // which does not go through this filter - only list/audience views do.
+  and.push({ workingStatus: { not: "DEACTIVATED" } });
   if (Object.keys(leadScope).length > 0) and.push(leadScope);
   if (query.ownerId) and.push({ ownerId: query.ownerId });
   if (query.dateFrom || query.dateTo) and.push({ createdAt: { gte: query.dateFrom, lte: query.dateTo } });

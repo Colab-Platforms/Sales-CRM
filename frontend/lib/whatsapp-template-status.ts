@@ -19,3 +19,17 @@ export const TEMPLATE_STATUS_COLORS: Record<WhatsAppTemplateStatus, string> = {
 export const TEMPLATE_STATUS_ORDER: WhatsAppTemplateStatus[] = ["DRAFT", "PENDING", "APPROVED", "REJECTED", "DISABLED"];
 
 export const PROVIDER_LABELS: Record<string, string> = { AISENSY: "AiSensy", GUPSHUP: "Gupshup", META: "Meta Cloud API" };
+
+// Meta's review lifecycle gets provider-specific wording so a submitted template can never read as approved: submission
+// success only means Meta accepted it FOR REVIEW.
+export const META_STATUS_LABELS: Record<WhatsAppTemplateStatus, string> = {
+  DRAFT: "Local draft only",
+  PENDING: "Pending Meta Approval",
+  APPROVED: "Approved by Meta",
+  REJECTED: "Rejected by Meta",
+  DISABLED: "Disabled",
+};
+
+export function templateStatusLabel(provider: string, status: WhatsAppTemplateStatus): string {
+  return provider === "META" ? META_STATUS_LABELS[status] : TEMPLATE_STATUS_LABELS[status];
+}

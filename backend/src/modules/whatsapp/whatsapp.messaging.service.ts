@@ -16,7 +16,7 @@ import { findConversationProvider } from "./whatsapp.conversation-provider.js";
 import { PROVIDER_DISPLAY_NAMES } from "./whatsapp.freetext.service.js";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
 import type { OrderConfirmationTestResult, PreviewTemplateInput, SendOrderConfirmationTestInput, SendTemplateInput, TemplatePreviewResult } from "./whatsapp.messaging.types.js";
-import { resolveTemplateVariables, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
+import { resolveTemplateVariables, type TemplateVariableField, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
 import type { WhatsAppMessageSummary } from "./whatsapp.types.js";
 
 const MESSAGE_SELECT = {
@@ -77,7 +77,9 @@ type TemplateRow = { id: string; name: string; provider: string; providerTemplat
 
 const TEMPLATE_SELECT = { id: true, name: true, provider: true, providerTemplateId: true, language: true, body: true, variables: true, status: true } satisfies Prisma.WhatsAppTemplateSelect;
 
-const TEMPLATE_STATUS_MESSAGES: Record<string, string> = {
+// Exported for whatsapp.bulk-send.service.ts, which needs the exact same wording to short-circuit
+// classifying every recipient TEMPLATE_NOT_SENDABLE without calling loadAndResolve per recipient.
+export const TEMPLATE_STATUS_MESSAGES: Record<string, string> = {
   DRAFT: "This template is still a draft and has not been approved for sending.",
   PENDING: "This template is pending provider approval and cannot be sent yet.",
   REJECTED: "This template was rejected by the provider and cannot be sent.",
@@ -204,9 +206,14 @@ class WhatsAppMessagingService {
     }
   }
 
+  // Never throws for an unresolved variable (unlike send()) - the Send WhatsApp UI calls this on every
+  // keystroke while a person is still filling in a manual value, and needs the full field list back
+  // (which ones are still missing, which are auto-filled) to render itself, not just a single error
+  // message. `resolvedBody` renders with any still-missing placeholders left untouched (see
+  // renderTemplateBody) so the preview updates live as fields are completed. sendTemplate/send() is
+  // the one place that still refuses to actually send while anything is unresolved.
   async previewTemplate(user: AuthUser, input: PreviewTemplateInput): Promise<TemplatePreviewResult> {
     const { template, resolution } = await this.loadAndResolve({ kind: "user", user }, input, { requireProviderMatch: false });
-    if (resolution.errors.length > 0) throw new ApiError(resolution.errors[0], STATUS_CODES.BAD_REQUEST);
 
     return {
       templateId: template.id,
@@ -215,6 +222,7 @@ class WhatsAppMessagingService {
       language: template.language,
       resolvedBody: renderTemplateBody(template.body, resolution.values),
       variables: resolution.values,
+      fields: resolution.fields,
     };
   }
 
@@ -330,7 +338,7 @@ class WhatsAppMessagingService {
     let providerMessageId: string | null = null;
     let sendError: WhatsAppSendError | null = null;
     try {
-      const result = await provider.sendTemplateMessage({ to: lead.normalizedMobile, templateName: providerTemplateName, params: positionalParams, contactName, media, ...(provider.id === "META" ? { languageCode: template.language } : {}) });
+      const result = await provider.sendTemplateMessage({ to: lead.normalizedMobile, templateName: providerTemplateName, params: positionalParams, paramNames: variableOrder, contactName, media, ...(provider.id === "META" ? { languageCode: template.language } : {}) });
       providerMessageId = result.providerMessageId;
     } catch (error) {
       if (error instanceof WhatsAppSendError) sendError = error;
@@ -406,7 +414,7 @@ class WhatsAppMessagingService {
     actor: SendActor,
     input: PreviewTemplateInput,
     opts: { requireProviderMatch: boolean },
-  ): Promise<{ lead: LeadRow; order: OrderRow | null; template: TemplateRow; resolution: { values: Record<string, string>; errors: string[] }; provider: WhatsAppProvider | null }> {
+  ): Promise<{ lead: LeadRow; order: OrderRow | null; template: TemplateRow; resolution: { values: Record<string, string>; errors: string[]; fields: TemplateVariableField[] }; provider: WhatsAppProvider | null }> {
     // A human caller only ever reaches a lead already inside their own RBAC scope (E7.1's rule for
     // this endpoint). A system caller (E7.6) already resolved this exact lead from the business
     // event itself - the same direct-by-id trust level shopify.persist.ts's own lead lookups use -
@@ -462,7 +470,7 @@ class WhatsAppMessagingService {
         : null,
     };
 
-    const resolution = resolveTemplateVariables(variableNames, ctx);
+    const resolution = resolveTemplateVariables(variableNames, ctx, input.manualValues);
     return { lead, order, template, resolution, provider };
   }
 }
