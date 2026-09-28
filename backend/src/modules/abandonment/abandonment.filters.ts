@@ -1,4 +1,4 @@
-import { AbandonmentStatus } from "../../../generated/prisma/enums.js";
+import { AbandonmentStatus, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { fullName } from "../orders/orders.filters.js";
 import type { AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
@@ -27,13 +27,24 @@ export function abandonmentSearchWhere(search: string): Prisma.AbandonmentWhereI
   };
 }
 
-export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput): Prisma.AbandonmentWhereInput {
+export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role): Prisma.AbandonmentWhereInput {
   const and: Prisma.AbandonmentWhereInput[] = [];
   if (Object.keys(leadScope).length > 0) and.push({ lead: leadScope });
   if (query.search) and.push(abandonmentSearchWhere(query.search));
   if (query.status) and.push({ status: query.status });
   if (query.type) and.push({ type: query.type });
   if (query.dateFrom || query.dateTo) and.push({ detectedAt: { gte: query.dateFrom, lte: query.dateTo } });
+  if (query.assignment === "UNASSIGNED") and.push({ lead: { assignedManagerId: null } });
+  else if (query.assignment === "ASSIGNED_TO_MANAGER") and.push({ lead: { assignedManagerId: { not: null }, ownerId: null } });
+  else if (query.assignment === "ASSIGNED_TO_SALESPERSON") and.push({ lead: { ownerId: { not: null } } });
+  if (query.managerId) and.push({ lead: { assignedManagerId: query.managerId } });
+  if (query.salespersonId) and.push({ lead: { ownerId: query.salespersonId } });
+  if (query.workingStatus) {
+    // A salesperson's "NEW" filter includes leads that are ASSIGNED underneath (they never see ASSIGNED
+    // itself) - same rule lead.service.ts's listLeads applies.
+    const includesAssigned = role === Role.SALESPERSON && (query.workingStatus === "NEW" || query.workingStatus === "ASSIGNED");
+    and.push({ lead: { workingStatus: includesAssigned ? { in: ["NEW", "ASSIGNED"] } : query.workingStatus } });
+  }
   return and.length > 0 ? { AND: and } : {};
 }
 
@@ -67,7 +78,17 @@ export interface AbandonmentListRow {
   priorityScore: { toString(): string } | null;
   priorityReason: string | null;
   cartSnapshot: unknown;
-  lead: { id: string; leadNumber: string; firstName: string; lastName: string | null; mobile: string | null; email: string | null };
+  lead: {
+    id: string;
+    leadNumber: string;
+    firstName: string;
+    lastName: string | null;
+    mobile: string | null;
+    email: string | null;
+    workingStatus: import("../../../generated/prisma/enums.js").LeadWorkingStatus;
+    assignedManager: { id: string; name: string } | null;
+    owner: { id: string; name: string } | null;
+  };
   source: { id: string; name: string } | null;
   recoveryActions: { type: import("../../../generated/prisma/enums.js").RecoveryActionType; status: import("../../../generated/prisma/enums.js").RecoveryActionStatus; createdAt: Date }[];
 }
@@ -99,7 +120,16 @@ export function mapAbandonmentListRow(row: AbandonmentListRow, summary: string |
     priorityReason: row.priorityReason,
     summary,
     cartSnapshot: asCartSnapshot(row.cartSnapshot),
-    lead: { id: row.lead.id, leadNumber: row.lead.leadNumber, name: fullName(row.lead.firstName, row.lead.lastName), mobile: row.lead.mobile, email: row.lead.email },
+    lead: {
+      id: row.lead.id,
+      leadNumber: row.lead.leadNumber,
+      name: fullName(row.lead.firstName, row.lead.lastName),
+      mobile: row.lead.mobile,
+      email: row.lead.email,
+      workingStatus: row.lead.workingStatus,
+      assignedManager: row.lead.assignedManager,
+      owner: row.lead.owner,
+    },
     source: row.source,
     latestRecoveryAction: latest ? { type: latest.type, status: latest.status, createdAt: latest.createdAt } : null,
   };

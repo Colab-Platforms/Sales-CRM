@@ -1,9 +1,11 @@
-import type { AbandonmentStatus, AbandonmentType, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
+import type { AbandonmentStatus, AbandonmentType, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
 import type { Pagination } from "../orders/orders.types.js";
 
 // Abandoned-checkout queue ("/dashboard/abandoned-leads"). Reads the Abandonment/RecoveryAction tables
 // E6's Customer 360 timeline already renders (customers.timeline.ts) - this is the first module that
 // writes and lists them directly, rather than only rendering them inside one lead's history.
+
+export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
 
 export interface ListAbandonmentsQuery {
   page: number;
@@ -13,6 +15,11 @@ export interface ListAbandonmentsQuery {
   type?: AbandonmentType;
   dateFrom?: Date;
   dateTo?: Date;
+  assignment?: AbandonmentAssignmentFilter;
+  managerId?: string;
+  salespersonId?: string;
+  /** Filters on the underlying Lead's own pipeline status, same field the Leads page filters on. */
+  workingStatus?: LeadWorkingStatus;
 }
 
 // Structured cart detail written by the ingesting processor (e.g. shiprocket.abandonment.processor.ts)
@@ -38,7 +45,18 @@ export interface AbandonmentListItem {
   /** Legacy free-text fallback (from the Activity row) for abandonments recorded before cartSnapshot existed. */
   summary: string | null;
   cartSnapshot: CartSnapshot | null;
-  lead: { id: string; leadNumber: string; name: string; mobile: string | null; email: string | null };
+  lead: {
+    id: string;
+    leadNumber: string;
+    name: string;
+    mobile: string | null;
+    email: string | null;
+    /** The lead's own pipeline status (NEW/ASSIGNED/.../CONVERTED) - separate from this abandonment's
+     *  cart-recovery status above. A salesperson never sees ASSIGNED here either, same as the Leads page. */
+    workingStatus: LeadWorkingStatus;
+    assignedManager: { id: string; name: string } | null;
+    owner: { id: string; name: string } | null;
+  };
   source: { id: string; name: string } | null;
   latestRecoveryAction: { type: RecoveryActionType; status: RecoveryActionStatus; createdAt: Date } | null;
 }
@@ -81,4 +99,18 @@ export interface CreateRecoveryActionBody {
 
 export interface UpdateAbandonmentStatusBody {
   status: AbandonmentStatus;
+}
+
+export interface BulkAssignManagerBody {
+  abandonmentIds: string[];
+  method: "MANUAL" | "ROUND_ROBIN";
+  managerId?: string;
+  managerIds?: string[];
+}
+
+export interface BulkAssignSalespersonBody {
+  abandonmentIds: string[];
+  method: "MANUAL" | "ROUND_ROBIN";
+  salespersonId?: string;
+  salespersonIds?: string[];
 }

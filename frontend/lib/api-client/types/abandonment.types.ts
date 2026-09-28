@@ -1,4 +1,5 @@
 import type { Pagination } from "./orders.types";
+import type { LeadWorkingStatus } from "./dashboard.types";
 
 // The abandoned-leads queue ("/dashboard/abandoned-leads"), fed by Shiprocket Checkout's "Abandon
 // Cart" webhook. Mirrors shiprocket.types.ts's shape (list item + summary + pagination) since it is
@@ -9,6 +10,8 @@ export type AbandonmentStatus = "ACTIVE" | "IN_PROGRESS" | "RECOVERED" | "NOT_RE
 export type RecoveryActionType = "CALL" | "CALLBACK" | "CONTINUE_ORDER";
 export type RecoveryActionStatus = "PENDING" | "IN_PROGRESS" | "SUCCESS" | "FAILED";
 
+export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
+
 export interface ListAbandonmentsParams {
   page: number;
   pageSize: number;
@@ -17,6 +20,10 @@ export interface ListAbandonmentsParams {
   type?: AbandonmentType;
   dateFrom?: string;
   dateTo?: string;
+  assignment?: AbandonmentAssignmentFilter;
+  managerId?: string;
+  salespersonId?: string;
+  workingStatus?: LeadWorkingStatus;
 }
 
 export interface AbandonmentSummary {
@@ -50,7 +57,17 @@ export interface AbandonmentListItem {
   /** Legacy free-text fallback for abandonments recorded before cartSnapshot existed. */
   summary: string | null;
   cartSnapshot: CartSnapshot | null;
-  lead: { id: string; leadNumber: string; name: string; mobile: string | null; email: string | null };
+  lead: {
+    id: string;
+    leadNumber: string;
+    name: string;
+    mobile: string | null;
+    email: string | null;
+    /** The lead's own pipeline status - separate from this abandonment's cart-recovery `status` above. */
+    workingStatus: LeadWorkingStatus;
+    assignedManager: { id: string; name: string } | null;
+    owner: { id: string; name: string } | null;
+  };
   source: { id: string; name: string } | null;
   latestRecoveryAction: { type: RecoveryActionType; status: RecoveryActionStatus; createdAt: string } | null;
 }
@@ -80,4 +97,18 @@ export interface CreateRecoveryActionInput {
   type: RecoveryActionType;
   status?: RecoveryActionStatus;
   notes?: string;
+}
+
+export interface BulkAssignManagerPayload {
+  abandonmentIds: string[];
+  method: "MANUAL" | "ROUND_ROBIN";
+  managerId?: string;
+  managerIds?: string[];
+}
+
+export interface BulkAssignSalespersonPayload {
+  abandonmentIds: string[];
+  method: "MANUAL" | "ROUND_ROBIN";
+  salespersonId?: string;
+  salespersonIds?: string[];
 }

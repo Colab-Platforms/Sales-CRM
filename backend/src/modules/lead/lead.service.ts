@@ -112,6 +112,9 @@ class LeadService {
         user.role === Role.SALESPERSON && (status === "NEW" || status === "ASSIGNED") ? { in: ["NEW", "ASSIGNED"] } : status;
     }
     where.lifecycleStage = query.lifecycleStage ?? "LEAD";
+    // Cart-abandonment leads live only in the Abandoned Leads queue, never in the normal Leads list -
+    // even once worked/recovered, so this excludes any lead with an Abandonment row.
+    where.abandonments = { none: {} };
 
     if (query.assignment === "UNASSIGNED") {
       where.assignedManagerId = null;

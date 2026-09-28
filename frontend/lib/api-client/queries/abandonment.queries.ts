@@ -7,6 +7,7 @@ export const abandonmentKeys = {
   lists: () => [...abandonmentKeys.all, "list"] as const,
   list: (params: ListAbandonmentsParams) => [...abandonmentKeys.lists(), params] as const,
   detail: (id: string) => [...abandonmentKeys.all, "detail", id] as const,
+  byLead: (leadId: string) => [...abandonmentKeys.all, "byLead", leadId] as const,
 };
 
 const LIST_STALE_TIME_MS = 30 * 1000;
@@ -25,6 +26,14 @@ export function abandonmentDetailQueryOptions(id: string) {
   return queryOptions({
     queryKey: abandonmentKeys.detail(id),
     queryFn: () => abandonmentApi.get(id),
+    staleTime: LIST_STALE_TIME_MS,
+  });
+}
+
+export function abandonmentByLeadQueryOptions(leadId: string) {
+  return queryOptions({
+    queryKey: abandonmentKeys.byLead(leadId),
+    queryFn: () => abandonmentApi.getByLead(leadId),
     staleTime: LIST_STALE_TIME_MS,
   });
 }

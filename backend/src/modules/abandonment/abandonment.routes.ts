@@ -1,18 +1,31 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
-import { createRecoveryAction, getAbandonment, listAbandonments, updateAbandonmentStatus } from "./abandonment.controller.js";
+import {
+  bulkAssignManager,
+  bulkAssignSalesperson,
+  createRecoveryAction,
+  getAbandonment,
+  getAbandonmentByLead,
+  listAbandonments,
+  updateAbandonmentStatus,
+} from "./abandonment.controller.js";
 
 const router = Router();
 
-// Mounted at /api/abandonments. Working an abandoned cart is an ADMIN/MANAGER operation, same as
-// /api/shipments - lead scope (getLeadScope) then decides which abandonments a manager can see/act on.
-// Salespersons see their own leads' abandonment history through Customer 360 instead (already built).
-const managers = requireRole(Role.ADMIN, Role.MANAGER);
+// Mounted at /api/abandonments. Abandoned leads are worked the same as normal leads: ADMIN assigns to
+// a manager, the manager assigns to a salesperson, and each role's queue is scoped to what's assigned
+// to them (AbandonmentService.scopeWhere) - same assignedManagerId/ownerId fields as the Lead itself.
+const allRoles = requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON);
 
-router.get("/", requireAuth, managers, listAbandonments);
-router.get("/:id", requireAuth, managers, getAbandonment);
-router.post("/:id/recovery-actions", requireAuth, managers, createRecoveryAction);
-router.patch("/:id/status", requireAuth, managers, updateAbandonmentStatus);
+router.get("/", requireAuth, allRoles, listAbandonments);
+// Backs the "Abandoned Checkout" panel embedded on the normal lead-detail page - looked up by leadId.
+router.get("/by-lead/:leadId", requireAuth, allRoles, getAbandonmentByLead);
+router.get("/:id", requireAuth, allRoles, getAbandonment);
+router.post("/:id/recovery-actions", requireAuth, allRoles, createRecoveryAction);
+router.patch("/:id/status", requireAuth, allRoles, updateAbandonmentStatus);
+
+router.post("/bulk/assign-manager", requireAuth, requireRole(Role.ADMIN), bulkAssignManager);
+router.post("/bulk/assign-salesperson", requireAuth, requireRole(Role.MANAGER), bulkAssignSalesperson);
 
 export default router;

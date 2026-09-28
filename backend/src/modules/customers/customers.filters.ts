@@ -1,4 +1,4 @@
-import type { LeadWorkingStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import { LifecycleStage, type LeadWorkingStatus, type PaymentMethod, type PaymentStatus, type ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
 import type { ShipmentDetail } from "../orders/orders.types.js";
@@ -196,6 +196,10 @@ export function buildSegmentInfo(
 export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId" | "dateFrom" | "dateTo" | "search">, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
   const and: Prisma.LeadWhereInput[] = [];
 
+  // Customers page: only leads that actually converted - lifecycleStage flips to CUSTOMER the
+  // moment an order is placed/synced (orders.service.ts), never set any other way. A lead still
+  // being worked, with no order yet, never shows up here as a "customer".
+  and.push({ lifecycleStage: LifecycleStage.CUSTOMER });
   // A deactivated customer (Part 8, WhatsApp Inbox: "Delete Customer") is never removed from the
   // database, but it must stop appearing in every operational funnel that reads this same list -
   // the customer list itself, campaign/bulk-send audience resolution (resolveMatchingCustomers below
