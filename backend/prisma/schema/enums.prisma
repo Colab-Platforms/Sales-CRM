@@ -189,6 +189,9 @@ enum SourceType {
   // recordInboundMessage) - same "external source with a Source row" pattern as META/SHOPIFY,
   // reusing leadService.createLeadFromSource rather than a bespoke lead-creation path.
   WHATSAPP
+  // A lead created from a Shiprocket Checkout (formerly Fastrr) "Abandon Cart" webhook delivery -
+  // same "external source with a Source row" pattern as WHATSAPP/SHOPIFY above.
+  SHIPROCKET
 
   @@map("source_type")
 }

@@ -22,6 +22,7 @@ import {
   Plug,
   Phone,
   Settings,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Sidebar,
@@ -252,6 +253,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/shiprocket",
           icon: Truck,
         },
+        {
+          title: "Abandoned Leads",
+          href: "/dashboard/abandoned-leads",
+          icon: AlertTriangle,
+        },
         { title: "Reports", icon: BarChart3 },
       ],
     },
@@ -324,6 +330,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           title: "Shiprocket",
           href: "/dashboard/shiprocket",
           icon: Truck,
+        },
+        {
+          title: "Abandoned Leads",
+          href: "/dashboard/abandoned-leads",
+          icon: AlertTriangle,
         },
         { title: "Reports", icon: BarChart3 },
       ],
