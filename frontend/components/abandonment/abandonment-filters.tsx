@@ -6,20 +6,27 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
-import { ABANDONMENT_STATUS_LABELS } from "./abandonment-status-badge";
-import type { AbandonmentStatus } from "@/lib/api-client/types/abandonment.types";
-
-const STATUS_OPTIONS: AbandonmentStatus[] = ["ACTIVE", "IN_PROGRESS", "RECOVERED", "NOT_RECOVERED", "EXPIRED"];
+import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
+import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
+import type { Role } from "@/lib/api-client/types/auth.types";
 
 export interface AbandonmentFilterState {
   search?: string;
-  status?: AbandonmentStatus;
+  workingStatus?: LeadWorkingStatus;
 }
 
-export function AbandonmentFilters({ value, onChange }: { value: AbandonmentFilterState; onChange: (value: AbandonmentFilterState) => void }) {
+export function AbandonmentFilters({
+  value,
+  onChange,
+  role,
+}: {
+  value: AbandonmentFilterState;
+  onChange: (value: AbandonmentFilterState) => void;
+  role: Role;
+}) {
   const [search, setSearch] = useState(value.search ?? "");
 
-  const hasFilters = Boolean(value.search || value.status);
+  const hasFilters = Boolean(value.search || value.workingStatus);
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -52,19 +59,24 @@ export function AbandonmentFilters({ value, onChange }: { value: AbandonmentFilt
         </div>
       </div>
 
-      <div className="w-full space-y-2 sm:w-56">
+      <div className="w-full space-y-2 sm:w-48">
         <Label htmlFor="abandonment-status-filter" className="text-xs text-muted-foreground">
-          Status
+          Lead status
         </Label>
         <NativeSelect
           id="abandonment-status-filter"
-          value={value.status ?? ""}
-          onChange={(e) => onChange({ ...value, status: (e.target.value || undefined) as AbandonmentStatus | undefined })}
+          value={value.workingStatus ?? ""}
+          onChange={(e) =>
+            onChange({
+              ...value,
+              workingStatus: (e.target.value || undefined) as LeadWorkingStatus | undefined,
+            })
+          }
         >
           <option value="">All statuses</option>
-          {STATUS_OPTIONS.map((status) => (
+          {STATUS_ORDER.filter((status) => role !== "SALESPERSON" || status !== "ASSIGNED").map((status) => (
             <option key={status} value={status}>
-              {ABANDONMENT_STATUS_LABELS[status]}
+              {STATUS_LABELS[status]}
             </option>
           ))}
         </NativeSelect>

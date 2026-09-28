@@ -5,7 +5,6 @@ import type { ComponentType } from "react";
 import {
   LayoutDashboard,
   Users,
-  Target,
   ShoppingCart,
   UsersRound,
   BarChart3,
@@ -180,7 +179,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Pipeline",
       items: [
         { title: "My Leads", href: "/dashboard/leads", icon: Users },
-        { title: "Interested Leads", icon: Target },
+        {
+          title: "Abandoned Leads",
+          href: "/dashboard/abandoned-leads",
+          icon: AlertTriangle,
+        },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
         { title: "Customers", href: "/dashboard/customers", icon: Contact },
       ],

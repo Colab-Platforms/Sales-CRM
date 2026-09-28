@@ -1,24 +1,28 @@
 "use client";
 
 import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
-import { AbandonmentStatusBadge, RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
+import { StatusBadge } from "@/components/dashboard/status-badge";
+import { leadDetailHref } from "@/components/leads/lead-table";
+import { RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
 import { parseAbandonmentCart } from "./abandonment-cart-utils";
 import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.types";
 
-const COLUMN_COUNT = 8;
+const COLUMN_COUNT = 9;
 const HEADERS = [
   { label: "Lead", className: "w-[180px] min-w-[150px]" },
   { label: "Contact", className: "w-[180px] min-w-[160px]" },
   { label: "Items", className: "min-w-[220px] max-w-[320px]" },
   { label: "Value", className: "w-[120px] text-right" },
   { label: "Detected", className: "w-[110px]" },
-  { label: "Status", className: "w-[140px]" },
+  { label: "Lead Status", className: "w-[120px]" },
   { label: "Last action", className: "w-[140px]" },
+  { label: "Assigned to", className: "w-[160px]" },
 ];
 
 function CartItems({ item }: { item: AbandonmentListItem }) {
@@ -47,11 +51,12 @@ function CartItems({ item }: { item: AbandonmentListItem }) {
   );
 }
 
-export function AbandonmentTableSkeleton({ rows = 6 }: { rows?: number }) {
+export function AbandonmentTableSkeleton({ rows = 6, withSelection = false }: { rows?: number; withSelection?: boolean }) {
   return (
     <Table aria-busy="true" aria-label="Loading abandoned leads">
       <TableHeader>
         <TableRow>
+          {withSelection ? <TableHead className="w-12">&nbsp;</TableHead> : null}
           {HEADERS.map((header) => (
             <TableHead key={header.label} className={header.className}>
               {header.label}
@@ -63,7 +68,7 @@ export function AbandonmentTableSkeleton({ rows = 6 }: { rows?: number }) {
       <TableBody>
         {Array.from({ length: rows }).map((_, i) => (
           <TableRow key={i}>
-            {Array.from({ length: COLUMN_COUNT }).map((__, j) => (
+            {Array.from({ length: COLUMN_COUNT + (withSelection ? 1 : 0) }).map((__, j) => (
               <TableCell key={j}>
                 <div className="h-4 w-full max-w-24 animate-pulse rounded bg-muted" />
               </TableCell>
@@ -88,18 +93,33 @@ function timeSince(iso: string): string {
 interface AbandonmentTableProps {
   items: AbandonmentListItem[];
   isFetching: boolean;
-  onOpenDetail: (id: string) => void;
+  selectedIds?: Set<string>;
+  onToggleOne?: (id: string, checked: boolean) => void;
+  onToggleAll?: (checked: boolean) => void;
 }
 
-export function AbandonmentTable({ items, isFetching, onOpenDetail }: AbandonmentTableProps) {
+export function AbandonmentTable({ items, isFetching, selectedIds, onToggleOne, onToggleAll }: AbandonmentTableProps) {
+  const router = useRouter();
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
   }, [items]);
+  const withSelection = Boolean(selectedIds && onToggleOne && onToggleAll);
+  const allSelected = withSelection && sortedItems.length > 0 && sortedItems.every((item) => selectedIds!.has(item.id));
 
   return (
     <Table className={cn("transition-opacity", isFetching && "opacity-60")}>
       <TableHeader>
         <TableRow>
+          {withSelection ? (
+            <TableHead className="w-12">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                onChange={(e) => onToggleAll!(e.target.checked)}
+                aria-label="Select all abandoned leads"
+              />
+            </TableHead>
+          ) : null}
           {HEADERS.map((header) => (
             <TableHead key={header.label} className={header.className}>
               {header.label}
@@ -111,9 +131,25 @@ export function AbandonmentTable({ items, isFetching, onOpenDetail }: Abandonmen
       <TableBody>
         {sortedItems.map((item) => {
           const cart = parseAbandonmentCart(item);
+          const assignee = item.lead.owner?.name ?? item.lead.assignedManager?.name ?? null;
 
           return (
-            <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item.id)}>
+            <TableRow
+              key={item.id}
+              className="cursor-pointer"
+              data-state={withSelection && selectedIds!.has(item.id) ? "selected" : undefined}
+              onClick={() => router.push(leadDetailHref(item.lead.id))}
+            >
+              {withSelection ? (
+                <TableCell onClick={(e) => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds!.has(item.id)}
+                    onChange={(e) => onToggleOne!(item.id, e.target.checked)}
+                    aria-label={`Select ${item.lead.name}`}
+                  />
+                </TableCell>
+              ) : null}
               <TableCell className="w-[180px] min-w-[150px]">
                 <div className="font-semibold text-foreground">{item.lead.name}</div>
                 <div className="text-xs font-mono text-muted-foreground">{item.lead.leadNumber}</div>
@@ -144,8 +180,8 @@ export function AbandonmentTable({ items, isFetching, onOpenDetail }: Abandonmen
                 <span title={formatDateTime(item.detectedAt)}>{timeSince(item.detectedAt)}</span>
               </TableCell>
 
-              <TableCell className="w-[140px] whitespace-nowrap">
-                <AbandonmentStatusBadge status={item.status} />
+              <TableCell className="w-[120px] whitespace-nowrap">
+                <StatusBadge status={item.lead.workingStatus} />
               </TableCell>
 
               <TableCell className="w-[140px] whitespace-nowrap text-sm">
@@ -158,14 +194,18 @@ export function AbandonmentTable({ items, isFetching, onOpenDetail }: Abandonmen
                 )}
               </TableCell>
 
+              <TableCell className="w-[160px] whitespace-nowrap text-sm">
+                {assignee ? <span className="text-foreground">{assignee}</span> : <span className="text-muted-foreground">Unassigned</span>}
+              </TableCell>
+
               <TableCell className="w-[50px] text-right">
                 <Button
                   variant="ghost"
                   size="icon-sm"
-                  aria-label="View abandonment"
+                  aria-label="View lead"
                   onClick={(e) => {
                     e.stopPropagation();
-                    onOpenDetail(item.id);
+                    router.push(leadDetailHref(item.lead.id));
                   }}
                 >
                   <Eye className="size-4" />

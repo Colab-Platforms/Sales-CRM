@@ -2,6 +2,8 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
   AbandonmentDetail,
+  BulkAssignManagerPayload,
+  BulkAssignSalespersonPayload,
   CreateRecoveryActionInput,
   ListAbandonmentsParams,
   ListAbandonmentsResult,
@@ -19,7 +21,22 @@ export const abandonmentApi = {
     return res.data.data;
   },
 
+  async getByLead(leadId: string): Promise<AbandonmentDetail | null> {
+    const res = await apiClient.get<ApiEnvelope<AbandonmentDetail | null>>(`/abandonments/by-lead/${leadId}`);
+    return res.data.data;
+  },
+
   async logRecoveryAction(id: string, input: CreateRecoveryActionInput): Promise<void> {
     await apiClient.post<ApiEnvelope<unknown>>(`/abandonments/${id}/recovery-actions`, input);
+  },
+
+  async bulkAssignManager(payload: BulkAssignManagerPayload): Promise<{ assignedCount: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>("/abandonments/bulk/assign-manager", payload);
+    return res.data.data;
+  },
+
+  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>("/abandonments/bulk/assign-salesperson", payload);
+    return res.data.data;
   },
 };
