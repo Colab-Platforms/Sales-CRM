@@ -32,7 +32,7 @@ import { customerDetailHref } from "@/components/orders/orders-table";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { useSubmitCallOutcomeMutation } from "@/lib/api-client/mutations/calling.mutations";
 import { callingKeys, callOutcomesQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
-import { useInitiateCallMutation } from "@/lib/api-client/mutations/calling.mutations";
+import { useInitiateCallMutation } from "@/lib/api-client/mutations/calls.mutations";
 import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { CallOutcomeForm, CALL_STATUS_VARIANT, TERMINAL_CALL_STATUSES } from "@/components/calling/active-call-dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -49,6 +49,8 @@ import type {
 } from "@/lib/api-client/types/lead.types";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
+import type { CallStatus } from "@/lib/api-client/types/calling.types";
+import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
 
 function CallHistoryDialogContent({ lead }: { lead: Lead }) {
   return (
@@ -147,7 +149,17 @@ const IN_PROGRESS_LABEL: Record<CallStatus, string> = {
 // push channel exists) until this call reaches a terminal status, then swaps straight into the same
 // outcome form the call history uses - so logging the result never waits on the salesperson
 // remembering to open history afterwards.
-function ActiveCallDialog({ lead, callId, onClose }: { lead: Lead; callId: string; onClose: () => void }) {
+function ActiveCallDialog({
+  lead,
+  currentFollowUp,
+  callId,
+  onClose,
+}: {
+  lead: Lead;
+  currentFollowUp?: LeadFollowUp | null;
+  callId: string;
+  onClose: () => void;
+}) {
   const { data: calls } = useQuery({
     ...leadCallsQueryOptions(lead.id),
     refetchInterval: (query) => {
@@ -182,7 +194,7 @@ function ActiveCallDialog({ lead, callId, onClose }: { lead: Lead; callId: strin
                 {call.status.replaceAll("_", " ")}
                 {call.durationSeconds ? ` · ${call.durationSeconds}s` : ""}
               </Badge>
-              <CallOutcomeForm leadId={lead.id} call={call} onSaved={onClose} />
+              <CallOutcomeForm leadId={lead.id} call={call} currentFollowUp={currentFollowUp} onSaved={onClose} />
             </div>
           )
         )}
@@ -238,8 +250,6 @@ function ClickToCallButton({ lead }: { lead: Lead }) {
   );
 }
 
-// Exported so the Lead Details page reuses the exact same status-change control (and its mutation).
-export function LeadStatusSelect({ lead }: { lead: Lead }) {
 /** The reminder set on a lead, under its status; click to move it. Shows the actual time, red once overdue. */
 function LeadReminderChip({ lead }: { lead: Lead }) {
   const updateLead = useUpdateLeadMutation();
@@ -291,7 +301,8 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadStatusSelect({ lead }: { lead: Lead }) {
+// Exported so the Lead Details page reuses the exact same status-change control (and its mutation).
+export function LeadStatusSelect({ lead }: { lead: Lead }) {
   const updateLead = useUpdateLeadMutation();
   // Call back / follow up need a reminder time first, so they're held here until the dialog confirms.
   const [pendingFollowUp, setPendingFollowUp] = useState<"CALL_BACK" | "FOLLOW_UP" | null>(null);
