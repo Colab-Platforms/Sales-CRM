@@ -44,3 +44,7 @@ export interface UpdateSalespersonPayload {
   status?: "ACTIVE" | "INACTIVE";
   reportingManagerId?: string;
 }
+
+export interface ResetPasswordPayload {
+  password: string;
+}

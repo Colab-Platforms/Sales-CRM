@@ -6,6 +6,7 @@ import type { AuthRequest } from "@/middlewares/auth.js";
 import {
   validateCreateManagerSchema,
   validateCreateSalespersonSchema,
+  validateResetPasswordSchema,
   validateUpdateManagerSchema,
   validateUpdateSalespersonSchema,
 } from "./admin.validators.js";
@@ -69,6 +70,21 @@ export const deactivateManager = async (req: AuthRequest, res: Response): Promis
   }
 };
 
+export const resetManagerPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateResetPasswordSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.resetManagerPassword(req.params.id as string, value.password);
+    sendResponse(res, true, result, "Manager password updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const createSalesperson = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateCreateSalespersonSchema(req.body);
@@ -103,6 +119,21 @@ export const updateSalesperson = async (req: AuthRequest, res: Response): Promis
 
     const result = await adminService.updateSalesperson(req.params.id as string, value);
     sendResponse(res, true, result, "Salesperson updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const resetSalespersonPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateResetPasswordSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.resetSalespersonPassword(req.params.id as string, value.password);
+    sendResponse(res, true, result, "Salesperson password updated successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

@@ -7,6 +7,7 @@ import type {
   AddExistingMemberBody,
   UpdateGroupBody,
   UpdateSalespersonBody,
+  ResetPasswordBody,
 } from "./manager.types.js";
 
 const createGroupSchema = z.object({
@@ -52,7 +53,14 @@ const updateSalespersonSchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
+const resetPasswordSchema = z.object({
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
+
 export const validateCreateGroupSchema = (body: unknown) => validateSchema<CreateGroupBody>(createGroupSchema, body);
+
+export const validateResetPasswordSchema = (body: unknown) =>
+  validateSchema<ResetPasswordBody>(resetPasswordSchema, body);
 
 export const validateAddSalespersonSchema = (body: unknown) =>
   validateSchema<AddSalespersonBody>(addSalespersonSchema, body);

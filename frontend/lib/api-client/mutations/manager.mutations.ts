@@ -7,6 +7,7 @@ import type {
   CreateGroupPayload,
   CreateSalespersonPayload,
   Group,
+  ResetPasswordPayload,
   SalespersonUser,
   UpdateGroupPayload,
   UpdateSalespersonPayload,
@@ -97,6 +98,12 @@ export function useUpdateSalespersonMutation() {
       queryClient.invalidateQueries({ queryKey: managerKeys.groups() });
       queryClient.invalidateQueries({ queryKey: managerKeys.mySalespersons() });
     },
+  });
+}
+
+export function useResetSalespersonPasswordMutation() {
+  return useMutation<SalespersonUser, unknown, { groupId: string; userId: string; payload: ResetPasswordPayload }>({
+    mutationFn: ({ groupId, userId, payload }) => managerApi.resetSalespersonPassword(groupId, userId, payload),
   });
 }
 

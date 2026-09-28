@@ -18,6 +18,7 @@ import callerDeskRoutes from "@modules/webhooks/callerdesk/callerdesk.routes.js"
 import callRoutes from "@modules/call/call.routes.js";
 import tasksRoutes from "@modules/tasks/tasks.routes.js";
 import deliveryRoutes from "@modules/delivery/delivery.routes.js";
+import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
 
 const router = Router();
 
@@ -41,10 +42,11 @@ router.use("/whatsapp", whatsappRoutes);
 router.use("/payments", paymentsRoutes);
 router.use("/shipments", shipmentsRoutes);
 router.use("/integrations", integrationsRoutes);
-router.use("/lead", leadRoutes);                         
+router.use("/lead", leadRoutes);
 router.use("/calling", callingRoutes);
 router.use("/calls", callRoutes);
 router.use("/tasks", tasksRoutes);
 router.use("/delivery", deliveryRoutes);
+router.use("/abandonments", abandonmentRoutes);
 
 export default router;

@@ -29,3 +29,7 @@ export interface UpdateSalespersonBody {
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";
 }
+
+export interface ResetPasswordBody {
+  password: string;
+}

@@ -4,6 +4,7 @@ import type {
   CreateManagerPayload,
   CreateSalespersonPayload,
   ManagerUser,
+  ResetPasswordPayload,
   SalespersonUser,
   UpdateManagerPayload,
   UpdateSalespersonPayload,
@@ -30,6 +31,11 @@ export const adminApi = {
     return res.data.data;
   },
 
+  async resetManagerPassword(id: string, payload: ResetPasswordPayload): Promise<ManagerUser> {
+    const res = await apiClient.patch<ApiEnvelope<ManagerUser>>(`/admin/managers/${id}/password`, payload);
+    return res.data.data;
+  },
+
   async listSalespersons(): Promise<SalespersonUser[]> {
     const res = await apiClient.get<ApiEnvelope<SalespersonUser[]>>("/admin/salespersons");
     return res.data.data;
@@ -42,6 +48,11 @@ export const adminApi = {
 
   async updateSalesperson(id: string, payload: UpdateSalespersonPayload): Promise<SalespersonUser> {
     const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(`/admin/salespersons/${id}`, payload);
+    return res.data.data;
+  },
+
+  async resetSalespersonPassword(id: string, payload: ResetPasswordPayload): Promise<SalespersonUser> {
+    const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(`/admin/salespersons/${id}/password`, payload);
     return res.data.data;
   },
 };

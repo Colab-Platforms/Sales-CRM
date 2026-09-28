@@ -5,6 +5,7 @@ import type {
   CreateManagerPayload,
   CreateSalespersonPayload,
   ManagerUser,
+  ResetPasswordPayload,
   SalespersonUser,
   UpdateManagerPayload,
   UpdateSalespersonPayload,
@@ -43,6 +44,12 @@ export function useDeactivateManagerMutation() {
   });
 }
 
+export function useResetManagerPasswordMutation() {
+  return useMutation<ManagerUser, unknown, { id: string; payload: ResetPasswordPayload }>({
+    mutationFn: ({ id, payload }) => adminApi.resetManagerPassword(id, payload),
+  });
+}
+
 export function useCreateSalespersonMutation() {
   const queryClient = useQueryClient();
 
@@ -62,5 +69,11 @@ export function useUpdateSalespersonMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminKeys.salespersons() });
     },
+  });
+}
+
+export function useResetSalespersonPasswordMutation() {
+  return useMutation<SalespersonUser, unknown, { id: string; payload: ResetPasswordPayload }>({
+    mutationFn: ({ id, payload }) => adminApi.resetSalespersonPassword(id, payload),
   });
 }
