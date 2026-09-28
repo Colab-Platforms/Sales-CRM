@@ -26,12 +26,19 @@ export function ConversationListItem({
   selected,
   onSelect,
   onArchiveToggle,
+  selectionMode,
+  checked,
+  onToggleSelect,
 }: {
   conversation: ConversationSummary;
   selected: boolean;
   onSelect: () => void;
   /** Asks the parent to archive (or, in the Archived view, restore) this conversation - the parent owns the confirmation. */
   onArchiveToggle?: () => void;
+  /** Part 3 (WhatsApp Inbox): when true, the row toggles a checkbox instead of opening the conversation. */
+  selectionMode?: boolean;
+  checked?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const { lastMessage } = conversation;
   const preview =
@@ -39,17 +46,40 @@ export function ConversationListItem({
     (lastMessage.templateName ? `Template: ${lastMessage.templateName}` : lastMessage.messageType === "TEMPLATE" ? "(template message)" : "—");
 
   const archiveLabel = conversation.archived ? "Restore to inbox" : "Archive conversation";
+  const activate = selectionMode ? onToggleSelect : onSelect;
   return (
     <li className="group relative">
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-current={selected}
+      {/* A native <button> cannot validly contain a real <input type="checkbox"> (invalid HTML
+          nesting, inconsistent click/focus behavior across browsers) - this is a div with button
+          semantics instead, so the checkbox below is a normal sibling control, not nested inside one. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={activate}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            activate?.();
+          }
+        }}
+        aria-current={!selectionMode && selected}
+        aria-pressed={selectionMode ? checked : undefined}
         className={cn(
-          "flex w-full items-center gap-3 border-b px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-muted/50",
-          selected && "bg-muted",
+          "flex w-full cursor-pointer items-center gap-3 border-b px-3 py-3 text-left transition-colors last:border-b-0 hover:bg-muted/50",
+          selected && !selectionMode && "bg-muted",
+          checked && selectionMode && "bg-primary/5",
         )}
       >
+        {selectionMode ? (
+          <input
+            type="checkbox"
+            checked={Boolean(checked)}
+            onChange={onToggleSelect}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={`Select ${conversation.name}`}
+            className="size-4 shrink-0 accent-primary"
+          />
+        ) : null}
         <span
           className={cn(
             "flex size-10 shrink-0 items-center justify-center rounded-full text-sm font-semibold",
@@ -92,8 +122,8 @@ export function ConversationListItem({
             {conversation.assignedTo ? <span className="truncate text-xs text-muted-foreground">· {conversation.assignedTo.name}</span> : null}
           </div>
         </div>
-      </button>
-      {onArchiveToggle ? (
+      </div>
+      {onArchiveToggle && !selectionMode ? (
         <button
           type="button"
           onClick={onArchiveToggle}

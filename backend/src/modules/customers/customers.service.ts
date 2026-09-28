@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { InterestedPeriodStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, InterestedPeriodStatus, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
@@ -30,6 +30,7 @@ import {
 } from "./customers.timeline.js";
 import type {
   Customer360,
+  CustomerDeactivationImpact,
   CustomerListResult,
   CustomerTimelineResult,
   ListCustomerTimelineQuery,
@@ -363,6 +364,53 @@ class CustomersService {
         totalPages: Math.max(1, Math.ceil(totalItems / query.pageSize)),
       },
     };
+  }
+
+  // Part 8 (WhatsApp Inbox, Delete Customer): counts of what a hard delete would have touched - shown
+  // in the confirmation dialog so the person deactivating this profile knows exactly what stays
+  // intact. Never deleted: Lead has no cascading FK from any of these tables (orders, conversations,
+  // messages, campaign recipients all reference it), so a real DELETE would fail at the database
+  // level anyway - this is why deactivateCustomer below is a status change, not a delete.
+  async getDeactivationImpact(user: AuthUser, leadId: string): Promise<CustomerDeactivationImpact> {
+    const leadScope = await getLeadScope(user, this.db);
+    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true } });
+    if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+
+    const [orders, conversations, messages, campaignRecipients] = await Promise.all([
+      this.db.order.count({ where: { leadId } }),
+      this.db.whatsAppConversation.count({ where: { leadId } }),
+      this.db.whatsAppMessage.count({ where: { leadId } }),
+      this.db.whatsAppCampaignRecipient.count({ where: { leadId } }),
+    ]);
+
+    return { orders, conversations, messages, campaignRecipients };
+  }
+
+  // Deactivates (never deletes) a customer profile. Sets Lead.workingStatus to DEACTIVATED - the one
+  // new enum value added for this - which every existing "active leads" list/assignment query already
+  // excludes by construction (they filter for the working statuses they actually want, and none of
+  // them enumerate DEACTIVATED). Orders, conversations, messages, campaign history and every other
+  // related record are left completely untouched; only this one status column changes.
+  async deactivateCustomer(user: AuthUser, leadId: string): Promise<{ leadId: string; workingStatus: LeadWorkingStatus }> {
+    const leadScope = await getLeadScope(user, this.db);
+    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true, workingStatus: true } });
+    if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+    if (lead.workingStatus === LeadWorkingStatus.DEACTIVATED) return { leadId: lead.id, workingStatus: LeadWorkingStatus.DEACTIVATED };
+
+    await this.db.lead.update({ where: { id: lead.id }, data: { workingStatus: LeadWorkingStatus.DEACTIVATED } });
+    await this.db.activity.create({
+      data: {
+        leadId: lead.id,
+        actorId: user.id,
+        actorRole: user.role,
+        type: ActivityType.STATUS_CHANGE,
+        source: ActivitySource.USER,
+        title: "Customer profile deactivated",
+        description: "Deactivated from the WhatsApp Inbox. Orders, conversations and messages were not deleted.",
+      },
+    });
+
+    return { leadId: lead.id, workingStatus: LeadWorkingStatus.DEACTIVATED };
   }
 }
 

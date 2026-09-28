@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
-import { PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import { PaymentStatus, ShipmentStatus, WhatsAppProviderName } from "../../../generated/prisma/enums.js";
 import { NO_PAYMENT } from "../orders/orders.types.js";
 import type {
   AudienceFilters,
@@ -63,7 +63,18 @@ const pageSize = z.coerce.number({ error: "pageSize must be a number" }).int().m
 const campaignStatusEnum = z.enum(["DRAFT", "SCHEDULED", "RUNNING", "COMPLETED", "CANCELLED", "FAILED"]);
 const recipientStatusEnum = z.enum(["PENDING", "CLAIMED", "SENT", "SKIPPED", "FAILED"]);
 
-const listCampaignsQuerySchema = z.object({ page, pageSize, status: optional(campaignStatusEnum) });
+const listCampaignsQuerySchema = z.object({
+  page,
+  pageSize,
+  status: optional(campaignStatusEnum),
+  search: optional(z.string().trim().max(150, "search must be 150 characters or fewer")),
+  // Campaigns have no provider column of their own - this filters by the LINKED template's provider (a campaign's
+  // provider is always its template's provider, since sendTemplateAsSystem sends through whichever provider the
+  // template belongs to).
+  provider: optional(z.enum(WhatsAppProviderName, { error: "Invalid provider" })),
+  createdFrom: optional(z.iso.datetime({ offset: true, error: "createdFrom must be an ISO date-time" }).transform((v) => new Date(v))),
+  createdTo: optional(z.iso.datetime({ offset: true, error: "createdTo must be an ISO date-time" }).transform((v) => new Date(v))),
+});
 const listRecipientsQuerySchema = z.object({ page, pageSize, status: optional(recipientStatusEnum) });
 const campaignIdParamsSchema = z.object({ id: z.uuid({ error: "Invalid campaign id" }) });
 

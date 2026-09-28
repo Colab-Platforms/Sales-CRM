@@ -51,3 +51,13 @@ export function customerTimelineQueryOptions(leadId: string, params: CustomerTim
     retry: retryUnlessClientError,
   });
 }
+
+// Fetched only when the Delete Customer confirmation dialog actually opens - never eagerly, since it's
+// ADMIN/MANAGER-only and irrelevant otherwise.
+export function customerDeactivationImpactQueryOptions(leadId: string) {
+  return queryOptions({
+    queryKey: [...customersKeys.detail(leadId), "deactivation-impact"] as const,
+    queryFn: () => customersApi.getDeactivationImpact(leadId),
+    retry: retryUnlessClientError,
+  });
+}

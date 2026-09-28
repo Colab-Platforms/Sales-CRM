@@ -31,7 +31,10 @@ export function scopedMessageWhere(id: string, leadScope: Prisma.LeadWhereInput)
 
 /** Every message that belongs to a real Lead, scoped and optionally name/mobile-searched - the base query the Inbox's conversation list groups by leadId. */
 export function buildConversationWhere(leadScope: Prisma.LeadWhereInput, search?: string): Prisma.WhatsAppMessageWhereInput {
-  const and: Prisma.WhatsAppMessageWhereInput[] = [{ leadId: { not: null } }];
+  // A deactivated customer (Part 8, WhatsApp Inbox: "Delete Customer") drops out of the active
+  // Inbox/conversation list entirely - their message history is still reachable through Customer
+  // 360's own timeline, just not through this operational queue.
+  const and: Prisma.WhatsAppMessageWhereInput[] = [{ leadId: { not: null } }, { lead: { workingStatus: { not: "DEACTIVATED" } } }];
   if (Object.keys(leadScope).length > 0) and.push({ lead: leadScope });
   if (search) {
     const contains = { contains: search, mode: "insensitive" as const };

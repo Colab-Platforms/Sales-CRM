@@ -19,6 +19,7 @@ function emptyStatusCounts(): StatusCounts {
     INTERESTED: 0,
     NOT_INTERESTED: 0,
     CONVERTED: 0,
+    DEACTIVATED: 0,
   };
 }
 
@@ -29,6 +30,13 @@ function fillStatusCounts(rows: { workingStatus: LeadWorkingStatus; _count: { _a
   }
   return counts;
 }
+
+// A deactivated customer (Part 8, WhatsApp Inbox: "Delete Customer") is excluded from every dashboard
+// count below - "total leads"/status breakdowns represent the active pipeline, and a deactivated
+// profile is no longer part of anyone's active workload. Their record itself is untouched; they simply
+// stop being counted here, the same exclusion applied to the customer list/campaign audience
+// (see customers.filters.ts's buildCustomerListWhere) and the WhatsApp Inbox (whatsapp.history.filters.ts).
+const ACTIVE_LEAD: { workingStatus: { not: "DEACTIVATED" } } = { workingStatus: { not: "DEACTIVATED" } };
 
 class DashboardService {
   async getDashboard(user: AuthUser) {
@@ -46,12 +54,12 @@ class DashboardService {
     const [statusRows, totalLeads, recentLeads] = await Promise.all([
       prisma.lead.groupBy({
         by: ["workingStatus"],
-        where: { ownerId: userId },
+        where: { ownerId: userId, ...ACTIVE_LEAD },
         _count: { _all: true },
       }),
-      prisma.lead.count({ where: { ownerId: userId } }),
+      prisma.lead.count({ where: { ownerId: userId, ...ACTIVE_LEAD } }),
       prisma.lead.findMany({
-        where: { ownerId: userId },
+        where: { ownerId: userId, ...ACTIVE_LEAD },
         orderBy: { updatedAt: "desc" },
         take: 5,
         select: {
@@ -96,15 +104,15 @@ class DashboardService {
     const [statusRows, totalLeads, perSalespersonRows] = await Promise.all([
       prisma.lead.groupBy({
         by: ["workingStatus"],
-        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }] },
+        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }], ...ACTIVE_LEAD },
         _count: { _all: true },
       }),
       prisma.lead.count({
-        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }] },
+        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }], ...ACTIVE_LEAD },
       }),
       prisma.lead.groupBy({
         by: ["ownerId", "workingStatus"],
-        where: { ownerId: { in: memberIds } },
+        where: { ownerId: { in: memberIds }, ...ACTIVE_LEAD },
         _count: { _all: true },
       }),
     ]);
@@ -136,8 +144,8 @@ class DashboardService {
 
   private async adminDashboard() {
     const [statusRows, totalLeads, usersByRole, totalGroups] = await Promise.all([
-      prisma.lead.groupBy({ by: ["workingStatus"], _count: { _all: true } }),
-      prisma.lead.count(),
+      prisma.lead.groupBy({ by: ["workingStatus"], where: ACTIVE_LEAD, _count: { _all: true } }),
+      prisma.lead.count({ where: ACTIVE_LEAD }),
       prisma.user.groupBy({ by: ["role"], _count: { _all: true } }),
       prisma.group.count(),
     ]);

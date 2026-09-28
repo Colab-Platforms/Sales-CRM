@@ -32,7 +32,7 @@ describe("payment link template variables", () => {
   it("fail validation - rather than send a dead link - when the link is paid, failed or expired", () => {
     for (const dead of [link({ status: PaymentStatus.SUCCESS }), link({ status: PaymentStatus.FAILED }), link({ paymentExpiresAt: new Date(Date.now() - HOUR) })]) {
       const result = resolveTemplateVariables(["payment_link"], ctx([dead]));
-      assert.deepEqual(result.errors, ["Missing value for variable: payment_link"]);
+      assert.deepEqual(result.errors, ["Value required for payment_link"]);
     }
   });
 

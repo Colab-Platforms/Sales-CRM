@@ -94,6 +94,14 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
     return `https://graph.facebook.com/${this.config.graphApiVersion}/${this.config.phoneNumberId}/messages`;
   }
 
+  /** Never the token/Authorization header, never the full recipient number - just enough to diagnose a
+   *  rejected send from server logs (dev or prod) without exposing a secret or a customer's real number. */
+  private sanitizedForLog(body: Record<string, unknown>): unknown {
+    const masked = { ...body } as Record<string, unknown>;
+    if (typeof masked.to === "string") masked.to = masked.to.replace(/\d(?=\d{2})/g, "*");
+    return masked;
+  }
+
   private async post(body: Record<string, unknown>, label: string): Promise<Record<string, unknown>> {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -118,13 +126,31 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
         lastError = parsed;
         continue; // rate-limited/transient - retry once
       }
-      throw new WhatsAppSendError(`Meta Cloud API rejected the ${label} message (HTTP ${response.status})`, parsed);
+      // Sanitized diagnostic log (no token, masked recipient) - Meta's own error body is never a secret,
+      // it's what actually explains a rejected send (wrong parameter format, unapproved template, etc.).
+      logger.error(`Meta Cloud API rejected the ${label} message (HTTP ${response.status})`, { request: this.sanitizedForLog(body), metaError: isObject(parsed) ? parsed.error : parsed });
+      throw new WhatsAppSendError(`Meta Cloud API rejected the ${label} message (HTTP ${response.status}): ${describeMetaError(parsed)}`, parsed);
     }
     throw new WhatsAppSendError(`Could not reach Meta Cloud API for ${label}: ${lastError instanceof Error ? lastError.message : String(lastError)}`, lastError);
   }
 
   async sendTemplateMessage(input: SendTemplateMessageInput): Promise<SendTemplateMessageResult> {
-    const components = input.params.length > 0 ? [{ type: "body", parameters: input.params.map((text) => ({ type: "text", text })) }] : [];
+    // Every template this CRM submits to Meta uses parameter_format: "named" (whatsapp.template.meta-payload.ts) -
+    // Meta's Send Message API rejects a named-format template sent with positional-only parameters (no
+    // parameter_name), which is exactly the HTTP 400 this fixes. Falls back to positional only if the caller
+    // genuinely has no names (never the case for a send this service originates).
+    const components =
+      input.params.length > 0
+        ? [
+            {
+              type: "body",
+              parameters: input.params.map((text, i) => {
+                const name = input.paramNames?.[i];
+                return name ? { type: "text", parameter_name: name, text } : { type: "text", text };
+              }),
+            },
+          ]
+        : [];
     const body = await this.post(
       {
         to: input.to,
@@ -182,21 +208,63 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
     return verifyMetaSignature(req.rawBody, value, this.config.appSecret);
   }
 
-  async listTemplates(): Promise<TemplateSyncResult> {
+  /** POST /{WABA_ID}/message_templates - confirmed against Meta's current published Message Templates API contract.
+   *  Submission success means Meta accepted the template FOR REVIEW, never that it is approved - the returned
+   *  status is whatever Meta reports at creation time (normally PENDING), read through the exact same
+   *  TEMPLATE_STATUS_MAP listTemplates() already uses, so the two paths can never disagree about what a status
+   *  string means. Meta's own duplicate-name rule (a second create for an existing name/language on this WABA is
+   *  itself rejected by Meta) is surfaced as a WhatsAppSendError, not invented here. */
+  async createTemplate(payload: Record<string, unknown>): Promise<{ providerTemplateId: string; status: Exclude<ProviderTemplateStatus, "UNKNOWN">; rejectedReason: string | null }> {
     const url = `https://graph.facebook.com/${this.config.graphApiVersion}/${this.config.businessAccountId}/message_templates`;
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
-        headers: { Authorization: `Bearer ${this.config.accessToken}` },
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${this.config.accessToken}` },
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
-      throw new WhatsAppSendError(`Could not reach Meta Cloud API to list templates: ${error instanceof Error ? error.message : String(error)}`);
+      throw new WhatsAppSendError(`Could not reach Meta Cloud API to create the template: ${error instanceof Error ? error.message : String(error)}`);
     }
     const body = await response.json().catch(() => null);
-    if (!response.ok || !isObject(body) || !Array.isArray(body.data)) {
-      throw new WhatsAppSendError(`Meta Cloud API rejected the template list request (HTTP ${response.status})`, body);
+    if (!response.ok || !isObject(body) || typeof body.id !== "string") {
+      const reason = isObject(body) && isObject(body.error) && typeof body.error.error_user_msg === "string" ? body.error.error_user_msg : isObject(body) && isObject(body.error) && typeof body.error.message === "string" ? body.error.message : `HTTP ${response.status}`;
+      throw new WhatsAppSendError(`Meta rejected the template submission: ${reason}`, body);
     }
+    const rawStatus = typeof body.status === "string" ? body.status.toLowerCase() : "";
+    return {
+      providerTemplateId: body.id,
+      status: (TEMPLATE_STATUS_MAP[rawStatus] as Exclude<ProviderTemplateStatus, "UNKNOWN"> | undefined) ?? "PENDING", // Meta virtually always returns PENDING on a fresh accept; an unrecognised string is never treated as a silent failure
+      rejectedReason: isObject(body.rejected_reason) ? null : typeof body.rejected_reason === "string" ? body.rejected_reason : null,
+    };
+  }
+
+  async listTemplates(): Promise<TemplateSyncResult> {
+    // Meta paginates this list (paging.next). The sync marks any previously-synced template that is ABSENT from the
+    // result as removed, so a partial list would wrongly disable real templates - every page is read, and if the page
+    // cap is hit with more remaining the call fails instead of returning a partial list.
+    const MAX_PAGES = 40;
+    let url: string | null = `https://graph.facebook.com/${this.config.graphApiVersion}/${this.config.businessAccountId}/message_templates?limit=100`;
+    const data: unknown[] = [];
+    for (let page = 0; url; page += 1) {
+      if (page >= MAX_PAGES) throw new WhatsAppSendError("Meta returned more template pages than this sync will read - refusing to sync a partial list.");
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.config.accessToken}` }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      } catch (error) {
+        throw new WhatsAppSendError(`Could not reach Meta Cloud API to list templates: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const body: unknown = await response.json().catch(() => null);
+      if (!response.ok || !isObject(body) || !Array.isArray(body.data)) {
+        throw new WhatsAppSendError(`Meta Cloud API rejected the template list request (HTTP ${response.status})`, body);
+      }
+      data.push(...body.data);
+      const next: unknown = isObject(body.paging) ? body.paging.next : null;
+      // Only ever follow a next link that stays on Meta's own Graph host.
+      url = typeof next === "string" && next.startsWith("https://graph.facebook.com/") ? next : null;
+    }
+    const body = { data };
 
     const templates: NormalizedTemplate[] = [];
     for (const row of body.data) {
@@ -211,6 +279,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
         body: isObject(bodyComponent) && typeof bodyComponent.text === "string" ? bodyComponent.text : "",
         status: TEMPLATE_STATUS_MAP[typeof row.status === "string" ? row.status.toLowerCase() : ""] ?? "UNKNOWN",
         quality: isObject(row.quality_score) && typeof row.quality_score.score === "string" ? row.quality_score.score : null,
+        rejectedReason: typeof row.rejected_reason === "string" ? row.rejected_reason : null,
       });
     }
     return { supported: true, templates };
@@ -281,4 +350,17 @@ function firstMessageId(body: Record<string, unknown>): string | null {
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const first = messages[0];
   return isObject(first) && typeof first.id === "string" ? first.id : null;
+}
+
+// Meta's documented error envelope: { error: { message, type, code, error_subcode, error_data: { details }, fbtrace_id } }.
+// None of these fields are secrets - surfacing them is what turns "HTTP 400" into something an admin can actually act on.
+function describeMetaError(parsed: unknown): string {
+  if (!isObject(parsed) || !isObject(parsed.error)) return "no further detail from Meta";
+  const err = parsed.error;
+  const parts: string[] = [];
+  if (typeof err.message === "string") parts.push(err.message);
+  if (isObject(err.error_data) && typeof err.error_data.details === "string") parts.push(err.error_data.details);
+  if (typeof err.code !== "undefined") parts.push(`code ${err.code}`);
+  if (typeof err.error_subcode !== "undefined") parts.push(`subcode ${err.error_subcode}`);
+  return parts.length > 0 ? parts.join(" — ") : "no further detail from Meta";
 }

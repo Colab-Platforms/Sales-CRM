@@ -47,12 +47,14 @@ export interface CampaignStats {
   pending: number;
 }
 
+export type WhatsAppCampaignProvider = "AISENSY" | "GUPSHUP" | "META";
+
 export interface CampaignSummary {
   id: string;
   name: string;
   description: string | null;
   status: WhatsAppCampaignStatus;
-  template: { id: string; name: string; status: string } | null;
+  template: { id: string; name: string; status: string; provider: WhatsAppCampaignProvider } | null;
   createdBy: { id: string; name: string } | null;
   scheduledAt: string | null;
   startedAt: string | null;
@@ -72,12 +74,17 @@ export interface AudiencePreview {
   count: number;
   sample: CustomerListItem[];
   excludedNoMobile: number;
+  excludedOptedOut: number;
 }
 
 export interface ListCampaignsParams {
   page: number;
   pageSize: number;
   status?: WhatsAppCampaignStatus;
+  search?: string;
+  provider?: WhatsAppCampaignProvider;
+  createdFrom?: string;
+  createdTo?: string;
 }
 
 export interface Pagination {

@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { whatsappTemplatesApi } from "../endpoints/whatsapp-templates.api";
 import { whatsappTemplateKeys } from "../queries/whatsapp-templates.queries";
-import type { CreateTemplateInput, DeleteTemplateResult, TemplateSyncSummary, UpdateTemplateInput, WhatsAppTemplate } from "../types/whatsapp-templates.types";
+import type { CreateTemplateInput, DeleteTemplateResult, SubmitTemplateResult, TemplateSyncSummary, UpdateTemplateInput, WhatsAppTemplate } from "../types/whatsapp-templates.types";
 
 export function useCreateTemplateMutation() {
   const queryClient = useQueryClient();
@@ -27,6 +27,16 @@ export function useDeleteTemplateMutation() {
   const queryClient = useQueryClient();
   return useMutation<DeleteTemplateResult, unknown, string>({
     mutationFn: (id) => whatsappTemplatesApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: whatsappTemplateKeys.all });
+    },
+  });
+}
+
+export function useSubmitTemplateToMetaMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<SubmitTemplateResult, unknown, string>({
+    mutationFn: (id) => whatsappTemplatesApi.submitToMeta(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: whatsappTemplateKeys.all });
     },
