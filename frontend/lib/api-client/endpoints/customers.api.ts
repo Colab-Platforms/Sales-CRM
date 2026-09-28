@@ -2,6 +2,7 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
   Customer360,
+  CustomerDeactivationImpact,
   CustomerListResult,
   CustomerTimelineParams,
   CustomerTimelineResult,
@@ -22,6 +23,16 @@ export const customersApi = {
 
   async getTimeline(leadId: string, params: CustomerTimelineParams): Promise<CustomerTimelineResult> {
     const res = await apiClient.get<ApiEnvelope<CustomerTimelineResult>>(`/customers/${leadId}/timeline`, { params });
+    return res.data.data;
+  },
+
+  async getDeactivationImpact(leadId: string): Promise<CustomerDeactivationImpact> {
+    const res = await apiClient.get<ApiEnvelope<CustomerDeactivationImpact>>(`/customers/${leadId}/deactivation-impact`);
+    return res.data.data;
+  },
+
+  async deactivate(leadId: string): Promise<{ leadId: string; workingStatus: string }> {
+    const res = await apiClient.post<ApiEnvelope<{ leadId: string; workingStatus: string }>>(`/customers/${leadId}/deactivate`);
     return res.data.data;
   },
 };

@@ -57,11 +57,21 @@ function fakeDb(overrides: { leads?: any[] } = {}) {
       async count({ where }: any) {
         return messages.filter((m) => m.leadId === where.leadId && m.direction === "INBOUND" && m.createdAt > where.createdAt.gt).length;
       },
+      // No message history is ever seeded in this file's tests - toDetail's archive check (isArchived)
+      // needs this delegate to exist, but always finds nothing, same as the real "no messages yet" case.
+      async findFirst() {
+        return null;
+      },
     },
     activity: {
       async create({ data }: any) {
-        activities.push(data);
+        activities.push({ id: `a${activities.length}`, createdAt: new Date(), ...data });
         return data;
+      },
+      // Archiving is not exercised by this file's tests (see whatsapp.conversation.archive.test.ts) -
+      // toDetail's isArchived check needs this delegate to exist, but always finds nothing archived.
+      async findFirst() {
+        return null;
       },
     },
   } as unknown as DbClient;

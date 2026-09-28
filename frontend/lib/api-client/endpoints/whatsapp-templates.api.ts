@@ -2,7 +2,9 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
   CreateTemplateInput,
+  DeleteTemplateResult,
   ListTemplatesParams,
+  SubmitTemplateResult,
   TemplateListResult,
   TemplateSyncSummary,
   UpdateTemplateInput,
@@ -26,8 +28,16 @@ export const whatsappTemplatesApi = {
     const res = await apiClient.patch<ApiEnvelope<WhatsAppTemplate>>(`/whatsapp/templates/${id}`, input);
     return res.data.data;
   },
-  async sync(): Promise<TemplateSyncSummary> {
-    const res = await apiClient.post<ApiEnvelope<TemplateSyncSummary>>("/whatsapp/templates/sync");
+  async sync(provider?: "META"): Promise<TemplateSyncSummary> {
+    const res = await apiClient.post<ApiEnvelope<TemplateSyncSummary>>("/whatsapp/templates/sync", provider ? { provider } : undefined);
+    return res.data.data;
+  },
+  async remove(id: string): Promise<DeleteTemplateResult> {
+    const res = await apiClient.delete<ApiEnvelope<DeleteTemplateResult>>(`/whatsapp/templates/${id}`);
+    return res.data.data;
+  },
+  async submitToMeta(id: string): Promise<SubmitTemplateResult> {
+    const res = await apiClient.post<ApiEnvelope<SubmitTemplateResult>>(`/whatsapp/templates/${id}/submit`);
     return res.data.data;
   },
 };

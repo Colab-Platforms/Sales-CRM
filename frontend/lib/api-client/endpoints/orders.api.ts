@@ -1,6 +1,8 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
+  CancelOrderInput,
+  CancelOrderResult,
   CreateManualOrderInput,
   CreateManualOrderResult,
   OrderDetail,
@@ -28,8 +30,18 @@ export const ordersApi = {
     return res.data.data;
   },
 
+  async cancel(orderId: string, input: CancelOrderInput): Promise<CancelOrderResult> {
+    const res = await apiClient.post<ApiEnvelope<CancelOrderResult>>(`/orders/${orderId}/cancel`, input);
+    return res.data.data;
+  },
+
   async pushToShopify(orderId: string): Promise<ShopifyPushResult> {
     const res = await apiClient.post<ApiEnvelope<ShopifyPushResult>>(`/orders/${orderId}/shopify-order`);
+    return res.data.data;
+  },
+
+  async retryShopifyPaymentSync(orderId: string): Promise<{ status: "synced" | "not_linked" | "failed"; reason?: string }> {
+    const res = await apiClient.post<ApiEnvelope<{ status: "synced" | "not_linked" | "failed"; reason?: string }>>(`/orders/${orderId}/shopify-payment-sync/retry`);
     return res.data.data;
   },
 

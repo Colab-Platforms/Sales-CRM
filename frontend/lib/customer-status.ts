@@ -13,6 +13,7 @@ export const LEAD_STATUS_LABELS: Record<LeadWorkingStatus, string> = {
   INTERESTED: "Interested",
   NOT_INTERESTED: "Not interested",
   CONVERTED: "Converted",
+  DEACTIVATED: "Deactivated",
 };
 
 export const LEAD_STATUS_COLORS: Record<LeadWorkingStatus, string> = {
@@ -28,6 +29,7 @@ export const LEAD_STATUS_COLORS: Record<LeadWorkingStatus, string> = {
   INTERESTED: "bg-violet-500/10 text-violet-600 dark:text-violet-400",
   NOT_INTERESTED: "bg-red-500/10 text-red-600 dark:text-red-400",
   CONVERTED: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  DEACTIVATED: "bg-neutral-500/10 text-neutral-600 dark:text-neutral-400",
 };
 
 export const LEAD_PRIORITY_LABELS: Record<LeadPriority, string> = {

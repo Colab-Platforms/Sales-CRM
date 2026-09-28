@@ -182,7 +182,7 @@ describe("sending a template message", () => {
       const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx);
-      const svc = new WhatsAppMessagingService(tx, () => null);
+      const svc = new WhatsAppMessagingService(tx, () => null, async () => null);
       await assert.rejects(() => svc.sendTemplate(as(admin, Role.ADMIN), { leadId: lead.id, templateId: template.id }), (e: any) => e.statusCode === 503);
       assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id } }), 0);
     });
@@ -508,7 +508,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       await makeOrderConfirmationTemplate(tx);
-      const svc = new WhatsAppMessagingService(tx, () => null);
+      const svc = new WhatsAppMessagingService(tx, () => null, async () => null);
       await assert.rejects(() => svc.sendOrderConfirmationTest(as(admin, Role.ADMIN), { orderId: order.id }), (e: any) => e.statusCode === 503);
       assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id } }), 0);
     });

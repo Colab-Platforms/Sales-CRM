@@ -6,8 +6,8 @@ import { Phone, Loader2 } from "lucide-react";
 import { AlarmClock } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Eye, Inbox, Pencil, Trash2 } from "lucide-react";
-import { History } from "lucide-react";
+import { Eye, Inbox, Pencil, Trash2, History, ArrowRight, Lock, Mic, PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { useAuthStore } from "@/stores/auth-store";
 import {
   Table,
   TableBody,
@@ -18,7 +18,6 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { NativeSelect } from "@/components/ui/native-select";
 import {
   Dialog,
@@ -28,17 +27,19 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { customerDetailHref } from "@/components/orders/orders-table";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { useSubmitCallOutcomeMutation } from "@/lib/api-client/mutations/calling.mutations";
 import { callingKeys, callOutcomesQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { useInitiateCallMutation } from "@/lib/api-client/mutations/calls.mutations";
-import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { CallOutcomeForm, CALL_STATUS_VARIANT, TERMINAL_CALL_STATUSES } from "@/components/calling/active-call-dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import { ScheduleFollowUpDialog } from "@/components/follow-ups/schedule-follow-up-dialog";
-import { FOLLOW_UP_TYPE_LABEL, formatRelative, formatWhen } from "@/components/follow-ups/follow-up-utils";
+import {
+  FOLLOW_UP_TYPE_LABEL,
+  formatRelative,
+  formatWhen,
+} from "@/components/follow-ups/follow-up-utils";
 import { useNow } from "@/components/follow-ups/use-now";
 import { cn } from "@/lib/utils";
 import { EditLeadDialog } from "./edit-lead-dialog";
@@ -51,62 +52,98 @@ import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
 import type { CallStatus } from "@/lib/api-client/types/calling.types";
 import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
+import { Badge } from "../ui/badge";
+
+const CALL_HISTORY_PREVIEW_COUNT = 5;
 
 function CallHistoryDialogContent({ lead }: { lead: Lead }) {
+  const currentUser = useAuthStore((s) => s.user);
+  // lead.calls already arrives newest-first from the API, so slicing the front gives the latest N.
+  const recentCalls = lead.calls.slice(0, CALL_HISTORY_PREVIEW_COUNT);
+  const hiddenCount = lead.calls.length - recentCalls.length;
+
   return (
-    <DialogContent className="sm:max-w-[520px]">
+    <DialogContent className="sm:max-w-140">
       <DialogHeader>
         <DialogTitle>
           {lead.firstName} {lead.lastName ?? ""} — Call History
         </DialogTitle>
         <DialogDescription>
-          Click-to-call attempts logged for this lead.
+          {hiddenCount > 0
+            ? `Showing the ${recentCalls.length} most recent of ${lead.calls.length} calls.`
+            : "Click-to-call attempts logged for this lead."}
         </DialogDescription>
       </DialogHeader>
-      {lead.calls.length === 0 ? (
+      {recentCalls.length === 0 ? (
         <p className="text-sm text-muted-foreground">No calls yet.</p>
       ) : (
-        <div className="max-h-96 space-y-2 overflow-y-auto">
-          {lead.calls.map((call) => (
-            <div
-              key={call.id}
-              className="sketch-outline space-y-2 p-2.5 text-sm"
-            >
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-medium">
-                    {call.startedAt
-                      ? new Date(call.startedAt).toLocaleString()
-                      : "—"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {call.agent?.name ?? "Unknown agent"}
-                    {call.durationSeconds ? ` · ${call.durationSeconds}s` : ""}
-                  </p>
+        <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+          {recentCalls.map((call) => {
+            // A salesperson can see how a call another salesperson handled turned out, but
+            // can't touch the outcome — only the agent who took the call (or a manager/admin) can.
+            const isOthersCall =
+              currentUser?.role === "SALESPERSON" &&
+              Boolean(call.agent?.id && call.agent.id !== currentUser.id);
+            const DirectionIcon = call.direction === "INBOUND" ? PhoneIncoming : PhoneOutgoing;
+
+            return (
+              <div
+                key={call.id}
+                className={cn(
+                  "sketch-outline space-y-2.5 p-3 text-sm",
+                  isOthersCall ? "bg-muted/30" : "bg-card/60",
+                )}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2">
+                    <DirectionIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <div>
+                      <p className="font-semibold text-foreground">
+                        {call.startedAt ? new Date(call.startedAt).toLocaleString() : "Not started"}
+                      </p>
+                      <p className="flex items-center gap-1 text-xs text-muted-foreground">
+                        {isOthersCall ? <Lock className="size-3 shrink-0" aria-hidden="true" /> : null}
+                        {call.agent?.name ?? "Unknown agent"}
+                        {call.durationSeconds ? ` · ${call.durationSeconds}s` : ""}
+                      </p>
+                    </div>
+                  </div>
+                  <Badge variant={CALL_STATUS_VARIANT[call.status]}>
+                    {call.status.replaceAll("_", " ")}
+                  </Badge>
                 </div>
-                <Badge variant={CALL_STATUS_VARIANT[call.status]}>
-                  {call.status.replaceAll("_", " ")}
-                </Badge>
+
+                {call.recording?.recordingUrl ? (
+                  <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-2">
+                    <Mic className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <audio controls className="h-8 w-full min-w-0" src={call.recording.recordingUrl} />
+                  </div>
+                ) : null}
+
+                {call.outcome || call.notes ? (
+                  <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
+                    {call.outcome ? <p className="font-semibold text-foreground">Outcome: {call.outcome.name}</p> : null}
+                    {call.notes ? <p className="mt-1 text-muted-foreground leading-relaxed">{call.notes}</p> : null}
+                  </div>
+                ) : null}
+
+                {TERMINAL_CALL_STATUSES.has(call.status) && !isOthersCall ? (
+                  <CallOutcomeForm leadId={lead.id} currentFollowUp={lead.tasks[0]} call={call} />
+                ) : null}
               </div>
-              {call.recording?.recordingUrl ? (
-                <audio
-                  controls
-                  className="w-full"
-                  src={call.recording.recordingUrl}
-                />
-              ) : null}
-              {call.notes ? (
-                <p className="text-xs text-muted-foreground">
-                  <span className="font-medium text-foreground">{call.outcome?.name}:</span> {call.notes}
-                </p>
-              ) : null}
-              {TERMINAL_CALL_STATUSES.has(call.status) ? (
-                <CallOutcomeForm leadId={lead.id} currentFollowUp={lead.tasks[0]} call={call} />
-              ) : null}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+      {hiddenCount > 0 ? (
+        <Link
+          href={leadDetailHref(lead.id)}
+          className="flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+        >
+          View full history for this lead
+          <ArrowRight className="size-3.5" />
+        </Link>
+      ) : null}
     </DialogContent>
   );
 }
@@ -257,7 +294,11 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
   const now = useNow(30_000);
   const reminder = lead.tasks[0];
   // Reminders only exist while the lead is in a call back / follow up status.
-  if (!reminder || (lead.workingStatus !== "CALL_BACK" && lead.workingStatus !== "FOLLOW_UP")) return null;
+  if (
+    !reminder ||
+    (lead.workingStatus !== "CALL_BACK" && lead.workingStatus !== "FOLLOW_UP")
+  )
+    return null;
   const overdue = new Date(reminder.scheduledAt).getTime() < now;
 
   return (
@@ -268,7 +309,9 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
         title={`${FOLLOW_UP_TYPE_LABEL[reminder.type]} · ${formatRelative(reminder.scheduledAt, now)} — click to reschedule`}
         className={cn(
           "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring hover:shadow-sm",
-          overdue ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20" : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
+          overdue
+            ? "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/20"
+            : "border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
         )}
       >
         <AlarmClock className="size-3.5" />
@@ -290,7 +333,8 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
                   toast.success("Reminder rescheduled.");
                   setOpen(false);
                 },
-                onError: (error) => toast.error(getErrorMessage(error, "Failed to reschedule.")),
+                onError: (error) =>
+                  toast.error(getErrorMessage(error, "Failed to reschedule.")),
               },
             )
           }
@@ -305,17 +349,22 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
 export function LeadStatusSelect({ lead }: { lead: Lead }) {
   const updateLead = useUpdateLeadMutation();
   // Call back / follow up need a reminder time first, so they're held here until the dialog confirms.
-  const [pendingFollowUp, setPendingFollowUp] = useState<"CALL_BACK" | "FOLLOW_UP" | null>(null);
+  const [pendingFollowUp, setPendingFollowUp] = useState<
+    "CALL_BACK" | "FOLLOW_UP" | null
+  >(null);
 
   function save(workingStatus: LeadWorkingStatus, followUpAt?: string) {
     updateLead.mutate(
       { id: lead.id, payload: { workingStatus, followUpAt } },
       {
         onSuccess: () => {
-          toast.success(followUpAt ? "Status updated — reminder set." : "Status updated.");
+          toast.success(
+            followUpAt ? "Status updated — reminder set." : "Status updated.",
+          );
           setPendingFollowUp(null);
         },
-        onError: (error) => toast.error(getErrorMessage(error, "Failed to update status.")),
+        onError: (error) =>
+          toast.error(getErrorMessage(error, "Failed to update status.")),
       },
     );
   }
@@ -330,12 +379,16 @@ export function LeadStatusSelect({ lead }: { lead: Lead }) {
         wrapperClassName="w-40"
         onChange={(e) => {
           const next = e.target.value as LeadWorkingStatus;
-          if (next === "CALL_BACK" || next === "FOLLOW_UP") setPendingFollowUp(next);
+          if (next === "CALL_BACK" || next === "FOLLOW_UP")
+            setPendingFollowUp(next);
           else save(next);
         }}
       >
         {/* ASSIGNED is set by assigning a lead; only shown while the lead already has it (never for a salesperson). */}
-        {STATUS_ORDER.filter((status) => status !== "ASSIGNED" || lead.workingStatus === "ASSIGNED").map((status) => (
+        {STATUS_ORDER.filter(
+          (status) =>
+            status !== "ASSIGNED" || lead.workingStatus === "ASSIGNED",
+        ).map((status) => (
           <option key={status} value={status}>
             {STATUS_LABELS[status]}
           </option>
@@ -454,7 +507,7 @@ export function LeadTable({
                   </TableCell>
                   <TableCell>
                     <Link
-                      href={customerDetailHref(lead.id)}
+                      href={leadDetailHref(lead.id)}
                       className="font-semibold hover:underline"
                     >
                       {lead.firstName} {lead.lastName ?? ""}

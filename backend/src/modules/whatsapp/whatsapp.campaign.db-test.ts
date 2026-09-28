@@ -139,6 +139,61 @@ describe("campaign CRUD", () => {
 
       const list = await campaign.listCampaigns(as(a, Role.ADMIN), { page: 1, pageSize: 20, status: "DRAFT" });
       assert.ok(list.items.some((c) => c.id === created.id));
+      assert.equal(list.items.find((c) => c.id === created.id)?.template?.provider, "AISENSY");
+    });
+  });
+
+  it("lists campaigns filtered by name search, by the template's provider, and by created-date range", async () => {
+    await inRollback(async (tx) => {
+      const a = await admin(tx);
+      const { campaign } = services(tx);
+      const tag = `Search${uid().slice(0, 8)}`;
+      const aisensyTemplate = await makeTemplate(tx, { provider: "AISENSY" });
+      const gupshupTemplate = await makeTemplate(tx, { provider: "GUPSHUP", providerTemplateId: `gs-${uid()}` });
+      const match = await campaign.createCampaign(as(a, Role.ADMIN), { name: `${tag} Diwali blast`, templateId: aisensyTemplate.id, filters: {} });
+      await campaign.createCampaign(as(a, Role.ADMIN), { name: `${tag} Gupshup blast`, templateId: gupshupTemplate.id, filters: {} });
+      await campaign.createCampaign(as(a, Role.ADMIN), { name: "Unrelated", templateId: aisensyTemplate.id, filters: {} });
+
+      const bySearch = await campaign.listCampaigns(as(a, Role.ADMIN), { page: 1, pageSize: 20, search: tag });
+      assert.equal(bySearch.items.length, 2);
+
+      const byProvider = await campaign.listCampaigns(as(a, Role.ADMIN), { page: 1, pageSize: 20, search: tag, provider: "AISENSY" });
+      assert.deepEqual(byProvider.items.map((c) => c.id), [match.id]);
+
+      const farFuture = await campaign.listCampaigns(as(a, Role.ADMIN), { page: 1, pageSize: 20, search: tag, createdFrom: new Date(Date.now() + 86_400_000) });
+      assert.equal(farFuture.items.length, 0, "a createdFrom in the future excludes everything created today");
+    });
+  });
+
+  it("duplicates a campaign as a fresh untouched DRAFT - never copying recipients, schedule or lifecycle state", async () => {
+    await inRollback(async (tx) => {
+      const a = await admin(tx);
+      const { campaign } = services(tx);
+      const template = await makeTemplate(tx);
+      await makeLead(tx);
+      const original = await campaign.createCampaign(as(a, Role.ADMIN), { name: "Original", description: "notes", templateId: template.id, filters: {} });
+      await campaign.launchCampaign(as(a, Role.ADMIN), original.id, {});
+
+      const copy = await campaign.duplicateCampaign(as(a, Role.ADMIN), original.id);
+      assert.notEqual(copy.id, original.id);
+      assert.equal(copy.status, "DRAFT");
+      assert.match(copy.name, /Original.*copy/);
+      assert.equal(copy.description, "notes");
+      assert.equal(copy.startedAt, null);
+      assert.equal(copy.stats.totalRecipients, 0);
+      assert.equal(await tx.whatsAppCampaignRecipient.count({ where: { campaignId: copy.id } }), 0);
+    });
+  });
+
+  it("cannot duplicate onto a template that is no longer APPROVED - same validation createCampaign already applies", async () => {
+    await inRollback(async (tx) => {
+      const a = await admin(tx);
+      const { campaign } = services(tx);
+      const template = await makeTemplate(tx);
+      const original = await campaign.createCampaign(as(a, Role.ADMIN), { name: "Will go stale", templateId: template.id, filters: {} });
+      await tx.whatsAppTemplate.update({ where: { id: template.id }, data: { status: WhatsAppTemplateStatus.DISABLED } });
+
+      await assert.rejects(() => campaign.duplicateCampaign(as(a, Role.ADMIN), original.id), (e: any) => e.statusCode === 400);
     });
   });
 
@@ -161,11 +216,15 @@ describe("audience filtering and preview", () => {
     await inRollback(async (tx) => {
       const a = await admin(tx);
       const { campaign } = services(tx);
-      for (let i = 0; i < 8; i++) await makeLead(tx);
+      // Scoped to this test's own leads via `search` - an unfiltered {} preview would also match every real lead
+      // already in the (shared) database, which is not this test's concern and not stable to assert an exact count on.
+      const tag = `Audience${uid().slice(0, 8)}`;
+      for (let i = 0; i < 8; i++) await makeLead(tx, { firstName: tag });
 
-      const preview = await campaign.previewAudience(as(a, Role.ADMIN), {});
-      assert.ok(preview.count >= 8);
+      const preview = await campaign.previewAudience(as(a, Role.ADMIN), { search: tag });
+      assert.equal(preview.count, 8);
       assert.ok(preview.sample.length <= 5, "never returns more than the small sample size");
+      assert.ok(preview.sample.every((s) => s.leadId));
     });
   });
 
@@ -182,6 +241,55 @@ describe("audience filtering and preview", () => {
       assert.equal(preview.excludedNoMobile, 1);
       assert.equal(preview.count, 1);
       assert.ok(preview.sample.some((s) => s.leadId === withMobile.id));
+    });
+  });
+
+  it("excludes a lead who has explicitly opted OUT of WhatsApp (CommunicationPreference) - never overridable by any filter", async () => {
+    await inRollback(async (tx) => {
+      const a = await admin(tx);
+      const { campaign } = services(tx);
+      const tag = `OptOut${uid().slice(0, 8)}`;
+      const optedOut = await makeLead(tx, { firstName: tag, lastName: "OptedOut" });
+      const optedIn = await makeLead(tx, { firstName: tag, lastName: "OptedIn" });
+      const unknown = await makeLead(tx, { firstName: tag, lastName: "Unknown" }); // no CommunicationPreference row at all
+      await tx.communicationPreference.create({ data: { leadId: optedOut.id, channel: "WHATSAPP", status: "OPTED_OUT", optedOutAt: new Date() } });
+      await tx.communicationPreference.create({ data: { leadId: optedIn.id, channel: "WHATSAPP", status: "OPTED_IN", consentAt: new Date() } });
+
+      const preview = await campaign.previewAudience(as(a, Role.ADMIN), { search: tag });
+      assert.equal(preview.count, 2, "opted-in and unknown/no-preference both still match - only an explicit opt-out excludes");
+      assert.equal(preview.excludedOptedOut, 1);
+      assert.ok(preview.sample.every((s) => s.leadId !== optedOut.id));
+      assert.ok(preview.sample.some((s) => s.leadId === optedIn.id) && preview.sample.some((s) => s.leadId === unknown.id));
+    });
+  });
+
+  it("an opt-out on a DIFFERENT channel (e.g. SMS) does not exclude the lead from a WhatsApp campaign", async () => {
+    await inRollback(async (tx) => {
+      const a = await admin(tx);
+      const { campaign } = services(tx);
+      const tag = `SmsOptOut${uid().slice(0, 8)}`;
+      const lead = await makeLead(tx, { firstName: tag, lastName: "SmsOnly" });
+      await tx.communicationPreference.create({ data: { leadId: lead.id, channel: "SMS", status: "OPTED_OUT", optedOutAt: new Date() } });
+
+      const preview = await campaign.previewAudience(as(a, Role.ADMIN), { search: tag });
+      assert.equal(preview.count, 1);
+      assert.equal(preview.excludedOptedOut, 0);
+    });
+  });
+
+  it("launching a campaign whose entire matched audience has opted out is rejected with a clear reason - never silently sent", async () => {
+    await inRollback(async (tx) => {
+      const a = await admin(tx);
+      const template = await makeTemplate(tx);
+      const { campaign } = services(tx);
+      const tag = `AllOptOut${uid().slice(0, 8)}`;
+      const lead = await makeLead(tx, { firstName: tag });
+      await tx.communicationPreference.create({ data: { leadId: lead.id, channel: "WHATSAPP", status: "OPTED_OUT", optedOutAt: new Date() } });
+      const created = await campaign.createCampaign(as(a, Role.ADMIN), { name: "All opted out", templateId: template.id, filters: { search: tag } });
+
+      await assert.rejects(() => campaign.launchCampaign(as(a, Role.ADMIN), created.id, {}), (e: any) => e.statusCode === 400 && /opted out/.test(e.message));
+      const stillDraft = await tx.whatsAppCampaign.findUniqueOrThrow({ where: { id: created.id }, select: { status: true } });
+      assert.equal(stillDraft.status, "DRAFT");
     });
   });
 

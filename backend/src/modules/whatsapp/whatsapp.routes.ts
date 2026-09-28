@@ -10,8 +10,11 @@ import {
   sendWhatsAppMessage,
 } from "./whatsapp.controller.js";
 import { previewTemplateMessage, sendOrderConfirmationTest, sendTemplateMessage as sendTemplateMessageV2 } from "./whatsapp.messaging.controller.js";
+import { classifyBulkRecipients, sendBulkTemplate } from "./whatsapp.bulk-send.controller.js";
 import {
   createTemplate,
+  deleteTemplate,
+  submitTemplateToMeta,
   getTemplate,
   listTemplates,
   syncTemplates,
@@ -27,6 +30,7 @@ import {
 import {
   cancelCampaign,
   createCampaign,
+  duplicateCampaign,
   getCampaign,
   launchCampaign,
   listCampaignRecipients,
@@ -35,6 +39,7 @@ import {
   updateCampaign,
 } from "./whatsapp.campaign.controller.js";
 import {
+  archiveConversation,
   assignConversation,
   confirmOrderDraft,
   getConversationDetail,
@@ -43,6 +48,8 @@ import {
   markConversationRead,
   returnConversationToAi,
   sendConversationText,
+  getMessagingCapability,
+  unarchiveConversation,
 } from "./whatsapp.conversation.controller.js";
 import { searchCatalog } from "./whatsapp.catalog.controller.js";
 
@@ -61,6 +68,8 @@ router.post("/templates/sync", requireAuth, requireRole(Role.ADMIN), syncTemplat
 router.post("/templates", requireAuth, requireRole(Role.ADMIN), createTemplate);
 router.get("/templates/:id", requireAuth, getTemplate);
 router.patch("/templates/:id", requireAuth, requireRole(Role.ADMIN), updateTemplate);
+router.delete("/templates/:id", requireAuth, requireRole(Role.ADMIN), deleteTemplate);
+router.post("/templates/:id/submit", requireAuth, requireRole(Role.ADMIN), submitTemplateToMeta);
 
 // E7.3 Template-Based Messaging. Same RBAC as "/send" above (lead scope decides who can message
 // which customer, not a role gate) - an ADMIN/MANAGER/SALESPERSON can all send, scoped to the
@@ -73,6 +82,13 @@ router.post("/messages/template", requireAuth, sendTemplateMessageV2);
 // creation/Shopify/Cashfree; a real authenticated user must call it, scoped to their own leads via
 // the order the same way "/messages/template" already is - no separate role gate.
 router.post("/test/order-confirmation", requireAuth, sendOrderConfirmationTest);
+
+// Parts 3-5 (WhatsApp Inbox): selected-chat/bulk template sending. Same RBAC convention as
+// "/messages/template" above - lead scope (checked per recipient inside the service) is the real
+// gate, not a role. Reuses WhatsAppMessagingService's send path per eligible recipient - never a
+// second messaging engine.
+router.post("/messages/template/bulk-classify", requireAuth, classifyBulkRecipients);
+router.post("/messages/template/bulk-send", requireAuth, sendBulkTemplate);
 
 // E7.4 Conversation/Message History. Read-only; same lead-scope RBAC as everything else here - a
 // leadId filter narrows to one customer's conversation (what Customer 360 uses), or is left off
@@ -96,6 +112,11 @@ router.post("/conversations/:leadId/read", requireAuth, markConversationRead);
 router.post("/conversations/:leadId/assign", requireAuth, assignConversation);
 router.post("/conversations/:leadId/handoff", requireAuth, handoffConversation);
 router.post("/conversations/:leadId/ai-mode", requireAuth, returnConversationToAi);
+// Delete/archive - reachable from both the inbox list and the open conversation. Same RBAC as every
+// other conversation action (assertAccess inside the service): lead-scope or the conversation's own assignee.
+router.post("/conversations/:leadId/archive", requireAuth, archiveConversation);
+router.post("/conversations/:leadId/unarchive", requireAuth, unarchiveConversation);
+router.get("/conversations/:leadId/capability", requireAuth, getMessagingCapability);
 router.post("/conversations/:leadId/messages", requireAuth, sendConversationText);
 
 // Thin wrapper over the existing product catalog (products.service.ts) - see whatsapp.catalog.controller.ts.
@@ -132,6 +153,7 @@ router.delete("/cloud-config", requireAuth, requireRole(Role.ADMIN), resetWhatsA
 // is never read as a campaign id.
 router.post("/campaigns/preview", requireAuth, requireRole(Role.ADMIN), previewCampaignAudience);
 router.post("/campaigns", requireAuth, requireRole(Role.ADMIN), createCampaign);
+router.post("/campaigns/:id/duplicate", requireAuth, requireRole(Role.ADMIN), duplicateCampaign);
 router.get("/campaigns", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), listCampaigns);
 router.get("/campaigns/:id", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), getCampaign);
 router.patch("/campaigns/:id", requireAuth, requireRole(Role.ADMIN), updateCampaign);

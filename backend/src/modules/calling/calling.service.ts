@@ -233,6 +233,12 @@ class CallingService {
     if (user.role === Role.SALESPERSON && call.lead.ownerId !== user.id) {
       throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
     }
+    if (user.role === Role.SALESPERSON && call.agentId !== user.id) {
+      throw new ApiError(
+        "You cannot modify feedback or notes from another salesperson. This record is read-only.",
+        STATUS_CODES.FORBIDDEN
+      );
+    }
 
     const outcome = await prisma.callOutcome.findUnique({ where: { id: data.outcomeId } });
     if (!outcome || !outcome.isActive) throw new ApiError("Unknown call outcome", STATUS_CODES.BAD_REQUEST);

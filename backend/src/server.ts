@@ -12,6 +12,7 @@ import cashfreeWebhookRoutes, { startCashfreeWebhookWorker } from "./modules/cas
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
 import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/whatsapp/whatsapp.meta.webhook.routes.js";
+import legalRoutes from "./modules/legal/legal.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 
@@ -67,6 +68,9 @@ app.use(
   }),
 );
 app.use(sanitizeMiddleware);
+
+// Public legal pages required for Meta App publishing (HTML, no auth).
+app.use(legalRoutes);
 
 app.use("/api", routes);
 

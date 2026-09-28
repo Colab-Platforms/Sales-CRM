@@ -17,6 +17,7 @@ import exotelIvrRoutes from "@modules/webhooks/exotel/exotelIvr.routes.js";
 import callerDeskRoutes from "@modules/webhooks/callerdesk/callerdesk.routes.js";
 import callRoutes from "@modules/call/call.routes.js";
 import tasksRoutes from "@modules/tasks/tasks.routes.js";
+import deliveryRoutes from "@modules/delivery/delivery.routes.js";
 
 const router = Router();
 
@@ -44,5 +45,6 @@ router.use("/lead", leadRoutes);
 router.use("/calling", callingRoutes);
 router.use("/calls", callRoutes);
 router.use("/tasks", tasksRoutes);
+router.use("/delivery", deliveryRoutes);
 
 export default router;

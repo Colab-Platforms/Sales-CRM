@@ -57,6 +57,76 @@ function fakeShopifyClient(queryImpl?: (document: string, variables: Record<stri
   return { query: queryImpl ?? (async () => DEFAULT_ORDER_CREATE_RESPONSE) } as unknown as ShopifyClient;
 }
 
+describe("createManualOrder - idempotencyKey guards a double submit", () => {
+  it("two concurrent calls with the SAME idempotencyKey create exactly one order and one Shopify push", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const product = await makeProduct(tx);
+      let shopifyCalls = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => { shopifyCalls += 1; return { orderCreate: { order: { id: "gid://shopify/Order/1", name: "#TST1" }, userErrors: [] } }; }));
+      const input = { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "349.00" as const }], paymentMethod: "COD" as const, idempotencyKey: `idem-${uid()}` };
+
+      // Simulates a double-click: two calls fired back-to-back, before the first has resolved.
+      const [a, b] = await Promise.all([svc.createManualOrder(as(admin, Role.ADMIN), input), svc.createManualOrder(as(admin, Role.ADMIN), input)]);
+
+      assert.equal(a.order.id, b.order.id, "both calls resolve to the SAME order, not two");
+      assert.equal(await tx.order.count({ where: { leadId: lead.id } }), 1, "exactly one CRM order was created");
+      assert.equal(shopifyCalls, 1, "exactly one Shopify push, never two");
+    });
+  });
+
+  it("a different idempotencyKey (or none at all) is a genuinely new order - never falsely deduplicated", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const product = await makeProduct(tx);
+      let n = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => { n += 1; return { orderCreate: { order: { id: `gid://shopify/Order/${n}`, name: `#TST${n}` }, userErrors: [] } }; }));
+      const base = { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "349.00" as const }], paymentMethod: "COD" as const };
+
+      const first = await svc.createManualOrder(as(admin, Role.ADMIN), { ...base, idempotencyKey: `idem-${uid()}` });
+      const second = await svc.createManualOrder(as(admin, Role.ADMIN), { ...base, idempotencyKey: `idem-${uid()}` });
+      const third = await svc.createManualOrder(as(admin, Role.ADMIN), base);
+
+      assert.equal(new Set([first.order.id, second.order.id, third.order.id]).size, 3);
+      assert.equal(await tx.order.count({ where: { leadId: lead.id } }), 3);
+    });
+  });
+
+  it("the same idempotencyKey from a DIFFERENT user is never deduplicated against another user's order", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const manager = await tx.user.create({ data: { name: "Admin B", email: `b-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const product = await makeProduct(tx);
+      let n = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => { n += 1; return { orderCreate: { order: { id: `gid://shopify/Order/${n}`, name: `#TST${n}` }, userErrors: [] } }; }));
+      const sharedKey = `idem-${uid()}`;
+      const input = { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "349.00" as const }], paymentMethod: "COD" as const, idempotencyKey: sharedKey };
+
+      const a = await svc.createManualOrder(as(admin, Role.ADMIN), input);
+      const b = await svc.createManualOrder(as(manager, Role.ADMIN), input);
+      assert.notEqual(a.order.id, b.order.id);
+    });
+  });
+
+  it("a failed attempt is never cached - retrying the same idempotencyKey after a failure creates the order normally", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const svc = new OrdersService(tx, () => fakeShopifyClient());
+      const key = `idem-${uid()}`;
+
+      await assert.rejects(() => svc.createManualOrder(as(admin, Role.ADMIN), { leadId: lead.id, items: [{ productId: randomUUID(), quantity: 1, unitPrice: "1.00" }], paymentMethod: "COD", idempotencyKey: key }));
+
+      const product = await makeProduct(tx);
+      const result = await svc.createManualOrder(as(admin, Role.ADMIN), { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "349.00" }], paymentMethod: "COD", idempotencyKey: key });
+      assert.ok(result.order.id);
+    });
+  });
+});
+
 describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
   it("full happy path: creates the order/items/payment, audits it, and appears via getOrder/listOrders", async () => {
     await inRollback(async (tx) => {
@@ -194,6 +264,81 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
   });
 });
 
+describe("createManualOrder's Shopify push - variant id sent to Shopify (mocked client)", () => {
+  async function orderWithVariant(tx: Prisma.TransactionClient, variant: { externalSource?: "SHOPIFY" | null; externalId?: string | null }) {
+    const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+    const lead = await makeLead(tx);
+    const product = await makeProduct(tx);
+    const v = await tx.productVariant.create({ data: { productId: product.id, name: "1 Jar", price: "1199.00", externalSource: variant.externalSource ?? null, externalId: variant.externalId ?? null }, select: { id: true } });
+    return { admin, lead, product, variant: v };
+  }
+  const input = (leadId: string, productId: string, variantId: string) => ({ leadId, items: [{ productId, variantId, quantity: 1, unitPrice: "1199.00" }], paymentMethod: "COD" as const });
+
+  it("a Shopify-synced variant stored numeric is sent to orderCreate as a ProductVariant GID, and the order links to Shopify", async () => {
+    await inRollback(async (tx) => {
+      const numeric = `45${Math.floor(Math.random() * 1e12)}`;
+      const { admin, lead, product, variant } = await orderWithVariant(tx, { externalSource: "SHOPIFY", externalId: numeric });
+      const sent: any[] = [];
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async (_doc, vars) => { sent.push(vars); return { orderCreate: { order: { id: `gid://shopify/Order/${uid()}`, name: "#TSTV" }, userErrors: [] } }; }));
+
+      const result = await svc.createManualOrder(as(admin, Role.ADMIN), input(lead.id, product.id, variant.id));
+
+      assert.equal(result.shopify.status, "created");
+      assert.equal(sent.length, 1);
+      assert.equal((sent[0].order as any).lineItems[0].variantId, `gid://shopify/ProductVariant/${numeric}`);
+    });
+  });
+
+  it("an invalid stored Shopify variant id fails clearly, Shopify is never called, and the CRM order is unaffected", async () => {
+    await inRollback(async (tx) => {
+      const { admin, lead, product, variant } = await orderWithVariant(tx, { externalSource: "SHOPIFY", externalId: "not-a-variant-id" });
+      let called = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => { called += 1; return DEFAULT_ORDER_CREATE_RESPONSE; }));
+
+      const result = await svc.createManualOrder(as(admin, Role.ADMIN), input(lead.id, product.id, variant.id));
+
+      assert.equal(result.shopify.status, "failed");
+      assert.match(result.shopify.reason ?? "", /not a valid Shopify product variant id/);
+      assert.equal(called, 0);
+      assert.equal(await tx.order.count({ where: { leadId: lead.id } }), 1, "the CRM order exists exactly once");
+      assert.equal(result.order.status, "CONFIRMED");
+    });
+  });
+
+  it("retry after that failure still works once the id is valid, and creates exactly one Shopify order", async () => {
+    await inRollback(async (tx) => {
+      const { admin, lead, product, variant } = await orderWithVariant(tx, { externalSource: "SHOPIFY", externalId: "bad id" });
+      let created = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => { created += 1; return { orderCreate: { order: { id: "gid://shopify/Order/5150", name: "#RETRY" }, userErrors: [] } }; }));
+      const first = await svc.createManualOrder(as(admin, Role.ADMIN), input(lead.id, product.id, variant.id));
+      assert.equal(first.shopify.status, "failed");
+
+      await tx.productVariant.update({ where: { id: variant.id }, data: { externalId: `46${Math.floor(Math.random() * 1e12)}` } }); // the data is corrected
+      const retry = await svc.pushOrderToShopify(as(admin, Role.ADMIN), first.order.id);
+      const again = await svc.pushOrderToShopify(as(admin, Role.ADMIN), first.order.id);
+
+      assert.equal(retry.status, "created");
+      assert.equal(again.status, "already_linked");
+      assert.equal(created, 1, "one Shopify order in total, never a duplicate");
+      assert.equal(await tx.order.count({ where: { leadId: lead.id } }), 1);
+    });
+  });
+
+  it("a variant with no Shopify link (or from another source) is sent as a custom line item - never given a variant id", async () => {
+    await inRollback(async (tx) => {
+      const { admin, lead, product, variant } = await orderWithVariant(tx, { externalSource: null, externalId: null });
+      const sent: any[] = [];
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async (_doc, vars) => { sent.push(vars); return DEFAULT_ORDER_CREATE_RESPONSE; }));
+      // give the CRM variant an id that LOOKS numeric but has no Shopify source: it must not be treated as a Shopify id
+      await tx.productVariant.update({ where: { id: variant.id }, data: { externalId: "123456" } });
+      await svc.createManualOrder(as(admin, Role.ADMIN), input(lead.id, product.id, variant.id));
+      const item = (sent[0].order as any).lineItems[0];
+      assert.equal(item.variantId, undefined);
+      assert.ok(item.title, "sent as a custom item with a title and price instead");
+    });
+  });
+});
+
 describe("createManualOrder's Shopify push (mocked client - never a real Shopify call)", () => {
   it("links the CRM order to Shopify on success", async () => {
     await inRollback(async (tx) => {
@@ -294,6 +439,32 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       const result = await svc.pushOrderToShopify(as(admin, Role.ADMIN), order.id);
       assert.deepEqual(result, { status: "already_linked", shopifyOrderId: "gid://shopify/Order/existing", shopifyOrderName: "#EXIST1" });
       assert.equal(called, false);
+    });
+  });
+});
+
+describe("getLastShippingAddress (Create Order prefill)", () => {
+  it("returns the customer's most recent order address, understanding both the CRM and Shopify shapes", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      await tx.order.create({ data: { orderNumber: `O-${uid()}`, leadId: lead.id, source: "SHOPIFY", status: "CONFIRMED", totalAmount: "10.00", shippingAddress: { name: "Old", address1: "1 Old Rd", city: "Pune", province: "Maharashtra", zip: "411001" } } });
+      const svc = new OrdersService(tx);
+      assert.equal((await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id)).address?.line1, "1 Old Rd", "Shopify shape (address1/province/zip)");
+      await tx.order.create({ data: { orderNumber: `O-${uid()}`, leadId: lead.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "10.00", createdAt: new Date(Date.now() + 60_000), shippingAddress: { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123" } } });
+      const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
+      assert.deepEqual(latest.address, { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123" });
+    });
+  });
+
+  it("is null when the customer has no saved address, and out-of-scope customers read as not found", async () => {
+    await inRollback(async (tx) => {
+      const owner = await tx.user.create({ data: { name: "Owner", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const stranger = await tx.user.create({ data: { name: "Stranger", email: `s-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const lead = await makeLead(tx, { ownerId: owner.id });
+      const svc = new OrdersService(tx);
+      assert.equal((await svc.getLastShippingAddress(as(owner, Role.SALESPERSON), lead.id)).address, null);
+      await assert.rejects(() => svc.getLastShippingAddress(as(stranger, Role.SALESPERSON), lead.id), (e: any) => e.statusCode === 404);
     });
   });
 });

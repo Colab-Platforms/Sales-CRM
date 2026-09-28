@@ -516,3 +516,93 @@ describe("Next Best Action (E6.8)", () => {
     });
   });
 });
+
+// Part 8 (WhatsApp Inbox): "Delete Customer" never hard-deletes - it marks the profile DEACTIVATED and
+// leaves every related record (orders, conversations, messages, campaign recipients) untouched.
+describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
+  it("reports related-record counts without deleting anything, ahead of deactivation", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Impact", lastName: "Check", mobile: "9876500000" } });
+      const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" } });
+
+      const svc = new CustomersService(tx);
+      const impact = await svc.getDeactivationImpact(as(admin, Role.ADMIN), lead.id);
+      assert.deepEqual(impact, { orders: 1, conversations: 0, messages: 0, campaignRecipients: 0 });
+
+      // Nothing above was deleted or altered - just counted.
+      assert.equal(await tx.order.count({ where: { id: order.id } }), 1);
+    });
+  });
+
+  it("sets workingStatus to DEACTIVATED, audits it, and leaves orders untouched", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "ToDeactivate", workingStatus: "NEW" } });
+      const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" } });
+
+      const svc = new CustomersService(tx);
+      const result = await svc.deactivateCustomer(as(admin, Role.ADMIN), lead.id);
+      assert.equal(result.workingStatus, "DEACTIVATED");
+
+      const after = await tx.lead.findUniqueOrThrow({ where: { id: lead.id }, select: { workingStatus: true } });
+      assert.equal(after.workingStatus, "DEACTIVATED");
+
+      const stillThere = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { id: true } });
+      assert.ok(stillThere);
+
+      const activity = await tx.activity.findFirst({ where: { leadId: lead.id, type: ActivityType.STATUS_CHANGE }, orderBy: { createdAt: "desc" } });
+      assert.equal(activity?.title, "Customer profile deactivated");
+    });
+  });
+
+  it("is idempotent - deactivating an already-deactivated customer does not error or double-audit", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "AlreadyGone", workingStatus: "DEACTIVATED" } });
+
+      const svc = new CustomersService(tx);
+      const result = await svc.deactivateCustomer(as(admin, Role.ADMIN), lead.id);
+      assert.equal(result.workingStatus, "DEACTIVATED");
+
+      const activityCount = await tx.activity.count({ where: { leadId: lead.id, type: ActivityType.STATUS_CHANGE } });
+      assert.equal(activityCount, 0);
+    });
+  });
+
+  it("404s for a customer outside the caller's scope, and never reveals whether it exists", async () => {
+    await inRollback(async (tx) => {
+      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotYours", ownerId: rep2.id } });
+
+      const svc = new CustomersService(tx);
+      await assert.rejects(() => svc.getDeactivationImpact(as(rep1, Role.SALESPERSON), lead.id), /Customer not found/);
+      await assert.rejects(() => svc.deactivateCustomer(as(rep1, Role.SALESPERSON), lead.id), /Customer not found/);
+
+      const untouched = await tx.lead.findUniqueOrThrow({ where: { id: lead.id }, select: { workingStatus: true } });
+      assert.notEqual(untouched.workingStatus, "DEACTIVATED");
+    });
+  });
+
+  // Part 7 (WhatsApp Inbox): a deactivated customer must stop appearing in the operational customer
+  // list/campaign audience (buildCustomerListWhere - the same filter resolveMatchingCustomers uses),
+  // never in a hard-delete sense - their record/orders/history stay fully intact and directly reachable.
+  it("excludes a deactivated customer from the customer list, without deleting their record", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const token = `Deact${uid().slice(0, 8)}`;
+      const active = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Active" } });
+      const deactivated = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Deactivated", workingStatus: "DEACTIVATED" } });
+
+      const svc = new CustomersService(tx);
+      const list = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token });
+      assert.equal(list.pagination.totalItems, 1);
+      assert.equal(list.items[0]?.leadId, active.id);
+
+      // Still fully reachable directly - deactivation never hides a record from a direct lookup, only from lists.
+      const direct = await svc.getCustomer360(as(admin, Role.ADMIN), deactivated.id);
+      assert.equal(direct.profile.workingStatus, "DEACTIVATED");
+    });
+  });
+});

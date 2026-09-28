@@ -117,6 +117,13 @@ model WhatsAppTemplate {
   // send has a value for every placeholder.
   variables Json @map("variables")
 
+  // Optional structured pieces of a real WhatsApp template (header/footer/buttons) that the flat `body` string
+  // cannot represent. Shaped as { header?: {type: "TEXT"|"IMAGE"|"VIDEO"|"DOCUMENT", text?, mediaUrl?, example?},
+  // footer?: string, buttons?: Array<{type:"QUICK_REPLY"|"URL"|"PHONE_NUMBER", text, url?, urlVariable?, example?,
+  // phoneNumber?}> }. Never executed as code - display/preview and, at send time, payload-building only. Null for
+  // every template created before this field existed (nothing to backfill: they never had these parts).
+  components Json? @map("components")
+
   status WhatsAppTemplateStatus @default(DRAFT) @map("status")
   // Provider's own quality rating (e.g. Gupshup's UNKNOWN/HIGH), informational only.
   quality String? @map("quality") @db.VarChar(50)
