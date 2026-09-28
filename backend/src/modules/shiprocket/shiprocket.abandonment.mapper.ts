@@ -91,8 +91,7 @@ function parseItems(body: Record<string, unknown>): { itemCount: number | null; 
   if (!Array.isArray(raw)) return { itemCount: null, itemNames: [] };
   const names = raw
     .map((item) => asString(asRecord(item).name) ?? asString(asRecord(item).title) ?? asString(asRecord(item).product_name))
-    .filter((n): n is string => !!n)
-    .slice(0, 3);
+    .filter((n): n is string => !!n);
   return { itemCount: raw.length, itemNames: names };
 }
 

@@ -61,9 +61,8 @@ class AbandonmentService {
       this.db.abandonment.findMany({
         where,
         select: LIST_SELECT,
-        // Highest-value, most-recently-abandoned carts first; a cart with no known value sorts after
-        // every priced one but is still shown, newest first.
-        orderBy: [{ priorityScore: { sort: "desc", nulls: "last" } }, { detectedAt: "desc" }],
+        // Newest abandoned carts first
+        orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
       }),

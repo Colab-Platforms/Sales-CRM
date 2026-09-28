@@ -1,27 +1,49 @@
 "use client";
 
+import { useMemo } from "react";
 import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
 import { AbandonmentStatusBadge, RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
+import { parseAbandonmentCart } from "./abandonment-cart-utils";
 import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.types";
 
-const COLUMN_COUNT = 7;
-const HEADERS = ["Lead", "Contact", "Items", "Value", "Detected", "Status", "Last action"];
+const COLUMN_COUNT = 8;
+const HEADERS = [
+  { label: "Lead", className: "w-[180px] min-w-[150px]" },
+  { label: "Contact", className: "w-[180px] min-w-[160px]" },
+  { label: "Items", className: "min-w-[220px] max-w-[320px]" },
+  { label: "Value", className: "w-[120px] text-right" },
+  { label: "Detected", className: "w-[110px]" },
+  { label: "Status", className: "w-[140px]" },
+  { label: "Last action", className: "w-[140px]" },
+];
 
-// A short, plain list of what was in the cart - never the flattened "value · items · stage · link"
-// text some rows still carry from before cartSnapshot existed (see `summary`'s fallback usage below).
 function CartItems({ item }: { item: AbandonmentListItem }) {
-  const names = item.cartSnapshot?.itemNames ?? [];
-  if (names.length === 0) return <span className="text-sm text-muted-foreground">{item.summary ?? "—"}</span>;
-  const extra = (item.cartSnapshot?.itemCount ?? names.length) - names.length;
+  const cart = parseAbandonmentCart(item);
+  const names = cart.itemNames;
+
+  if (names.length === 0) {
+    if (cart.itemCount) {
+      return <span className="text-sm font-medium text-foreground">{cart.itemCount} items in cart</span>;
+    }
+    return <span className="text-sm text-muted-foreground">—</span>;
+  }
+
+  const extra = (cart.itemCount ?? names.length) - names.length;
   return (
-    <span className="line-clamp-2 text-sm">
-      {names.join(", ")}
-      {extra > 0 ? <span className="text-muted-foreground"> +{extra} more</span> : null}
-    </span>
+    <div className="flex flex-col gap-0.5">
+      <span className="line-clamp-2 text-sm font-medium leading-snug text-foreground" title={names.join(", ")}>
+        {names.join(", ")}
+      </span>
+      {extra > 0 ? (
+        <span className="text-xs text-muted-foreground">
+          +{extra} more item{extra > 1 ? "s" : ""}
+        </span>
+      ) : null}
+    </div>
   );
 }
 
@@ -31,9 +53,11 @@ export function AbandonmentTableSkeleton({ rows = 6 }: { rows?: number }) {
       <TableHeader>
         <TableRow>
           {HEADERS.map((header) => (
-            <TableHead key={header}>{header}</TableHead>
+            <TableHead key={header.label} className={header.className}>
+              {header.label}
+            </TableHead>
           ))}
-          <TableHead className="sr-only">Actions</TableHead>
+          <TableHead className="w-[50px] sr-only">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -51,9 +75,6 @@ export function AbandonmentTableSkeleton({ rows = 6 }: { rows?: number }) {
   );
 }
 
-// How long ago detection happened, in the coarse "act now" granularity a telecaller cares about -
-// abandoned-cart recovery rates drop sharply within the first hour, so minutes matter here in a way
-// they don't for e.g. an order placed date.
 function timeSince(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
   const minutes = Math.floor(ms / 60_000);
@@ -71,61 +92,88 @@ interface AbandonmentTableProps {
 }
 
 export function AbandonmentTable({ items, isFetching, onOpenDetail }: AbandonmentTableProps) {
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
+  }, [items]);
+
   return (
     <Table className={cn("transition-opacity", isFetching && "opacity-60")}>
       <TableHeader>
         <TableRow>
           {HEADERS.map((header) => (
-            <TableHead key={header}>{header}</TableHead>
+            <TableHead key={header.label} className={header.className}>
+              {header.label}
+            </TableHead>
           ))}
-          <TableHead className="sr-only">Actions</TableHead>
+          <TableHead className="w-[50px] sr-only">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {items.map((item) => (
-          <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item.id)}>
-            <TableCell>
-              <div className="font-medium">{item.lead.name}</div>
-              <div className="text-xs text-muted-foreground">{item.lead.leadNumber}</div>
-            </TableCell>
-            <TableCell>
-              {item.lead.mobile ?? <span className="text-muted-foreground">—</span>}
-              {item.lead.email ? <div className="text-xs text-muted-foreground">{item.lead.email}</div> : null}
-            </TableCell>
-            <TableCell className="max-w-64">
-              <CartItems item={item} />
-            </TableCell>
-            <TableCell className="tabular-nums">
-              {item.cartSnapshot?.cartValue ? formatMoney(item.cartSnapshot.cartValue, item.cartSnapshot.currency ?? "INR") : "—"}
-            </TableCell>
-            <TableCell>
-              <span title={formatDateTime(item.detectedAt)}>{timeSince(item.detectedAt)}</span>
-            </TableCell>
-            <TableCell>
-              <AbandonmentStatusBadge status={item.status} />
-            </TableCell>
-            <TableCell>
-              {item.latestRecoveryAction ? (
-                <span className="text-sm">{RECOVERY_ACTION_TYPE_LABELS[item.latestRecoveryAction.type]}</span>
-              ) : (
-                <span className="text-muted-foreground">No action yet</span>
-              )}
-            </TableCell>
-            <TableCell>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="View abandonment"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenDetail(item.id);
-                }}
-              >
-                <Eye className="size-4" />
-              </Button>
-            </TableCell>
-          </TableRow>
-        ))}
+        {sortedItems.map((item) => {
+          const cart = parseAbandonmentCart(item);
+
+          return (
+            <TableRow key={item.id} className="cursor-pointer" onClick={() => onOpenDetail(item.id)}>
+              <TableCell className="w-[180px] min-w-[150px]">
+                <div className="font-semibold text-foreground">{item.lead.name}</div>
+                <div className="text-xs font-mono text-muted-foreground">{item.lead.leadNumber}</div>
+              </TableCell>
+
+              <TableCell className="w-[180px] min-w-[160px]">
+                {item.lead.mobile ? (
+                  <div className="font-medium text-foreground">{item.lead.mobile}</div>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+                {item.lead.email ? (
+                  <div className="truncate max-w-[160px] text-xs text-muted-foreground" title={item.lead.email}>
+                    {item.lead.email}
+                  </div>
+                ) : null}
+              </TableCell>
+
+              <TableCell className="min-w-[220px] max-w-[320px] whitespace-normal">
+                <CartItems item={item} />
+              </TableCell>
+
+              <TableCell className="w-[120px] text-right font-semibold tabular-nums text-foreground">
+                {cart.cartValue ? formatMoney(cart.cartValue, cart.currency) : "—"}
+              </TableCell>
+
+              <TableCell className="w-[110px] whitespace-nowrap text-sm text-muted-foreground">
+                <span title={formatDateTime(item.detectedAt)}>{timeSince(item.detectedAt)}</span>
+              </TableCell>
+
+              <TableCell className="w-[140px] whitespace-nowrap">
+                <AbandonmentStatusBadge status={item.status} />
+              </TableCell>
+
+              <TableCell className="w-[140px] whitespace-nowrap text-sm">
+                {item.latestRecoveryAction ? (
+                  <span className="font-medium text-foreground">
+                    {RECOVERY_ACTION_TYPE_LABELS[item.latestRecoveryAction.type]}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground">No action yet</span>
+                )}
+              </TableCell>
+
+              <TableCell className="w-[50px] text-right">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="View abandonment"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenDetail(item.id);
+                  }}
+                >
+                  <Eye className="size-4" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
