@@ -25,3 +25,7 @@ export interface UpdateSalespersonBody {
   status?: "ACTIVE" | "INACTIVE";
   reportingManagerId?: string;
 }
+
+export interface ResetPasswordBody {
+  password: string;
+}

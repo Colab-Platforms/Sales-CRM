@@ -3,6 +3,7 @@ import { validateSchema } from "@/utils/validate.js";
 import type {
   CreateManagerBody,
   CreateSalespersonBody,
+  ResetPasswordBody,
   UpdateManagerBody,
   UpdateSalespersonBody,
 } from "./admin.types.js";
@@ -41,8 +42,15 @@ const updateSalespersonSchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
+const resetPasswordSchema = z.object({
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
+
 export const validateCreateManagerSchema = (body: unknown) =>
   validateSchema<CreateManagerBody>(createManagerSchema, body);
+
+export const validateResetPasswordSchema = (body: unknown) =>
+  validateSchema<ResetPasswordBody>(resetPasswordSchema, body);
 
 export const validateCreateSalespersonSchema = (body: unknown) =>
   validateSchema<CreateSalespersonBody>(createSalespersonSchema, body);

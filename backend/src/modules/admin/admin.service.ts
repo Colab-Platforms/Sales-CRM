@@ -84,6 +84,18 @@ class AdminService {
     return toPublicUser(manager);
   }
 
+  async resetManagerPassword(id: string, password: string) {
+    await this.getManagerOrThrow(id);
+
+    const passwordHash = await hashPassword(password);
+    const manager = await prisma.user.update({
+      where: { id },
+      data: { passwordHash },
+    });
+
+    return toPublicUser(manager);
+  }
+
   // Admin picks the reporting manager up front — from that point on, only that
   // manager (not every manager) can see this salesperson or add them to a team.
   async createSalesperson(adminId: string, data: CreateSalespersonBody) {
@@ -170,6 +182,18 @@ class AdminService {
     });
 
     return { ...toPublicUser(salesperson), reportingManager: salesperson.reportingManager };
+  }
+
+  async resetSalespersonPassword(id: string, password: string) {
+    await this.getSalespersonOrThrow(id);
+
+    const passwordHash = await hashPassword(password);
+    const salesperson = await prisma.user.update({
+      where: { id },
+      data: { passwordHash },
+    });
+
+    return toPublicUser(salesperson);
   }
 }
 
