@@ -7,9 +7,13 @@ import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
  * "ALL" clears the workingStatus filter. CALLBACK_DUE/FOLLOWUP_DUE aren't
  * backed by a lead-level field or query yet (that lives on Task, which the
  * lead list endpoint doesn't join), so they're disabled placeholders rather
- * than a filter that silently returns nothing.
+ * than a filter that silently returns nothing. WORKING/CLOSED are the same:
+ * intended as grouped filters (e.g. every non-terminal vs. every terminal
+ * status) but there's no backend support for a grouped workingStatus filter
+ * yet, so they stay disabled placeholders too rather than sending an invalid
+ * single-status value.
  */
-export type LeadStatusTab = "ALL" | LeadWorkingStatus | "CALLBACK_DUE" | "FOLLOWUP_DUE";
+export type LeadStatusTab = "ALL" | LeadWorkingStatus | "CALLBACK_DUE" | "FOLLOWUP_DUE" | "WORKING" | "CLOSED";
 
 interface TabDef {
   id: LeadStatusTab;
@@ -20,11 +24,11 @@ interface TabDef {
 const TABS: TabDef[] = [
   { id: "ALL", label: "All Leads" },
   { id: "NEW", label: "Fresh" },
-  { id: "WORKING", label: "Working" },
+  { id: "WORKING", label: "Working", disabled: true },
   { id: "INTERESTED", label: "Interested" },
   { id: "CALLBACK_DUE", label: "Callback Due", disabled: true },
   { id: "FOLLOWUP_DUE", label: "Follow-up Due", disabled: true },
-  { id: "CLOSED", label: "Closed" },
+  { id: "CLOSED", label: "Closed", disabled: true },
 ];
 
 export function LeadStatusTabs({

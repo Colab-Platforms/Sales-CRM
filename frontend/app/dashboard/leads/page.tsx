@@ -58,7 +58,7 @@ export default function LeadsPage() {
   const activeTab: LeadStatusTab = filters.workingStatus ?? "ALL";
 
   function handleTabChange(tab: LeadStatusTab) {
-    if (tab === "CALLBACK_DUE" || tab === "FOLLOWUP_DUE") return; // disabled placeholders
+    if (tab === "CALLBACK_DUE" || tab === "FOLLOWUP_DUE" || tab === "WORKING" || tab === "CLOSED") return; // disabled placeholders
     setFilters((prev) => ({ ...prev, workingStatus: tab === "ALL" ? undefined : tab }));
     setPage(1);
     clearSelection();
