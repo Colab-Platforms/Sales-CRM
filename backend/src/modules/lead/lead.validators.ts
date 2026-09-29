@@ -9,8 +9,11 @@ import type {
   ImportPreviewBody,
 } from "./lead.types.js";
 
+// .guid() (not .uuid()) throughout this file — .uuid() enforces RFC 9562
+// version/variant bits, but Postgres's uuid column (and thus ids already in
+// the database, e.g. seeded rows) accepts any 32-hex-digit UUID regardless.
 const priorityEnum = z.enum(["LOW", "MEDIUM", "HIGH"]);
-const workingStatusEnum = z.enum(["NEW", "ASSIGNED", "WORKING", "INTERESTED", "EXPIRED", "CONVERTED", "CLOSED"]);
+const workingStatusEnum = z.enum(["NEW", "ASSIGNED", "RINGING", "BUSY", "CALL_BACK", "FOLLOW_UP", "SWITCHED_OFF", "DND", "NOT_REACHABLE", "INTERESTED", "NOT_INTERESTED", "CONVERTED"]);
 const assignmentEnum = z.enum(["UNASSIGNED", "ASSIGNED_TO_MANAGER", "ASSIGNED_TO_SALESPERSON"]);
 
 const createLeadSchema = z
@@ -21,8 +24,8 @@ const createLeadSchema = z
     email: z.string().email().max(255).optional(),
     requirement: z.string().optional(),
     location: z.string().max(255).optional(),
-    sourceId: z.string().uuid().optional(),
-    interestedProductId: z.string().uuid().optional(),
+    sourceId: z.string().guid().optional(),
+    interestedProductId: z.string().guid().optional(),
     priority: priorityEnum.optional(),
   })
   .refine((data) => Boolean(data.mobile) || Boolean(data.email), {
@@ -37,31 +40,32 @@ const updateLeadSchema = z
     email: z.string().email().max(255).optional(),
     requirement: z.string().optional(),
     location: z.string().max(255).optional(),
-    sourceId: z.string().uuid().optional(),
-    interestedProductId: z.string().uuid().optional(),
+    sourceId: z.string().guid().optional(),
+    interestedProductId: z.string().guid().optional(),
     workingStatus: workingStatusEnum.optional(),
     priority: priorityEnum.optional(),
+    followUpAt: z.string().datetime({ offset: true }).optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
 const listLeadsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
-  sourceId: z.string().uuid().optional(),
+  sourceId: z.string().guid().optional(),
   workingStatus: workingStatusEnum.optional(),
   lifecycleStage: z.enum(["LEAD", "CUSTOMER"]).optional(),
   assignment: assignmentEnum.optional(),
-  managerId: z.string().uuid().optional(),
-  salespersonId: z.string().uuid().optional(),
+  managerId: z.string().guid().optional(),
+  salespersonId: z.string().guid().optional(),
   search: z.string().max(255).optional(),
 });
 
 const bulkAssignManagerSchema = z
   .object({
-    leadIds: z.array(z.string().uuid()).min(1, "No leads selected"),
+    leadIds: z.array(z.string().guid()).min(1, "No leads selected"),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
-    managerId: z.string().uuid().optional(),
-    managerIds: z.array(z.string().uuid()).optional(),
+    managerId: z.string().guid().optional(),
+    managerIds: z.array(z.string().guid()).optional(),
   })
   .refine((data) => (data.method === "MANUAL" ? Boolean(data.managerId) : Boolean(data.managerIds?.length)), {
     message: "managerId is required for manual assignment, managerIds is required for round robin",
@@ -69,10 +73,10 @@ const bulkAssignManagerSchema = z
 
 const bulkAssignSalespersonSchema = z
   .object({
-    leadIds: z.array(z.string().uuid()).min(1, "No leads selected"),
+    leadIds: z.array(z.string().guid()).min(1, "No leads selected"),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
-    salespersonId: z.string().uuid().optional(),
-    salespersonIds: z.array(z.string().uuid()).optional(),
+    salespersonId: z.string().guid().optional(),
+    salespersonIds: z.array(z.string().guid()).optional(),
   })
   .refine((data) => (data.method === "MANUAL" ? Boolean(data.salespersonId) : Boolean(data.salespersonIds?.length)), {
     message: "salespersonId is required for manual assignment, salespersonIds is required for round robin",

@@ -1,4 +1,3 @@
-
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -24,6 +23,7 @@ import {
   Phone,
   Settings,
   PhoneCall,
+  AlertTriangle,
 } from "lucide-react";
 import {
   Sidebar,
@@ -78,6 +78,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "My Leads", href: "/dashboard/leads", icon: Users },
         { title: "Interested Leads", icon: Target },
+        {
+          title: "Abandoned Leads",
+          href: "/dashboard/abandoned-leads",
+          icon: AlertTriangle,
+        },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
         { title: "Customers", href: "/dashboard/customers", icon: Contact },
       ],
@@ -146,6 +151,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           title: "Shiprocket",
           href: "/dashboard/shiprocket",
           icon: Truck,
+        },
+        {
+          title: "Abandoned Leads",
+          href: "/dashboard/abandoned-leads",
+          icon: AlertTriangle,
         },
         { title: "Reports", icon: BarChart3 },
       ],
@@ -217,6 +227,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/shiprocket",
           icon: Truck,
         },
+        {
+          title: "Abandoned Leads",
+          href: "/dashboard/abandoned-leads",
+          icon: AlertTriangle,
+        },
         { title: "Reports", icon: BarChart3 },
       ],
     },
@@ -287,7 +302,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
               {/* <BrandMark className="size-8 shrink-0" /> */}
               <div className="flex min-w-0 flex-col leading-tight">
                 <span className="truncate font-hand text-xl leading-none font-bold text-foreground">
-                  Sales CRM
+                  AVATAR CRM
                 </span>
                 <span className="truncate text-[0.7rem] text-muted-foreground">
                   Lead workspace

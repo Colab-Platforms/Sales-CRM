@@ -10,6 +10,17 @@ import type { AssignConversationInput, ConversationDetail, OrderDraft } from "./
 
 const REFERENCE_TYPE = "WhatsAppConversation";
 
+// Conversation delete/archive: WhatsAppConversation has no archivedAt/deletedAt column (schema
+// changes are out of scope), so "archived" is DERIVED, never stored as a boolean - the safest existing
+// mechanism available: the generic ActivityType.STATUS_CHANGE row (see enums.prisma's own comment: it
+// exists as the catch-all for exactly this kind of event) marks the moment of archiving/restoring, and
+// a conversation counts as archived only while no message (either direction) has arrived since. That
+// makes "a new inbound message un-archives the conversation" fall out for free, with no extra code and
+// no schema change: the new message is simply newer than the archive marker.
+export const ARCHIVE_TITLE = "WhatsApp conversation archived";
+export const RESTORE_TITLE = "WhatsApp conversation restored";
+const ARCHIVE_TITLES = [ARCHIVE_TITLE, RESTORE_TITLE];
+
 const CONVERSATION_SELECT = {
   id: true,
   leadId: true,
@@ -60,10 +71,66 @@ class WhatsAppConversationService {
     return row;
   }
 
-  private async toDetail(row: ConversationRow): Promise<ConversationDetail> {
-    const unreadCount = await this.db.whatsAppMessage.count({
-      where: { leadId: row.leadId, direction: "INBOUND", createdAt: { gt: row.lastReadAt ?? new Date(0) } },
+  /** Bulk (one query for many leads): the leadIds among `leadIds` that are currently archived. */
+  async archivedLeadIds(leadIds: string[], lastMessageAtByLead: Map<string, Date>): Promise<Set<string>> {
+    if (leadIds.length === 0) return new Set();
+    const events = await this.db.activity.findMany({
+      where: { leadId: { in: leadIds }, referenceType: REFERENCE_TYPE, type: ActivityType.STATUS_CHANGE, title: { in: ARCHIVE_TITLES } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { leadId: true, title: true, createdAt: true },
     });
+    const latestByLead = new Map<string, { title: string | null; createdAt: Date }>();
+    for (const e of events) {
+      if (!e.leadId || latestByLead.has(e.leadId)) continue; // first hit per lead, since events are newest-first
+      latestByLead.set(e.leadId, e);
+    }
+    const archived = new Set<string>();
+    for (const [leadId, latest] of latestByLead) {
+      if (latest.title !== ARCHIVE_TITLE) continue;
+      const lastMessageAt = lastMessageAtByLead.get(leadId);
+      if (lastMessageAt && lastMessageAt > latest.createdAt) continue; // a message arrived after archiving - restored
+      archived.add(leadId);
+    }
+    return archived;
+  }
+
+  private async isArchived(leadId: string): Promise<boolean> {
+    const [lastMessage, latest] = await Promise.all([
+      this.db.whatsAppMessage.findFirst({ where: { leadId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { createdAt: true } }),
+      this.db.activity.findFirst({ where: { leadId, referenceType: REFERENCE_TYPE, type: ActivityType.STATUS_CHANGE, title: { in: ARCHIVE_TITLES } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { title: true, createdAt: true } }),
+    ]);
+    if (!latest || latest.title !== ARCHIVE_TITLE) return false;
+    if (lastMessage && lastMessage.createdAt > latest.createdAt) return false;
+    return true;
+  }
+
+  /** Idempotent: archiving an already-archived conversation (or restoring an already-active one) is a
+   *  no-op that still succeeds, and never writes a second marker. */
+  async archiveConversation(user: AuthUser, leadId: string): Promise<{ archived: boolean }> {
+    const row = await this.getRowOrThrow(leadId);
+    await this.assertAccess(user, leadId, row);
+    if (await this.isArchived(leadId)) return { archived: true };
+    await this.db.activity.create({
+      data: { leadId, actorId: user.id, actorRole: user.role, type: ActivityType.STATUS_CHANGE, referenceType: REFERENCE_TYPE, referenceId: row.id, source: ActivitySource.USER, title: ARCHIVE_TITLE, description: "The customer, orders and payment records were not affected." },
+    });
+    return { archived: true };
+  }
+
+  async unarchiveConversation(user: AuthUser, leadId: string): Promise<{ archived: boolean }> {
+    const row = await this.getRowOrThrow(leadId);
+    await this.assertAccess(user, leadId, row);
+    if (!(await this.isArchived(leadId))) return { archived: false };
+    await this.db.activity.create({
+      data: { leadId, actorId: user.id, actorRole: user.role, type: ActivityType.STATUS_CHANGE, referenceType: REFERENCE_TYPE, referenceId: row.id, source: ActivitySource.USER, title: RESTORE_TITLE },
+    });
+    return { archived: false };
+  }
+
+  private async toDetail(row: ConversationRow): Promise<ConversationDetail> {
+    const [unreadCount, archived] = await Promise.all([
+      this.db.whatsAppMessage.count({ where: { leadId: row.leadId, direction: "INBOUND", createdAt: { gt: row.lastReadAt ?? new Date(0) } } }),
+      this.isArchived(row.leadId),
+    ]);
     return {
       leadId: row.leadId,
       provider: row.provider,
@@ -75,6 +142,7 @@ class WhatsAppConversationService {
       lastAiHandoffReason: row.lastAiHandoffReason,
       createdOrderId: row.createdOrderId,
       unreadCount,
+      archived,
     };
   }
 

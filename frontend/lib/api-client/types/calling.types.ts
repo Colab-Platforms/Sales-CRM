@@ -11,6 +11,17 @@ export type CallStatus =
   | "NOT_REACHABLE"
   | "FAILED";
 
+export type CallOutcomeCategory = "CONNECTED" | "NOT_CONNECTED" | "FOLLOW_UP" | "INTERESTED" | "NOT_INTERESTED" | "OTHER";
+
+export interface CallOutcomeOption {
+  id: string;
+  name: string;
+  code: string;
+  category: CallOutcomeCategory;
+  requiresFollowup: boolean;
+  requiresNote: boolean;
+}
+
 export interface Call {
   id: string;
   provider: string;
@@ -22,11 +33,20 @@ export interface Call {
   durationSeconds: number | null;
   recording: { recordingUrl: string | null } | null;
   agent?: { id: string; name: string };
+  notes: string | null;
+  outcome: { id: string; name: string; code: string } | null;
 }
 
 export interface ClickToCallResult {
   callId: string;
   status: CallStatus;
+}
+
+export interface SubmitCallOutcomePayload {
+  outcomeId: string;
+  notes?: string;
+  /** ISO time to remind the salesperson; required for call back / follow up outcomes. */
+  followUpAt?: string;
 }
 
 export interface VirtualNumber {

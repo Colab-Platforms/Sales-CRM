@@ -2,7 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FolderPlus, UserPlus, LayoutGrid } from "lucide-react";
+import { FolderPlus, KeyRound, UserPlus, LayoutGrid } from "lucide-react";
 import { groupsQueryOptions, salespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import {
   useAddExistingSalespersonMutation,
@@ -10,6 +10,7 @@ import {
   useCreateGroupMutation,
   useDeleteGroupMutation,
   useRemoveSalespersonMutation,
+  useResetSalespersonPasswordMutation,
   useUpdateGroupMutation,
   useUpdateSalespersonMutation,
 } from "@/lib/api-client/mutations/manager.mutations";
@@ -295,6 +296,103 @@ function AddExistingSalespersonForm({
   );
 }
 
+interface PasswordFieldErrors {
+  password?: string;
+  confirmPassword?: string;
+}
+
+function ChangePasswordModalContent({
+  memberName,
+  isPending,
+  error,
+  onSubmit,
+  onDone,
+}: {
+  memberName: string;
+  isPending: boolean;
+  error: unknown;
+  onSubmit: (password: string, onSuccess: () => void) => void;
+  onDone: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<PasswordFieldErrors>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors: PasswordFieldErrors = {};
+    if (password.length < 6) errors.password = "Password must be at least 6 characters.";
+    if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    onSubmit(password, onDone);
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[420px]">
+      <DialogHeader>
+        <DialogTitle>Change Password</DialogTitle>
+        <DialogDescription>Set a new password for {memberName}.</DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="member-password-new">New Password</Label>
+          <PasswordInput
+            id="member-password-new"
+            placeholder="Enter a new password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            required
+            autoFocus
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? (
+            <p className="text-xs text-destructive">{fieldErrors.password}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">At least 6 characters.</p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="member-password-confirm">Confirm Password</Label>
+          <PasswordInput
+            id="member-password-confirm"
+            placeholder="Re-enter the new password"
+            value={confirmPassword}
+            onChange={(e) => {
+              setConfirmPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.confirmPassword ? <p className="text-xs text-destructive">{fieldErrors.confirmPassword}</p> : null}
+        </div>
+
+        {error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(error, "Failed to update password.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isPending}>
+            {isPending ? "Updating..." : "Update Password"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
 function EditMemberRow({ groupId, member, onDone }: { groupId: string; member: GroupMember; onDone: () => void }) {
   const updateSalesperson = useUpdateSalespersonMutation();
   const [name, setName] = useState(member.user.name);
@@ -341,38 +439,63 @@ function EditMemberRow({ groupId, member, onDone }: { groupId: string; member: G
 
 function MemberRow({ groupId, member }: { groupId: string; member: GroupMember }) {
   const [editing, setEditing] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const removeSalesperson = useRemoveSalespersonMutation();
+  const resetPassword = useResetSalespersonPasswordMutation();
 
   if (editing) {
     return <EditMemberRow groupId={groupId} member={member} onDone={() => setEditing(false)} />;
   }
 
   return (
-    <TableRow>
-      <TableCell>
-        <div className="font-medium">{member.user.name}</div>
-        <div className="text-xs text-muted-foreground">{member.user.email}</div>
-      </TableCell>
-      <TableCell>{member.user.phone ?? "—"}</TableCell>
-      <TableCell>
-        <Badge variant={member.user.status === "ACTIVE" ? "default" : "secondary"}>{member.user.status}</Badge>
-      </TableCell>
-      <TableCell className="text-right">
-        <div className="flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={removeSalesperson.isPending}
-            onClick={() => removeSalesperson.mutate({ groupId, userId: member.userId })}
-          >
-            Remove
-          </Button>
-        </div>
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow>
+        <TableCell>
+          <div className="font-medium">{member.user.name}</div>
+          <div className="text-xs text-muted-foreground">{member.user.email}</div>
+        </TableCell>
+        <TableCell>{member.user.phone ?? "—"}</TableCell>
+        <TableCell>
+          <Badge variant={member.user.status === "ACTIVE" ? "default" : "secondary"}>{member.user.status}</Badge>
+        </TableCell>
+        <TableCell className="text-right">
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+              <KeyRound />
+              Change Password
+            </Button>
+            <Button
+              size="sm"
+              variant="destructive"
+              disabled={removeSalesperson.isPending}
+              onClick={() => removeSalesperson.mutate({ groupId, userId: member.userId })}
+            >
+              Remove
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            memberName={member.user.name}
+            isPending={resetPassword.isPending}
+            error={resetPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetPassword.mutate(
+                { groupId, userId: member.userId, payload: { password } },
+                { onSuccess },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+    </>
   );
 }
 

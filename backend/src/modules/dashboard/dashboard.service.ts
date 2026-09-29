@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma.js";
 import { Role, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
 import type { AuthUser } from "@/middlewares/auth.js";
+import { statusForRole } from "@/lib/leadStatusView.js";
 
 type StatusCounts = Record<LeadWorkingStatus, number>;
 
@@ -8,11 +9,17 @@ function emptyStatusCounts(): StatusCounts {
   return {
     NEW: 0,
     ASSIGNED: 0,
-    WORKING: 0,
+    RINGING: 0,
+    BUSY: 0,
+    CALL_BACK: 0,
+    FOLLOW_UP: 0,
+    SWITCHED_OFF: 0,
+    DND: 0,
+    NOT_REACHABLE: 0,
     INTERESTED: 0,
-    EXPIRED: 0,
+    NOT_INTERESTED: 0,
     CONVERTED: 0,
-    CLOSED: 0,
+    DEACTIVATED: 0,
   };
 }
 
@@ -23,6 +30,13 @@ function fillStatusCounts(rows: { workingStatus: LeadWorkingStatus; _count: { _a
   }
   return counts;
 }
+
+// A deactivated customer (Part 8, WhatsApp Inbox: "Delete Customer") is excluded from every dashboard
+// count below - "total leads"/status breakdowns represent the active pipeline, and a deactivated
+// profile is no longer part of anyone's active workload. Their record itself is untouched; they simply
+// stop being counted here, the same exclusion applied to the customer list/campaign audience
+// (see customers.filters.ts's buildCustomerListWhere) and the WhatsApp Inbox (whatsapp.history.filters.ts).
+const ACTIVE_LEAD: { workingStatus: { not: "DEACTIVATED" } } = { workingStatus: { not: "DEACTIVATED" } };
 
 class DashboardService {
   async getDashboard(user: AuthUser) {
@@ -40,12 +54,12 @@ class DashboardService {
     const [statusRows, totalLeads, recentLeads] = await Promise.all([
       prisma.lead.groupBy({
         by: ["workingStatus"],
-        where: { ownerId: userId },
+        where: { ownerId: userId, ...ACTIVE_LEAD },
         _count: { _all: true },
       }),
-      prisma.lead.count({ where: { ownerId: userId } }),
+      prisma.lead.count({ where: { ownerId: userId, ...ACTIVE_LEAD } }),
       prisma.lead.findMany({
-        where: { ownerId: userId },
+        where: { ownerId: userId, ...ACTIVE_LEAD },
         orderBy: { updatedAt: "desc" },
         take: 5,
         select: {
@@ -60,11 +74,16 @@ class DashboardService {
       }),
     ]);
 
+    // A salesperson never sees ASSIGNED: those leads count as NEW.
+    const statusCounts = fillStatusCounts(statusRows);
+    statusCounts.NEW += statusCounts.ASSIGNED;
+    statusCounts.ASSIGNED = 0;
+
     return {
       role: Role.SALESPERSON,
       totalLeads,
-      statusCounts: fillStatusCounts(statusRows),
-      recentLeads,
+      statusCounts,
+      recentLeads: recentLeads.map((lead) => ({ ...lead, workingStatus: statusForRole(lead.workingStatus, Role.SALESPERSON) })),
     };
   }
 
@@ -85,20 +104,25 @@ class DashboardService {
     const [statusRows, totalLeads, perSalespersonRows] = await Promise.all([
       prisma.lead.groupBy({
         by: ["workingStatus"],
-        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }] },
+        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }], ...ACTIVE_LEAD },
         _count: { _all: true },
       }),
       prisma.lead.count({
-        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }] },
+        where: { OR: [{ groupId: { in: groupIds } }, { ownerId: { in: memberIds } }], ...ACTIVE_LEAD },
       }),
       prisma.lead.groupBy({
         by: ["ownerId", "workingStatus"],
-        where: { ownerId: { in: memberIds } },
+        where: { ownerId: { in: memberIds }, ...ACTIVE_LEAD },
         _count: { _all: true },
       }),
     ]);
 
-    const teamMembers = groups.flatMap((g) => g.members.map((m) => m.user));
+    // A salesperson can be an active member of more than one of this manager's
+    // groups, which would otherwise duplicate them in `team` (and break React's
+    // key uniqueness on the dashboard) — dedupe by id, keeping the first hit.
+    const teamMembers = Array.from(
+      new Map(groups.flatMap((g) => g.members.map((m) => m.user)).map((user) => [user.id, user])).values(),
+    );
 
     const team = teamMembers.map((member) => {
       const rows = perSalespersonRows.filter((r) => r.ownerId === member.id);
@@ -120,8 +144,8 @@ class DashboardService {
 
   private async adminDashboard() {
     const [statusRows, totalLeads, usersByRole, totalGroups] = await Promise.all([
-      prisma.lead.groupBy({ by: ["workingStatus"], _count: { _all: true } }),
-      prisma.lead.count(),
+      prisma.lead.groupBy({ by: ["workingStatus"], where: ACTIVE_LEAD, _count: { _all: true } }),
+      prisma.lead.count({ where: ACTIVE_LEAD }),
       prisma.user.groupBy({ by: ["role"], _count: { _all: true } }),
       prisma.group.count(),
     ]);

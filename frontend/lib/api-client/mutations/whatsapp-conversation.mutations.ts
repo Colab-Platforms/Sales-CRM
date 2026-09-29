@@ -10,6 +10,7 @@ function useConversationAction<TVariables = void>(fn: (leadId: string, variables
     mutationFn: ({ leadId, variables }) => fn(leadId, variables),
     onSuccess: (_data, { leadId }) => {
       queryClient.invalidateQueries({ queryKey: whatsappConversationKeys.detail(leadId) });
+      queryClient.invalidateQueries({ queryKey: whatsappConversationKeys.capability(leadId) });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
   });
@@ -29,6 +30,16 @@ export function useHandoffConversationMutation() {
 
 export function useReturnConversationToAiMutation() {
   return useConversationAction<void>((leadId) => whatsappConversationApi.returnToAi(leadId));
+}
+
+// Archive/unarchive change which list a conversation appears in, so the conversation LIST (whatsappHistoryKeys)
+// is invalidated as well as this conversation's own detail (useConversationAction already does both).
+export function useArchiveConversationMutation() {
+  return useConversationAction<void>((leadId) => whatsappConversationApi.archive(leadId));
+}
+
+export function useUnarchiveConversationMutation() {
+  return useConversationAction<void>((leadId) => whatsappConversationApi.unarchive(leadId));
 }
 
 export function useSendConversationTextMutation() {

@@ -46,4 +46,8 @@ export const whatsappCampaignsApi = {
     const res = await apiClient.post<ApiEnvelope<CampaignDetail>>(`/whatsapp/campaigns/${id}/cancel`);
     return res.data.data;
   },
+  async duplicate(id: string): Promise<CampaignDetail> {
+    const res = await apiClient.post<ApiEnvelope<CampaignDetail>>(`/whatsapp/campaigns/${id}/duplicate`);
+    return res.data.data;
+  },
 };

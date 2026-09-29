@@ -145,9 +145,15 @@ export function WhatsAppCampaignCreateView() {
           {preview ? (
             <div className="space-y-2 text-sm">
               <p>
-                <span className="font-medium">{preview.count}</span> customer{preview.count === 1 ? "" : "s"} will receive this campaign
-                {preview.excludedNoMobile > 0 ? ` (${preview.excludedNoMobile} matched but have no WhatsApp number on file, and are excluded)` : ""}.
+                <span className="font-medium">{preview.count}</span> customer{preview.count === 1 ? "" : "s"} will receive this campaign.
               </p>
+              {preview.excludedNoMobile > 0 || preview.excludedOptedOut > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  {preview.excludedNoMobile > 0 ? `${preview.excludedNoMobile} excluded (no WhatsApp/mobile number on file)` : ""}
+                  {preview.excludedNoMobile > 0 && preview.excludedOptedOut > 0 ? "; " : ""}
+                  {preview.excludedOptedOut > 0 ? `${preview.excludedOptedOut} excluded (opted out of WhatsApp)` : ""}
+                </p>
+              ) : null}
               {preview.sample.length > 0 ? (
                 <ul className="list-inside list-disc text-muted-foreground">
                   {preview.sample.map((s) => (

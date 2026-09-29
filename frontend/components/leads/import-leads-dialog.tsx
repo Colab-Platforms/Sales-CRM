@@ -99,8 +99,8 @@ export function ImportLeadsDialog({
           <div className="space-y-4">
             {isManager ? (
               <p className="sketch-outline border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
-                Imported leads go to Admin&apos;s unassigned pool for distribution — they won&apos;t appear in your
-                own lead list until Admin assigns them to you.
+                Imported leads are automatically assigned to you and will appear in your own lead list right away.
+                Admin can see them too and reassign if needed.
               </p>
             ) : null}
             <div className="space-y-1.5">

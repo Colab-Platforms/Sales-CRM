@@ -40,3 +40,11 @@ export function useCancelCampaignMutation() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: whatsappCampaignKeys.all }),
   });
 }
+
+export function useDuplicateCampaignMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<CampaignDetail, unknown, string>({
+    mutationFn: (id) => whatsappCampaignsApi.duplicate(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: whatsappCampaignKeys.all }),
+  });
+}

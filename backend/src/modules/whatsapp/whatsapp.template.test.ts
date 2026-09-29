@@ -4,6 +4,7 @@ import { AiSensyProvider } from "./whatsapp.aisensy.provider.js";
 import { resolveWhatsAppConfig } from "./whatsapp.config.js";
 import { GupshupProvider } from "./whatsapp.gupshup.provider.js";
 import { extractTemplateVariables, validateVariableValues } from "./whatsapp.template.variables.js";
+import { validateCreateTemplate } from "./whatsapp.template.validators.js";
 
 const jsonResponse = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 
@@ -151,5 +152,64 @@ describe("GupshupProvider.listTemplates", () => {
       assert.equal(e.message.includes("wrong"), false);
       return true;
     });
+  });
+});
+
+// ==== Template builder validation ====
+
+const VALID = { name: "order_shipped_v1", provider: "AISENSY" as const, category: "UTILITY" as const, language: "en", body: "Hi {{customer_name}}, your order {{order_number}} has shipped." };
+
+describe("template create validation - name/category/body", () => {
+  it("accepts lowercase letters, digits and underscores", () => {
+    const { error } = validateCreateTemplate(VALID);
+    assert.equal(error, null);
+  });
+
+  it("rejects spaces, capitals and special characters in the name", () => {
+    for (const bad of ["Order Shipped", "order-shipped", "OrderShipped", "order.shipped!"]) {
+      const { error } = validateCreateTemplate({ ...VALID, name: bad });
+      assert.ok(error, bad);
+      assert.match(error!.message, /lowercase letters, numbers and underscores/);
+    }
+  });
+
+  it("rejects an invented category - only Meta's own three are accepted", () => {
+    const { error } = validateCreateTemplate({ ...VALID, category: "PROMO" });
+    assert.ok(error);
+  });
+
+  it("rejects a body over WhatsApp's own 1024-character template limit", () => {
+    const { error } = validateCreateTemplate({ ...VALID, body: "x".repeat(1025) });
+    assert.ok(error);
+  });
+});
+
+describe("template create validation - components (header/footer/buttons)", () => {
+  it("accepts a well-formed header/footer/buttons payload", () => {
+    const { error } = validateCreateTemplate({ ...VALID, components: { header: { type: "TEXT", text: "Order update" }, footer: "Thanks for shopping with us", buttons: [{ type: "URL", text: "Track order", url: "https://example.invalid/t" }] } });
+    assert.equal(error, null);
+  });
+
+  it("rejects a URL button with no URL, and a phone button with no number", () => {
+    assert.ok(validateCreateTemplate({ ...VALID, components: { buttons: [{ type: "URL", text: "Go" }] } }).error);
+    assert.ok(validateCreateTemplate({ ...VALID, components: { buttons: [{ type: "PHONE_NUMBER", text: "Call" }] } }).error);
+  });
+
+  it("rejects an invalid phone number and a footer over 60 characters", () => {
+    assert.ok(validateCreateTemplate({ ...VALID, components: { buttons: [{ type: "PHONE_NUMBER", text: "Call", phoneNumber: "not-a-number" }] } }).error);
+    assert.ok(validateCreateTemplate({ ...VALID, components: { footer: "x".repeat(61) } }).error);
+  });
+
+  it("rejects more than 3 buttons, and mixing quick replies with a URL/phone CTA", () => {
+    const quads = Array.from({ length: 4 }, (_, i) => ({ type: "QUICK_REPLY" as const, text: `Opt ${i}` }));
+    assert.ok(validateCreateTemplate({ ...VALID, components: { buttons: quads } }).error);
+
+    const mixed = [{ type: "QUICK_REPLY" as const, text: "Yes" }, { type: "URL" as const, text: "Go", url: "https://example.invalid" }];
+    assert.ok(validateCreateTemplate({ ...VALID, components: { buttons: mixed } }).error);
+  });
+
+  it("allows up to 3 quick replies together, or up to 3 URL/phone buttons together", () => {
+    const threeQuick = Array.from({ length: 3 }, (_, i) => ({ type: "QUICK_REPLY" as const, text: `Opt ${i}` }));
+    assert.equal(validateCreateTemplate({ ...VALID, components: { buttons: threeQuick } }).error, null);
   });
 });

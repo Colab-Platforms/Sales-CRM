@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { generateLeadNumber } from "@/utils/leadNumber.js";
+import { statusForRole } from "@/lib/leadStatusView.js";
+import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { normalizeMobile, normalizeEmail } from "@/utils/normalize.js";
 import {
   Role,
@@ -11,6 +13,8 @@ import {
   ImportBatchStatus,
   AssignmentType,
   ActivityType,
+  TaskType,
+  TaskStatus,
 } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import type { User, Lead } from "../../../generated/prisma/client.js";
@@ -48,6 +52,14 @@ const leadListInclude = {
   assignedManager: { select: { id: true, name: true, email: true } },
   group: { select: { id: true, name: true } },
   importBatch: { select: { fileName: true, uploadedBy: { select: { id: true, name: true, role: true } } } },
+  // The lead's pending call back / follow up reminder (at most one - scheduling a new one replaces it),
+  // so the UI can show the time that's currently set and pre-fill it when rescheduling.
+  tasks: {
+    where: { status: TaskStatus.PENDING, type: { in: [...FOLLOW_UP_TASK_TYPES] } },
+    select: { id: true, type: true, scheduledAt: true },
+    orderBy: { scheduledAt: "asc" },
+    take: 1,
+  },
   calls: {
     select: {
       id: true,
@@ -60,6 +72,8 @@ const leadListInclude = {
       durationSeconds: true,
       recording: { select: { recordingUrl: true } },
       agent: { select: { id: true, name: true } },
+      notes: true,
+      outcome: { select: { id: true, name: true, code: true } },
     },
     orderBy: { createdAt: "desc" },
   },
@@ -68,13 +82,15 @@ const leadListInclude = {
 class LeadService {
   // Salespersons see their calls (status, duration) but can't hear the recording —
   // only managers/admins can listen. Strip the URL out rather than the whole call.
-  private redactRecordingsForRole<T extends { calls: { recording: { recordingUrl: string | null } | null }[] }>(
+  // They also never see the ASSIGNED status (shown as NEW), see statusForRole.
+  private presentForRole<T extends { workingStatus: Lead["workingStatus"]; calls: { recording: { recordingUrl: string | null } | null }[] }>(
     entity: T,
     role: Role,
   ): T {
     if (role !== Role.SALESPERSON) return entity;
     return {
       ...entity,
+      workingStatus: statusForRole(entity.workingStatus, role),
       calls: entity.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call)),
     };
   }
@@ -89,8 +105,16 @@ class LeadService {
     const where: Prisma.LeadWhereInput = { ...this.buildScopeWhere(user) };
 
     if (query.sourceId) where.sourceId = query.sourceId;
-    if (query.workingStatus) where.workingStatus = query.workingStatus as Lead["workingStatus"];
+    if (query.workingStatus) {
+      const status = query.workingStatus as Lead["workingStatus"];
+      // A salesperson's NEW includes leads that are ASSIGNED underneath; they can't filter on ASSIGNED itself.
+      where.workingStatus =
+        user.role === Role.SALESPERSON && (status === "NEW" || status === "ASSIGNED") ? { in: ["NEW", "ASSIGNED"] } : status;
+    }
     where.lifecycleStage = query.lifecycleStage ?? "LEAD";
+    // Cart-abandonment leads live only in the Abandoned Leads queue, never in the normal Leads list -
+    // even once worked/recovered, so this excludes any lead with an Abandonment row.
+    where.abandonments = { none: {} };
 
     if (query.assignment === "UNASSIGNED") {
       where.assignedManagerId = null;
@@ -128,7 +152,7 @@ class LeadService {
     ]);
 
     return {
-      data: data.map((lead) => this.redactRecordingsForRole(lead, user.role)),
+      data: data.map((lead) => this.presentForRole(lead, user.role)),
       pagination: {
         page: query.page,
         limit: query.limit,
@@ -156,7 +180,7 @@ class LeadService {
   async getLeadById(user: AuthUser, id: string) {
     const lead = await this.getLeadOrThrow(id);
     this.assertAccess(user, lead);
-    return this.redactRecordingsForRole(lead, user.role);
+    return this.presentForRole(lead, user.role);
   }
 
   async createLead(user: AuthUser, data: CreateLeadBody) {
@@ -226,7 +250,13 @@ class LeadService {
   }
 
   async updateLead(user: AuthUser, id: string, data: UpdateLeadBody) {
-    const lead = await this.getLeadById(user, id);
+    const lead = await this.getLeadOrThrow(id);
+    this.assertAccess(user, lead);
+    if (user.role === Role.SALESPERSON && data.workingStatus === "ASSIGNED") {
+      throw new ApiError("Only a manager or admin can set a lead to Assigned", STATUS_CODES.FORBIDDEN);
+    }
+    // What this user currently sees; leaving it unchanged in the form must not overwrite the real status.
+    const shownStatus = statusForRole(lead.workingStatus, user.role);
 
     const updateData: Prisma.LeadUpdateInput = {
       firstName: data.firstName,
@@ -248,20 +278,48 @@ class LeadService {
     if (data.interestedProductId !== undefined) {
       updateData.interestedProduct = { connect: { id: data.interestedProductId } };
     }
-    if (data.workingStatus !== undefined) updateData.workingStatus = data.workingStatus;
+    const statusChanged = data.workingStatus !== undefined && data.workingStatus !== shownStatus;
+    if (statusChanged) updateData.workingStatus = data.workingStatus;
 
-    const updated = await prisma.lead.update({ where: { id }, data: updateData, include: leadListInclude });
+    // Call back / follow up always carry a reminder time: required when switching to one, and
+    // accepted on its own to reschedule while the lead already has that status.
+    const resultingStatus = statusChanged ? data.workingStatus! : lead.workingStatus;
+    const isFollowUpStatus = resultingStatus === "CALL_BACK" || resultingStatus === "FOLLOW_UP";
+    const followUpAt =
+      isFollowUpStatus && (statusChanged || data.followUpAt)
+        ? parseFollowUpAt(data.followUpAt, resultingStatus === "CALL_BACK" ? "call back" : "follow up")
+        : null;
 
-    await prisma.activity.create({
-      data: {
-        leadId: id,
-        actorId: user.id,
-        type: data.workingStatus && data.workingStatus !== lead.workingStatus ? ActivityType.STATUS_CHANGE : ActivityType.LEAD_UPDATED,
-        title: data.workingStatus && data.workingStatus !== lead.workingStatus ? `Status changed to ${data.workingStatus}` : "Lead updated",
-      },
+    const updated = await prisma.$transaction(async (tx) => {
+      const row = await tx.lead.update({ where: { id }, data: updateData, include: leadListInclude });
+
+      if (followUpAt) {
+        await scheduleFollowUp(tx, {
+          leadId: id,
+          leadName: [row.firstName, row.lastName].filter(Boolean).join(" "),
+          assignedToId: row.ownerId ?? user.id,
+          actor: { id: user.id, role: user.role },
+          type: resultingStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
+          scheduledAt: followUpAt,
+        });
+      } else if (statusChanged) {
+        // Moved on to another status - any reminder still pending on the lead has been dealt with.
+        await completePendingFollowUps(tx, id);
+      }
+
+      await tx.activity.create({
+        data: {
+          leadId: id,
+          actorId: user.id,
+          type: statusChanged ? ActivityType.STATUS_CHANGE : ActivityType.LEAD_UPDATED,
+          title: statusChanged ? `Status changed to ${data.workingStatus}` : "Lead updated",
+        },
+      });
+
+      return row;
     });
 
-    return this.redactRecordingsForRole(updated, user.role);
+    return this.presentForRole(updated, user.role);
   }
 
   // Hard-deletes a Lead. The schema already protects real lead history at the DB level -
@@ -415,7 +473,7 @@ class LeadService {
   // Same batching strategy as bulkAssignLeadsToManager, for Manager -> Salesperson assignment.
   private async bulkAssignLeadsToSalesperson(
     tx: TxClient,
-    assignments: { lead: Lead; salesperson: User; groupId: string }[],
+    assignments: { lead: Lead; salesperson: User; groupId: string | null }[],
     assignedById: string,
     method: typeof AssignmentType.MANUAL | typeof AssignmentType.ROUND_ROBIN,
   ): Promise<void> {
@@ -427,7 +485,7 @@ class LeadService {
       data: { isCurrent: false, unassignedAt: now },
     });
 
-    const bySalesperson = new Map<string, { ids: string[]; groupId: string }>();
+    const bySalesperson = new Map<string, { ids: string[]; groupId: string | null }>();
     const newLeadIds: string[] = [];
     const assignmentRows: Prisma.LeadAssignmentCreateManyInput[] = [];
     const activityRows: Prisma.ActivityCreateManyInput[] = [];
@@ -548,18 +606,33 @@ class LeadService {
     );
   }
 
-  // Resolves a salesperson id to their active group membership under THIS manager.
-  // The manager picks a person, not a group — the group is implicit, and a
-  // salesperson who isn't currently on this manager's active team is rejected.
+  // Resolves a salesperson id to whoever this manager is allowed to assign leads
+  // to: anyone reporting to them (self-added, or admin-assigned), whether or not
+  // they've been placed in a group yet. If they're an active member of one of
+  // this manager's groups, the lead inherits that group; otherwise it's assigned
+  // with no group (groupId is nullable on Lead precisely for this case).
   private async resolveTeamMember(managerId: string, salespersonId: string) {
     const membership = await prisma.groupMember.findFirst({
       where: { userId: salespersonId, isActive: true, group: { managerId, status: "ACTIVE" } },
       include: { user: true },
     });
-    if (!membership || membership.user.role !== Role.SALESPERSON || membership.user.status !== UserStatus.ACTIVE) {
-      throw new ApiError("Salesperson is not part of your active team", STATUS_CODES.BAD_REQUEST);
+    if (membership) {
+      if (membership.user.role !== Role.SALESPERSON || membership.user.status !== UserStatus.ACTIVE) {
+        throw new ApiError("Salesperson is not part of your team", STATUS_CODES.BAD_REQUEST);
+      }
+      return { user: membership.user, groupId: membership.groupId as string | null };
     }
-    return { user: membership.user, groupId: membership.groupId };
+
+    const salesperson = await prisma.user.findUnique({ where: { id: salespersonId } });
+    if (
+      !salesperson ||
+      salesperson.role !== Role.SALESPERSON ||
+      salesperson.status !== UserStatus.ACTIVE ||
+      salesperson.reportingManagerId !== managerId
+    ) {
+      throw new ApiError("Salesperson is not part of your team", STATUS_CODES.BAD_REQUEST);
+    }
+    return { user: salesperson, groupId: null as string | null };
   }
 
   async bulkAssignSalespersons(managerId: string, body: BulkAssignSalespersonBody) {
@@ -784,6 +857,12 @@ class LeadService {
     let createdCount = 0;
     const usedLeadNumbers = new Set<string>();
 
+    // A manager who imports leads keeps them — the lead lands assigned to
+    // that manager immediately instead of sitting in Admin's unassigned pool.
+    // Admin still sees every lead regardless (ADMIN has unrestricted scope),
+    // and the "via {uploadedBy}" source-column note still reflects who brought it in.
+    const isManagerImport = user.role === Role.MANAGER;
+
     const uniqueLeadNumber = (): string => {
       let leadNumber = generateLeadNumber();
       while (usedLeadNumbers.has(leadNumber)) leadNumber = generateLeadNumber();
@@ -806,6 +885,7 @@ class LeadService {
         location: row.location,
         sourceId: sourceCache.get(row.sourceName?.trim() || "CSV Import"),
         importBatchId: batch.id,
+        assignedManagerId: isManagerImport ? user.id : undefined,
       }));
 
       await prisma.$transaction(
@@ -820,6 +900,32 @@ class LeadService {
               title: "Lead created via CSV import",
             })),
           });
+
+          if (isManagerImport) {
+            const now = new Date();
+            await tx.leadAssignment.createMany({
+              data: leadRows.map((lead) => ({
+                id: randomUUID(),
+                leadId: lead.id,
+                userId: user.id,
+                assignmentType: AssignmentType.MANUAL,
+                assignedById: user.id,
+                assignedAt: now,
+                isCurrent: true,
+              })),
+            });
+            await tx.activity.createMany({
+              data: leadRows.map((lead) => ({
+                leadId: lead.id,
+                actorId: user.id,
+                type: ActivityType.ASSIGNMENT,
+                referenceType: "LeadImportBatch",
+                referenceId: batch.id,
+                title: "Auto-assigned to importing manager",
+                description: "Method: CSV_IMPORT",
+              })),
+            });
+          }
         },
         { timeout: 30000, maxWait: 10000 },
       );

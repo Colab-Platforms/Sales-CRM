@@ -40,13 +40,22 @@ export const refreshPaymentLink = async (req: AuthRequest, res: Response): Promi
   }
 };
 
+// When the caller specifies a templateId, the existing explicit-template send runs unchanged. When
+// they don't, the provider-aware send decides for itself (Meta free text inside the 24-hour window,
+// otherwise an approved template for the resolved provider) - see sendPaymentLinkAuto.
 export const sendPaymentLinkWhatsApp = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const params = validatePaymentParams(req.params);
     if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
-    const body = validateSendBody(req.body);
+    const body = validateSendBody(req.body ?? {});
     if (body.error) return void sendResponse(res, false, null, body.error.message, STATUS_CODES.BAD_REQUEST);
-    sendResponse(res, true, await service.sendPaymentLinkWhatsApp(req.user!, params.value.paymentId, body.value.templateId), "Payment link sent", STATUS_CODES.CREATED);
+
+    if (body.value.templateId) {
+      sendResponse(res, true, await service.sendPaymentLinkWhatsApp(req.user!, params.value.paymentId, body.value.templateId), "Payment link sent", STATUS_CODES.CREATED);
+      return;
+    }
+    const result = await service.sendPaymentLinkAuto(req.user!, params.value.paymentId);
+    sendResponse(res, result.sent, result, result.sent ? "Payment link sent" : (result.reason ?? "Could not send the payment link"), result.sent ? STATUS_CODES.CREATED : STATUS_CODES.BAD_REQUEST);
   } catch (error: any) {
     fail(res, error);
   }

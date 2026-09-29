@@ -2,6 +2,7 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type { CourierOption, CreateShipmentInput, IntegrationStatus, PaymentLinkResult, ShipmentActionResult } from "../types/integrations.types";
 import type { WhatsAppMessageResult } from "../types/whatsapp-messaging.types";
+import type { OrderNotifyResult } from "../types/orders.types";
 
 export const integrationsApi = {
   async getStatus(): Promise<IntegrationStatus> {
@@ -28,6 +29,14 @@ export const integrationsApi = {
   // Goes through the existing WhatsApp template messaging on the backend; the template must contain {{payment_link}}.
   async sendPaymentLinkWhatsApp(paymentId: string, templateId: string): Promise<WhatsAppMessageResult> {
     const res = await apiClient.post<ApiEnvelope<WhatsAppMessageResult>>(`/payments/${paymentId}/send-whatsapp`, { templateId });
+    return res.data.data;
+  },
+
+  // Provider-aware send with no template chosen: Meta free text while its 24-hour window is open, otherwise an approved
+  // template for the provider the customer's conversation is on. A "not sent" outcome comes back as an error whose
+  // message is the backend's safe reason.
+  async sendPaymentLinkAuto(paymentId: string): Promise<OrderNotifyResult> {
+    const res = await apiClient.post<ApiEnvelope<OrderNotifyResult>>(`/payments/${paymentId}/send-whatsapp`, {});
     return res.data.data;
   },
 

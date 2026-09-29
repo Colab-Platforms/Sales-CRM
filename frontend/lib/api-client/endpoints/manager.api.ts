@@ -7,6 +7,7 @@ import type {
   AddExistingMemberPayload,
   Group,
   MySalesperson,
+  ResetPasswordPayload,
   SalespersonUser,
   SalespersonWithGroup,
   UpdateGroupPayload,
@@ -65,6 +66,18 @@ export const managerApi = {
   async updateSalesperson(groupId: string, userId: string, payload: UpdateSalespersonPayload): Promise<SalespersonUser> {
     const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(
       `/manager/groups/${groupId}/members/${userId}`,
+      payload,
+    );
+    return res.data.data;
+  },
+
+  async resetSalespersonPassword(
+    groupId: string,
+    userId: string,
+    payload: ResetPasswordPayload,
+  ): Promise<SalespersonUser> {
+    const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(
+      `/manager/groups/${groupId}/members/${userId}/password`,
       payload,
     );
     return res.data.data;

@@ -44,7 +44,7 @@ export default function LoginPage() {
           {/* <BrandMark className="size-14" /> */}
           <div className="space-y-1">
             <h1 className="font-hand text-4xl leading-none font-bold">
-              Sales CRM
+              AVATAR CRM
             </h1>
             <p className="text-sm text-muted-foreground">
               Leads, teams and pipeline in one place.

@@ -22,7 +22,7 @@ export function SalespersonDashboardView({ data }: { data: SalespersonDashboard 
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard label="Total Leads" value={data.totalLeads} icon={Users} tone="primary" />
-        <StatCard label="Working" value={data.statusCounts.WORKING} icon={TrendingUp} tone="amber" />
+        <StatCard label="Follow up" value={data.statusCounts.FOLLOW_UP} icon={TrendingUp} tone="amber" />
         <StatCard label="Interested" value={data.statusCounts.INTERESTED} icon={Target} tone="teal" />
         <StatCard
           label="Converted"

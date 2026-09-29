@@ -23,11 +23,22 @@ enum GroupStatus {
 enum LeadWorkingStatus {
   NEW
   ASSIGNED
-  WORKING
+  RINGING
+  BUSY
+  CALL_BACK
+  FOLLOW_UP
+  SWITCHED_OFF
+  DND
+  NOT_REACHABLE
   INTERESTED
-  EXPIRED
+  NOT_INTERESTED
   CONVERTED
-  CLOSED
+  // A soft-deleted/deactivated customer profile (Part 8, WhatsApp Inbox improvements): Lead has no
+  // cascading delete from any related table (orders, conversations, messages, campaigns, activities
+  // all reference it), so a real DELETE is unsafe. This one enum value is the whole schema change -
+  // no new column/table - and every existing list/assignment query that filters LeadWorkingStatus
+  // simply needs to exclude it, exactly like any other terminal status.
+  DEACTIVATED
 
   @@map("lead_working_status")
 }
@@ -184,6 +195,9 @@ enum SourceType {
   // recordInboundMessage) - same "external source with a Source row" pattern as META/SHOPIFY,
   // reusing leadService.createLeadFromSource rather than a bespoke lead-creation path.
   WHATSAPP
+  // A lead created from a Shiprocket Checkout (formerly Fastrr) "Abandon Cart" webhook delivery -
+  // same "external source with a Source row" pattern as WHATSAPP/SHOPIFY above.
+  SHIPROCKET
 
   @@map("source_type")
 }
@@ -340,6 +354,7 @@ enum ActivityType {
   WHATSAPP_TEMPLATE_UPDATED
   WHATSAPP_TEMPLATE_STATUS_CHANGED
   WHATSAPP_TEMPLATE_SYNCED
+  WHATSAPP_TEMPLATE_DELETED
 
   // E7.7 Campaign & Bulk Messaging: campaign-level lifecycle events, not tied to any one customer
   // (null leadId, same convention as the WHATSAPP_TEMPLATE_* rows above). A campaign's individual

@@ -4,21 +4,32 @@ import { useMemo, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Contact, Search, UserPlus, Users2 } from "lucide-react";
 import { groupsQueryOptions, mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
-import { useRemoveSalespersonMutation, useUpdateSalespersonMutation } from "@/lib/api-client/mutations/manager.mutations";
+import {
+  useAddExistingSalespersonMutation,
+  useRemoveSalespersonMutation,
+  useUpdateSalespersonMutation,
+} from "@/lib/api-client/mutations/manager.mutations";
 import { CreateSalespersonModal } from "@/components/team/create-salesperson-modal";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { MySalesperson } from "@/lib/api-client/types/manager.types";
+import type { Group, MySalesperson } from "@/lib/api-client/types/manager.types";
 
-function EditSalespersonRow({ salesperson, onDone }: { salesperson: MySalesperson; onDone: () => void }) {
+function EditSalespersonRow({
+  salesperson,
+  onDone,
+}: {
+  salesperson: MySalesperson & { groupId: string };
+  onDone: () => void;
+}) {
   const updateSalesperson = useUpdateSalespersonMutation();
   const [name, setName] = useState(salesperson.name);
   const [phone, setPhone] = useState(salesperson.phone ?? "");
@@ -62,12 +73,79 @@ function EditSalespersonRow({ salesperson, onDone }: { salesperson: MySalesperso
   );
 }
 
-function SalespersonRow({ salesperson }: { salesperson: MySalesperson }) {
+function AddToTeamRow({
+  salesperson,
+  groups,
+  onDone,
+}: {
+  salesperson: MySalesperson;
+  groups: Group[];
+  onDone: () => void;
+}) {
+  const addExisting = useAddExistingSalespersonMutation();
+  const activeGroups = groups.filter((g) => g.status === "ACTIVE");
+  const [groupId, setGroupId] = useState("");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    addExisting.mutate({ groupId, payload: { userId: salesperson.id } }, { onSuccess: onDone });
+  }
+
+  return (
+    <TableRow>
+      <TableCell colSpan={5}>
+        <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-3">
+          <div className="min-w-56 space-y-1.5">
+            <Label htmlFor={`add-team-${salesperson.id}`}>Add {salesperson.name} to which group?</Label>
+            <NativeSelect
+              id={`add-team-${salesperson.id}`}
+              value={groupId}
+              onChange={(e) => setGroupId(e.target.value)}
+              required
+            >
+              <option value="" disabled>
+                Select a group
+              </option>
+              {activeGroups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </NativeSelect>
+          </div>
+          {addExisting.error ? (
+            <p className="w-full text-sm text-destructive">
+              {getErrorMessage(addExisting.error, "Failed to add to group.")}
+            </p>
+          ) : null}
+          <Button type="submit" size="sm" disabled={addExisting.isPending || !groupId}>
+            {addExisting.isPending ? "Adding..." : "Add"}
+          </Button>
+          <Button type="button" size="sm" variant="ghost" onClick={onDone}>
+            Cancel
+          </Button>
+        </form>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+function SalespersonRow({ salesperson, groups }: { salesperson: MySalesperson; groups: Group[] }) {
   const [editing, setEditing] = useState(false);
+  const [addingToTeam, setAddingToTeam] = useState(false);
   const removeSalesperson = useRemoveSalespersonMutation();
 
-  if (editing) {
-    return <EditSalespersonRow salesperson={salesperson} onDone={() => setEditing(false)} />;
+  if (editing && salesperson.groupId) {
+    return (
+      <EditSalespersonRow
+        salesperson={salesperson as MySalesperson & { groupId: string }}
+        onDone={() => setEditing(false)}
+      />
+    );
+  }
+
+  if (addingToTeam) {
+    return <AddToTeamRow salesperson={salesperson} groups={groups} onDone={() => setAddingToTeam(false)} />;
   }
 
   return (
@@ -78,7 +156,11 @@ function SalespersonRow({ salesperson }: { salesperson: MySalesperson }) {
       </TableCell>
       <TableCell>{salesperson.phone ?? "—"}</TableCell>
       <TableCell>
-        <Badge variant="outline">{salesperson.groupName}</Badge>
+        {salesperson.groupName ? (
+          <Badge variant="outline">{salesperson.groupName}</Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">Not in a team yet</span>
+        )}
       </TableCell>
       <TableCell>
         <Badge variant={salesperson.status === "ACTIVE" ? "default" : "secondary"}>
@@ -87,17 +169,25 @@ function SalespersonRow({ salesperson }: { salesperson: MySalesperson }) {
       </TableCell>
       <TableCell className="pr-5 text-right">
         <div className="flex justify-end gap-2">
-          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-            Edit
-          </Button>
-          <Button
-            size="sm"
-            variant="destructive"
-            disabled={removeSalesperson.isPending}
-            onClick={() => removeSalesperson.mutate({ groupId: salesperson.groupId, userId: salesperson.id })}
-          >
-            Remove
-          </Button>
+          {salesperson.groupId ? (
+            <>
+              <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={removeSalesperson.isPending}
+                onClick={() => removeSalesperson.mutate({ groupId: salesperson.groupId as string, userId: salesperson.id })}
+              >
+                Remove
+              </Button>
+            </>
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => setAddingToTeam(true)}>
+              Add to a team
+            </Button>
+          )}
         </div>
       </TableCell>
     </TableRow>
@@ -118,7 +208,7 @@ export default function SalespersonsPage() {
       (sp) =>
         sp.name.toLowerCase().includes(q) ||
         sp.email.toLowerCase().includes(q) ||
-        sp.groupName.toLowerCase().includes(q),
+        (sp.groupName ?? "").toLowerCase().includes(q),
     );
   }, [salespersons, search]);
 
@@ -126,7 +216,7 @@ export default function SalespersonsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Salespersons"
-        description="Everyone you've added across your teams, in one place."
+        description="Everyone reporting to you — added by you or assigned by admin — in one place."
         actions={
           <Button onClick={() => setIsAddOpen(true)}>
             <UserPlus />
@@ -190,7 +280,7 @@ export default function SalespersonsPage() {
               </TableHeader>
               <TableBody>
                 {filtered.map((sp) => (
-                  <SalespersonRow key={sp.id} salesperson={sp} />
+                  <SalespersonRow key={sp.id} salesperson={sp} groups={groups ?? []} />
                 ))}
               </TableBody>
             </Table>

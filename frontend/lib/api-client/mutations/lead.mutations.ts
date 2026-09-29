@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { leadApi } from "../endpoints/lead.api";
 import { leadKeys } from "../queries/lead.queries";
 import { customersKeys } from "../queries/customers.queries";
+import { tasksKeys } from "../queries/tasks.queries";
 import type {
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
@@ -38,7 +39,7 @@ export function useUpdateLeadMutation() {
       const previous = queryClient.getQueriesData<LeadListResult>({ queryKey: leadKeys.all });
 
       queryClient.setQueriesData<LeadListResult>({ queryKey: leadKeys.all }, (old) => {
-        if (!old) return old;
+        if (!old || !Array.isArray(old.data)) return old;
         return {
           ...old,
           data: old.data.map((lead) => (lead.id === id ? { ...lead, ...payload } : lead)),
@@ -54,6 +55,8 @@ export function useUpdateLeadMutation() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
+      // A status change can schedule or close a follow-up reminder.
+      queryClient.invalidateQueries({ queryKey: tasksKeys.all });
     },
   });
 }

@@ -268,14 +268,15 @@ describe("Customer list (E6.7)", () => {
       const token = `Seg${uid().slice(0, 8)}`;
       const named = (first: string) => ({ firstName: first, lastName: token });
 
-      // NEW: no orders at all.
+      // NEW: no orders at all - still just a lead, never listed as a customer.
       const fresh = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Fresh") } });
 
-      // HOT: no orders, but marked INTERESTED.
+      // HOT: no orders, but marked INTERESTED - still just a lead, not a customer yet.
       const hot = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Hot"), workingStatus: "INTERESTED" } });
 
-      // REPEAT: two successful orders.
-      const repeat = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Repeat") } });
+      // REPEAT: two successful orders. lifecycleStage flips to CUSTOMER the moment an order is
+      // placed (orders.service.ts) - set explicitly here since these orders are seeded directly.
+      const repeat = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Repeat"), lifecycleStage: "CUSTOMER" } });
       for (let i = 0; i < 2; i++) {
         const order = await tx.order.create({
           data: { orderNumber: `ORD-${uid()}`, leadId: repeat.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" },
@@ -284,7 +285,7 @@ describe("Customer list (E6.7)", () => {
       }
 
       // DORMANT: one successful order 200 days ago.
-      const dormant = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Dormant") } });
+      const dormant = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, ...named("Dormant"), lifecycleStage: "CUSTOMER" } });
       const dormantOrder = await tx.order.create({
         data: {
           orderNumber: `ORD-${uid()}`,
@@ -299,11 +300,13 @@ describe("Customer list (E6.7)", () => {
 
       const svc = new CustomersService(tx);
 
+      // The list only ever shows leads that converted (lifecycleStage CUSTOMER) - fresh and hot,
+      // with no order yet, are never customers, no matter how "hot" their working status is.
       const all = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token });
-      assert.equal(all.pagination.totalItems, 4, "only the 4 seeded leads match this token");
+      assert.equal(all.pagination.totalItems, 2, "only repeat and dormant have converted to customers");
       const byLeadId = new Map(all.items.map((c) => [c.leadId, c]));
-      assert.equal(byLeadId.get(fresh.id)?.segment, "NEW");
-      assert.equal(byLeadId.get(hot.id)?.segment, "HOT");
+      assert.ok(!byLeadId.has(fresh.id), "a lead with no order is never a customer");
+      assert.ok(!byLeadId.has(hot.id), "an INTERESTED lead with no order is never a customer");
       assert.equal(byLeadId.get(repeat.id)?.segment, "REPEAT");
       assert.equal(byLeadId.get(repeat.id)?.orderCount, 2);
       assert.equal(byLeadId.get(repeat.id)?.totalPaid, "1000.00");
@@ -315,24 +318,14 @@ describe("Customer list (E6.7)", () => {
       assert.equal(repeatOnly.pagination.totalItems, 1);
       assert.equal(repeatOnly.items[0]?.leadId, repeat.id);
 
-      const withOrders = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, hasOrders: true });
-      assert.equal(withOrders.pagination.totalItems, 2, "repeat and dormant have orders; fresh and hot do not");
-      assert.ok(!withOrders.items.some((c) => c.leadId === fresh.id), "the customer with no orders is excluded");
-      assert.ok(!withOrders.items.some((c) => c.leadId === hot.id));
-
-      const noOrdersOnly = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, hasOrders: false });
-      assert.equal(noOrdersOnly.pagination.totalItems, 2);
-      assert.ok(noOrdersOnly.items.some((c) => c.leadId === fresh.id));
-      assert.ok(!noOrdersOnly.items.some((c) => c.leadId === repeat.id));
-
-      // Pagination over just these 4 seeded leads.
-      const page1 = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 2, search: token });
-      const page2 = await svc.listCustomers(as(admin, Role.ADMIN), { page: 2, pageSize: 2, search: token });
-      assert.equal(page1.items.length, 2);
-      assert.equal(page2.items.length, 2);
+      // Pagination over the 2 converted leads.
+      const page1 = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 1, search: token });
+      const page2 = await svc.listCustomers(as(admin, Role.ADMIN), { page: 2, pageSize: 1, search: token });
+      assert.equal(page1.items.length, 1);
+      assert.equal(page2.items.length, 1);
       assert.equal(page1.pagination.totalPages, 2);
       const pagedIds = [...page1.items, ...page2.items].map((c) => c.leadId);
-      assert.equal(new Set(pagedIds).size, 4, "two pages of 2 cover all 4 seeded leads with no repeats");
+      assert.equal(new Set(pagedIds).size, 2, "two pages of 1 cover both converted leads with no repeats");
     });
   });
 
@@ -343,7 +336,7 @@ describe("Customer list (E6.7)", () => {
       const otherOwner = await tx.user.create({ data: { name: "Rep Two", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
 
       const searchToken = `Zephyr${uid().slice(0, 8)}`;
-      const owned = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: searchToken, lastName: "Owned", ownerId: owner.id } });
+      const owned = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: searchToken, lastName: "Owned", ownerId: owner.id, lifecycleStage: "CUSTOMER" } });
       await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Someone", lastName: "Else", ownerId: otherOwner.id } });
 
       const order = await tx.order.create({
@@ -378,8 +371,8 @@ describe("Customer list (E6.7)", () => {
     await inRollback(async (tx) => {
       const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
       const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id } });
-      await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id } });
+      const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id, lifecycleStage: "CUSTOMER" } });
+      await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id, lifecycleStage: "CUSTOMER" } });
 
       const svc = new CustomersService(tx);
       const result = await svc.listCustomers(as(rep, Role.SALESPERSON), { page: 1, pageSize: 20 });
@@ -393,7 +386,7 @@ describe("Next Best Action (E6.8)", () => {
   it("recommends FOLLOW_UP_PAYMENT for an order with an outstanding balance, on Customer 360, the dedicated endpoint, and the list, in agreement", async () => {
     await inRollback(async (tx) => {
       const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Unpaid", lastName: "Customer" } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Unpaid", lastName: "Customer", lifecycleStage: "CUSTOMER" } });
       const order = await tx.order.create({
         data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.PENDING_PAYMENT, totalAmount: "1200.00" },
       });
@@ -483,11 +476,23 @@ describe("Next Best Action (E6.8)", () => {
       const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
       const token = `Nba${uid().slice(0, 8)}`;
 
-      const unpaidLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Unpaid" } });
+      const unpaidLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Unpaid", lifecycleStage: "CUSTOMER" } });
       const unpaidOrder = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: unpaidLead.id, source: OrderSource.WEBSITE, status: OrderStatus.PENDING_PAYMENT, totalAmount: "700.00" } });
       await tx.payment.create({ data: { orderId: unpaidOrder.id, amount: "700.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
 
-      const freshLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Fresh" } });
+      // A DORMANT customer (one paid order, long ago) - low-priority RETENTION_FOLLOW_UP.
+      const dormantLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Dormant", lifecycleStage: "CUSTOMER" } });
+      const dormantOrder = await tx.order.create({
+        data: {
+          orderNumber: `ORD-${uid()}`,
+          leadId: dormantLead.id,
+          source: OrderSource.WEBSITE,
+          status: OrderStatus.DELIVERED,
+          totalAmount: "300.00",
+          createdAt: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000),
+        },
+      });
+      await tx.payment.create({ data: { orderId: dormantOrder.id, amount: "300.00", method: PaymentMethod.CARD, status: PaymentStatus.SUCCESS } });
 
       const svc = new CustomersService(tx);
       const paymentFollowUps = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, nbaAction: "FOLLOW_UP_PAYMENT" });
@@ -499,7 +504,7 @@ describe("Next Best Action (E6.8)", () => {
       assert.equal(highPriority.items[0]?.leadId, unpaidLead.id);
 
       const lowPriority = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token, nbaPriority: "LOW" });
-      assert.equal(lowPriority.items[0]?.leadId, freshLead.id);
+      assert.equal(lowPriority.items[0]?.leadId, dormantLead.id);
     });
   });
 
@@ -513,6 +518,96 @@ describe("Next Best Action (E6.8)", () => {
       const svc = new CustomersService(tx);
       assert.ok(await svc.getNextBestAction(as(rep, Role.SALESPERSON), ownLead.id));
       await assert.rejects(() => svc.getNextBestAction(as(rep, Role.SALESPERSON), otherLead.id), /Customer not found/);
+    });
+  });
+});
+
+// Part 8 (WhatsApp Inbox): "Delete Customer" never hard-deletes - it marks the profile DEACTIVATED and
+// leaves every related record (orders, conversations, messages, campaign recipients) untouched.
+describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
+  it("reports related-record counts without deleting anything, ahead of deactivation", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Impact", lastName: "Check", mobile: "9876500000" } });
+      const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" } });
+
+      const svc = new CustomersService(tx);
+      const impact = await svc.getDeactivationImpact(as(admin, Role.ADMIN), lead.id);
+      assert.deepEqual(impact, { orders: 1, conversations: 0, messages: 0, campaignRecipients: 0 });
+
+      // Nothing above was deleted or altered - just counted.
+      assert.equal(await tx.order.count({ where: { id: order.id } }), 1);
+    });
+  });
+
+  it("sets workingStatus to DEACTIVATED, audits it, and leaves orders untouched", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "ToDeactivate", workingStatus: "NEW" } });
+      const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" } });
+
+      const svc = new CustomersService(tx);
+      const result = await svc.deactivateCustomer(as(admin, Role.ADMIN), lead.id);
+      assert.equal(result.workingStatus, "DEACTIVATED");
+
+      const after = await tx.lead.findUniqueOrThrow({ where: { id: lead.id }, select: { workingStatus: true } });
+      assert.equal(after.workingStatus, "DEACTIVATED");
+
+      const stillThere = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { id: true } });
+      assert.ok(stillThere);
+
+      const activity = await tx.activity.findFirst({ where: { leadId: lead.id, type: ActivityType.STATUS_CHANGE }, orderBy: { createdAt: "desc" } });
+      assert.equal(activity?.title, "Customer profile deactivated");
+    });
+  });
+
+  it("is idempotent - deactivating an already-deactivated customer does not error or double-audit", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "AlreadyGone", workingStatus: "DEACTIVATED" } });
+
+      const svc = new CustomersService(tx);
+      const result = await svc.deactivateCustomer(as(admin, Role.ADMIN), lead.id);
+      assert.equal(result.workingStatus, "DEACTIVATED");
+
+      const activityCount = await tx.activity.count({ where: { leadId: lead.id, type: ActivityType.STATUS_CHANGE } });
+      assert.equal(activityCount, 0);
+    });
+  });
+
+  it("404s for a customer outside the caller's scope, and never reveals whether it exists", async () => {
+    await inRollback(async (tx) => {
+      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotYours", ownerId: rep2.id } });
+
+      const svc = new CustomersService(tx);
+      await assert.rejects(() => svc.getDeactivationImpact(as(rep1, Role.SALESPERSON), lead.id), /Customer not found/);
+      await assert.rejects(() => svc.deactivateCustomer(as(rep1, Role.SALESPERSON), lead.id), /Customer not found/);
+
+      const untouched = await tx.lead.findUniqueOrThrow({ where: { id: lead.id }, select: { workingStatus: true } });
+      assert.notEqual(untouched.workingStatus, "DEACTIVATED");
+    });
+  });
+
+  // Part 7 (WhatsApp Inbox): a deactivated customer must stop appearing in the operational customer
+  // list/campaign audience (buildCustomerListWhere - the same filter resolveMatchingCustomers uses),
+  // never in a hard-delete sense - their record/orders/history stay fully intact and directly reachable.
+  it("excludes a deactivated customer from the customer list, without deleting their record", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const token = `Deact${uid().slice(0, 8)}`;
+      const active = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Active" } });
+      const deactivated = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Deactivated", workingStatus: "DEACTIVATED" } });
+
+      const svc = new CustomersService(tx);
+      const list = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token });
+      assert.equal(list.pagination.totalItems, 1);
+      assert.equal(list.items[0]?.leadId, active.id);
+
+      // Still fully reachable directly - deactivation never hides a record from a direct lookup, only from lists.
+      const direct = await svc.getCustomer360(as(admin, Role.ADMIN), deactivated.id);
+      assert.equal(direct.profile.workingStatus, "DEACTIVATED");
     });
   });
 });

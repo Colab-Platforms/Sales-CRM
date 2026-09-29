@@ -10,6 +10,7 @@ import {
   validateAddExistingMemberSchema,
   validateUpdateGroupSchema,
   validateUpdateSalespersonSchema,
+  validateResetPasswordSchema,
 } from "./manager.validators.js";
 
 const managerService = new ManagerService();
@@ -71,9 +72,9 @@ export const deleteGroup = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
-export const listSalespersons = async (_req: AuthRequest, res: Response): Promise<void> => {
+export const listSalespersons = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const result = await managerService.listAllSalespersons();
+    const result = await managerService.listAllSalespersons(req.user!.id);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
@@ -150,6 +151,26 @@ export const updateSalesperson = async (req: AuthRequest, res: Response): Promis
       value,
     );
     sendResponse(res, true, result, "Salesperson updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const resetSalespersonPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateResetPasswordSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await managerService.resetSalespersonPassword(
+      req.user!.id,
+      req.params.groupId as string,
+      req.params.userId as string,
+      value.password,
+    );
+    sendResponse(res, true, result, "Salesperson password updated successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
-import { ORDER_ONLY_VARIABLES, RESOLVABLE_VARIABLES, resolveTemplateVariables, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
+import { classifyVariable, ORDER_ONLY_VARIABLES, RESOLVABLE_VARIABLES, resolveTemplateVariables, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
 import { assertValidMediaUrl } from "./whatsapp.messaging.service.js";
 
 const lead = { firstName: "Mahadev", lastName: "Babar", mobile: "+919876543210", normalizedMobile: "+919876543210", email: "mahadev@example.invalid" };
@@ -46,23 +46,48 @@ describe("resolveTemplateVariables", () => {
     assert.equal(values.outstanding_amount, "₹600.00");
   });
 
-  it("fails an order-only variable with a clear 'missing value' error when no order is given", () => {
+  it("fails an order-only variable with a clear 'value required' error when no order is given", () => {
     const ctx: VariableResolutionContext = { lead, order: null };
     const { values, errors } = resolveTemplateVariables(["tracking_number"], ctx);
     assert.deepEqual(values, {});
-    assert.deepEqual(errors, ["Missing value for variable: tracking_number"]);
+    assert.deepEqual(errors, ["Value required for tracking_number"]);
   });
 
   it("fails a shipment variable when the order has no shipment yet", () => {
     const ctx: VariableResolutionContext = { lead, order: { ...orderCtx, latestShipment: null } };
     const { errors } = resolveTemplateVariables(["tracking_number"], ctx);
-    assert.deepEqual(errors, ["Missing value for variable: tracking_number"]);
+    assert.deepEqual(errors, ["Value required for tracking_number"]);
   });
 
-  it("reports an unrecognised variable name distinctly from a missing value", () => {
+  // E9: a variable this CRM has no automatic source for (e.g. a webinar-specific name like
+  // webinar_name) is never reported as "unknown" - it is a real variable of the template itself,
+  // just one only a person can supply. classifyVariable is the single shared way the resolver and
+  // the Send WhatsApp UI agree on which is which.
+  it("classifies a variable with no CRM data source as manual, not unknown - and requires a value for it", () => {
     const ctx: VariableResolutionContext = { lead, order: null };
-    const { errors } = resolveTemplateVariables(["totally_made_up_variable"], ctx);
-    assert.deepEqual(errors, ["Unknown template variable: totally_made_up_variable"]);
+    assert.equal(classifyVariable("webinar_name"), "manual");
+    assert.equal(classifyVariable("customer_name"), "crm");
+    const { errors, fields } = resolveTemplateVariables(["webinar_name"], ctx);
+    assert.deepEqual(errors, ["Value required for webinar_name"]);
+    assert.deepEqual(fields, [{ name: "webinar_name", source: "manual", value: null }]);
+  });
+
+  it("accepts a manually supplied value for a variable with no CRM source", () => {
+    const ctx: VariableResolutionContext = { lead, order: null };
+    const { values, errors, fields } = resolveTemplateVariables(["customer_name", "webinar_name"], ctx, { webinar_name: "AyushWellness Webinar" });
+    assert.deepEqual(errors, []);
+    assert.equal(values.customer_name, "Mahadev Babar");
+    assert.equal(values.webinar_name, "AyushWellness Webinar");
+    assert.deepEqual(fields, [
+      { name: "customer_name", source: "crm", value: "Mahadev Babar" },
+      { name: "webinar_name", source: "manual", value: "AyushWellness Webinar" },
+    ]);
+  });
+
+  it("lets a manually typed value override an otherwise-resolvable CRM variable", () => {
+    const ctx: VariableResolutionContext = { lead, order: null };
+    const { values } = resolveTemplateVariables(["customer_name"], ctx, { customer_name: "Preferred Name" });
+    assert.equal(values.customer_name, "Preferred Name");
   });
 
   it("is not limited to a fixed hardcoded set - the registry covers a real, extensible list", () => {

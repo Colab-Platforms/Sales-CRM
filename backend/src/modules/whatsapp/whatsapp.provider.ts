@@ -21,8 +21,16 @@ export interface SendTemplateMessageInput {
   /** Destination WhatsApp number, already normalized (E.164-ish, e.g. "+919876543210"). */
   to: string;
   templateName: string;
-  /** Positional template variables, in the order the approved template defines them. */
+  /** Positional template variables, in the order the approved template defines them. AiSensy/Gupshup
+   *  address parameters this way ({{1}}, {{2}}, ...). */
   params: string[];
+  /** The same values' variable NAMES, same order/length as `params` - e.g. ["customer_name",
+   *  "webinar_name"]. Every template this CRM submits to Meta is created with
+   *  `parameter_format: "named"` (see whatsapp.template.meta-payload.ts), and Meta's Send Message API
+   *  requires each body parameter to carry its `parameter_name` for a named-format template - sending
+   *  positional-only parameters against one is rejected outright (HTTP 400). AiSensy/Gupshup ignore
+   *  this field; only MetaCloudApiProvider uses it. */
+  paramNames?: string[];
   /** Recipient's display name, when known. Some providers (AiSensy) require a name field on every
    *  send; adapters that need one fall back to the phone number rather than inventing a name. */
   contactName?: string;
@@ -31,6 +39,9 @@ export interface SendTemplateMessageInput {
    *  field), not as a separate free-standing media message. A provider that doesn't support this
    *  (e.g. Gupshup, not yet wired for it) is free to ignore it. */
   media?: SendTemplateMessageMedia;
+  /** The template's approved language code (e.g. "en_US", "hi"). Meta requires it to match the approved template;
+   *  AiSensy/Gupshup ignore it. */
+  languageCode?: string;
 }
 
 export interface SendTemplateMessageResult {
@@ -95,6 +106,9 @@ export interface NormalizedTemplate {
   body: string;
   status: ProviderTemplateStatus;
   quality: string | null;
+  /** Why the provider rejected it, when it reports one (Meta's `rejected_reason` on REJECTED templates) - null
+   *  otherwise, including when the provider gives no such field at all. */
+  rejectedReason?: string | null;
 }
 
 /**

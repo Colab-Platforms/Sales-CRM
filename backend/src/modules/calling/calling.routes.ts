@@ -8,6 +8,8 @@ import {
   updateVirtualNumber,
   deleteVirtualNumber,
   receiveCallWebhook,
+  listCallOutcomes,
+  submitCallOutcome,
 } from "./calling.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
@@ -22,6 +24,8 @@ router.use(requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON))
 router.get("/virtual-numbers", listVirtualNumbers);
 router.post("/leads/:leadId/click-to-call", initiateCall);
 router.get("/leads/:leadId/calls", listLeadCalls);
+router.get("/call-outcomes", listCallOutcomes);
+router.patch("/calls/:id/outcome", submitCallOutcome);
 
 router.use("/virtual-numbers", requireRole(Role.ADMIN, Role.MANAGER));
 

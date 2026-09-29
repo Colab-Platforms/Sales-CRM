@@ -53,7 +53,7 @@ describe("deriveCustomerSegment", () => {
   });
 
   it("is HOT when there is an active InterestedLeadPeriod, regardless of working status", () => {
-    const result = deriveCustomerSegment(input({ workingStatus: "WORKING", hasActiveInterestedPeriod: true }));
+    const result = deriveCustomerSegment(input({ workingStatus: "FOLLOW_UP", hasActiveInterestedPeriod: true }));
     assert.equal(result.segment, "HOT");
   });
 

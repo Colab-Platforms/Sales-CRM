@@ -54,7 +54,7 @@ export function ManagerDashboardView({ data }: { data: ManagerDashboard }) {
                 <TableHead className="pl-5">Salesperson</TableHead>
                 <TableHead className="text-right">Total</TableHead>
                 <TableHead className="text-right">New</TableHead>
-                <TableHead className="text-right">Working</TableHead>
+                <TableHead className="text-right">Follow up</TableHead>
                 <TableHead className="text-right">Interested</TableHead>
                 <TableHead className="pr-5 text-right">Converted</TableHead>
               </TableRow>
@@ -80,7 +80,7 @@ export function ManagerDashboardView({ data }: { data: ManagerDashboard }) {
                       {member.statusCounts.NEW}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
-                      {member.statusCounts.WORKING}
+                      {member.statusCounts.FOLLOW_UP}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">
                       {member.statusCounts.INTERESTED}

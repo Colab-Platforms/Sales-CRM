@@ -66,6 +66,10 @@ export interface UpdateSalespersonPayload {
   status?: "ACTIVE" | "INACTIVE";
 }
 
+export interface ResetPasswordPayload {
+  password: string;
+}
+
 export interface SalespersonWithGroup extends SalespersonUser {
   currentGroup: { id: string; name: string } | null;
 }
@@ -76,6 +80,6 @@ export interface MySalesperson {
   email: string;
   phone: string | null;
   status: string;
-  groupId: string;
-  groupName: string;
+  groupId: string | null;
+  groupName: string | null;
 }

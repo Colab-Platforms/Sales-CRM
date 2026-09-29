@@ -84,7 +84,7 @@ export function LeadFilters({
           }
         >
           <option value="">All statuses</option>
-          {STATUS_ORDER.map((status) => (
+          {STATUS_ORDER.filter((status) => role !== "SALESPERSON" || status !== "ASSIGNED").map((status) => (
             <option key={status} value={status}>
               {STATUS_LABELS[status]}
             </option>

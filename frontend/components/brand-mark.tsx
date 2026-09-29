@@ -10,7 +10,7 @@ export function BrandMark({ className }: { className?: string }) {
     <svg
       viewBox="0 0 40 40"
       role="img"
-      aria-label="Sales CRM"
+      aria-label="AVATAR CRM"
       className={cn("text-primary", className)}
     >
       <path

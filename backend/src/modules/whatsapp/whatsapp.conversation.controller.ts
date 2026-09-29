@@ -6,7 +6,8 @@ import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
 import WhatsAppConversationService from "./whatsapp.conversation.service.js";
 import WhatsAppOrderConversationService from "./whatsapp.order-conversation.service.js";
-import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
+import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
+import WhatsAppMessagingService from "./whatsapp.messaging.service.js";
 import { prisma } from "@/lib/prisma.js";
 import { getLeadScope } from "@/lib/leadScope.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
@@ -14,6 +15,8 @@ import { ApiError } from "@/utils/apiError.js";
 
 const conversationService = new WhatsAppConversationService();
 const orderConversationService = new WhatsAppOrderConversationService();
+const freeTextService = new WhatsAppFreeTextService();
+const messagingService = new WhatsAppMessagingService();
 
 const assignSchema = z.object({ userId: z.string().uuid() });
 const sendTextSchema = z.object({ text: z.string().min(1).max(4000) });
@@ -68,9 +71,37 @@ export const returnConversationToAi = async (req: AuthRequest, res: Response): P
   }
 };
 
-/** Free-text send - only reachable when the conversation's active provider is Meta. AiSensy/Gupshup
- *  have no free-text send capability today (see whatsapp.order-conversation.service.ts's header
- *  comment); this route makes that limitation explicit instead of silently failing at the provider. */
+// Delete/archive: never deletes the lead, orders, payments or message history - only hides the
+// conversation from the normal inbox list (see WhatsAppConversationService's own comment on how,
+// with no schema change). Callable from both the open conversation and the inbox list.
+export const archiveConversation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await conversationService.archiveConversation(req.user!, req.params.leadId as string);
+    sendResponse(res, true, result, "Conversation removed from the inbox. The customer, orders and payment records were not affected.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const unarchiveConversation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await conversationService.unarchiveConversation(req.user!, req.params.leadId as string);
+    sendResponse(res, true, result, "Conversation restored to the inbox.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+/** Free-text send. WhatsAppFreeTextService decides (server-side, never trusting the client) whether it is
+ *  allowed: the conversation's active provider must be Meta AND Meta's 24-hour customer-service window must be
+ *  open. AiSensy/Gupshup conversations keep their template-only behavior. */
+const loadScopedLead = async (req: AuthRequest) => {
+  const leadScope = await getLeadScope(req.user!);
+  const lead = await prisma.lead.findFirst({ where: scopedLeadWhere(req.params.leadId as string, leadScope), select: { id: true, normalizedMobile: true } });
+  if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+  return lead;
+};
+
 export const sendConversationText = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateSchema(sendTextSchema, req.body);
@@ -78,33 +109,25 @@ export const sendConversationText = async (req: AuthRequest, res: Response): Pro
       sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
       return;
     }
-    const leadId = req.params.leadId as string;
-    const leadScope = await getLeadScope(req.user!);
-    const lead = await prisma.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true, normalizedMobile: true } });
-    if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+    const lead = await loadScopedLead(req);
     if (!lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
 
-    const provider = await getMetaWhatsAppProvider();
-    if (!provider) throw new ApiError("Free-text sending needs the Meta WhatsApp Cloud API provider - this conversation's active provider does not support it. Use a template message instead.", STATUS_CODES.BAD_REQUEST);
-
-    const result = await provider.sendText({ to: lead.normalizedMobile, body: value.text });
-    const row = await prisma.whatsAppMessage.create({
-      data: {
-        provider: "META",
-        providerMessageId: result.providerMessageId,
-        direction: "OUTBOUND",
-        messageType: "TEXT",
-        status: result.providerMessageId ? "SENT" : "QUEUED",
-        leadId: lead.id,
-        toNumber: lead.normalizedMobile,
-        normalizedContact: lead.normalizedMobile,
-        body: value.text,
-        sentById: req.user!.id,
-        sentAt: new Date(),
-      },
-      select: { id: true },
-    });
+    const row = await freeTextService.sendText({ id: lead.id, normalizedMobile: lead.normalizedMobile }, value.text, req.user!.id);
     sendResponse(res, true, { id: row.id }, "Message sent.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+/** What the inbox needs to render the composer honestly: the conversation's active provider, whether free text is
+ *  allowed right now (and why not), and the Meta service-window state. Works for leads with no conversation row yet. */
+export const getMessagingCapability = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const lead = await loadScopedLead(req);
+    const { capability } = await freeTextService.getCapability(lead.id);
+    // Which provider a template send would use (and why not, if it can't): the Send Template dialog filters on this.
+    const templates = await messagingService.describeTemplateProvider(req.user!, lead.id);
+    sendResponse(res, true, { ...capability, templates }, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

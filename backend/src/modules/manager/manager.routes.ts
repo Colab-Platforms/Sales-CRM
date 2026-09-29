@@ -11,6 +11,7 @@ import {
   addNewSalesperson,
   addExistingSalesperson,
   updateSalesperson,
+  resetSalespersonPassword,
   removeSalesperson,
 } from "./manager.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
@@ -31,6 +32,7 @@ router.delete("/groups/:groupId", deleteGroup);
 router.post("/groups/:groupId/members", addNewSalesperson);
 router.post("/groups/:groupId/members/existing", addExistingSalesperson);
 router.patch("/groups/:groupId/members/:userId", updateSalesperson);
+router.patch("/groups/:groupId/members/:userId/password", resetSalespersonPassword);
 router.delete("/groups/:groupId/members/:userId", removeSalesperson);
 
 export default router;

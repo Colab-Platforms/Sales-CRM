@@ -27,7 +27,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sales CRM",
+  title: "Avatar CRM",
   description: "Universal AI Sales, Calling & Conversational Commerce CRM",
 };
 

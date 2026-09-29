@@ -43,6 +43,16 @@ export interface CustomerProfile {
   lastContactedAt: Date | null;
 }
 
+// Part 8 (WhatsApp Inbox): shown in the "Delete Customer" confirmation dialog before anyone commits -
+// every related record type that a hard delete would have touched, so the user knows exactly what
+// stays intact (nothing here is ever deleted; see CustomersService.deactivateCustomer).
+export interface CustomerDeactivationImpact {
+  orders: number;
+  conversations: number;
+  messages: number;
+  campaignRecipients: number;
+}
+
 export interface CustomerOrderSummary {
   id: string;
   orderNumber: string;
