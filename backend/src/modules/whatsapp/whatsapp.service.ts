@@ -13,6 +13,7 @@ import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
 import { matchSenderToLead } from "./whatsapp.matching.js";
+import { normalizeMobile } from "@/lib/leadIdentity.js";
 import LeadService from "../lead/lead.service.js";
 import WhatsAppConversationService from "./whatsapp.conversation.service.js";
 import WhatsAppOrderConversationService from "./whatsapp.order-conversation.service.js";
@@ -30,8 +31,10 @@ const HISTORY_SELECT = {
   messageType: true,
   status: true,
   providerMessageId: true,
+  replyToProviderMessageId: true,
   body: true,
   errorMessage: true,
+  errorCode: true,
   createdAt: true,
   sentAt: true,
   deliveredAt: true,
@@ -96,14 +99,6 @@ class WhatsAppService {
     this.leadService = new LeadService();
     this.conversationService = new WhatsAppConversationService(this.db);
     this.orderConversationService = new WhatsAppOrderConversationService(this.db);
-  }
-
-  /** At most one row is meant to exist (name/type pair), same "findFirst-or-create, guarded"
-   *  pattern as whatsapp.cloud-config.service.ts's singleton WhatsAppConfig - not a DB constraint. */
-  private async getOrCreateWhatsAppSource(): Promise<{ id: string }> {
-    const existing = await this.db.source.findFirst({ where: { type: "WHATSAPP" }, select: { id: true } });
-    if (existing) return existing;
-    return this.db.source.create({ data: { name: "WhatsApp Inbound", type: "WHATSAPP", status: "ACTIVE" }, select: { id: true } });
   }
 
   getStatus(): WhatsAppStatusResult {
@@ -321,61 +316,91 @@ class WhatsAppService {
     const existing = await this.db.whatsAppMessage.findUnique({ where: { provider_providerMessageId: { provider, providerMessageId: message.providerMessageId } } });
     if (existing) return;
 
-    let { leadId, normalizedContact } = await matchSenderToLead(message.from, { db: this.db });
+    const normalizedContact = normalizeMobile(message.from);
 
-    // Unmatched sender: create the CRM contact, same "Source-attributed lead" pattern Meta/Shopify
-    // already use (leadService.createLeadFromSource), never a bespoke lead-creation path. Dedup is
-    // createLeadFromSource's own (scoped to the single WhatsApp Source, by its own normalization),
-    // so a second message from the same unmatched number reuses the same lead, never a duplicate.
-    if (!leadId && normalizedContact) {
-      const source = await this.getOrCreateWhatsAppSource();
-      const lead = await this.leadService.createLeadFromSource(source.id, { firstName: message.from, mobile: message.from }, "Lead created from WhatsApp Inbox", this.db);
-      leadId = lead.id;
-      // Align this lead's normalizedMobile with the form matchSenderToLead actually queries by
-      // (leadIdentity.ts's, same scheme shopify.persist.ts already uses), so the next message from
-      // this number takes the fast matched path instead of re-running createLeadFromSource's dedup.
-      if (lead.normalizedMobile !== normalizedContact) {
-        await this.db.lead.update({ where: { id: leadId }, data: { normalizedMobile: normalizedContact } });
+    // Bug fix (race condition): lead-matching, lead-creation, and conversation-creation used to run
+    // as separate, unguarded "check, then act" steps against `this.db` directly. Two inbound
+    // messages from the SAME brand-new number arriving close together (two separate webhook
+    // deliveries, each independently scheduled via its own setImmediate in
+    // whatsapp.webhook.routes.ts - never serialized against each other) could each see "no existing
+    // lead" and each create one, splitting the conversation in two - the same symptom the
+    // normalizedMobile-format fix in whatsapp.matching.ts addresses, but from a timing angle instead
+    // of a data-format one. Wrapping match -> create-if-needed -> conversation get-or-create in one
+    // transaction, serialized per phone number by a Postgres advisory lock (session-scoped, released
+    // automatically when the transaction ends - no schema change, no new table), makes this atomic:
+    // a second concurrent call for the same number simply waits, then finds the lead/conversation the
+    // first call just committed, instead of racing it.
+    const result = await this.db.$transaction(async (tx) => {
+      if (normalizedContact) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${normalizedContact})::bigint)`;
       }
-    }
 
-    const row = await this.db.whatsAppMessage.create({
-      data: {
-        provider,
-        providerMessageId: message.providerMessageId,
-        direction: "INBOUND",
-        messageType: message.messageType,
-        status: "RECEIVED",
-        leadId,
-        fromNumber: message.from,
-        toNumber: message.to,
-        normalizedContact,
-        body: message.text?.slice(0, 4000) ?? null,
-        receivedAt: message.timestamp,
-      },
-      select: { id: true },
+      let { leadId } = await matchSenderToLead(message.from, { db: tx });
+
+      // Unmatched sender: create the CRM contact, same "Source-attributed lead" pattern Meta/Shopify
+      // already use (leadService.createLeadFromSource), never a bespoke lead-creation path.
+      if (!leadId && normalizedContact) {
+        let source = await tx.source.findFirst({ where: { type: "WHATSAPP" }, select: { id: true } });
+        if (!source) source = await tx.source.create({ data: { name: "WhatsApp Inbound", type: "WHATSAPP", status: "ACTIVE" }, select: { id: true } });
+        const lead = await this.leadService.createLeadFromSource(source.id, { firstName: message.from, mobile: message.from }, "Lead created from WhatsApp Inbox", tx);
+        leadId = lead.id;
+        // Align this lead's normalizedMobile with the form matchSenderToLead actually queries by
+        // (leadIdentity.ts's, same scheme shopify.persist.ts already uses), so the next message from
+        // this number takes the fast matched path instead of re-running createLeadFromSource's dedup.
+        if (lead.normalizedMobile !== normalizedContact) {
+          await tx.lead.update({ where: { id: leadId }, data: { normalizedMobile: normalizedContact } });
+        }
+      }
+
+      const row = await tx.whatsAppMessage.create({
+        data: {
+          provider,
+          providerMessageId: message.providerMessageId,
+          direction: "INBOUND",
+          messageType: message.messageType,
+          status: "RECEIVED",
+          leadId,
+          fromNumber: message.from,
+          toNumber: message.to,
+          normalizedContact,
+          body: message.text?.slice(0, 4000) ?? null,
+          receivedAt: message.timestamp,
+          // Real provider-reported reply reference only (Meta's context.id) - null for the large
+          // majority of inbound messages, which is expected, not missing data.
+          replyToProviderMessageId: message.replyToProviderMessageId ?? null,
+        },
+        select: { id: true },
+      });
+
+      if (!leadId) return { leadId: null, conversation: null }; // No phone number at all to match or create from (rare, malformed sender).
+
+      await tx.activity.create({
+        data: {
+          leadId,
+          source: ActivitySource.WHATSAPP_WEBHOOK,
+          type: ActivityType.WHATSAPP_MESSAGE_RECEIVED,
+          referenceType: REFERENCE_TYPE,
+          referenceId: row.id,
+          title: "WhatsApp message received",
+          description: message.text?.slice(0, 4000) ?? null,
+        },
+      });
+
+      // The existing conversation for this lead is reused whenever one exists - getOrCreateConversation
+      // only ever creates one on a lead's genuinely first message. Scoped to `tx` (not `this.db`) so it
+      // shares the same advisory lock/transaction as the match-or-create step above.
+      const conversation = await new WhatsAppConversationService(tx).getOrCreateConversation(leadId, provider);
+      return { leadId, conversation };
     });
 
-    if (!leadId) return; // No phone number at all to match or create from (rare, malformed sender).
-    await this.db.activity.create({
-      data: {
-        leadId,
-        source: ActivitySource.WHATSAPP_WEBHOOK,
-        type: ActivityType.WHATSAPP_MESSAGE_RECEIVED,
-        referenceType: REFERENCE_TYPE,
-        referenceId: row.id,
-        title: "WhatsApp message received",
-        description: message.text?.slice(0, 4000) ?? null,
-      },
-    });
-
-    const conversation = await this.conversationService.getOrCreateConversation(leadId, provider);
-    if (conversation.mode === "AI") {
+    if (!result.leadId || !result.conversation) return;
+    if (result.conversation.mode === "AI") {
       // Fire-and-forget, same setImmediate pattern whatsapp.webhook.routes.ts already uses for
       // processing - keeps the webhook's own 200-ack timing unaffected by an AI call's latency.
+      const { leadId, conversation } = result;
       setImmediate(() => {
         void this.orderConversationService
-          .processInboundForAi({ leadId: leadId!, messageText: message.text ?? "", conversation: { provider: conversation.provider, assignedToId: conversation.assignedToId, orderState: conversation.orderState, orderDraft: conversation.orderDraft as any } })
+          .processInboundForAi({ leadId, messageText: message.text ?? "", conversation: { provider: conversation.provider, assignedToId: conversation.assignedToId, orderState: conversation.orderState, orderDraft: conversation.orderDraft as any } })
           .catch((error) => logger.error("WhatsApp AI order-taking processing failed", error instanceof Error ? error.message : error));
       });
     }
