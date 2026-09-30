@@ -341,7 +341,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                 ) : (
                   <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
                     {lead.calls.map((call) => (
-                      <CallHistoryEntry key={call.id} leadId={lead.id} call={call} />
+                      <CallHistoryEntry key={call.id} leadId={lead.id} call={call} currentFollowUp={lead.tasks[0]} />
                     ))}
                   </div>
                 )}

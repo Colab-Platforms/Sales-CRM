@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { leadDetailHref } from "@/components/leads/lead-table";
+import { leadDetailHref, CallHistoryButton } from "@/components/leads/lead-table";
+import { ClickToCallButton } from "@/components/leads/calling";
 import { RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
 import { parseAbandonmentCart } from "./abandonment-cart-utils";
 import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.types";
@@ -155,12 +156,12 @@ export function AbandonmentTable({ items, isFetching, selectedIds, onToggleOne, 
                 <div className="text-xs font-mono text-muted-foreground">{item.lead.leadNumber}</div>
               </TableCell>
 
-              <TableCell className="w-[180px] min-w-[160px]">
-                {item.lead.mobile ? (
-                  <div className="font-medium text-foreground">{item.lead.mobile}</div>
-                ) : (
-                  <span className="text-muted-foreground">—</span>
-                )}
+              <TableCell className="w-[180px] min-w-[160px]" onClick={(e) => e.stopPropagation()}>
+                <div className="flex items-center gap-1">
+                  <span className="font-medium text-foreground">{item.lead.mobile ?? "—"}</span>
+                  <ClickToCallButton lead={item.lead} />
+                  <CallHistoryButton lead={item.lead} />
+                </div>
                 {item.lead.email ? (
                   <div className="truncate max-w-[160px] text-xs text-muted-foreground" title={item.lead.email}>
                     {item.lead.email}

@@ -2,9 +2,10 @@ import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthUser } from "@/middlewares/auth.js";
-import { ActivitySource, ActivityType, AbandonmentStatus, RecoveryActionStatus, Role } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, AbandonmentStatus, RecoveryActionStatus, Role, TaskStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
+import { FOLLOW_UP_TASK_TYPES } from "../tasks/tasks.followup.js";
 import LeadService from "../lead/lead.service.js";
 import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow } from "./abandonment.filters.js";
 import type {
@@ -40,6 +41,31 @@ const LIST_SELECT = {
       workingStatus: true,
       assignedManager: { select: { id: true, name: true } },
       owner: { select: { id: true, name: true } },
+      // Same shape lead.service.ts's leadListInclude.tasks/calls use, so the abandoned-leads queue and
+      // lead detail page can reuse the exact same calling/history components leads already have.
+      tasks: {
+        where: { status: TaskStatus.PENDING, type: { in: [...FOLLOW_UP_TASK_TYPES] } },
+        select: { id: true, type: true, scheduledAt: true },
+        orderBy: { scheduledAt: "asc" as const },
+        take: 1,
+      },
+      calls: {
+        select: {
+          id: true,
+          provider: true,
+          direction: true,
+          status: true,
+          startedAt: true,
+          answeredAt: true,
+          endedAt: true,
+          durationSeconds: true,
+          recording: { select: { recordingUrl: true } },
+          agent: { select: { id: true, name: true } },
+          notes: true,
+          outcome: { select: { id: true, name: true, code: true } },
+        },
+        orderBy: { createdAt: "desc" as const },
+      },
     },
   },
   source: { select: { id: true, name: true } },
@@ -101,6 +127,9 @@ class AbandonmentService {
       items: rows.map((row) => {
         const typed = row as AbandonmentListRow;
         typed.lead.workingStatus = statusForRole(typed.lead.workingStatus, user.role);
+        if (user.role === Role.SALESPERSON) {
+          typed.lead.calls = typed.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
+        }
         return mapAbandonmentListRow(typed, summaries.get(row.id) ?? null);
       }),
       summary: buildAbandonmentSummary(counts),
@@ -139,6 +168,9 @@ class AbandonmentService {
     }));
 
     row.lead.workingStatus = statusForRole(row.lead.workingStatus, user.role);
+    if (user.role === Role.SALESPERSON) {
+      row.lead.calls = row.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
+    }
 
     return {
       ...mapAbandonmentListRow(row, summary),

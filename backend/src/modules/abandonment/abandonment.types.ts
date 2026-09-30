@@ -1,4 +1,4 @@
-import type { AbandonmentStatus, AbandonmentType, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
+import type { AbandonmentStatus, AbandonmentType, CallDirection, CallStatus, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
 import type { Pagination } from "../orders/orders.types.js";
 
 // Abandoned-checkout queue ("/dashboard/abandoned-leads"). Reads the Abandonment/RecoveryAction tables
@@ -34,6 +34,23 @@ export interface CartSnapshot {
   checkoutUrl: string | null;
 }
 
+// Same shape frontend's Call type (calling.types.ts) expects - lets the abandoned-leads queue and lead
+// detail page reuse the exact same calling/history UI components normal leads already have.
+export interface AbandonmentCallItem {
+  id: string;
+  provider: string;
+  direction: CallDirection;
+  status: CallStatus;
+  startedAt: Date | null;
+  answeredAt: Date | null;
+  endedAt: Date | null;
+  durationSeconds: number | null;
+  recording: { recordingUrl: string | null } | null;
+  agent: { id: string; name: string } | null;
+  notes: string | null;
+  outcome: { id: string; name: string; code: string } | null;
+}
+
 export interface AbandonmentListItem {
   id: string;
   type: AbandonmentType;
@@ -48,6 +65,8 @@ export interface AbandonmentListItem {
   lead: {
     id: string;
     leadNumber: string;
+    firstName: string;
+    lastName: string | null;
     name: string;
     mobile: string | null;
     email: string | null;
@@ -56,6 +75,10 @@ export interface AbandonmentListItem {
     workingStatus: LeadWorkingStatus;
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
+    calls: AbandonmentCallItem[];
+    /** This lead's pending call back / follow up reminder, if any - same shape leadListInclude.tasks
+     *  gives the Leads page, so the call-outcome form here can pre-fill/replace it identically. */
+    tasks: { id: string; type: string; scheduledAt: Date | null }[];
   };
   source: { id: string; name: string } | null;
   latestRecoveryAction: { type: RecoveryActionType; status: RecoveryActionStatus; createdAt: Date } | null;
