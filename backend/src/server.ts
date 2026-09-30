@@ -10,6 +10,7 @@ import shopifyWebhookRoutes, { startShopifyWebhookWorker } from "./modules/shopi
 import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
 import cashfreeWebhookRoutes, { startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
+import shiprocketAbandonmentWebhookRoutes, { startAbandonmentWebhookWorker } from "./modules/shiprocket/shiprocket.abandonment.webhook.routes.js";
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
 import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/whatsapp/whatsapp.meta.webhook.routes.js";
 import legalRoutes from "./modules/legal/legal.routes.js";
@@ -49,6 +50,9 @@ app.use("/api/webhooks/whatsapp", express.raw({ type: "*/*", limit: "5mb" }), wh
 // Shiprocket's body is recorded as received - both read the raw body, ahead of the JSON parser and the sanitizer.
 app.use("/api/webhooks/cashfree", express.raw({ type: "*/*", limit: "5mb" }), cashfreeWebhookRoutes);
 app.use("/api/webhooks/shiprocket", express.raw({ type: "*/*", limit: "5mb" }), shiprocketWebhookRoutes);
+// Shiprocket Checkout's separate "Abandon Cart" webhook (a different product/dashboard from the AWB
+// tracking webhook above) - authenticated by a shared secret header we chose ourselves, not a signature.
+app.use("/api/webhooks/shiprocket/abandoned-cart", express.raw({ type: "*/*", limit: "5mb" }), shiprocketAbandonmentWebhookRoutes);
 // AiSensy's separate "Project Webhook" feature (contact.*/message.*/payment.*/order.placed/
 // lead_form.submitted) - distinct from /api/webhooks/whatsapp/aisensy above. No signature scheme is
 // documented for it (see whatsapp.aisensy.webhook.config.ts), so this still reads the raw body only
@@ -84,6 +88,7 @@ app.listen(PORT, () => {
   startWhatsAppWebhookWorker();
   startCashfreeWebhookWorker();
   startShiprocketWebhookWorker();
+  startAbandonmentWebhookWorker();
   startAiSensyProjectWebhookWorker();
   startMetaWebhookWorker();
   startLifecycleAutomationScheduler();

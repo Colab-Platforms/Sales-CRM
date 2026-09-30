@@ -46,6 +46,9 @@ model User {
   salespersonRoundRobinAsManager    SalespersonAssignmentRoundRobin?  @relation("SalespersonAssignmentRoundRobinManager")
   salespersonRoundRobinLastAssigned SalespersonAssignmentRoundRobin[] @relation("SalespersonAssignmentRoundRobinLastAssigned")
 
+  managerAutoAssignConfigsUpdated      ManagerAutoAssignConfig[]    @relation("ManagerAutoAssignConfigUpdatedBy")
+  salespersonAutoAssignConfigAsManager SalespersonAutoAssignConfig? @relation("SalespersonAutoAssignConfigManager")
+
   callsAsAgent Call[] @relation("CallAgent")
 
   tasksAssignedToMe Task[] @relation("TaskAssignedTo")

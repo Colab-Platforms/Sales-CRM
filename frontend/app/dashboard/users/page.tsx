@@ -3,12 +3,14 @@
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { UserPlus, Users } from "lucide-react";
+import { KeyRound, UserPlus, Users } from "lucide-react";
 import { adminSalespersonsQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
 import {
   useCreateManagerMutation,
   useCreateSalespersonMutation,
   useDeactivateManagerMutation,
+  useResetManagerPasswordMutation,
+  useResetSalespersonPasswordMutation,
   useUpdateManagerMutation,
   useUpdateSalespersonMutation,
 } from "@/lib/api-client/mutations/admin.mutations";
@@ -340,6 +342,105 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
   );
 }
 
+interface PasswordFieldErrors {
+  password?: string;
+  confirmPassword?: string;
+}
+
+function ChangePasswordModalContent({
+  title,
+  description,
+  isPending,
+  error,
+  onSubmit,
+  onDone,
+}: {
+  title: string;
+  description: string;
+  isPending: boolean;
+  error: unknown;
+  onSubmit: (password: string, onSuccess: () => void) => void;
+  onDone: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<PasswordFieldErrors>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors: PasswordFieldErrors = {};
+    if (password.length < 6) errors.password = "Password must be at least 6 characters.";
+    if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    onSubmit(password, onDone);
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[420px]">
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{description}</DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="change-password-new">New Password</Label>
+          <PasswordInput
+            id="change-password-new"
+            placeholder="Enter a new password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            required
+            autoFocus
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? (
+            <p className="text-xs text-destructive">{fieldErrors.password}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">At least 6 characters.</p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="change-password-confirm">Confirm Password</Label>
+          <PasswordInput
+            id="change-password-confirm"
+            placeholder="Re-enter the new password"
+            value={confirmPassword}
+            onChange={(e) => {
+              setConfirmPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.confirmPassword ? <p className="text-xs text-destructive">{fieldErrors.confirmPassword}</p> : null}
+        </div>
+
+        {error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(error, "Failed to update password.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isPending}>
+            {isPending ? "Updating..." : "Update Password"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
 function EditSalespersonModalContent({
   salesperson,
   managers,
@@ -464,7 +565,9 @@ function EditSalespersonModalContent({
 
 function SalespersonRow({ salesperson, managers }: { salesperson: SalespersonUser; managers: ManagerUser[] }) {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const updateSalesperson = useUpdateSalespersonMutation();
+  const resetSalespersonPassword = useResetSalespersonPasswordMutation();
   const isActive = salesperson.status === "ACTIVE";
 
   return (
@@ -481,6 +584,10 @@ function SalespersonRow({ salesperson, managers }: { salesperson: SalespersonUse
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setIsEditDialogOpen(true)}>
               Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+              <KeyRound />
+              Change Password
             </Button>
             {isActive ? (
               <Button
@@ -521,6 +628,29 @@ function SalespersonRow({ salesperson, managers }: { salesperson: SalespersonUse
             salesperson={salesperson}
             managers={managers}
             onDone={() => setIsEditDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            title="Change Password"
+            description={`Set a new password for ${salesperson.name}.`}
+            isPending={resetSalespersonPassword.isPending}
+            error={resetSalespersonPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetSalespersonPassword.mutate(
+                { id: salesperson.id, payload: { password } },
+                {
+                  onSuccess: () => {
+                    toast.success("Salesperson password updated successfully.");
+                    onSuccess();
+                  },
+                },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
           />
         ) : null}
       </Dialog>
@@ -618,8 +748,10 @@ function EditManagerModalContent({
 
 function ManagerRow({ manager }: { manager: ManagerUser }) {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
   const deactivateManager = useDeactivateManagerMutation();
   const updateManager = useUpdateManagerMutation();
+  const resetManagerPassword = useResetManagerPasswordMutation();
 
   const isActive = manager.status === "ACTIVE";
 
@@ -638,6 +770,10 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
           <div className="flex justify-end gap-2">
             <Button size="sm" variant="outline" onClick={() => setIsEditDialogOpen(true)}>
               Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+              <KeyRound />
+              Change Password
             </Button>
             {isActive ? (
               <Button
@@ -678,6 +814,29 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
           <EditManagerModalContent
             manager={manager}
             onDone={() => setIsEditDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            title="Change Password"
+            description={`Set a new password for ${manager.name}.`}
+            isPending={resetManagerPassword.isPending}
+            error={resetManagerPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetManagerPassword.mutate(
+                { id: manager.id, payload: { password } },
+                {
+                  onSuccess: () => {
+                    toast.success("Manager password updated successfully.");
+                    onSuccess();
+                  },
+                },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
           />
         ) : null}
       </Dialog>

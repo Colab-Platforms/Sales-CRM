@@ -226,6 +226,18 @@ class ManagerService {
     return toPublicUser(salesperson);
   }
 
+  async resetSalespersonPassword(managerId: string, groupId: string, userId: string, password: string) {
+    await this.getActiveMembership(managerId, groupId, userId);
+
+    const passwordHash = await hashPassword(password);
+    const salesperson = await prisma.user.update({
+      where: { id: userId },
+      data: { passwordHash },
+    });
+
+    return toPublicUser(salesperson);
+  }
+
   async removeSalesperson(managerId: string, groupId: string, userId: string) {
     const membership = await this.getActiveMembership(managerId, groupId, userId);
 

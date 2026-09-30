@@ -181,6 +181,39 @@ model SalespersonAssignmentRoundRobin {
   @@map("salesperson_assignment_round_robin")
 }
 
+// Admin's single on/off switch for auto-assigning newly-arrived abandoned leads to a manager via
+// round robin, alongside the existing manual bulk-assign flow. Missing row = disabled (same "at
+// most one row, missing = default" convention as WhatsAppConfig/WhatsAppAutomationConfig) - auto-
+// assignment must be explicitly turned on, never silently active.
+model ManagerAutoAssignConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  enabled Boolean @default(false) @map("enabled")
+
+  updatedById String? @map("updated_by_id") @db.Uuid
+  updatedBy   User?   @relation("ManagerAutoAssignConfigUpdatedBy", fields: [updatedById], references: [id])
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("manager_auto_assign_config")
+}
+
+// Each manager's own on/off switch for auto-assigning abandoned leads under them to their
+// salespeople via round robin. One row per manager, created lazily on first toggle - a manager
+// with no row here has auto-assignment disabled, same as a missing ManagerAutoAssignConfig row.
+model SalespersonAutoAssignConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  managerId String @unique @map("manager_id") @db.Uuid
+  manager   User   @relation("SalespersonAutoAssignConfigManager", fields: [managerId], references: [id])
+
+  enabled Boolean @default(false) @map("enabled")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("salesperson_auto_assign_config")
+}
+
 model CommunicationPreference {
   id String @id @default(uuid()) @db.Uuid
 

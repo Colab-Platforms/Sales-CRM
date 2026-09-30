@@ -20,6 +20,13 @@ model Abandonment {
   priorityScore  Decimal? @map("priority_score") @db.Decimal(5, 2)
   priorityReason String?  @map("priority_reason")
 
+  // Structured cart detail (value, currency, line items, checkout stage, resume link) as reported by
+  // the source at detection time - e.g. Shiprocket Checkout's "Abandon Cart" webhook. Kept as JSON
+  // rather than dedicated columns since the shape genuinely differs per AbandonmentType/source, the
+  // same reasoning Activity.metadata already uses. Null on rows written before this column existed;
+  // the UI falls back to the Activity-recorded text summary for those.
+  cartSnapshot Json? @map("cart_snapshot")
+
   recoveredAt DateTime? @map("recovered_at")
 
   createdAt DateTime @default(now()) @map("created_at")

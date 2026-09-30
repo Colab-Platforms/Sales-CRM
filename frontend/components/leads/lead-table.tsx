@@ -65,7 +65,18 @@ export function leadDetailHref(leadId: string) {
 
 const CALL_HISTORY_PREVIEW_COUNT = 5;
 
-function CallHistoryDialogContent({ lead }: { lead: Lead }) {
+// Minimal shape this popup needs off a lead - satisfied structurally by both the full Lead type
+// (leads pages) and AbandonmentListItem.lead (abandoned-leads pages), so both reuse the exact same
+// call-history/outcome UI instead of the abandoned-leads queue duplicating it.
+export interface CallHistoryLead {
+  id: string;
+  firstName: string;
+  lastName?: string | null;
+  calls: Lead["calls"];
+  tasks: Lead["tasks"];
+}
+
+function CallHistoryDialogContent({ lead }: { lead: CallHistoryLead }) {
   const currentUser = useAuthStore((s) => s.user);
   // lead.calls already arrives newest-first from the API, so slicing the front gives the latest N.
   const recentCalls = lead.calls.slice(0, CALL_HISTORY_PREVIEW_COUNT);
@@ -157,7 +168,7 @@ function CallHistoryDialogContent({ lead }: { lead: Lead }) {
   );
 }
 
-function CallHistoryButton({ lead }: { lead: Lead }) {
+export function CallHistoryButton({ lead }: { lead: CallHistoryLead }) {
   const [isOpen, setIsOpen] = useState(false);
 
   return (

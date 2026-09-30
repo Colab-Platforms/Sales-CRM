@@ -13,6 +13,7 @@ import {
   Pencil,
   Phone,
   PhoneCall,
+  ShoppingCart,
   Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +26,8 @@ import { DeleteLeadDialog } from "./delete-lead-dialog";
 import { ClickToCallButton, CallHistoryEntry } from "./calling";
 import { useAuthStore } from "@/stores/auth-store";
 import { leadDetailQueryOptions } from "@/lib/api-client/queries/lead.queries";
+import { abandonmentByLeadQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import { AbandonmentPanel } from "@/components/abandonment/abandonment-panel";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { formatDateTime } from "@/lib/order-status";
 import { LEAD_PRIORITY_LABELS } from "@/lib/customer-status";
@@ -62,9 +65,10 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const role = currentUser?.role;
 
   const { data: lead, isLoading, error, refetch } = useQuery(leadDetailQueryOptions(leadId));
+  const { data: abandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"calls" | "timeline" | "assignments">("calls");
+  const [activeTab, setActiveTab] = useState<"calls" | "timeline" | "assignments" | "abandonment">("calls");
 
   if (isLoading) return <LeadDetailSkeleton />;
 
@@ -293,6 +297,21 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <History className="size-3.5" />
               <span>Assignment Trail</span>
             </button>
+
+            {abandonment ? (
+              <button
+                type="button"
+                onClick={() => setActiveTab("abandonment")}
+                className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+                  activeTab === "abandonment"
+                    ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
+                    : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <ShoppingCart className="size-3.5" />
+                <span>Abandoned Checkout</span>
+              </button>
+            ) : null}
           </div>
 
           {/* Tab Content Pane: Neat, Bounded & Scroll-Friendly */}
@@ -322,7 +341,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                 ) : (
                   <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
                     {lead.calls.map((call) => (
-                      <CallHistoryEntry key={call.id} leadId={lead.id} call={call} />
+                      <CallHistoryEntry key={call.id} leadId={lead.id} call={call} currentFollowUp={lead.tasks[0]} />
                     ))}
                   </div>
                 )}
@@ -359,6 +378,23 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
                 <div className="max-h-[520px] overflow-y-auto pr-1">
                   <AssignmentHistoryCard leadId={lead.id} bare />
+                </div>
+              </div>
+            ) : null}
+
+            {/* TAB 4: Abandoned Checkout - only present when this lead came from (or has) an abandoned cart */}
+            {activeTab === "abandonment" && abandonment ? (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-border/60 pb-2">
+                  <div className="flex items-center gap-2">
+                    <ShoppingCart className="size-4 text-primary" />
+                    <h3 className="font-heading text-sm font-extrabold">Abandoned Checkout</h3>
+                  </div>
+                  <span className="text-xs text-muted-foreground">Cart &amp; recovery details</span>
+                </div>
+
+                <div className="max-h-[520px] overflow-y-auto pr-1">
+                  <AbandonmentPanel abandonment={abandonment} />
                 </div>
               </div>
             ) : null}
