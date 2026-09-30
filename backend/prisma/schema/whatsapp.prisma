@@ -12,10 +12,17 @@ model WhatsAppMessage {
 
   provider          WhatsAppProviderName @map("provider")
   providerMessageId String?              @map("provider_message_id") @db.VarChar(255)
+  // Part 1 (WhatsApp Inbox reply association): Meta's documented `context.id` on an inbound webhook
+  // message - the providerMessageId of whatever message the customer actually tapped "reply" on in
+  // WhatsApp. Only ever set from real provider data (whatsapp.meta.provider.ts's parseIncomingWebhook)
+  // - never inferred/guessed here or anywhere else. Most inbound messages have no context at all
+  // (the customer just typed normally), so this is null far more often than not; that is expected,
+  // not a bug. AiSensy/Gupshup document no equivalent field, so it is always null for those providers.
+  replyToProviderMessageId String? @map("reply_to_provider_message_id") @db.VarChar(255)
 
   // Meta's real inbound-message reply reference (context.id) when the customer actually replied to
   // a specific message in WhatsApp. Purely additive, nullable - never backfilled/guessed.
-  replyToProviderMessageId String? @map("reply_to_provider_message_id") @db.VarChar(255)
+
 
   direction   WhatsAppDirection      @map("direction")
   messageType WhatsAppMessageType    @default(TEXT) @map("message_type")

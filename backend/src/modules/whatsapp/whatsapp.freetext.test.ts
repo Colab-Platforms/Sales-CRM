@@ -156,7 +156,9 @@ describe("free-text send - AiSensy / Gupshup conversations keep template-only be
       assert.equal(capability.activeProviderLabel, label);
       assert.equal(capability.freeText.reason, "PROVIDER_NOT_META");
 
-      await assert.rejects(() => service(db, meta).sendText(lead, "hi", "user-1"), (err: unknown) => err instanceof ApiError && err.message.includes(label) && /templates/.test(err.message));
+      // The rejection message never names a provider (Meta Cloud API is the CRM's only active provider from the
+      // user's point of view) - only that free text isn't available yet and a template is needed instead.
+      await assert.rejects(() => service(db, meta).sendText(lead, "hi", "user-1"), (err: unknown) => err instanceof ApiError && !err.message.includes(label) && /template/.test(err.message));
       assert.equal(sent.length, 0);
     });
   }

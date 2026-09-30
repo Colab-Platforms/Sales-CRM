@@ -14,7 +14,10 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
+import { Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
+import type { AuthUser } from "@/middlewares/auth.js";
+import LeadService from "../lead/lead.service.js";
 import WhatsAppService from "./whatsapp.service.js";
 import type { NormalizedIncomingMessage } from "./whatsapp.provider.js";
 
@@ -179,6 +182,54 @@ describe("WhatsApp inbound threading: concurrent delivery of two different messa
     } finally {
       // Real commits (not a rolled-back transaction) - clean up everything this test created, exactly
       // like the CRM's own "Delete Customer" cleanup, so the dev database is left as it was found.
+      const leads = await prisma.lead.findMany({ where: { normalizedMobile: canonical }, select: { id: true } });
+      for (const l of leads) {
+        await prisma.whatsAppMessage.deleteMany({ where: { leadId: l.id } });
+        await prisma.whatsAppConversation.deleteMany({ where: { leadId: l.id } });
+        await prisma.activity.deleteMany({ where: { leadId: l.id } });
+        await prisma.lead.delete({ where: { id: l.id } });
+      }
+    }
+  });
+});
+
+// Regression: reproduces the exact "Ankit Manager" bug class live-caught in production. Root cause
+// was NOT the matching function (which was already correct) - it was that LeadService.createLead
+// (the "Create Contact" button's own backend path) imported normalizeMobile from a second, divergent
+// implementation (@/utils/normalize.js: strips non-digits only, never adds "+", never infers the
+// default country code) instead of the canonical @/lib/leadIdentity.js every other identity lookup
+// in the codebase agrees on. A contact created this way got a non-canonical normalizedMobile with no
+// self-correction step (unlike WhatsApp-inbound-created leads, which whatsapp.service.ts already
+// re-aligns right after creation) - manufacturing exactly the kind of "legacy-format" data the
+// matching-side tolerance was built to work around, forever, for every single new contact. Fixed by
+// consolidating on one canonical normalizer (lead.service.ts now imports from leadIdentity.js) -
+// this test proves a lead created via the real Create Contact path now gets a canonical
+// normalizedMobile, and that a real inbound reply for it threads into the SAME lead/conversation.
+describe("WhatsApp inbound threading: a contact created via the real 'Create Contact' path (LeadService.createLead)", () => {
+  it("gets a canonical normalizedMobile, and a real inbound reply threads into the SAME lead - never a duplicate", async () => {
+    const admin = await prisma.user.findFirstOrThrow({ where: { role: Role.ADMIN }, select: { id: true, email: true, role: true } });
+    const leadService = new LeadService();
+    const whatsapp = new WhatsAppService(prisma);
+    const brandNewNumber = `8${Date.now()}`.slice(0, 10);
+    const canonical = `+91${brandNewNumber}`;
+    // Exactly how a human types it into the Create Contact form: "+91 XXXXX XXXXX".
+    const prettyMobile = `+91 ${brandNewNumber.slice(0, 5)} ${brandNewNumber.slice(5)}`;
+
+    try {
+      const created = await leadService.createLead(admin as AuthUser, { firstName: "Ankit", lastName: "TestManager", mobile: prettyMobile });
+      const createdLead = await prisma.lead.findUniqueOrThrow({ where: { id: created.id }, select: { id: true, normalizedMobile: true } });
+      assert.equal(createdLead.normalizedMobile, canonical, "Create Contact must produce the SAME canonical form matchSenderToLead looks for - not a divergent one");
+
+      await whatsapp.recordInboundMessage("META", inbound({ providerMessageId: `wamid-createcontact-${uid()}`, from: brandNewNumber, text: "hello" }));
+
+      const leads = await prisma.lead.findMany({ where: { normalizedMobile: canonical }, select: { id: true } });
+      assert.equal(leads.length, 1, "no duplicate lead was created for the reply");
+      assert.equal(leads[0]!.id, created.id, "the reply must attach to the contact Create Contact just made, not a new one");
+
+      assert.equal(await prisma.whatsAppConversation.count({ where: { leadId: created.id } }), 1, "exactly one conversation");
+      const inboundMsg = await prisma.whatsAppMessage.findFirstOrThrow({ where: { leadId: created.id, direction: "INBOUND" }, select: { body: true } });
+      assert.equal(inboundMsg.body, "hello");
+    } finally {
       const leads = await prisma.lead.findMany({ where: { normalizedMobile: canonical }, select: { id: true } });
       for (const l of leads) {
         await prisma.whatsAppMessage.deleteMany({ where: { leadId: l.id } });

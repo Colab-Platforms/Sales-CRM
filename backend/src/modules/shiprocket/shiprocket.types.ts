@@ -1,5 +1,14 @@
 import type { OrderSource, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { PaymentMode } from "../orders/orders.types.js";
+import type { TrackingResult } from "./shiprocket.client.js";
+
+// What getLiveTracking() (shiprocket.live-tracking.ts) overlays onto a CRM shipment row - live,
+// read-only, never written back. Absent (undefined) when the row has no AWB to look up at all;
+// `null` tracking with an `error` when Shiprocket was asked but couldn't answer.
+export interface LiveTracking {
+  tracking: TrackingResult | null;
+  error?: string;
+}
 
 // Types for the centralized Shiprocket shipment listing/tracking page. Distinct from ShipmentResult in
 // shiprocket.shipments.service.ts, which is the result of an action (create/assign/pickup/label/track), not a read model.
@@ -51,6 +60,8 @@ export interface ShipmentListItem {
   updatedAt: Date;
   order: { id: string; orderNumber: string; externalNumber: string | null; source: OrderSource };
   customer: { leadId: string; leadNumber: string; name: string; mobile: string | null };
+  /** Live from Shiprocket (see shiprocket.live-tracking.ts) - undefined when this shipment has no AWB yet. */
+  liveTracking?: LiveTracking;
 }
 
 export interface ListShipmentsResult {

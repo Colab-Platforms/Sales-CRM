@@ -66,6 +66,91 @@ export const CUSTOMER_REFS_QUERY = /* GraphQL */ `
   }
 `;
 
+// ---- Listing for live display (Orders page): one call per page, with exactly the fields a list row
+// needs - never a full per-order fetch (ORDER_BY_ID_QUERY) for every row, which would turn one page
+// load into N+1 GraphQL calls. Read-only, same as everything else in this file. ----
+
+export const ORDER_LIST_QUERY = /* GraphQL */ `
+  query OrderList($first: Int!, $after: String, $query: String, $sortKey: OrderSortKeys!, $reverse: Boolean) {
+    orders(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      nodes {
+        id
+        name
+        createdAt
+        displayFinancialStatus
+        displayFulfillmentStatus
+        paymentGatewayNames
+        email
+        phone
+        customer {
+          firstName
+          lastName
+          email
+          phone
+        }
+        totalPriceSet {
+          shopMoney {
+            amount
+            currencyCode
+          }
+        }
+        # Only the id of each line item, just to count rows (matches how the CRM's own itemCount -
+        # Order._count.items - counts OrderItem rows, not summed quantity). 50 covers virtually every
+        # real order; this is still one call per PAGE of orders, never a second call per row.
+        lineItems(first: 50) {
+          nodes {
+            id
+          }
+        }
+      }
+    }
+  }
+`;
+
+// ---- Listing for live display (Customers page / Customer 360 overlay): one call per page/lookup,
+// with exactly the fields a customer row/overlay needs - never a full per-customer fetch for every row. ----
+
+export const CUSTOMER_LIST_QUERY = /* GraphQL */ `
+  query CustomerList($first: Int!, $after: String, $query: String, $sortKey: CustomerSortKeys!, $reverse: Boolean) {
+    customers(first: $first, after: $after, query: $query, sortKey: $sortKey, reverse: $reverse) {
+      pageInfo {
+        hasNextPage
+        hasPreviousPage
+        startCursor
+        endCursor
+      }
+      nodes {
+        id
+        firstName
+        lastName
+        email
+        phone
+        createdAt
+        updatedAt
+        numberOfOrders
+        amountSpent {
+          amount
+          currencyCode
+        }
+        defaultAddress {
+          address1
+          address2
+          city
+          province
+          zip
+          country
+        }
+      }
+    }
+  }
+`;
+
 // ---- Counts: how many records match a search, without reading them. `limit: null` asks for the exact number. ----
 
 export type CountField = "orders" | "products" | "customers";
@@ -128,6 +213,23 @@ export const ORDER_BY_ID_QUERY = /* GraphQL */ `
         country
         countryCodeV2
         phone
+      }
+      billingAddress {
+        name
+        firstName
+        lastName
+        address1
+        address2
+        city
+        province
+        provinceCode
+        zip
+        country
+        countryCodeV2
+        phone
+      }
+      shippingLine {
+        title
       }
       subtotalPriceSet {
         ...Money

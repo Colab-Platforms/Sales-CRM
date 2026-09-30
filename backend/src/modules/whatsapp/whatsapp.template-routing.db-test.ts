@@ -1,8 +1,11 @@
 // Database integration tests for provider-aware template sending. Run with: npm run test:db
 //
-// A signed-in user's template send goes through the provider the lead's WhatsApp conversation is on (Meta -> the active
-// Meta config; AiSensy/Gupshup -> the legacy env provider), never overridden by the global WHATSAPP_PROVIDER. System
-// senders (automation/campaigns) keep the legacy provider. Every test runs in ONE transaction that is always rolled back.
+// AiSensy is disabled for every signed-in-user send: a user's template send ALWAYS goes through Meta
+// Cloud API, regardless of which provider the lead's conversation history happens to be on, and
+// regardless of the legacy WHATSAPP_PROVIDER env setting - it is refused (503) rather than silently
+// falling back to AiSensy/Gupshup when Meta isn't configured. System senders (automation/campaigns)
+// are untouched by this policy and keep using the legacy env provider, exactly as before. Every test
+// runs in ONE transaction that is always rolled back.
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -104,12 +107,12 @@ describe("template send routing by conversation provider", () => {
     });
   });
 
-  it("AiSensy still sends by providerTemplateId (its campaign identifier) when one is set - unchanged", async () => {
+  it("AiSensy still sends by providerTemplateId (its campaign identifier) when one is set - unchanged for system senders (campaigns/automation), which AiSensy is not disabled for", async () => {
     await inRollback(async (tx) => {
       const campaignId = `aisensy-campaign-${uid()}`;
-      const { user, lead, template } = await setup(tx, { conversationProvider: "AISENSY", templateProvider: "AISENSY", providerTemplateId: campaignId });
+      const { lead, template } = await setup(tx, { templateProvider: "AISENSY", providerTemplateId: campaignId });
       const legacy = recordingProvider("AISENSY");
-      await service(tx, legacy.provider, null).sendTemplate(user, { leadId: lead.id, templateId: template.id });
+      await service(tx, legacy.provider, null).sendTemplateAsSystem({ leadId: lead.id, templateId: template.id });
       assert.equal(legacy.calls[0].templateName, campaignId);
     });
   });
@@ -127,40 +130,41 @@ describe("template send routing by conversation provider", () => {
     }
   });
 
-  it("AISENSY conversation: keeps using AiSensy; Meta is never touched", async () => {
+  it("AISENSY conversation history no longer routes a user's send through AiSensy - Meta is used instead, and AiSensy is never touched", async () => {
     await inRollback(async (tx) => {
-      const { user, lead, template } = await setup(tx, { conversationProvider: "AISENSY", templateProvider: "AISENSY" });
+      const { user, lead, template } = await setup(tx, { conversationProvider: "AISENSY", templateProvider: "META" });
       const legacy = recordingProvider("AISENSY");
       const meta = recordingProvider("META");
       const result = await service(tx, legacy.provider, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id });
-      assert.equal(result.provider, "AISENSY");
-      assert.equal(legacy.calls.length, 1);
-      assert.equal(legacy.calls[0].languageCode, undefined, "AiSensy's payload is unchanged - no Meta-only field is added");
-      assert.equal(meta.calls.length, 0);
+      assert.equal(result.provider, "META");
+      assert.equal(legacy.calls.length, 0, "AiSensy is disabled for user-initiated sends, regardless of the conversation's real history");
+      assert.equal(meta.calls.length, 1);
     });
   });
 
-  it("GUPSHUP conversation: keeps using Gupshup; Meta is never touched", async () => {
+  it("GUPSHUP conversation history no longer routes a user's send through Gupshup - Meta is used instead", async () => {
     await inRollback(async (tx) => {
-      const { user, lead, template } = await setup(tx, { conversationProvider: "GUPSHUP", templateProvider: "GUPSHUP" });
+      const { user, lead, template } = await setup(tx, { conversationProvider: "GUPSHUP", templateProvider: "META" });
       const legacy = recordingProvider("GUPSHUP");
       const meta = recordingProvider("META");
       const result = await service(tx, legacy.provider, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id });
-      assert.equal(result.provider, "GUPSHUP");
-      assert.equal(legacy.calls.length, 1);
-      assert.equal(meta.calls.length, 0);
+      assert.equal(result.provider, "META");
+      assert.equal(legacy.calls.length, 0);
+      assert.equal(meta.calls.length, 1);
     });
   });
 
-  it("a lead with pre-conversation-model AiSensy history is routed by that history, not the global setting", async () => {
+  it("an AiSensy-provider template can no longer be sent by a signed-in user, now that AiSensy is disabled for user sends - refused with a clear message; nothing is sent", async () => {
     await inRollback(async (tx) => {
       const { user, lead, template } = await setup(tx, { historyProvider: "GUPSHUP", templateProvider: "AISENSY" });
-      const legacy = recordingProvider("AISENSY"); // the global provider is AiSensy, but this customer is on Gupshup
+      const legacy = recordingProvider("AISENSY");
+      const meta = recordingProvider("META");
       await assert.rejects(
-        () => service(tx, legacy.provider, null).sendTemplate(user, { leadId: lead.id, templateId: template.id }),
-        (e: unknown) => e instanceof ApiError && e.statusCode === 400 && /Gupshup/.test(e.message),
+        () => service(tx, legacy.provider, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id }),
+        (e: unknown) => e instanceof ApiError && e.statusCode === 400 && /belongs to AISENSY/.test(e.message) && /configured provider is META/.test(e.message),
       );
-      assert.equal(legacy.calls.length, 0, "never silently re-routed through the other legacy provider");
+      assert.equal(legacy.calls.length, 0, "never silently re-routed through a legacy provider - Meta is the only provider a user's send can go through");
+      assert.equal(meta.calls.length, 0);
     });
   });
 
@@ -171,7 +175,7 @@ describe("template send routing by conversation provider", () => {
       const meta = recordingProvider("META");
       await assert.rejects(
         () => service(tx, legacy.provider, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id }),
-        (e: unknown) => e instanceof ApiError && e.statusCode === 400 && /belongs to AISENSY/.test(e.message) && /Meta Cloud API template/.test(e.message),
+        (e: unknown) => e instanceof ApiError && e.statusCode === 400 && /belongs to AISENSY/.test(e.message) && /configured provider is META/.test(e.message),
       );
       assert.equal(legacy.calls.length + meta.calls.length, 0);
       assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id, direction: "OUTBOUND" } }), 0);
@@ -202,17 +206,31 @@ describe("template send routing by conversation provider", () => {
     });
   });
 
-  it("a lead with no WhatsApp history keeps the existing behavior (legacy provider), and uses Meta only when no legacy provider is configured", async () => {
+  it("a lead with no WhatsApp history: a user's send still always goes through Meta, even when a legacy provider is configured", async () => {
     await inRollback(async (tx) => {
-      const { user, lead, template } = await setup(tx, { templateProvider: "AISENSY" });
+      const { user, lead, template } = await setup(tx, { templateProvider: "META" });
       const legacy = recordingProvider("AISENSY");
       const meta = recordingProvider("META");
-      assert.equal((await service(tx, legacy.provider, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id })).provider, "AISENSY");
+      const result = await service(tx, legacy.provider, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id });
+      assert.equal(result.provider, "META");
+      assert.equal(legacy.calls.length, 0);
     });
     await inRollback(async (tx) => {
       const { user, lead, template } = await setup(tx, { templateProvider: "META" });
       const meta = recordingProvider("META");
       assert.equal((await service(tx, null, meta.provider).sendTemplate(user, { leadId: lead.id, templateId: template.id })).provider, "META");
+    });
+  });
+
+  it("a user's send is refused (503) when Meta is not configured - never silently falls back to a configured legacy provider", async () => {
+    await inRollback(async (tx) => {
+      const { user, lead, template } = await setup(tx, { conversationProvider: "META", templateProvider: "AISENSY" });
+      const legacy = recordingProvider("AISENSY");
+      await assert.rejects(
+        () => service(tx, legacy.provider, null).sendTemplate(user, { leadId: lead.id, templateId: template.id }),
+        (e: unknown) => e instanceof ApiError && e.statusCode === 503 && /Meta WhatsApp Cloud API is not configured/.test(e.message),
+      );
+      assert.equal(legacy.calls.length, 0, "AiSensy is disabled for user sends, even as a fallback when Meta is unavailable");
     });
   });
 

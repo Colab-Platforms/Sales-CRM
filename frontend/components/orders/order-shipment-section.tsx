@@ -21,6 +21,18 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
       {shipment.linkedShipmentId ? (
         <p className="text-xs text-muted-foreground">The same parcel is also tracked directly in Shiprocket (same AWB) - see that shipment.</p>
       ) : null}
+      {shipment.liveTracking ? (
+        shipment.liveTracking.tracking ? (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs">
+            <span className="font-medium">Live from Shiprocket:</span> {shipment.liveTracking.tracking.currentStatus ?? "Status not available"}
+            {shipment.liveTracking.tracking.courierName ? ` · ${shipment.liveTracking.tracking.courierName}` : ""}
+          </p>
+        ) : (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+            Live Shiprocket status unavailable: {shipment.liveTracking.error ?? "unknown reason"}
+          </p>
+        )
+      ) : null}
       <DetailGrid>
         <DetailField label="Courier">{shipment.courier ?? NOT_AVAILABLE}</DetailField>
         <DetailField label="Tracking / AWB number">

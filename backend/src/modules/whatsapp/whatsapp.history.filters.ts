@@ -50,8 +50,10 @@ export interface MessageHistoryRow {
   messageType: WhatsAppMessageHistoryItem["messageType"];
   status: WhatsAppMessageHistoryItem["status"];
   providerMessageId: string | null;
+  replyToProviderMessageId: string | null;
   body: string | null;
   errorMessage: string | null;
+  errorCode: string | null;
   createdAt: Date;
   sentAt: Date | null;
   deliveredAt: Date | null;
@@ -72,8 +74,10 @@ export function mapMessageHistoryItem(row: MessageHistoryRow): WhatsAppMessageHi
     messageType: row.messageType,
     status: row.status,
     providerMessageId: row.providerMessageId,
+    replyToProviderMessageId: row.replyToProviderMessageId,
     body: row.body,
     errorMessage: row.errorMessage,
+    errorCode: row.errorCode,
     createdAt: row.createdAt,
     sentAt: row.sentAt,
     deliveredAt: row.deliveredAt,

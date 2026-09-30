@@ -1,6 +1,8 @@
 import type { ExternalSource, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { ReconciliationStatus } from "../reconciliation/reconciliation.types.js";
 import type { OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
+import type { NormalizedOrder } from "../shopify/shopify.orders.js";
+import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 
 // How the customer pays: cash on delivery, or up front by any other method. Null when the method is not known.
 export type PaymentMode = "COD" | "PREPAID";
@@ -221,6 +223,12 @@ export interface OrderDetail {
   items: OrderItemDetail[];
   payments: PaymentDetail[];
   shipments: OrderShipmentDetail[];
+  // Live snapshot fetched directly from Shopify for a synced order (Order.externalId set) - see
+  // orders.service.ts's getOrder(). null when the order has no Shopify link, was never fetched, or
+  // Shopify couldn't be reached (see shopifyLiveError). The CRM's own fields above are never replaced
+  // by this - it's an additive overlay only.
+  shopifyLive: NormalizedOrder | null;
+  shopifyLiveError?: string;
 }
 
 export interface OrderItemDetail {
@@ -272,6 +280,8 @@ export interface ShipmentDetail {
   deliveredAt: Date | null;
   returnedAt: Date | null;
   createdAt: Date;
+  // Live from Shiprocket (see shiprocket.live-tracking.ts) - undefined when this shipment has no AWB.
+  liveTracking?: LiveTracking;
 }
 
 // A shipment as the order detail shows it: the fields above plus where the record comes from and, for a shipment the CRM

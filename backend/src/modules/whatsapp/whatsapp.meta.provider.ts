@@ -298,6 +298,10 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
           const type = typeof m.type === "string" ? m.type : "unknown";
           const text = type === "text" && isObject(m.text) && typeof m.text.body === "string" ? m.text.body : null;
           const timestampSec = typeof m.timestamp === "string" ? Number(m.timestamp) : NaN;
+          // Meta's documented `context` object appears only when the customer tapped "reply" on a
+          // specific earlier message: { from, id } - `id` is that message's own wamid. Read only, never
+          // synthesized - most inbound messages simply have no `context` at all.
+          const replyToProviderMessageId = isObject(m.context) && typeof m.context.id === "string" ? m.context.id : null;
           out.push({
             providerMessageId: m.id,
             from: m.from,
@@ -305,6 +309,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
             messageType: text !== null ? "TEXT" : type === "interactive" ? "INTERACTIVE" : ["image", "video", "audio", "document", "sticker"].includes(type) ? "MEDIA" : "OTHER",
             text,
             timestamp: Number.isFinite(timestampSec) ? new Date(timestampSec * 1000) : new Date(),
+            replyToProviderMessageId,
           });
         }
       }
@@ -334,7 +339,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
             status,
             timestamp: Number.isFinite(timestampSec) ? new Date(timestampSec * 1000) : new Date(),
             errorCode: firstError && typeof firstError.code !== "undefined" ? String(firstError.code) : undefined,
-            errorMessage: firstError && typeof firstError.title === "string" ? firstError.title : undefined,
+            errorMessage: firstError ? describeStatusError(firstError) : undefined,
           });
         }
       }
@@ -352,6 +357,23 @@ function firstMessageId(body: Record<string, unknown>): string | null {
   return isObject(first) && typeof first.id === "string" ? first.id : null;
 }
 
+// A delivery-status webhook's per-status error object - Meta's OTHER error shape, distinct from the
+// synchronous POST /messages error envelope describeMetaError() below handles. Documented as
+// { code, title, message, error_data: { details }, href }. Bug fix: this previously surfaced only
+// `title` (e.g. "Business eligibility payment issue") and silently dropped `error_data.details` -
+// which is where Meta actually explains WHAT to fix (e.g. "your WhatsApp Business account currency
+// is not configured... visit <billing hub URL> to resolve this issue") - and the numeric `code`,
+// leaving an admin with an unactionable, unsearchable message. None of these fields are secrets.
+function describeStatusError(err: Record<string, unknown>): string {
+  const parts: string[] = [];
+  const detail = typeof err.title === "string" ? err.title : typeof err.message === "string" ? err.message : null;
+  if (detail) parts.push(detail);
+  if (isObject(err.error_data) && typeof err.error_data.details === "string" && err.error_data.details !== detail) parts.push(err.error_data.details);
+  if (typeof err.code !== "undefined") parts.push(`code ${err.code}`);
+  if (typeof err.href === "string") parts.push(err.href);
+  return parts.length > 0 ? parts.join(" — ") : "no further detail from Meta";
+}
+
 // Meta's documented error envelope: { error: { message, type, code, error_subcode, error_data: { details }, fbtrace_id } }.
 // None of these fields are secrets - surfacing them is what turns "HTTP 400" into something an admin can actually act on.
 function describeMetaError(parsed: unknown): string {
@@ -362,5 +384,6 @@ function describeMetaError(parsed: unknown): string {
   if (isObject(err.error_data) && typeof err.error_data.details === "string") parts.push(err.error_data.details);
   if (typeof err.code !== "undefined") parts.push(`code ${err.code}`);
   if (typeof err.error_subcode !== "undefined") parts.push(`subcode ${err.error_subcode}`);
+  if (typeof err.fbtrace_id === "string") parts.push(`trace ${err.fbtrace_id}`);
   return parts.length > 0 ? parts.join(" — ") : "no further detail from Meta";
 }

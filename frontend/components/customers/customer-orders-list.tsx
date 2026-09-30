@@ -33,18 +33,32 @@ function CompactOrderRow({ order }: { order: CustomerOrderSummary }) {
   );
 }
 
-export function CustomerOrdersList({ orders, compact }: { orders: CustomerOrderSummary[]; compact?: boolean }) {
+export function CustomerOrdersList({
+  orders,
+  compact,
+  title = "Orders",
+  emptyMessage = "This customer has no orders yet.",
+}: {
+  orders: CustomerOrderSummary[];
+  compact?: boolean;
+  title?: string;
+  emptyMessage?: string;
+}) {
   return (
-    <Card size={compact ? "sm" : "default"}>
+    // shrink-0: see the identical comment in next-best-action-card.tsx - without it, a flex-col
+    // sidebar with more content than fits would silently squeeze this whole card (with potentially
+    // several stacked order rows) shorter than its content and clip the excess via Card's own
+    // overflow-hidden, instead of the intended outer scrollbar taking over.
+    <Card className="shrink-0">
       <CardHeader>
-        <CardTitle className={compact ? "flex items-center gap-2 text-sm" : "flex items-center gap-2"}>
+        <CardTitle className="flex items-center gap-2">
           {compact ? <ShoppingBag className="size-3.5" /> : null}
-          Orders{orders.length > 0 ? ` (${orders.length})` : ""}
+          {title}{orders.length > 0 ? ` (${orders.length})` : ""}
         </CardTitle>
       </CardHeader>
       <CardContent>
         {orders.length === 0 ? (
-          <p className="text-sm text-muted-foreground">This customer has no orders yet.</p>
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
         ) : compact ? (
           <div className="space-y-2">
             {orders.map((order) => (

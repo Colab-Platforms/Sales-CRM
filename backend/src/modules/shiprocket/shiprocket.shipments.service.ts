@@ -14,6 +14,7 @@ import { ShiprocketClient, type CourierOption, type CreateOrderRequest, type Cre
 import { isShiprocketEnabled, loadShiprocketConfig, ShiprocketConfigError, type ShiprocketConfig } from "./shiprocket.config.js";
 import { mapShiprocketStatus, parseEtd } from "./shiprocket.events.js";
 import { buildShipmentListWhere, buildShipmentSummary, mapShipmentDetailRow, mapShipmentListRow, scopedShipmentWhere, SHIPROCKET_SOURCE } from "./shiprocket.list.filters.js";
+import { getLiveTrackingBatch } from "./shiprocket.live-tracking.js";
 import type { ListShipmentsQuery, ListShipmentsResult, ShipmentDetailResult, ShipmentFilterOptions } from "./shiprocket.types.js";
 
 // Creates and drives Shiprocket shipments for an existing CRM order (Shopify-sourced or otherwise). The Shipment row is
@@ -534,7 +535,7 @@ class ShiprocketShipmentsService {
    * SHIPROCKET), same as every other Shiprocket-specific read in this service.
    */
   async listShipments(user: AuthUser, query: ListShipmentsQuery): Promise<ListShipmentsResult> {
-    return this.runner.$transaction(async (tx) => {
+    const { totalItems, rows, statusCounts } = await this.runner.$transaction(async (tx) => {
       const leadScope = await getLeadScope(user, tx);
       const where = buildShipmentListWhere(query, leadScope);
 
@@ -552,13 +553,26 @@ class ShiprocketShipmentsService {
         // not just the current page - one grouped COUNT, not a second full table scan.
         tx.shipment.groupBy({ by: ["status"], where, _count: { _all: true } }),
       ]);
-
-      return {
-        items: rows.map(mapShipmentListRow),
-        summary: buildShipmentSummary(statusCounts),
-        pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
-      };
+      return { totalItems, rows, statusCounts };
     });
+
+    const items = rows.map(mapShipmentListRow);
+    // Fetched after the DB transaction has closed, so an external HTTP round trip never holds a DB
+    // connection open. One batched, deduplicated, cached call for the whole page - never one per row.
+    // A row with no AWB yet is simply left without `liveTracking` (see getLiveTrackingBatch/getLiveTracking).
+    const awbs = items.map((i) => i.awb).filter((awb): awb is string => Boolean(awb));
+    if (awbs.length > 0) {
+      const live = await getLiveTrackingBatch(awbs);
+      for (const item of items) {
+        if (item.awb) item.liveTracking = live.get(item.awb);
+      }
+    }
+
+    return {
+      items,
+      summary: buildShipmentSummary(statusCounts),
+      pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
+    };
   }
 
   async getShipmentDetail(user: AuthUser, shipmentId: string): Promise<ShipmentDetailResult> {
@@ -568,7 +582,12 @@ class ShiprocketShipmentsService {
     });
     // Out-of-scope shipments look the same as missing ones so ids can't be probed - same rule orders.service.ts uses.
     if (!shipment) throw new ApiError("Shipment not found", STATUS_CODES.NOT_FOUND);
-    return mapShipmentDetailRow(shipment);
+    const detail = mapShipmentDetailRow(shipment);
+    if (detail.awb) {
+      const live = await getLiveTrackingBatch([detail.awb]);
+      detail.liveTracking = live.get(detail.awb);
+    }
+    return detail;
   }
 
   /** Courier names actually seen on this user's own Shiprocket shipments, for the courier filter dropdown. */

@@ -1,13 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, MessageCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useOrder } from "@/hooks/useOrders";
+import { useCustomer360 } from "@/hooks/useCustomers";
+import { CustomerOrdersList } from "@/components/customers/customer-orders-list";
+import { WhatsAppConversation } from "@/components/whatsapp/conversation/whatsapp-conversation";
+import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
 import {
   ORDER_SOURCE_LABELS,
   PAYMENT_METHOD_LABELS,
@@ -123,6 +128,13 @@ function PaymentReconciliationCard({ order }: { order: OrderDetail }) {
 function OrderDetailContent({ order }: { order: OrderDetail }) {
   const salesperson = order.bookedBy ?? order.leadOwner;
   const ownerDiffers = order.leadOwner && order.bookedBy && order.leadOwner.id !== order.bookedBy.id;
+  const [sendOpen, setSendOpen] = useState(false);
+
+  // Reuses the exact same Customer 360 data/endpoint this customer's own profile page already
+  // loads (Lead -> Orders, no second query or duplicated relation) - just to read their other
+  // orders here. Never a new "previous orders" endpoint.
+  const customer360 = useCustomer360(order.customer.leadId);
+  const previousOrders = (customer360.data?.orders ?? []).filter((o) => o.id !== order.id);
 
   return (
     <div className="space-y-6">
@@ -216,6 +228,28 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
         </CardContent>
       </Card>
 
+      {order.externalNumber ? (
+        <Card>
+          <CardHeader>
+            <CardTitle>Live from Shopify</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {order.shopifyLive ? (
+              <DetailGrid>
+                <DetailField label="Financial status">{order.shopifyLive.financialStatus ?? "—"}</DetailField>
+                <DetailField label="Fulfilment status">{order.shopifyLive.fulfillmentStatus ?? "—"}</DetailField>
+                {order.shopifyLive.returnStatus ? <DetailField label="Return status">{order.shopifyLive.returnStatus}</DetailField> : null}
+                <DetailField label="Live total">{formatMoney(order.shopifyLive.amounts.total ?? "0", order.currency)}</DetailField>
+              </DetailGrid>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {order.shopifyLiveError ?? "Live Shopify details are not available for this order."}
+              </p>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Items</CardTitle>
@@ -282,6 +316,22 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
 
       <OrderShipmentSection shipments={order.shipments} orderId={order.id} orderNumber={order.orderNumber} orderStatus={order.status} currency={order.currency} />
 
+      <WhatsAppConversation
+        leadId={order.customer.leadId}
+        orderId={order.id}
+        title="WhatsApp Conversation"
+        emptyMessage="No WhatsApp messages for this order yet."
+        onStartWhatsApp={order.customer.mobile ? () => setSendOpen(true) : undefined}
+      />
+
+      {/* The customer's OTHER orders - reused Customer 360 data/component, never a duplicate order
+          list or a second copy of the current order. */}
+      <CustomerOrdersList
+        orders={previousOrders}
+        title="Previous Orders"
+        emptyMessage="No previous orders for this customer."
+      />
+
       <Card>
         <CardHeader>
           <CardTitle>Status</CardTitle>
@@ -303,6 +353,14 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
       </Card>
 
       <OrderAuditHistory orderId={order.id} />
+
+      <SendWhatsAppDialog
+        open={sendOpen}
+        onOpenChange={setSendOpen}
+        leadId={order.customer.leadId}
+        customerName={order.customer.name}
+        orders={customer360.data?.orders ?? []}
+      />
     </div>
   );
 }

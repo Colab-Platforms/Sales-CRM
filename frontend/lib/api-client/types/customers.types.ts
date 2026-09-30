@@ -119,6 +119,50 @@ export interface Customer360 {
   latestOrder: CustomerOrderSummary | null;
   currentOrderStatus: OrderStatus | null;
   orders: CustomerOrderSummary[];
+  // Live Shopify identity matched by mobile/email - additive overlay, never replaces the CRM-owned
+  // fields above. null when no Shopify customer matched, or Shopify was unreachable (see shopifyError).
+  shopifyCustomer: LiveCustomerListItem | null;
+  shopifyError?: string;
+}
+
+// ---- Live Customers list (reads directly from Shopify - GET /customers/live) ----
+// Cursor-paginated, never the whole customer base in one page.
+
+export interface LiveCustomersListParams {
+  after?: string;
+  first: number;
+  search?: string;
+}
+
+export interface LiveCustomerListItem {
+  id: string;
+  externalId: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  numberOfOrders: number | null;
+  amountSpent: { amount: string; currencyCode: string } | null;
+  address: { city: string | null; province: string | null; country: string | null } | null;
+  leadId: string | null;
+  leadNumber: string | null;
+  owner: { id: string; name: string } | null;
+  workingStatus: LeadWorkingStatus | null;
+  priority: LeadPriority | null;
+  /** false = a Shopify customer with no matching CRM lead yet (ADMIN-only, see the backend). */
+  linkedInCrm: boolean;
+}
+
+export interface LiveCustomerPageInfo {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  endCursor: string | null;
+}
+
+export interface LiveCustomerListResult {
+  items: LiveCustomerListItem[];
+  pageInfo: LiveCustomerPageInfo;
+  error?: string;
+  partialError?: string;
 }
 
 export type TimelineEventType =

@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -22,6 +22,7 @@ import {
   Phone,
   Settings,
   AlertTriangle,
+  ChevronRight,
 } from "lucide-react";
 import {
   Sidebar,
@@ -35,9 +36,13 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/nav-user";
 import { BrandMark } from "@/components/brand-mark";
+import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
 
 interface NavItem {
@@ -45,10 +50,14 @@ interface NavItem {
   href?: string;
   icon: ComponentType<{ className?: string }>;
   // Only-ever-exact match: for a route that is itself a literal path-prefix of a sibling nav
-  // item's href (WhatsApp Status vs. WhatsApp Templates), so viewing Templates doesn't also light
-  // up Status. Every other item keeps the default prefix match, which is what lets e.g. viewing an
-  // order's detail page still highlight "Orders".
+  // item's href (WhatsApp vs. its own children like WhatsApp Templates, all under
+  // /dashboard/whatsapp/...), so viewing Templates doesn't also light up the WhatsApp Inbox link.
+  // Every other item keeps the default prefix match, which is what lets e.g. viewing an order's
+  // detail page still highlight "Orders".
   exact?: boolean;
+  // A collapsible parent group (e.g. "WhatsApp") instead of a direct link - has no href of its own,
+  // only children. Only one level deep; nothing here needs more than that today.
+  children?: NavItem[];
 }
 
 interface NavSection {
@@ -185,7 +194,6 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "Customers", href: "/dashboard/customers", icon: Contact },
       ],
     },
     {
@@ -193,14 +201,20 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         {
           title: "WhatsApp",
-          href: "/dashboard/whatsapp",
           icon: MessageCircle,
-          exact: true,
-        },
-        {
-          title: "WhatsApp Templates",
-          href: "/dashboard/whatsapp/templates",
-          icon: FileText,
+          children: [
+            {
+              title: "WhatsApp",
+              href: "/dashboard/whatsapp",
+              icon: MessageCircle,
+              exact: true,
+            },
+            {
+              title: "WhatsApp Templates",
+              href: "/dashboard/whatsapp/templates",
+              icon: FileText,
+            },
+          ],
         },
       ],
     },
@@ -245,7 +259,6 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "Customers", href: "/dashboard/customers", icon: Contact },
         {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
@@ -269,24 +282,25 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         {
           title: "WhatsApp",
-          href: "/dashboard/whatsapp",
           icon: MessageCircle,
-          exact: true,
-        },
-        {
-          title: "WhatsApp Status",
-          href: "/dashboard/whatsapp/status",
-          icon: MessageCircle,
-        },
-        {
-          title: "WhatsApp Templates",
-          href: "/dashboard/whatsapp/templates",
-          icon: FileText,
-        },
-        {
-          title: "WhatsApp Campaigns",
-          href: "/dashboard/whatsapp/campaigns",
-          icon: Send,
+          children: [
+            {
+              title: "WhatsApp",
+              href: "/dashboard/whatsapp",
+              icon: MessageCircle,
+              exact: true,
+            },
+            {
+              title: "WhatsApp Templates",
+              href: "/dashboard/whatsapp/templates",
+              icon: FileText,
+            },
+            {
+              title: "WhatsApp Campaigns",
+              href: "/dashboard/whatsapp/campaigns",
+              icon: Send,
+            },
+          ],
         },
       ],
     },
@@ -323,7 +337,6 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "Customers", href: "/dashboard/customers", icon: Contact },
         {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
@@ -347,34 +360,35 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         {
           title: "WhatsApp",
-          href: "/dashboard/whatsapp",
           icon: MessageCircle,
-          exact: true,
-        },
-        {
-          title: "WhatsApp Status",
-          href: "/dashboard/whatsapp/status",
-          icon: MessageCircle,
-        },
-        {
-          title: "WhatsApp Config",
-          href: "/dashboard/whatsapp/cloud-config",
-          icon: Settings,
-        },
-        {
-          title: "WhatsApp Templates",
-          href: "/dashboard/whatsapp/templates",
-          icon: FileText,
-        },
-        {
-          title: "WhatsApp Automations",
-          href: "/dashboard/whatsapp/automations",
-          icon: Workflow,
-        },
-        {
-          title: "WhatsApp Campaigns",
-          href: "/dashboard/whatsapp/campaigns",
-          icon: Send,
+          children: [
+            {
+              title: "WhatsApp",
+              href: "/dashboard/whatsapp",
+              icon: MessageCircle,
+              exact: true,
+            },
+            {
+              title: "WhatsApp Config",
+              href: "/dashboard/whatsapp/cloud-config",
+              icon: Settings,
+            },
+            {
+              title: "WhatsApp Templates",
+              href: "/dashboard/whatsapp/templates",
+              icon: FileText,
+            },
+            {
+              title: "WhatsApp Automations",
+              href: "/dashboard/whatsapp/automations",
+              icon: Workflow,
+            },
+            {
+              title: "WhatsApp Campaigns",
+              href: "/dashboard/whatsapp/campaigns",
+              icon: Send,
+            },
+          ],
         },
       ],
     },
@@ -391,6 +405,52 @@ function isActivePath(pathname: string, href: string, exact = false) {
   return href === "/dashboard" || exact
     ? pathname === href
     : pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** A collapsible parent nav item (e.g. "WhatsApp"), holding its own open/closed state - expanded
+ *  automatically whenever the current route is one of its children (covers both a fresh page load/
+ *  refresh on a child route, and a client-side navigation into one while the sidebar stays mounted),
+ *  and otherwise freely toggled by clicking the parent row. */
+function CollapsibleNavItem({ item, pathname }: { item: NavItem; pathname: string }) {
+  const children = item.children ?? [];
+  const hasActiveChild = children.some((child) => child.href && isActivePath(pathname, child.href, child.exact));
+  const [open, setOpen] = useState(hasActiveChild);
+
+  useEffect(() => {
+    if (hasActiveChild) setOpen(true);
+    // Only route changes should force this open - a manual collapse must never be immediately
+    // undone by this same effect re-running for an unrelated reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        onClick={() => setOpen((prev) => !prev)}
+        isActive={hasActiveChild}
+        aria-expanded={open}
+        tooltip={item.title}
+      >
+        <item.icon />
+        <span>{item.title}</span>
+        <ChevronRight className={cn("ml-auto transition-transform duration-200", open && "rotate-90")} />
+      </SidebarMenuButton>
+      {open ? (
+        <SidebarMenuSub>
+          {children.map((child) =>
+            child.href ? (
+              <SidebarMenuSubItem key={child.title}>
+                <SidebarMenuSubButton render={<Link href={child.href} />} isActive={isActivePath(pathname, child.href, child.exact)}>
+                  <child.icon />
+                  <span>{child.title}</span>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ) : null,
+          )}
+        </SidebarMenuSub>
+      ) : null}
+    </SidebarMenuItem>
+  );
 }
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
@@ -427,31 +487,35 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
             <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {section.items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    {item.href ? (
-                      <SidebarMenuButton
-                        render={<Link href={item.href} />}
-                        isActive={pathname === item.href}
-                        tooltip={item.title}
-                      >
-                        <item.icon />
-                        <span>{item.title}</span>
-                      </SidebarMenuButton>
-                    ) : (
-                      <>
+                {section.items.map((item) =>
+                  item.children ? (
+                    <CollapsibleNavItem key={item.title} item={item} pathname={pathname} />
+                  ) : (
+                    <SidebarMenuItem key={item.title}>
+                      {item.href ? (
                         <SidebarMenuButton
-                          disabled
-                          tooltip={`${item.title} — coming soon`}
+                          render={<Link href={item.href} />}
+                          isActive={pathname === item.href}
+                          tooltip={item.title}
                         >
                           <item.icon />
                           <span>{item.title}</span>
                         </SidebarMenuButton>
-                        <SidebarMenuBadge>soon</SidebarMenuBadge>
-                      </>
-                    )}
-                  </SidebarMenuItem>
-                ))}
+                      ) : (
+                        <>
+                          <SidebarMenuButton
+                            disabled
+                            tooltip={`${item.title} — coming soon`}
+                          >
+                            <item.icon />
+                            <span>{item.title}</span>
+                          </SidebarMenuButton>
+                          <SidebarMenuBadge>soon</SidebarMenuBadge>
+                        </>
+                      )}
+                    </SidebarMenuItem>
+                  ),
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

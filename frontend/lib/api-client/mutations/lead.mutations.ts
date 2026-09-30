@@ -3,6 +3,7 @@ import { leadApi } from "../endpoints/lead.api";
 import { leadKeys } from "../queries/lead.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { tasksKeys } from "../queries/tasks.queries";
+import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
 import type {
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
@@ -19,6 +20,9 @@ export function useCreateLeadMutation() {
     mutationFn: (payload) => leadApi.createLead(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
+      // A new Lead is a new customer/contact record too (same row, no separate contact table) - the
+      // Customers list and any open Customer 360 view need to see it without a manual page refresh.
+      queryClient.invalidateQueries({ queryKey: customersKeys.all });
     },
   });
 }
@@ -57,6 +61,13 @@ export function useUpdateLeadMutation() {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
       // A status change can schedule or close a follow-up reminder.
       queryClient.invalidateQueries({ queryKey: tasksKeys.all });
+      // A Lead IS the customer record Customer 360 reads (same row, no separate contact table) - a
+      // rename/edit here must show up immediately wherever Customer 360 is already rendered (the
+      // WhatsApp Inbox's right panel, the Customer 360 page itself), not just in the leads list.
+      queryClient.invalidateQueries({ queryKey: customersKeys.all });
+      // If this lead already has a real WhatsApp conversation, its row in the Inbox list shows the
+      // lead's name - a rename must be reflected there too, without a manual page refresh.
+      queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
   });
 }
@@ -71,6 +82,7 @@ export function useDeleteLeadMutation() {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
       queryClient.invalidateQueries({ queryKey: customersKeys.all });
       queryClient.removeQueries({ queryKey: customersKeys.detail(id) });
+      queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
   });
 }

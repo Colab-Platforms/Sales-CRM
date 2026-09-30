@@ -6,7 +6,12 @@ import { cn } from "@/lib/utils";
 import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import { OrderStatusBadge } from "./order-status-badge";
 import { PaymentStatusBadge } from "./payment-status-badge";
-import type { OrderListItem } from "@/lib/api-client/types/orders.types";
+import type { LiveOrderListItem, OrderListItem } from "@/lib/api-client/types/orders.types";
+
+// Accepts either the CRM-DB-backed list item or the live-Shopify one. The live one's status/customer
+// fields are nullable for a Shopify order the CRM hasn't synced yet (ADMIN-only, see
+// orders.live.service.ts) - rendered below as "Not synced to CRM" rather than crashing on a null link.
+type TableOrderItem = OrderListItem | LiveOrderListItem;
 
 const COLUMN_COUNT = 9;
 
@@ -64,7 +69,7 @@ export function OrdersTableSkeleton({ rows = 6 }: { rows?: number }) {
 }
 
 interface OrdersTableProps {
-  items: OrderListItem[];
+  items: TableOrderItem[];
   isFetching: boolean;
   onOpen: (id: string) => void;
 }
@@ -89,14 +94,20 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
               </div>
             </TableCell>
             <TableCell>
-              <Link
-                href={customerDetailHref(order.customer.leadId)}
-                onClick={(e) => e.stopPropagation()}
-                className="font-medium hover:underline"
-              >
-                {order.customer.name}
-              </Link>
-              <div className="text-xs text-muted-foreground">{order.customer.leadNumber}</div>
+              {order.customer.leadId ? (
+                <>
+                  <Link
+                    href={customerDetailHref(order.customer.leadId)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="font-medium hover:underline"
+                  >
+                    {order.customer.name}
+                  </Link>
+                  <div className="text-xs text-muted-foreground">{order.customer.leadNumber}</div>
+                </>
+              ) : (
+                <span className="font-medium">{order.customer.name}</span>
+              )}
             </TableCell>
             <TableCell>{order.salesperson?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell>{order.leadSource?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
@@ -109,7 +120,11 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
               ) : null}
             </TableCell>
             <TableCell>
-              <OrderStatusBadge status={order.status} />
+              {order.status ? (
+                <OrderStatusBadge status={order.status} />
+              ) : (
+                <span className="text-xs text-muted-foreground">Not synced to CRM</span>
+              )}
             </TableCell>
             <TableCell className="text-muted-foreground">{formatDate(order.createdAt)}</TableCell>
           </TableRow>

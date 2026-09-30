@@ -32,6 +32,14 @@ export function CustomerProfileCard({ customer }: { customer: Customer360 }) {
           <DetailField label="Last contacted">{formatDateTime(profile.lastContactedAt)}</DetailField>
           <DetailField label="Total orders">{customer.paymentSummary.orderCount}</DetailField>
         </DetailGrid>
+        {customer.shopifyCustomer ? (
+          <p className="mt-4 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">Live from Shopify:</span> {customer.shopifyCustomer.numberOfOrders ?? 0} orders,{" "}
+            {customer.shopifyCustomer.amountSpent ? `${customer.shopifyCustomer.amountSpent.currencyCode} ${customer.shopifyCustomer.amountSpent.amount} spent` : "spend not available"}
+          </p>
+        ) : customer.shopifyError ? (
+          <p className="mt-4 text-xs text-muted-foreground">Live Shopify details unavailable: {customer.shopifyError}</p>
+        ) : null}
       </CardContent>
     </Card>
   );

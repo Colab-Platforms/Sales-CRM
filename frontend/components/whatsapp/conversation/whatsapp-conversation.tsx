@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, MessageCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -59,13 +60,28 @@ function MessageRow({ message, onSelect }: { message: WhatsAppMessageHistoryItem
   );
 }
 
-export function WhatsAppConversation({ leadId }: { leadId: string }) {
+export function WhatsAppConversation({
+  leadId,
+  // Scopes this to only the messages tied to one specific order (Order Detail's use) instead of the
+  // customer's whole history (Customer 360's use) - same query/component either way, never a second
+  // WhatsApp-history implementation. Backend already supports this filter (whatsapp.history.filters.ts).
+  orderId,
+  title = "WhatsApp Conversation",
+  emptyMessage = "No WhatsApp messages yet for this customer.",
+  onStartWhatsApp,
+}: {
+  leadId: string;
+  orderId?: string;
+  title?: string;
+  emptyMessage?: string;
+  onStartWhatsApp?: () => void;
+}) {
   const token = useAuthStore((s) => s.token);
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<MessageHistoryFilter>("ALL");
   const [selected, setSelected] = useState<WhatsAppMessageHistoryItem | null>(null);
 
-  const params: ListMessagesParams = { page, pageSize: PAGE_SIZE, leadId, ...paramsForFilter(filter) };
+  const params: ListMessagesParams = { page, pageSize: PAGE_SIZE, leadId, orderId, ...paramsForFilter(filter) };
   const query = useQuery({ ...whatsappMessageListQueryOptions(params), enabled: Boolean(token) });
 
   const data = query.data;
@@ -75,7 +91,7 @@ export function WhatsAppConversation({ leadId }: { leadId: string }) {
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
-        <CardTitle>WhatsApp Conversation</CardTitle>
+        <CardTitle>{title}</CardTitle>
         <Select
           value={filter}
           items={MESSAGE_HISTORY_FILTER_LABELS}
@@ -108,9 +124,22 @@ export function WhatsAppConversation({ leadId }: { leadId: string }) {
             {error}
           </p>
         ) : !data || data.items.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            {filter === "ALL" ? "No WhatsApp messages yet for this customer." : "No messages match this filter."}
-          </p>
+          filter === "ALL" ? (
+            // No conversation exists yet - never faked/created just to have something to show here.
+            // A real one starts the moment either side sends the first real message, which is exactly
+            // what this button does (the same Send WhatsApp flow, not a second one).
+            <div className="flex flex-col items-center gap-2 py-6 text-center">
+              <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+              {onStartWhatsApp ? (
+                <Button size="sm" onClick={onStartWhatsApp}>
+                  <MessageCircle data-icon="inline-start" />
+                  Start WhatsApp
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">No messages match this filter.</p>
+          )
         ) : (
           <>
             <ol className="space-y-4 border-l pl-4">

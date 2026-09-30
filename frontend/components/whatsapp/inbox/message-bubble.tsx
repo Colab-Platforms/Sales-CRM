@@ -37,12 +37,25 @@ function renderBody(text: string): ReactNode[] {
   );
 }
 
-export function MessageBubble({ message, onSelect }: { message: WhatsAppMessageHistoryItem; onSelect: () => void }) {
+export function MessageBubble({
+  message,
+  onSelect,
+  replyTo,
+}: {
+  message: WhatsAppMessageHistoryItem;
+  onSelect: () => void;
+  /** The real message this one is a provider-reported reply to (Meta's context.id, resolved by the
+   *  caller against the currently loaded messages) - only ever real, already-fetched data, never a
+   *  fabricated relationship. Undefined when this message has no reply reference, or the referenced
+   *  message isn't in the currently loaded window. */
+  replyTo?: WhatsAppMessageHistoryItem;
+}) {
   const outbound = message.direction === "OUTBOUND";
   // Real body only - "(template message)" is an honest fallback for the small number of historical
   // rows sent before the send path started persisting the resolved body, never a substitute once a
   // real body exists.
   const bodyText = message.body || (message.template || message.messageType === "TEMPLATE" ? "(template message)" : "—");
+  const replyToText = replyTo ? replyTo.body || (replyTo.template ? `Template: ${replyTo.template.name}` : "(message)") : null;
 
   function handleKeyDown(e: KeyboardEvent) {
     if (e.key === "Enter" || e.key === " ") {
@@ -68,6 +81,18 @@ export function MessageBubble({ message, onSelect }: { message: WhatsAppMessageH
             : "rounded-bl-sm border bg-card hover:bg-muted/40",
         )}
       >
+        {replyToText ? (
+          // Real, provider-confirmed reply reference only (Meta's context.id) - a quoted-preview
+          // strip, the same visual idea WhatsApp itself uses for a reply, never a guessed link.
+          <div
+            className={cn(
+              "mb-1 rounded-md border-l-2 px-2 py-1 text-xs opacity-80",
+              outbound ? "border-primary-foreground/50 bg-primary-foreground/10" : "border-primary/50 bg-muted/60",
+            )}
+          >
+            <p className="line-clamp-2 whitespace-pre-wrap break-words">{replyToText}</p>
+          </div>
+        ) : null}
         {message.template ? (
           <p className={cn("mb-0.5 text-[0.7rem] font-medium opacity-70", outbound ? "text-primary-foreground" : "text-muted-foreground")}>
             Template: {message.template.name}

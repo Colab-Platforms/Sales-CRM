@@ -5,6 +5,11 @@ import type {
   CancelOrderResult,
   CreateManualOrderInput,
   CreateManualOrderResult,
+  LiveOrderDetailResult,
+  LiveOrderHistoryParams,
+  LiveOrderHistoryResult,
+  LiveOrderListResult,
+  LiveOrdersListParams,
   OrderDetail,
   OrderFilterOptions,
   OrderListResult,
@@ -20,8 +25,27 @@ export const ordersApi = {
     return res.data.data;
   },
 
+  /** The Orders list page's real data source: live from Shopify, cursor-paginated. See GET /orders
+   *  above (kept, unchanged) for the original CRM-DB-backed list still used elsewhere. */
+  async listLive(params: LiveOrdersListParams): Promise<LiveOrderListResult> {
+    const res = await apiClient.get<ApiEnvelope<LiveOrderListResult>>("/orders/live", { params });
+    return res.data.data;
+  },
+
   async get(id: string): Promise<OrderDetail> {
     const res = await apiClient.get<ApiEnvelope<OrderDetail>>(`/orders/${id}`);
+    return res.data.data;
+  },
+
+  /** Order Detail for a Shopify order not yet synced into the CRM - see parseLiveOrderId(). */
+  async getLiveDetail(externalId: string): Promise<LiveOrderDetailResult> {
+    const res = await apiClient.get<ApiEnvelope<LiveOrderDetailResult>>(`/orders/live/${externalId}`);
+    return res.data.data;
+  },
+
+  /** "Previous Orders" on the live Order Detail page - the Shopify customer's other orders, cursor-paginated. */
+  async getLiveHistory(shopifyCustomerId: string, params: LiveOrderHistoryParams): Promise<LiveOrderHistoryResult> {
+    const res = await apiClient.get<ApiEnvelope<LiveOrderHistoryResult>>(`/orders/live/customer/${shopifyCustomerId}/history`, { params });
     return res.data.data;
   },
 

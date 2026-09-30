@@ -87,7 +87,7 @@ describe("request construction", () => {
 
   it("only ever sends queries, never mutations", () => {
     const documents: string[] = Object.values<unknown>(queries).filter((v): v is string => typeof v === "string");
-    assert.equal(documents.length, 7);
+    assert.equal(documents.length, 9);
     for (const field of ["orders", "products", "customers"] as const) documents.push(queries.countQuery(field));
     for (const document of documents) assert.doesNotMatch(document, /\bmutation\b/i);
   });

@@ -8,14 +8,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TemplatePicker } from "@/components/whatsapp/template-picker";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { usePreviewTemplateMutation } from "@/lib/api-client/mutations/whatsapp-messaging.mutations";
 import { useBulkClassifyMutation, useBulkSendMutation } from "@/lib/api-client/mutations/whatsapp-bulk-send.mutations";
 import { whatsappTemplateListQueryOptions } from "@/lib/api-client/queries/whatsapp-templates.queries";
 import type { TemplateVariableField } from "@/lib/api-client/types/whatsapp-messaging.types";
 import type { BulkClassifyResult, BulkRecipientStatus, BulkSendResult } from "@/lib/api-client/types/whatsapp-bulk-send.types";
-import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 
 const PREVIEW_DEBOUNCE_MS = 300;
 
@@ -143,25 +142,14 @@ export function BulkSendDialog({
               ) : templates.length === 0 ? (
                 <p className="text-sm text-muted-foreground">No approved templates are available yet.</p>
               ) : (
-                <Select
-                  value={templateId || null}
-                  items={Object.fromEntries(templates.map((t) => [t.id, `${t.name} (${PROVIDER_LABELS[t.provider] ?? t.provider})`]))}
-                  onValueChange={(v) => {
-                    setTemplateId(v ?? "");
+                <TemplatePicker
+                  templates={templates}
+                  value={templateId}
+                  onChange={(id) => {
+                    setTemplateId(id);
                     setManualValues({});
                   }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select an approved template" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {templates.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name} <span className="text-muted-foreground">({PROVIDER_LABELS[t.provider] ?? t.provider})</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                />
               )}
             </div>
 

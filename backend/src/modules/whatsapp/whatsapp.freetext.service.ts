@@ -30,8 +30,12 @@ export function computeServiceWindow(lastInboundAt: Date | null, now: Date): Mes
   return { open: expires.getTime() > now.getTime(), lastInboundAt: lastInboundAt.toISOString(), expiresAt: expires.toISOString() };
 }
 
-const BLOCK_MESSAGES = (provider: WhatsAppProviderName | null, hadInbound: boolean): Record<FreeTextBlockReason, string> => ({
-  PROVIDER_NOT_META: `This conversation's active provider is ${provider ? PROVIDER_DISPLAY_NAMES[provider] : "not Meta"}, which only supports sending pre-approved templates. Use a template message instead.`,
+// Never names a provider - Meta Cloud API is the CRM's only active WhatsApp provider from the
+// user's point of view, so a message like "this conversation's active provider is AiSensy" would be
+// both confusing (the CRM shows no AiSensy option anywhere) and misleading (implies a per-provider
+// restriction rather than "free text isn't available for this conversation yet").
+const BLOCK_MESSAGES = (_provider: WhatsAppProviderName | null, hadInbound: boolean): Record<FreeTextBlockReason, string> => ({
+  PROVIDER_NOT_META: "Free-text messages are not available for this conversation yet. Use a template message instead.",
   META_NOT_CONFIGURED: "Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.",
   SERVICE_WINDOW_CLOSED: hadInbound
     ? "The 24-hour WhatsApp customer-service window has closed - this customer's last message to your Meta number was more than 24 hours ago. Send an approved template message instead."

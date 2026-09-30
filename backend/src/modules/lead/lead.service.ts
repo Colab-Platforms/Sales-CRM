@@ -6,7 +6,19 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { generateLeadNumber } from "@/utils/leadNumber.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
 import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
-import { normalizeMobile, normalizeEmail } from "@/utils/normalize.js";
+// Root-cause fix: this used to import from @/utils/normalize.js, a second, DIFFERENT normalizeMobile
+// that just strips non-digit characters - no "+" prefix, no default-country-code inference for a bare
+// 10-digit number. Every lead ever created here (createLead - including the WhatsApp page's "Create
+// Contact" - and createLeadFromSource, used by WhatsApp-inbound auto-creation, Shopify and Meta
+// imports) got a normalizedMobile in that divergent shape, while whatsapp.matching.ts's
+// matchSenderToLead has only ever matched against @/lib/leadIdentity.js's canonical "+"-prefixed
+// form. That mismatch is what kept manufacturing brand-new "legacy-format" leads for this task's
+// matching fix to work around - the matching-side patches were treating the symptom; this is the
+// actual source. @/lib/leadIdentity.js is the one canonical phone/email identity function used
+// everywhere else in the codebase (shopify.persist.ts, whatsapp.matching.ts, etc.) - this file now
+// agrees with them, so a lead created here will always be found by the same lookup a WhatsApp reply
+// (or a Shopify/Meta match) uses, with no special-casing needed on either side.
+import { normalizeMobile, normalizeEmail } from "@/lib/leadIdentity.js";
 import {
   Role,
   UserStatus,

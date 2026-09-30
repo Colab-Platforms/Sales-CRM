@@ -53,6 +53,11 @@ export function ConversationChat({ leadId }: { leadId: string }) {
   // Oldest at top, newest at bottom - the backend list itself stays newest-first (E7.4's own
   // contract, used elsewhere); this reverses only the displayed slice, client-side.
   const messages = data ? [...data.items].reverse() : [];
+  // Part 1 (WhatsApp Inbox reply association): resolves a message's real replyToProviderMessageId
+  // (Meta's context.id) against messages already loaded in this same window - never a separate fetch,
+  // never a guessed relationship. A reply to a message outside the currently loaded page simply
+  // renders without the quoted preview, rather than fetching further back for it.
+  const byProviderMessageId = new Map(messages.filter((m) => m.providerMessageId).map((m) => [m.providerMessageId as string, m]));
   const canLoadOlder = Boolean(data) && data!.pagination.totalItems > messages.length && pageSize < MAX_PAGE_SIZE;
 
   // Scroll to the newest message whenever the conversation is opened or grows with a new message
@@ -118,7 +123,11 @@ export function ConversationChat({ leadId }: { leadId: string }) {
                   </span>
                 </div>
               ) : null}
-              <MessageBubble message={message} onSelect={() => setSelected(message)} />
+              <MessageBubble
+                message={message}
+                onSelect={() => setSelected(message)}
+                replyTo={message.replyToProviderMessageId ? byProviderMessageId.get(message.replyToProviderMessageId) : undefined}
+              />
             </div>
           );
         })}

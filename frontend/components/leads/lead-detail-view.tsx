@@ -9,6 +9,7 @@ import {
   Clock,
   ExternalLink,
   History,
+  MessageCircle,
   NotebookPen,
   Pencil,
   Phone,
@@ -20,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { CustomerTimeline } from "@/components/customers/customer-timeline";
+import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
 import { AssignmentHistoryCard } from "./assignment-history-card";
 import { EditLeadDialog } from "./edit-lead-dialog";
 import { DeleteLeadDialog } from "./delete-lead-dialog";
@@ -69,6 +71,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"calls" | "timeline" | "assignments" | "abandonment">("calls");
+  const [sendWhatsAppOpen, setSendWhatsAppOpen] = useState(false);
 
   if (isLoading) return <LeadDetailSkeleton />;
 
@@ -99,6 +102,20 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         <BackLink />
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Reuses the exact same Send WhatsApp dialog/provider-agnostic template send flow Customer
+              360 and the WhatsApp Inbox already use - never a second messaging path. Only shown when
+              there's a real number to send to. */}
+          {lead.mobile ? (
+            <button
+              type="button"
+              onClick={() => setSendWhatsAppOpen(true)}
+              className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-primary/90"
+            >
+              <MessageCircle className="size-3.5" />
+              <span>Send WhatsApp</span>
+            </button>
+          ) : null}
+
           {/* Tactile Doodle Edit Button */}
           <button
             type="button"
@@ -410,6 +427,10 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         onOpenChange={setDeleteOpen}
         onDeleted={() => router.push(LEADS_HREF)}
       />
+      {/* No order list loaded on this page - the dialog's own order-selection step is already
+          optional and stays hidden whenever there are none, exactly as it does for a customer with
+          no orders yet on Customer 360. */}
+      <SendWhatsAppDialog open={sendWhatsAppOpen} onOpenChange={setSendWhatsAppOpen} leadId={lead.id} customerName={name} orders={[]} />
     </div>
   );
 }

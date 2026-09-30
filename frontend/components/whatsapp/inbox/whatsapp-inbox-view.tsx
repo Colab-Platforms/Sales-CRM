@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, MessagesSquare, Search } from "lucide-react";
+import { ArrowLeft, MessageCircle, MessagesSquare, Plus, Search } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,6 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { cn } from "@/lib/utils";
 import { whatsappConversationListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
 import { conversationDetailQueryOptions, messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
-import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 import { useArchiveConversationMutation, useMarkConversationReadMutation, useUnarchiveConversationMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { toast } from "sonner";
@@ -28,6 +27,8 @@ import { ConversationListItem } from "./conversation-list-item";
 import { CreateOrderDialog } from "./create-order-dialog";
 import { BulkSendDialog } from "./bulk-send-dialog";
 import { MessageComposer } from "./message-composer";
+import { NewChatDialog } from "./new-chat-dialog";
+import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
 
 const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -295,14 +296,13 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
                 </p>
                 {capability ? (
                   <p className="truncate text-xs text-muted-foreground" data-testid="conversation-provider">
-                    Provider: <span className="font-medium text-foreground">{capability.activeProvider ? (PROVIDER_LABELS[capability.activeProvider] ?? capability.activeProvider) : "None yet"}</span>
-                    {capability.activeProvider === "META"
-                      ? capability.serviceWindow.open && capability.serviceWindow.expiresAt
-                        ? ` · Service window open until ${new Date(capability.serviceWindow.expiresAt).toLocaleString()}`
-                        : " · Service window closed - templates only"
-                      : capability.activeProvider
-                        ? " · Templates only"
-                        : ""}
+                    {/* Meta Cloud API is the CRM's only active WhatsApp provider - this never names a
+                        provider or exposes a per-conversation provider restriction, only whether a
+                        free-text reply can be sent right now (open service window) or a template is
+                        needed instead. */}
+                    {capability.freeText.allowed && capability.serviceWindow.open && capability.serviceWindow.expiresAt
+                      ? `Free text available until ${new Date(capability.serviceWindow.expiresAt).toLocaleString()}`
+                      : "Send an approved template to message this customer"}
                   </p>
                 ) : null}
               </div>
@@ -342,7 +342,12 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
         </div>
       </div>
 
-      <div className="hidden min-h-0 w-[340px] shrink-0 border-l lg:block">
+      {/* A genuinely stable fixed-width sidebar: min-w/max-w pin it to exactly 340px regardless of its
+          own content, so a long customer name/email or an order with a long number can never push
+          this column wider and squeeze the main conversation area. Explicit h-full (not just relying
+          on flex "stretch") gives it a real, definite height from this row, which ConversationContextPanel's
+          own h-full + overflow-y-auto needs to actually scroll instead of silently growing/collapsing. */}
+      <div className="hidden h-full min-h-0 w-[340px] min-w-[340px] max-w-[340px] shrink-0 flex-col border-l lg:flex">
         <ConversationContextPanel
           leadId={leadId}
           canSendWhatsApp={Boolean(data?.profile.mobile)}
@@ -379,12 +384,38 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
 
 export function WhatsAppInboxView() {
   const [selectedLeadId, setSelectedLeadId] = useState<string | null>(null);
+  const [createContactOpen, setCreateContactOpen] = useState(false);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  // Picking a contact from "New Chat" never fabricates a conversation - it just hands their leadId to
+  // the same SendWhatsAppDialog every other "Send WhatsApp" button already uses. A conversation only
+  // exists once a real template is actually sent (or the customer messages in).
+  const [newChatTarget, setNewChatTarget] = useState<{ leadId: string; name: string } | null>(null);
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-2xl font-semibold">WhatsApp</h1>
-        <p className="text-sm text-muted-foreground">All WhatsApp conversations you have access to, in one place.</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">WhatsApp</h1>
+          <p className="text-sm text-muted-foreground">All WhatsApp conversations you have access to, in one place.</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {/* Any customer can be reached here even with zero prior messages - the conversation list
+              below is built only from existing WhatsAppMessage rows, so a contact with none can't
+              appear there yet. This searches the same Customers data and opens the same Send
+              WhatsApp dialog, never a second messaging path. */}
+          <Button size="sm" variant="outline" onClick={() => setNewChatOpen(true)}>
+            <MessageCircle data-icon="inline-start" />
+            New Chat
+          </Button>
+          {/* Same Lead create flow the Customers page's "Create Contact" button already uses (POST
+              /lead/leads) - a Lead IS the customer/contact record here, never a second, separate
+              model. useCreateLeadMutation already invalidates the Customers cache, so the new
+              contact is immediately findable from "New Chat" above with no page refresh. */}
+          <Button size="sm" onClick={() => setCreateContactOpen(true)}>
+            <Plus data-icon="inline-start" />
+            Create Contact
+          </Button>
+        </div>
       </div>
 
       <Card className="overflow-hidden p-0">
@@ -408,6 +439,37 @@ export function WhatsAppInboxView() {
           </div>
         </CardContent>
       </Card>
+
+      <CreateLeadDialog
+        open={createContactOpen}
+        onOpenChange={setCreateContactOpen}
+        onDone={(lead) => {
+          setCreateContactOpen(false);
+          // Immediately usable from WhatsApp, no navigating to Leads: hands the just-created contact
+          // straight to the exact same Send WhatsApp flow "New Chat" uses - never a fake conversation,
+          // never a duplicate lookup, just this contact's real id/name from the create response itself.
+          if (lead.mobile) setNewChatTarget({ leadId: lead.id, name: [lead.firstName, lead.lastName].filter(Boolean).join(" ") });
+        }}
+      />
+      <NewChatDialog
+        open={newChatOpen}
+        onOpenChange={setNewChatOpen}
+        onSelect={(customer) => {
+          setNewChatOpen(false);
+          setNewChatTarget({ leadId: customer.leadId, name: customer.name });
+        }}
+      />
+      {newChatTarget ? (
+        <SendWhatsAppDialog
+          open={Boolean(newChatTarget)}
+          onOpenChange={(next) => {
+            if (!next) setNewChatTarget(null);
+          }}
+          leadId={newChatTarget.leadId}
+          customerName={newChatTarget.name}
+          orders={[]}
+        />
+      ) : null}
     </div>
   );
 }

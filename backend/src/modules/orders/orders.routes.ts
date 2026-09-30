@@ -4,6 +4,7 @@ import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { cancelOrder, createOrder, getLastShippingAddress, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShopifyPaymentSync } from "./orders.controller.js";
+import { getLiveOrderDetail, getLiveOrderHistory, listLiveOrders } from "./orders.live.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 
@@ -16,6 +17,16 @@ router.get("/last-address", requireAuth, getLastShippingAddress);
 // Revenue & payment reconciliation is an org/team-level financial view, not a single order - only
 // management roles get it, same as the rest of the manager/admin-only reporting endpoints.
 router.get("/reconciliation", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), getReconciliation);
+// Live from Shopify (cursor-paginated, date/search filtered) - the Orders list page's data source.
+// Separate from GET "/" (the original CRM-DB-backed list, kept unchanged and still used by anything
+// else that needs offset pagination/exports/etc.) - see orders.live.service.ts's own header comment.
+router.get("/live", requireAuth, listLiveOrders);
+// Order Detail for a Shopify order not yet synced into the CRM (see orders.live.controller.ts) -
+// registered before "/:id" for the same reason as the routes above.
+router.get("/live/:externalId", requireAuth, getLiveOrderDetail);
+// "Previous Orders" on that same live detail page - registered as its own literal "customer" segment
+// so it never collides with "/live/:externalId" above (different, unrelated path shape).
+router.get("/live/customer/:customerId/history", requireAuth, getLiveOrderHistory);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);

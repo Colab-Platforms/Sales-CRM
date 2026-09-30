@@ -11,7 +11,10 @@ import { deriveReconciliationStatus } from "../reconciliation/reconciliation.fil
 import { ShopifyClient } from "../shopify/shopify.client.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
+import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
 import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
+import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
+import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
 import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
@@ -52,6 +55,39 @@ function generateManualOrderNumber(): string {
   return `CRM-${timestamp}-${random}`;
 }
 
+// Live Shopify snapshot for Order Detail - additive overlay only, never replaces the CRM's own order
+// record above. Same in-process TTL Map idiom as orders.live.service.ts; not RBAC-sensitive (the
+// caller already passed the CRM's own lead-scope check to load the order in the first place), so the
+// cache key is just the order's externalId.
+interface ShopifyLiveOrderResult {
+  order: NormalizedOrder | null;
+  error?: string;
+}
+const SHOPIFY_LIVE_ORDER_TTL_MS = 30_000;
+const shopifyLiveOrderCache = new Map<string, { value: ShopifyLiveOrderResult; expiresAt: number }>();
+
+async function fetchShopifyLiveOrder(externalSource: string | null, externalId: string | null): Promise<ShopifyLiveOrderResult> {
+  if (externalSource !== "SHOPIFY" || !externalId) return { order: null };
+
+  const cached = shopifyLiveOrderCache.get(externalId);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  let result: ShopifyLiveOrderResult;
+  try {
+    const client = new ShopifyClient(loadShopifyConfig());
+    const order = await fetchShopifyOrder(client, `gid://shopify/Order/${externalId}`);
+    result = { order };
+  } catch (error) {
+    result = {
+      order: null,
+      error: error instanceof ShopifyConfigError ? "Shopify is not configured" : "Could not reach Shopify for live order details",
+    };
+  }
+
+  shopifyLiveOrderCache.set(externalId, { value: result, expiresAt: Date.now() + SHOPIFY_LIVE_ORDER_TTL_MS });
+  return result;
+}
+
 const LIST_SELECT = {
   id: true,
   orderNumber: true,
@@ -88,6 +124,8 @@ const DETAIL_SELECT = {
   shippingAmount: true,
   totalAmount: true,
   discountReason: true,
+  externalSource: true,
+  externalId: true,
   externalNumber: true,
   shippingAddress: true,
   shippingPincode: true,
@@ -245,6 +283,15 @@ class OrdersService {
       order.shipments.filter((s) => s.externalSource === "SHIPROCKET" && s.trackingNumber).map((s) => [normalizeAwb(s.trackingNumber!), s.id] as const),
     );
 
+    // Both external lookups are independent of each other and of everything above (the CRM's own
+    // data was already loaded) - fetch them in parallel rather than one after the other, and let
+    // either fail on its own without affecting the CRM-owned data already assembled.
+    const awbsToTrack = [...new Set(order.shipments.map((s) => s.trackingNumber).filter((awb): awb is string => Boolean(awb)))];
+    const [shopifyLiveResult, liveTrackingByAwb] = await Promise.all([
+      fetchShopifyLiveOrder(order.externalSource, order.externalId),
+      awbsToTrack.length > 0 ? getLiveTrackingBatch(awbsToTrack) : Promise.resolve(new Map<string, LiveTracking>()),
+    ]);
+
     return {
       id: order.id,
       orderNumber: order.orderNumber,
@@ -335,7 +382,10 @@ class OrdersService {
         pickupScheduledAt: shipment.pickupScheduledAt,
         shiprocketOrderId: shipment.providerOrderId,
         linkedShipmentId: shipment.externalSource === "SHOPIFY" && shipment.trackingNumber ? (directByAwb.get(normalizeAwb(shipment.trackingNumber)) ?? null) : null,
+        liveTracking: shipment.trackingNumber ? liveTrackingByAwb.get(shipment.trackingNumber) : undefined,
       })),
+      shopifyLive: shopifyLiveResult.order,
+      shopifyLiveError: shopifyLiveResult.error,
     };
   }
 
