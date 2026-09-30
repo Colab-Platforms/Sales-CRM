@@ -412,7 +412,7 @@ class LeadService {
   private async bulkAssignLeadsToManager(
     tx: TxClient,
     assignments: { lead: Lead; manager: User }[],
-    assignedById: string,
+    assignedById: string | null,
     method: typeof AssignmentType.MANUAL | typeof AssignmentType.ROUND_ROBIN,
   ): Promise<void> {
     const now = new Date();
@@ -474,7 +474,7 @@ class LeadService {
   private async bulkAssignLeadsToSalesperson(
     tx: TxClient,
     assignments: { lead: Lead; salesperson: User; groupId: string | null }[],
-    assignedById: string,
+    assignedById: string | null,
     method: typeof AssignmentType.MANUAL | typeof AssignmentType.ROUND_ROBIN,
   ): Promise<void> {
     const now = new Date();
@@ -709,6 +709,113 @@ class LeadService {
       },
       { timeout: 20000, maxWait: 10000 },
     );
+  }
+
+  // ---------- Auto-assignment (abandoned leads) ----------
+  // Same round-robin engine as bulkAssignManagers/bulkAssignSalespersons above, triggered by the
+  // ingesting processor (e.g. shiprocket.abandonment.processor.ts) instead of an admin/manager
+  // request. The only differences: the participant pool is "every ACTIVE user of that role" rather
+  // than a caller-picked list, it acts on one lead at a time, and assignedById is null (system-
+  // triggered) rather than a real user id - LeadAssignment.assignedById/Activity.actorId are both
+  // nullable precisely for this. Each toggle (ManagerAutoAssignConfig, SalespersonAutoAssignConfig)
+  // is read fresh on every call - a single indexed row read costs nothing extra inside a transaction
+  // that's already doing real writes, so there's no need to cache or invalidate it.
+
+  /** No-ops (leaving the lead unassigned, same as if auto-assign were off) when the config row is
+   *  missing/disabled, the lead already has a manager, or there are no active managers to pick from. */
+  async autoAssignManagerForLead(tx: TxClient, lead: Lead): Promise<Lead> {
+    if (lead.assignedManagerId) return lead;
+
+    const config = await tx.managerAutoAssignConfig.findFirst({ select: { enabled: true } });
+    if (!config?.enabled) return lead;
+
+    const managers = await tx.user.findMany({
+      where: { role: Role.MANAGER, status: UserStatus.ACTIVE },
+      orderBy: { id: "asc" },
+    });
+    if (managers.length === 0) return lead;
+
+    const cursorRows = await tx.$queryRaw<{ id: string; lastAssignedManagerId: string | null }[]>`
+      SELECT id, last_assigned_manager_id AS "lastAssignedManagerId"
+      FROM manager_assignment_round_robin
+      LIMIT 1
+      FOR UPDATE
+    `;
+    let cursor = cursorRows[0];
+    if (!cursor) {
+      const created = await tx.managerAssignmentRoundRobin.create({ data: {} });
+      cursor = { id: created.id, lastAssignedManagerId: created.lastAssignedManagerId };
+    }
+
+    const managerIds = managers.map((m) => m.id);
+    let position = 0;
+    if (cursor.lastAssignedManagerId) {
+      const idx = managerIds.indexOf(cursor.lastAssignedManagerId);
+      position = idx === -1 ? 0 : (idx + 1) % managerIds.length;
+    }
+    const manager = managers[position]!;
+
+    await this.bulkAssignLeadsToManager(tx, [{ lead, manager }], null, AssignmentType.ROUND_ROBIN);
+    await tx.managerAssignmentRoundRobin.update({ where: { id: cursor.id }, data: { lastAssignedManagerId: manager.id } });
+
+    return { ...lead, assignedManagerId: manager.id };
+  }
+
+  /** Same guard shape as autoAssignManagerForLead: no-ops when the lead has no manager yet, already
+   *  has an owner, that manager's own toggle is off, or that manager has no active salespeople. */
+  async autoAssignSalespersonForLead(tx: TxClient, lead: Lead): Promise<void> {
+    if (!lead.assignedManagerId || lead.ownerId) return;
+
+    const config = await tx.salespersonAutoAssignConfig.findUnique({
+      where: { managerId: lead.assignedManagerId },
+      select: { enabled: true },
+    });
+    if (!config?.enabled) return;
+
+    const salespeople = await tx.user.findMany({
+      where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE, reportingManagerId: lead.assignedManagerId },
+      orderBy: { id: "asc" },
+    });
+    if (salespeople.length === 0) return;
+
+    const cursorRows = await tx.$queryRaw<{ id: string; lastAssignedSalespersonId: string | null }[]>`
+      SELECT id, last_assigned_salesperson_id AS "lastAssignedSalespersonId"
+      FROM salesperson_assignment_round_robin
+      WHERE manager_id = ${lead.assignedManagerId}::uuid
+      FOR UPDATE
+    `;
+    let cursor = cursorRows[0];
+    if (!cursor) {
+      const created = await tx.salespersonAssignmentRoundRobin.create({ data: { managerId: lead.assignedManagerId } });
+      cursor = { id: created.id, lastAssignedSalespersonId: created.lastAssignedSalespersonId };
+    }
+
+    const salespersonIds = salespeople.map((s) => s.id);
+    let position = 0;
+    if (cursor.lastAssignedSalespersonId) {
+      const idx = salespersonIds.indexOf(cursor.lastAssignedSalespersonId);
+      position = idx === -1 ? 0 : (idx + 1) % salespersonIds.length;
+    }
+    const salesperson = salespeople[position]!;
+
+    // Same "inherit an active group under this manager, else no group" resolution resolveTeamMember
+    // uses for manual assignment - a salesperson not yet placed in a group can still be auto-assigned.
+    const membership = await tx.groupMember.findFirst({
+      where: { userId: salesperson.id, isActive: true, group: { managerId: lead.assignedManagerId, status: "ACTIVE" } },
+      select: { groupId: true },
+    });
+    const groupId = membership?.groupId ?? null;
+
+    await this.bulkAssignLeadsToSalesperson(tx, [{ lead, salesperson, groupId }], null, AssignmentType.ROUND_ROBIN);
+    await tx.salespersonAssignmentRoundRobin.update({ where: { id: cursor.id }, data: { lastAssignedSalespersonId: salesperson.id } });
+  }
+
+  /** Entry point for a newly-created abandoned lead: tries the manager stage, then (whether a
+   *  manager was just assigned or already present) the salesperson stage. Each stage's own toggle
+   *  decides whether anything actually happens - safe to call unconditionally. */
+  async autoAssignAbandonedLead(tx: TxClient, lead: Lead): Promise<void> {
+    const withManager = await this.autoAssignManagerForLead(tx, lead);
+    await this.autoAssignSalespersonForLead(tx, withManager);
   }
 
   // ---------- CSV import ----------

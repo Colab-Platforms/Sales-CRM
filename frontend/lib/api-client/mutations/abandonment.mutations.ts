@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { abandonmentApi } from "../endpoints/abandonment.api";
 import { abandonmentKeys } from "../queries/abandonment.queries";
-import type { BulkAssignManagerPayload, BulkAssignSalespersonPayload, CreateRecoveryActionInput } from "../types/abandonment.types";
+import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, CreateRecoveryActionInput } from "../types/abandonment.types";
 
 export function useLogRecoveryActionMutation(abandonmentId: string) {
   const queryClient = useQueryClient();
@@ -29,6 +29,26 @@ export function useBulkAssignSalespersonMutation() {
     mutationFn: (payload) => abandonmentApi.bulkAssignSalesperson(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
+    },
+  });
+}
+
+export function useSetManagerAutoAssignMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<AutoAssignConfig, unknown, boolean>({
+    mutationFn: (enabled) => abandonmentApi.setManagerAutoAssignConfig(enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.managerAutoAssignConfig() });
+    },
+  });
+}
+
+export function useSetSalespersonAutoAssignMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<AutoAssignConfig, unknown, boolean>({
+    mutationFn: (enabled) => abandonmentApi.setSalespersonAutoAssignConfig(enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.salespersonAutoAssignConfig() });
     },
   });
 }
