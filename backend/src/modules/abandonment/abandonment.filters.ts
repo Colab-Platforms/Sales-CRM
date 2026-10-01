@@ -1,7 +1,6 @@
 import { AbandonmentStatus, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { fullName } from "../orders/orders.filters.js";
-import type { AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
+import { fullName } from "../orders/orders.filters.js";import type { AbandonmentCallItem, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
 
 // Where-building, row-mapping and summary logic for the abandoned-leads queue. Kept separate from
 // abandonment.service.ts the same way orders.filters.ts / shiprocket.list.filters.ts are kept
@@ -88,6 +87,8 @@ export interface AbandonmentListRow {
     workingStatus: import("../../../generated/prisma/enums.js").LeadWorkingStatus;
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
+    calls: AbandonmentCallItem[];
+    tasks: { id: string; type: string; scheduledAt: Date | null }[];
   };
   source: { id: string; name: string } | null;
   recoveryActions: { type: import("../../../generated/prisma/enums.js").RecoveryActionType; status: import("../../../generated/prisma/enums.js").RecoveryActionStatus; createdAt: Date }[];
@@ -123,12 +124,16 @@ export function mapAbandonmentListRow(row: AbandonmentListRow, summary: string |
     lead: {
       id: row.lead.id,
       leadNumber: row.lead.leadNumber,
+      firstName: row.lead.firstName,
+      lastName: row.lead.lastName,
       name: fullName(row.lead.firstName, row.lead.lastName),
       mobile: row.lead.mobile,
       email: row.lead.email,
       workingStatus: row.lead.workingStatus,
       assignedManager: row.lead.assignedManager,
       owner: row.lead.owner,
+      calls: row.lead.calls,
+      tasks: row.lead.tasks,
     },
     source: row.source,
     latestRecoveryAction: latest ? { type: latest.type, status: latest.status, createdAt: latest.createdAt } : null,

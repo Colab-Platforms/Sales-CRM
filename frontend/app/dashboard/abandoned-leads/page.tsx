@@ -14,6 +14,7 @@ import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { LeadSelectionToolbar } from "@/components/leads/lead-selection-toolbar";
 import { AssignAbandonmentManagerDialog } from "@/components/abandonment/assign-manager-dialog";
 import { AssignAbandonmentSalespersonDialog } from "@/components/abandonment/assign-salesperson-dialog";
+import { ManagerAutoAssignToggle, SalespersonAutoAssignToggle } from "@/components/abandonment/auto-assign-toggle";
 
 const PAGE_SIZE = 20;
 
@@ -63,6 +64,9 @@ export default function AbandonedLeadsPage() {
               : "Abandoned carts assigned to you. Reach out while the intent is still fresh."
         }
       />
+
+      {isAdmin ? <ManagerAutoAssignToggle /> : null}
+      {isManager ? <SalespersonAutoAssignToggle /> : null}
 
       <AbandonmentFilters
         value={filters}

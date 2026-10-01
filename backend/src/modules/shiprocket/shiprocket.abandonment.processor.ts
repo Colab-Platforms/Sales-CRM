@@ -151,6 +151,14 @@ export async function processAbandonmentEvent(eventId: string, deps: Abandonment
       });
 
       await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
+
+      // Only a genuinely new abandonment tries auto-assignment - a repeat delivery for the same cart
+      // (the `existing` branch above) never re-triggers it, matching manual assignment's own "don't
+      // clobber an existing owner" behavior. Each stage's toggle decides whether anything happens.
+      if (!existing) {
+        const fullLead = await tx.lead.findUniqueOrThrow({ where: { id: lead.id } });
+        await leadService.autoAssignAbandonedLead(tx, fullLead);
+      }
     });
 
     await deps.store.complete(eventId, "PROCESSED", now());

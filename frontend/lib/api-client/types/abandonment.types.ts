@@ -1,5 +1,7 @@
 import type { Pagination } from "./orders.types";
 import type { LeadWorkingStatus } from "./dashboard.types";
+import type { Call } from "./calling.types";
+import type { LeadFollowUp } from "./tasks.types";
 
 // The abandoned-leads queue ("/dashboard/abandoned-leads"), fed by Shiprocket Checkout's "Abandon
 // Cart" webhook. Mirrors shiprocket.types.ts's shape (list item + summary + pagination) since it is
@@ -60,6 +62,8 @@ export interface AbandonmentListItem {
   lead: {
     id: string;
     leadNumber: string;
+    firstName: string;
+    lastName: string | null;
     name: string;
     mobile: string | null;
     email: string | null;
@@ -67,6 +71,8 @@ export interface AbandonmentListItem {
     workingStatus: LeadWorkingStatus;
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
+    calls: Call[];
+    tasks: LeadFollowUp[];
   };
   source: { id: string; name: string } | null;
   latestRecoveryAction: { type: RecoveryActionType; status: RecoveryActionStatus; createdAt: string } | null;
@@ -111,4 +117,11 @@ export interface BulkAssignSalespersonPayload {
   method: "MANUAL" | "ROUND_ROBIN";
   salespersonId?: string;
   salespersonIds?: string[];
+}
+
+// Auto-assignment toggles behind the manual bulk-assign flow above - see
+// backend/src/modules/lead/lead.service.ts's autoAssignAbandonedLead. The manager-stage toggle is
+// global (admin-controlled); the salesperson-stage toggle is scoped to the logged-in manager's own team.
+export interface AutoAssignConfig {
+  enabled: boolean;
 }
