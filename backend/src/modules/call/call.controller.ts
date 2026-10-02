@@ -10,7 +10,7 @@ import { getTelephonyService } from "@modules/telephony/telephony.service.js";
 import { CallInitiationError, createCallService, type CallService } from "./call.service.js";
 import { createPrismaCallInitiationStore } from "./call.store.js";
 import { CallHistoryService } from "./call.history.service.js";
-import { validateCallIdParams, validateListCallsQuery } from "./call.history.validators.js";
+import { validateCallIdParams, validateCallSummaryQuery, validateListCallsQuery } from "./call.history.validators.js";
 
 let cachedService: CallService | undefined;
 
@@ -113,3 +113,29 @@ export function createGetCallHandler(getSvc: () => CallHistoryService) {
 }
 
 export const getCall = createGetCallHandler(getHistoryService);
+
+/** `getSvc` is injectable so route tests can run without the database. Backs the IVR Inbound/Outbound
+ * summary cards (and is equally usable from the plain Call History page, unused there for now). */
+export function createGetCallSummaryHandler(getSvc: () => CallHistoryService) {
+  return async function getCallSummary(req: AuthRequest, res: Response): Promise<void> {
+    const { error, value } = validateCallSummaryQuery(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    try {
+      const result = await getSvc().getCallSummary(req.user!, value);
+      sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+    } catch (err) {
+      const status = err instanceof ApiError ? err.statusCode : STATUS_CODES.SERVER_ERROR;
+      const message = err instanceof ApiError ? err.message : "Something went wrong";
+      if (!(err instanceof ApiError)) {
+        logger.error(`Call summary: unexpected error category=${err instanceof Error ? err.name : "UnknownError"}`);
+      }
+      sendResponse(res, false, null, message, status);
+    }
+  };
+}
+
+export const getCallSummary = createGetCallSummaryHandler(getHistoryService);

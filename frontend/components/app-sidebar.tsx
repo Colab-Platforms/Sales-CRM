@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { ComponentType } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -35,7 +35,11 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
+import { ChevronRight, PhoneIncoming, PhoneOutgoing, Radio } from "lucide-react";
 import { NavUser } from "@/components/nav-user";
 import { BrandMark } from "@/components/brand-mark";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
@@ -49,6 +53,10 @@ interface NavItem {
   // up Status. Every other item keeps the default prefix match, which is what lets e.g. viewing an
   // order's detail page still highlight "Orders".
   exact?: boolean;
+  // Leads and IVR are the only nav items with real sub-pages rather than one page per item -
+  // everything else in this sidebar stays flat on purpose. Recursive so "Leads" can nest "IVR"
+  // which itself nests "Inbound" (IVR is part of the Leads feature, not a separate module).
+  children?: NavItem[];
 }
 
 interface NavSection {
@@ -178,7 +186,21 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Pipeline",
       items: [
-        { title: "My Leads", href: "/dashboard/leads", icon: Users },
+        {
+          title: "My Leads",
+          icon: Users,
+          children: [
+            { title: "All Leads", href: "/dashboard/leads", icon: Users, exact: true },
+            {
+              title: "IVR",
+              icon: Radio,
+              children: [
+                { title: "Inbound", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
+                { title: "Outbound", href: "/dashboard/leads/ivr/outbound", icon: PhoneOutgoing },
+              ],
+            },
+          ],
+        },
         {
           title: "Abandoned Leads",
           href: "/dashboard/abandoned-leads",
@@ -243,7 +265,21 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Pipeline",
       items: [
-        { title: "Leads", href: "/dashboard/leads", icon: Users },
+        {
+          title: "Leads",
+          icon: Users,
+          children: [
+            { title: "All Leads", href: "/dashboard/leads", icon: Users, exact: true },
+            {
+              title: "IVR",
+              icon: Radio,
+              children: [
+                { title: "Inbound", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
+                { title: "Outbound", href: "/dashboard/leads/ivr/outbound", icon: PhoneOutgoing },
+              ],
+            },
+          ],
+        },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
         { title: "Customers", href: "/dashboard/customers", icon: Contact },
         {
@@ -321,7 +357,21 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Pipeline",
       items: [
-        { title: "Leads", href: "/dashboard/leads", icon: Users },
+        {
+          title: "Leads",
+          icon: Users,
+          children: [
+            { title: "All Leads", href: "/dashboard/leads", icon: Users, exact: true },
+            {
+              title: "IVR",
+              icon: Radio,
+              children: [
+                { title: "Inbound", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
+                { title: "Outbound", href: "/dashboard/leads/ivr/outbound", icon: PhoneOutgoing },
+              ],
+            },
+          ],
+        },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
         { title: "Customers", href: "/dashboard/customers", icon: Contact },
         {
@@ -393,9 +443,109 @@ function isActivePath(pathname: string, href: string, exact = false) {
     : pathname === href || pathname.startsWith(`${href}/`);
 }
 
+function itemHasActiveDescendant(item: NavItem, pathname: string): boolean {
+  if (item.href && isActivePath(pathname, item.href, item.exact)) return true;
+  return item.children?.some((child) => itemHasActiveDescendant(child, pathname)) ?? false;
+}
+
+/** Every item with children (e.g. "Leads", "Leads/IVR") that must start expanded so the active
+ * route's parents are already open on first paint/direct navigation - a plain prefix match on
+ * href, same rule isActivePath already uses for non-exact items. */
+function collectAutoExpandedIds(items: NavItem[], pathname: string, parentId = ""): string[] {
+  const ids: string[] = [];
+  for (const item of items) {
+    if (!item.children) continue;
+    const id = parentId ? `${parentId}/${item.title}` : item.title;
+    if (itemHasActiveDescendant(item, pathname)) {
+      ids.push(id, ...collectAutoExpandedIds(item.children, pathname, id));
+    }
+  }
+  return ids;
+}
+
+/** Renders one child inside a SidebarMenuSub, recursing when that child itself has children
+ * (e.g. Leads > IVR > Inbound/Outbound) - nesting another SidebarMenuSub inside the
+ * SidebarMenuSubItem's <li>, which the primitive supports structurally. A parent with children
+ * is a click-to-expand toggle, not a link - only leaves (Inbound/Outbound/All Leads) navigate. */
+function SidebarSubNavItem({
+  item,
+  parentId,
+  pathname,
+  openIds,
+  onToggle,
+}: {
+  item: NavItem;
+  parentId: string;
+  pathname: string;
+  openIds: Set<string>;
+  onToggle: (id: string) => void;
+}) {
+  const id = `${parentId}/${item.title}`;
+
+  if (item.children) {
+    const isOpen = openIds.has(id);
+    return (
+      <SidebarMenuSubItem>
+        <SidebarMenuSubButton
+          onClick={() => onToggle(id)}
+          aria-expanded={isOpen}
+          isActive={itemHasActiveDescendant(item, pathname)}
+        >
+          <item.icon />
+          <span>{item.title}</span>
+          <ChevronRight className={`ml-auto size-3.5 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+        </SidebarMenuSubButton>
+        {isOpen ? (
+          <SidebarMenuSub>
+            {item.children.map((child) => (
+              <SidebarSubNavItem key={child.title} item={child} parentId={id} pathname={pathname} openIds={openIds} onToggle={onToggle} />
+            ))}
+          </SidebarMenuSub>
+        ) : null}
+      </SidebarMenuSubItem>
+    );
+  }
+
+  return (
+    <SidebarMenuSubItem>
+      <SidebarMenuSubButton
+        render={<Link href={item.href!} />}
+        isActive={Boolean(item.href) && isActivePath(pathname, item.href!, item.exact)}
+      >
+        <item.icon />
+        <span>{item.title}</span>
+      </SidebarMenuSubButton>
+    </SidebarMenuSubItem>
+  );
+}
+
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
   const sections = NAV_BY_ROLE[user.role];
+
+  const [openIds, setOpenIds] = useState<Set<string>>(
+    () => new Set(sections.flatMap((section) => collectAutoExpandedIds(section.items, pathname))),
+  );
+
+  // Direct navigation to a nested route (e.g. pasting /dashboard/leads/ivr/outbound) must reveal
+  // it even if nothing was manually expanded yet - this only ever adds ids, it never collapses
+  // something the user already toggled open or closed themselves.
+  useEffect(() => {
+    const needed = sections.flatMap((section) => collectAutoExpandedIds(section.items, pathname));
+    setOpenIds((prev) => {
+      if (needed.every((id) => prev.has(id))) return prev;
+      return new Set([...prev, ...needed]);
+    });
+  }, [pathname, sections]);
+
+  function toggle(id: string) {
+    setOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   return (
     <Sidebar collapsible="icon">
@@ -427,31 +577,63 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
             <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {section.items.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    {item.href ? (
+                {section.items.map((item) =>
+                  item.children ? (
+                    <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
-                        render={<Link href={item.href} />}
-                        isActive={pathname === item.href}
+                        type="button"
+                        onClick={() => toggle(item.title)}
+                        aria-expanded={openIds.has(item.title)}
+                        isActive={itemHasActiveDescendant(item, pathname)}
                         tooltip={item.title}
                       >
                         <item.icon />
                         <span>{item.title}</span>
+                        <ChevronRight
+                          className={`ml-auto size-3.5 shrink-0 transition-transform ${openIds.has(item.title) ? "rotate-90" : ""}`}
+                        />
                       </SidebarMenuButton>
-                    ) : (
-                      <>
+                      {openIds.has(item.title) ? (
+                        <SidebarMenuSub>
+                          {item.children.map((child) => (
+                            <SidebarSubNavItem
+                              key={child.title}
+                              item={child}
+                              parentId={item.title}
+                              pathname={pathname}
+                              openIds={openIds}
+                              onToggle={toggle}
+                            />
+                          ))}
+                        </SidebarMenuSub>
+                      ) : null}
+                    </SidebarMenuItem>
+                  ) : (
+                    <SidebarMenuItem key={item.title}>
+                      {item.href ? (
                         <SidebarMenuButton
-                          disabled
-                          tooltip={`${item.title} — coming soon`}
+                          render={<Link href={item.href} />}
+                          isActive={pathname === item.href}
+                          tooltip={item.title}
                         >
                           <item.icon />
                           <span>{item.title}</span>
                         </SidebarMenuButton>
-                        <SidebarMenuBadge>soon</SidebarMenuBadge>
-                      </>
-                    )}
-                  </SidebarMenuItem>
-                ))}
+                      ) : (
+                        <>
+                          <SidebarMenuButton
+                            disabled
+                            tooltip={`${item.title} — coming soon`}
+                          >
+                            <item.icon />
+                            <span>{item.title}</span>
+                          </SidebarMenuButton>
+                          <SidebarMenuBadge>soon</SidebarMenuBadge>
+                        </>
+                      )}
+                    </SidebarMenuItem>
+                  ),
+                )}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

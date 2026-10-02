@@ -171,6 +171,15 @@ export function createInMemoryCallEventStore() {
       return state.virtualNumbers.find((v) => numbers.includes(v.number))?.id ?? null;
     },
 
+    async createIvrLead(customerNumber) {
+      const digits = customerNumber.replace(/\D/g, "");
+      const normalizedMobile = digits.slice(-10);
+      if (normalizedMobile.length < 10) return null;
+      const id = randomUUID();
+      state.leads.push({ id, normalizedMobile, ownerId: null, lastActivityAt: null, lastContactedAt: null });
+      return { id, ownerId: null };
+    },
+
     async upsertRecording(data) {
       maybeFail("upsertRecording");
       const existing = state.recordings.find((r) => r.callId === data.callId);

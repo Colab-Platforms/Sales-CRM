@@ -10,10 +10,10 @@ import { signToken } from "@/lib/jwt.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { errorHandler } from "@/middlewares/errorHandler.js";
-import { createGetCallHandler, createListCallsHandler } from "./call.controller.js";
+import { createGetCallHandler, createGetCallSummaryHandler, createListCallsHandler } from "./call.controller.js";
 import { createCallRouter } from "./call.routes.js";
 import type { CallHistoryService } from "./call.history.service.js";
-import type { CallDetail, CallListResult, ListCallsQuery } from "./call.history.types.js";
+import type { CallDetail, CallListResult, CallSummary, CallSummaryQuery, ListCallsQuery } from "./call.history.types.js";
 
 const CALL_ID = "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d";
 
@@ -29,21 +29,35 @@ const LIST_ITEM = {
   outcome: null,
   hasRecording: false,
   createdAt: new Date("2026-01-05T09:59:00.000Z"),
+  agentNumber: "9123456789",
+  customerNumber: "9876543210",
+  virtualNumber: { displayName: "Avatar Sales", number: "01204567890" },
+  providerCallId: "CA123",
 };
 
 const LIST_RESULT: CallListResult = { data: [LIST_ITEM], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } };
-const DETAIL_RESULT: CallDetail = { ...LIST_ITEM, answeredAt: new Date("2026-01-05T10:00:05.000Z"), notes: null, callingIdentity: { displayName: "Avatar Sales", number: "01204567890" } };
+const DETAIL_RESULT: CallDetail = {
+  ...LIST_ITEM,
+  answeredAt: new Date("2026-01-05T10:00:05.000Z"),
+  notes: null,
+  callingIdentity: { displayName: "Avatar Sales", number: "01204567890" },
+  recordingUrl: null,
+  providerMetadata: null,
+};
+const SUMMARY_RESULT: CallSummary = { total: 1, byStatus: [{ status: CallStatus.COMPLETED, count: 1 }], totalTalkTimeSeconds: 300 };
 
 let server: Server | undefined;
 let baseUrl = "";
 let listBehaviour: () => Promise<CallListResult> = async () => LIST_RESULT;
 let getBehaviour: () => Promise<CallDetail> = async () => DETAIL_RESULT;
+let summaryBehaviour: () => Promise<CallSummary> = async () => SUMMARY_RESULT;
 let seenActors: { id: string; role: Role }[] = [];
 let seenListQueries: ListCallsQuery[] = [];
 let seenCallIds: string[] = [];
+let seenSummaryQueries: CallSummaryQuery[] = [];
 let logs: string[] = [];
 
-const fakeHistoryService: Pick<CallHistoryService, "listCalls" | "getCallById"> = {
+const fakeHistoryService: Pick<CallHistoryService, "listCalls" | "getCallById" | "getCallSummary"> = {
   async listCalls(actor, query) {
     seenActors.push(actor);
     seenListQueries.push(query);
@@ -54,6 +68,11 @@ const fakeHistoryService: Pick<CallHistoryService, "listCalls" | "getCallById"> 
     seenCallIds.push(id);
     return getBehaviour();
   },
+  async getCallSummary(actor, query) {
+    seenActors.push(actor);
+    seenSummaryQueries.push(query);
+    return summaryBehaviour();
+  },
 };
 
 const token = (role: Role, id = "user-1") => signToken({ sub: id, role, email: "user@example.test" });
@@ -61,9 +80,11 @@ const token = (role: Role, id = "user-1") => signToken({ sub: id, role, email: "
 beforeEach(async () => {
   listBehaviour = async () => LIST_RESULT;
   getBehaviour = async () => DETAIL_RESULT;
+  summaryBehaviour = async () => SUMMARY_RESULT;
   seenActors = [];
   seenListQueries = [];
   seenCallIds = [];
+  seenSummaryQueries = [];
   logs = [];
   const capture = (...args: unknown[]) => void logs.push(args.map(String).join(" "));
   mock.method(console, "log", capture);
@@ -78,6 +99,7 @@ beforeEach(async () => {
       undefined,
       createListCallsHandler(() => fakeHistoryService as CallHistoryService),
       createGetCallHandler(() => fakeHistoryService as CallHistoryService),
+      createGetCallSummaryHandler(() => fakeHistoryService as CallHistoryService),
     ),
   );
   app.use(errorHandler);
@@ -227,5 +249,37 @@ describe("GET /api/calls/:id", () => {
     const res = await get(`/${CALL_ID}`, auth());
     const text = await res.text();
     assert.ok(!/callerdesk|exotel/i.test(text));
+  });
+});
+
+describe("GET /api/calls/summary - IVR reporting cards", () => {
+  const auth = () => `Bearer ${token(Role.SALESPERSON)}`;
+
+  it("200 with the aggregate shape, same filters as the list endpoint", async () => {
+    const res = await get("/summary?direction=INBOUND&agentId=9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d&hasRecording=true", auth());
+    const body = (await res.json()) as { success: boolean; data: CallSummary };
+    assert.equal(res.status, 200);
+    assert.deepEqual(body.data, SUMMARY_RESULT);
+    assert.equal(seenSummaryQueries[0]!.direction, "INBOUND");
+    assert.equal(seenSummaryQueries[0]!.agentId, "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d");
+    assert.equal(seenSummaryQueries[0]!.hasRecording, true);
+  });
+
+  it("is reachable before /:id - 'summary' is never swallowed as a call id", async () => {
+    const res = await get("/summary", auth());
+    assert.equal(res.status, 200);
+    assert.equal(seenSummaryQueries.length, 1, "the summary handler, not the :id handler, must have run");
+    assert.equal(seenCallIds.length, 0, "'summary' must never be parsed as a call id");
+  });
+
+  it("rejects a bad filter value (400) without calling the service", async () => {
+    const res = await get("/summary?hasRecording=maybe", auth());
+    assert.equal(res.status, 400);
+    assert.equal(seenSummaryQueries.length, 0);
+  });
+
+  it("requires auth, same as the list/detail endpoints", async () => {
+    const res = await fetch(`${baseUrl}/summary`);
+    assert.equal(res.status, 401);
   });
 });

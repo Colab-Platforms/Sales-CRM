@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { CallDirection, CallOutcomeCategory, CallStatus } from "../../../generated/prisma/enums.js";
-import { buildCallWhere, scopedCallWhere, searchWhere } from "./call.history.filters.js";
-import { validateCallIdParams, validateListCallsQuery } from "./call.history.validators.js";
+import { CallDirection, CallOutcomeCategory, CallStatus, Role } from "../../../generated/prisma/enums.js";
+import { buildCallSummary, buildCallWhere, scopedCallWhere, searchWhere } from "./call.history.filters.js";
+import { validateCallIdParams, validateCallSummaryQuery, validateListCallsQuery } from "./call.history.validators.js";
 import { mapCallDetail, mapCallListItem } from "./call.history.service.js";
+import { extractSafeProviderMetadata } from "./call.history.metadata.js";
 import type { ListCallsQuery } from "./call.history.types.js";
 
 const UUID = "0b8f4c1e-6a52-4c53-9d0a-3f1b2c4d5e6f";
@@ -146,32 +147,163 @@ describe("mapCallListItem / mapCallDetail - the exact frontend contract shape", 
     agent: { id: "agent-1", name: "E3 UAT Salesperson" },
     lead: { id: "lead-1", leadNumber: "LEAD-001", firstName: "Rahul", lastName: "Sharma", mobile: "9876543210" },
     outcome: null as { name: string; category: CallOutcomeCategory } | null,
-    recording: null as { id: string } | null,
+    recording: null as { id: string; recordingUrl: string | null } | null,
+    agentNumber: "9123456789" as string | null,
+    customerNumber: "9876543210" as string | null,
+    providerCallId: "CA123" as string | null,
+    virtualNumber: null as { id: string; number: string; displayName: string | null } | null,
+    provider: "callerdesk",
   };
 
   it("maps a call with no outcome/recording to null/false - never inventing either", () => {
     const item = mapCallListItem(baseRow);
-    assert.deepEqual(Object.keys(item).sort(), ["agent", "createdAt", "direction", "durationSeconds", "endedAt", "hasRecording", "id", "lead", "outcome", "startedAt", "status"]);
+    assert.deepEqual(
+      Object.keys(item).sort(),
+      ["agent", "agentNumber", "createdAt", "customerNumber", "direction", "durationSeconds", "endedAt", "hasRecording", "id", "lead", "outcome", "providerCallId", "startedAt", "status", "virtualNumber"].sort(),
+    );
     assert.equal(item.outcome, null);
     assert.equal(item.hasRecording, false);
   });
 
   it("maps a real outcome and recording presence, never the raw recording URL", () => {
+    // mapCallListItem's input type only ever selects `recording: { id: true }` (see LIST_SELECT) -
+    // there is no recordingUrl to accidentally leak here even before the mapper runs.
     const item = mapCallListItem({ ...baseRow, outcome: { name: "Interested", category: CallOutcomeCategory.INTERESTED }, recording: { id: "rec-1" } });
     assert.deepEqual(item.outcome, { name: "Interested", category: CallOutcomeCategory.INTERESTED });
     assert.equal(item.hasRecording, true);
-    assert.ok(!("recordingUrl" in item), "the raw recording URL must never be present on the mapped item");
+    assert.ok(!("recordingUrl" in item), "the raw recording URL must never be present on the mapped LIST item");
   });
 
   it("mapCallDetail extends the list shape with answeredAt/notes/callingIdentity", () => {
-    const detail = mapCallDetail({ ...baseRow, answeredAt: new Date("2026-01-05T10:00:05.000Z"), notes: "Customer will call back", virtualNumber: { number: "01204567890", displayName: "Avatar Sales" } });
+    const detail = mapCallDetail(
+      { ...baseRow, answeredAt: new Date("2026-01-05T10:00:05.000Z"), notes: "Customer will call back", virtualNumber: { id: "vn-1", number: "01204567890", displayName: "Avatar Sales" } },
+      Role.ADMIN,
+      null,
+    );
     assert.equal(detail.answeredAt?.toISOString(), "2026-01-05T10:00:05.000Z");
     assert.equal(detail.notes, "Customer will call back");
     assert.deepEqual(detail.callingIdentity, { number: "01204567890", displayName: "Avatar Sales" });
   });
 
   it("maps a null virtualNumber to a null callingIdentity, never a fabricated one", () => {
-    const detail = mapCallDetail({ ...baseRow, answeredAt: null, notes: null, virtualNumber: null });
+    const detail = mapCallDetail({ ...baseRow, answeredAt: null, notes: null, virtualNumber: null }, Role.ADMIN, null);
     assert.equal(detail.callingIdentity, null);
+  });
+
+  it("recordingUrl is only ever returned for ADMIN/MANAGER, never SALESPERSON, matching the legacy /api/calling redaction rule", () => {
+    const row = { ...baseRow, answeredAt: null, notes: null, virtualNumber: null, recording: { id: "rec-1", recordingUrl: "https://callerdesk.example/rec.mp3" } };
+    assert.equal(mapCallDetail(row, Role.ADMIN, null).recordingUrl, "https://callerdesk.example/rec.mp3");
+    assert.equal(mapCallDetail(row, Role.MANAGER, null).recordingUrl, "https://callerdesk.example/rec.mp3");
+    assert.equal(mapCallDetail(row, Role.SALESPERSON, null).recordingUrl, null);
+  });
+
+  it("passes providerMetadata through untouched - the service computes it, the mapper just carries it", () => {
+    const metadata = { campaignId: "55203758", errorCode: null, callGroup: null, receiverName: null, agentPickedAt: null, customerLegStartedAt: null, customerPickedAt: null, callDurationSeconds: null };
+    const detail = mapCallDetail({ ...baseRow, answeredAt: null, notes: null, virtualNumber: null }, Role.ADMIN, metadata);
+    assert.deepEqual(detail.providerMetadata, metadata);
+  });
+});
+
+describe("buildCallWhere - IVR reporting filters (agentId / virtualNumberId / hasRecording)", () => {
+  it("adds agentId and virtualNumberId as plain equality clauses", () => {
+    const where = buildCallWhere({ ...baseQuery, agentId: "agent-1", virtualNumberId: "vn-1" }, {});
+    assert.deepEqual(where, { AND: [{ agentId: "agent-1" }, { virtualNumberId: "vn-1" }] });
+  });
+
+  it("hasRecording=true means the recording relation exists; false means it doesn't", () => {
+    assert.deepEqual(buildCallWhere({ ...baseQuery, hasRecording: true }, {}), { AND: [{ recording: { isNot: null } }] });
+    assert.deepEqual(buildCallWhere({ ...baseQuery, hasRecording: false }, {}), { AND: [{ recording: { is: null } }] });
+  });
+
+  it("combines with lead scope and the plain Call History filters unchanged", () => {
+    const where = buildCallWhere({ ...baseQuery, direction: CallDirection.INBOUND, agentId: "agent-1" }, { ownerId: "s1" });
+    assert.deepEqual(where, { AND: [{ lead: { ownerId: "s1" } }, { direction: CallDirection.INBOUND }, { agentId: "agent-1" }] });
+  });
+});
+
+describe("buildCallSummary", () => {
+  it("sums counts across statuses into a total, and carries the talk-time sum through", () => {
+    const summary = buildCallSummary(
+      [
+        { status: CallStatus.COMPLETED, _count: { _all: 3 } },
+        { status: CallStatus.NO_ANSWER, _count: { _all: 2 } },
+      ],
+      450,
+    );
+    assert.equal(summary.total, 5);
+    assert.deepEqual(summary.byStatus, [
+      { status: CallStatus.COMPLETED, count: 3 },
+      { status: CallStatus.NO_ANSWER, count: 2 },
+    ]);
+    assert.equal(summary.totalTalkTimeSeconds, 450);
+  });
+
+  it("a null talk-time sum (no calls matched) becomes 0, not null - never NaN in the UI", () => {
+    assert.equal(buildCallSummary([], null).totalTalkTimeSeconds, 0);
+    assert.equal(buildCallSummary([], null).total, 0);
+  });
+});
+
+describe("validateCallSummaryQuery", () => {
+  it("accepts the same filters as the list query, minus page/limit", () => {
+    const { error, value } = validateCallSummaryQuery({ direction: "INBOUND", agentId: "0b8f4c1e-6a52-4c53-9d0a-3f1b2c4d5e6f", hasRecording: "true" });
+    assert.equal(error, null);
+    assert.equal(value.direction, "INBOUND");
+    assert.equal(value.hasRecording, true);
+    assert.ok(!("page" in value));
+    assert.ok(!("limit" in value));
+  });
+
+  it("rejects a non-uuid agentId/virtualNumberId", () => {
+    assert.notEqual(validateCallSummaryQuery({ agentId: "not-a-uuid" }).error, null);
+    assert.notEqual(validateCallSummaryQuery({ virtualNumberId: "not-a-uuid" }).error, null);
+  });
+
+  it("rejects a hasRecording value that isn't true/false", () => {
+    assert.notEqual(validateCallSummaryQuery({ hasRecording: "maybe" }).error, null);
+  });
+});
+
+describe("extractSafeProviderMetadata - IVR call-detail 'safe provider metadata'", () => {
+  it("extracts only the allowlisted fields, case-insensitively, from a raw CallerDesk Call Report payload", () => {
+    const payload = {
+      CallSid: "CA123",
+      campid: "55203758",
+      Error_Code: "0",
+      call_group: "Sales",
+      Receiver_Name: "Agent A",
+      LegA_Picked_time: "2026-01-05 10:00:02",
+      LegB_Start_time: "2026-01-05 10:00:05",
+      LegB_Picked_time: "2026-01-05 10:00:08",
+      CallDuration: "45",
+    };
+    const metadata = extractSafeProviderMetadata(payload);
+    assert.deepEqual(metadata, {
+      campaignId: "55203758",
+      errorCode: "0",
+      callGroup: "Sales",
+      receiverName: "Agent A",
+      agentPickedAt: "2026-01-05 10:00:02",
+      customerLegStartedAt: "2026-01-05 10:00:05",
+      customerPickedAt: "2026-01-05 10:00:08",
+      callDurationSeconds: 45,
+    });
+  });
+
+  it("never returns an authcode/apikey field even if one were somehow present - explicit allowlist, not a payload dump", () => {
+    const payload = { campid: "1", authcode: "SECRET-SHOULD-NEVER-APPEAR", api_key: "ALSO-SECRET" };
+    const metadata = extractSafeProviderMetadata(payload);
+    assert.ok(metadata);
+    assert.ok(!JSON.stringify(metadata).includes("SECRET"));
+  });
+
+  it("returns null for a payload with none of the safe fields present", () => {
+    assert.equal(extractSafeProviderMetadata({ CallSid: "CA123", Status: "Answer" }), null);
+  });
+
+  it("returns null for a non-object payload", () => {
+    assert.equal(extractSafeProviderMetadata(null), null);
+    assert.equal(extractSafeProviderMetadata("oops"), null);
+    assert.equal(extractSafeProviderMetadata([1, 2]), null);
   });
 });

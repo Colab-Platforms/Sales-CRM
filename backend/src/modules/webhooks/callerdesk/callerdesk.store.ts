@@ -1,6 +1,8 @@
 import type { Prisma } from "@root/generated/prisma/client.js";
-import { ActivityType, Role, UserStatus, WebhookStatus, type CallDirection, type CallStatus } from "@root/generated/prisma/enums.js";
+import { ActivityType, Role, SourceStatus, SourceType, UserStatus, WebhookStatus, type CallDirection, type CallStatus } from "@root/generated/prisma/enums.js";
 import type { prisma as PrismaSingleton } from "@/lib/prisma.js";
+import { normalizeMobile } from "@/utils/normalize.js";
+import LeadService from "../../lead/lead.service.js";
 
 /**
  * Persistence port for the CallerDesk webhook service.
@@ -75,6 +77,11 @@ export interface CandidateLead {
   ownerId: string | null;
 }
 
+export interface CreatedIvrLead {
+  id: string;
+  ownerId: string | null;
+}
+
 export interface CandidateUser {
   id: string;
   phone: string;
@@ -118,6 +125,15 @@ export interface CallEventTx {
   findActiveUsersWithPhone(): Promise<CandidateUser[]>;
   findVirtualNumberId(numbers: string[]): Promise<string | null>;
 
+  /**
+   * Only called after findLeadsByNormalizedMobile already found zero matches for this caller.
+   * Creates (or reuses) the "IVR Inquiry" Source and a minimal, unassigned Lead for the caller's
+   * number, via the same lead.service.ts#createLeadFromSource path every other webhook-sourced
+   * lead (Shopify/WhatsApp/Shiprocket) already uses - no second lead-creation implementation.
+   * Returns null only if the number cannot be normalized into a storable mobile.
+   */
+  createIvrLead(customerNumber: string): Promise<CreatedIvrLead | null>;
+
   /** Idempotent by `callId` (unique). Never creates a second recording row. */
   upsertRecording(data: RecordingUpsert): Promise<"created" | "updated" | "unchanged">;
 
@@ -137,6 +153,15 @@ export interface CallEventStore {
 
 const CALL_ACTIVITY_REFERENCE_TYPE = "Call";
 const TRANSACTION_OPTIONS = { maxWait: 5_000, timeout: 15_000 } as const;
+
+// "IVR caller = Lead": the Source row every inbound-IVR-created Lead is attached to. `type: API` reuses
+// an existing SourceType enum value (an external system posting to our API) rather than adding a new
+// enum member, which would itself be a migration - see telephony/README.md's Correlation section.
+export const IVR_INQUIRY_SOURCE_CODE = "ivr_inquiry";
+export const IVR_INQUIRY_SOURCE_NAME = "IVR Inquiry";
+const IVR_CALLER_PLACEHOLDER_FIRST_NAME = "IVR Caller";
+
+const leadService = new LeadService();
 
 type Db = Prisma.TransactionClient;
 
@@ -252,6 +277,31 @@ function createTx(db: Db): CallEventTx {
         select: { id: true },
       });
       return row?.id ?? null;
+    },
+
+    async createIvrLead(customerNumber) {
+      if (!normalizeMobile(customerNumber)) return null;
+
+      const source = await db.source.upsert({
+        where: { code: IVR_INQUIRY_SOURCE_CODE },
+        update: {},
+        create: {
+          name: IVR_INQUIRY_SOURCE_NAME,
+          code: IVR_INQUIRY_SOURCE_CODE,
+          type: SourceType.API,
+          status: SourceStatus.ACTIVE,
+        },
+        select: { id: true },
+      });
+
+      const lead = await leadService.createLeadFromSource(
+        source.id,
+        { firstName: IVR_CALLER_PLACEHOLDER_FIRST_NAME, mobile: customerNumber },
+        "Lead created via IVR Inquiry",
+        db,
+      );
+
+      return { id: lead.id, ownerId: lead.ownerId };
     },
 
     async upsertRecording(data) {

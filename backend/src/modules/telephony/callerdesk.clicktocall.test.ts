@@ -5,6 +5,7 @@ import {
   CALLERDESK_CLICK_TO_CALL_URL,
   CallerDeskProvider,
   classifyClickToCallResponse,
+  sanitizeProviderMessage,
 } from "./callerdesk.provider.js";
 import { ProviderInitiationError, type InitiateOutboundCallInput } from "./provider.types.js";
 
@@ -157,10 +158,46 @@ describe("CallerDesk click-to-call responses", () => {
 
   it("classifies pure responses consistently", () => {
     assert.deepEqual(classifyClickToCallResponse(200, SUCCESS_BODY), { kind: "ACCEPTED", campid: "3494009" });
-    assert.deepEqual(classifyClickToCallResponse(200, OBSERVED_AUTH_ERROR), { kind: "REJECTED" });
+    assert.deepEqual(classifyClickToCallResponse(200, OBSERVED_AUTH_ERROR), { kind: "REJECTED", message: "Invalid Auth Code!" });
     assert.deepEqual(classifyClickToCallResponse(200, ` \n${SUCCESS_BODY}\n `), { kind: "ACCEPTED", campid: "3494009" });
     assert.deepEqual(classifyClickToCallResponse(200, '{"type":"SUCCESS","campid":7}'), { kind: "ACCEPTED", campid: "7" });
     assert.equal(classifyClickToCallResponse(201, SUCCESS_BODY).kind, "UNCERTAIN", "only 200 is documented");
+  });
+
+  it("extracts the rejection message so the real reason can be logged", () => {
+    const body = '{"type":"error","message":"Insufficient balance"}';
+    assert.deepEqual(classifyClickToCallResponse(200, body), { kind: "REJECTED", message: "Insufficient balance" });
+  });
+
+  it("falls back to null when the rejection has no message field", () => {
+    const body = '{"type":"error"}';
+    assert.deepEqual(classifyClickToCallResponse(200, body), { kind: "REJECTED", message: null });
+  });
+});
+
+describe("sanitizeProviderMessage", () => {
+  it("never lets a URL through, since that's where the authcode lives", () => {
+    const message = sanitizeProviderMessage("See https://app.callerdesk.io/api/click_to_call_v2?authcode=SECRET123 for details");
+    assert.ok(!message.includes("authcode"), "authcode must not appear in the sanitized message");
+    assert.ok(!message.includes("SECRET123"));
+    assert.ok(message.includes("[redacted-url]"));
+  });
+
+  it("redacts long token-shaped runs even outside a URL", () => {
+    const message = sanitizeProviderMessage("Auth failed for key abcdefghijklmnop0123456789");
+    assert.ok(!message.includes("abcdefghijklmnop0123456789"));
+    assert.ok(message.includes("[redacted]"));
+  });
+
+  it("leaves an ordinary short message untouched", () => {
+    assert.equal(sanitizeProviderMessage("Invalid Auth Code!"), "Invalid Auth Code!");
+  });
+
+  it("truncates very long messages", () => {
+    const long = "error ".repeat(100); // words separated by spaces, so nothing is token-shaped
+    const result = sanitizeProviderMessage(long);
+    assert.ok(result.length <= 201);
+    assert.ok(result.endsWith("…"));
   });
 });
 

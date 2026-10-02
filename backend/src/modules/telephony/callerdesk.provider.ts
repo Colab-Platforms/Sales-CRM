@@ -1,4 +1,5 @@
 import { CallStatus } from "@root/generated/prisma/enums.js";
+import { logger } from "@/utils/logger.js";
 import { normalizeCallerDeskPayload, DEFAULT_TIMESTAMP_UTC_OFFSET } from "@modules/webhooks/callerdesk/callerdesk.payload.js";
 import {
   ProviderInitiationError,
@@ -71,8 +72,21 @@ export function readCallerDeskConfigFromEnv(env: NodeJS.ProcessEnv = process.env
 
 export type ClickToCallClassification =
   | { kind: "ACCEPTED"; campid: string | null }
-  | { kind: "REJECTED" }
+  | { kind: "REJECTED"; message: string | null }
   | { kind: "UNCERTAIN"; code: string };
+
+// Diagnostic only - never affects control flow. Strips anything that could be a URL (which is
+// where the authcode lives, per this file's own contract notes) or a long token/credential-shaped
+// run of characters, so a future CallerDesk message can never leak a secret into logs even if one
+// ever ended up embedded in it.
+const URL_PATTERN = /https?:\/\/\S+/gi;
+const TOKEN_LIKE_PATTERN = /[A-Za-z0-9_-]{16,}/g;
+const MAX_LOGGED_MESSAGE_LENGTH = 200;
+
+export function sanitizeProviderMessage(message: string): string {
+  const redacted = message.replace(URL_PATTERN, "[redacted-url]").replace(TOKEN_LIKE_PATTERN, "[redacted]");
+  return redacted.length > MAX_LOGGED_MESSAGE_LENGTH ? `${redacted.slice(0, MAX_LOGGED_MESSAGE_LENGTH)}…` : redacted;
+}
 
 /** Pure classification of a click-to-call HTTP response. Exported for tests. */
 export function classifyClickToCallResponse(httpStatus: number, bodyText: string): ClickToCallClassification {
@@ -102,7 +116,10 @@ export function classifyClickToCallResponse(httpStatus: number, bodyText: string
     return { kind: "ACCEPTED", campid };
   }
 
-  if (type === "error") return { kind: "REJECTED" };
+  if (type === "error") {
+    const rawMessage = typeof body.message === "string" ? body.message.trim() : null;
+    return { kind: "REJECTED", message: rawMessage ? sanitizeProviderMessage(rawMessage) : null };
+  }
 
   return { kind: "UNCERTAIN", code: "UNRECOGNISED_RESPONSE" };
 }
@@ -191,6 +208,9 @@ export class CallerDeskProvider implements TelephonyProvider {
       case "ACCEPTED":
         return { provider: "CALLERDESK", providerCallId: outcome.campid, campaignId: outcome.campid, status: CallStatus.INITIATED };
       case "REJECTED":
+        logger.warn(
+          `CallerDesk provider rejection: status=${status} type=error message="${outcome.message ?? "(no message)"}"`,
+        );
         throw new ProviderInitiationError("CALLERDESK", "NOT_DISPATCHED", "PROVIDER_REJECTED", "CallerDesk rejected the call request");
       case "UNCERTAIN":
         throw new ProviderInitiationError("CALLERDESK", "UNCERTAIN", outcome.code, "The CallerDesk response could not be confirmed");

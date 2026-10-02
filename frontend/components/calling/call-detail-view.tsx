@@ -101,16 +101,34 @@ export function CallDetailView({ callId }: { callId: string }) {
             <DetailField label="Ended">{formatDateTime(call.endedAt)}</DetailField>
             <DetailField label="Duration">{formatCallDuration(call.durationSeconds)}</DetailField>
             <DetailField label="Outcome / Disposition">{call.outcome?.name ?? "—"}</DetailField>
-            <DetailField label="Recording">
-              {call.hasRecording ? (
-                <span className="flex items-center gap-1.5">
-                  <Mic className="size-3.5" aria-hidden="true" /> Recording available
-                </span>
-              ) : (
-                "—"
-              )}
-            </DetailField>
+            <DetailField label="Caller / Customer number">{call.customerNumber ?? "—"}</DetailField>
+            <DetailField label="Agent number">{call.agentNumber ?? "—"}</DetailField>
+            <DetailField label="DID / Virtual number">{call.virtualNumber?.number ?? "—"}</DetailField>
+            <DetailField label="CallSid">{call.providerCallId ?? "—"}</DetailField>
+            {call.providerMetadata?.campaignId ? <DetailField label="campid">{call.providerMetadata.campaignId}</DetailField> : null}
           </DetailGrid>
+
+          {/* Recording: role-gated server-side (call.recordingUrl is null for SALESPERSON even when
+              a recording exists, see backend call.history.service.ts#canSeeRecordingUrl) - this
+              component never has to know the rule itself, it only ever renders what it's given. */}
+          <div className="border-t pt-4">
+            <h3 className="mb-2 text-sm font-medium">Recording</h3>
+            {call.recordingUrl ? (
+              <div className="space-y-2">
+                <audio controls className="h-10 w-full max-w-md" src={call.recordingUrl} />
+                <a href={call.recordingUrl} download className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline">
+                  <Mic className="size-3.5" aria-hidden="true" />
+                  Download recording
+                </a>
+              </div>
+            ) : call.hasRecording ? (
+              <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                <Mic className="size-3.5" aria-hidden="true" /> Recording available — visible to managers and admins only
+              </span>
+            ) : (
+              <span className="text-sm text-muted-foreground">—</span>
+            )}
+          </div>
 
           <div className="border-t pt-4">
             <CallingIdentity identity={call.callingIdentity} pendingMessage="Not recorded for this call" />
@@ -120,6 +138,25 @@ export function CallDetailView({ callId }: { callId: string }) {
             <h3 className="mb-1 text-sm font-medium">Notes</h3>
             <p className="text-sm text-muted-foreground whitespace-pre-wrap">{call.notes ?? "—"}</p>
           </div>
+
+          {/* Safe provider metadata: only the allowlisted fields CallerDesk's Call Report actually
+              sent for this call - never a raw payload dump, never a credential. See backend
+              call.history.metadata.ts. Future IVR fields (DTMF digit, menu path, language,
+              callback time) belong here too, once CallerDesk actually sends them - nothing is
+              invented ahead of that. */}
+          {call.providerMetadata ? (
+            <div className="border-t pt-4">
+              <h3 className="mb-1 text-sm font-medium">Provider details</h3>
+              <DetailGrid>
+                {call.providerMetadata.callDurationSeconds !== null ? (
+                  <DetailField label="Call duration (ring + talk)">{formatCallDuration(call.providerMetadata.callDurationSeconds)}</DetailField>
+                ) : null}
+                {call.providerMetadata.errorCode ? <DetailField label="Error code">{call.providerMetadata.errorCode}</DetailField> : null}
+                {call.providerMetadata.callGroup ? <DetailField label="Call group">{call.providerMetadata.callGroup}</DetailField> : null}
+                {call.providerMetadata.receiverName ? <DetailField label="Receiver">{call.providerMetadata.receiverName}</DetailField> : null}
+              </DetailGrid>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
     </div>

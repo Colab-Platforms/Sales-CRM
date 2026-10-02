@@ -240,29 +240,71 @@ describe("CallerDesk webhook service - Call Report", () => {
 });
 
 describe("CallerDesk webhook service - correlation", () => {
-  it("unmatched lead: stored safely as RECEIVED, no Call, no Activity", async () => {
+  it("IVR caller = Lead: an unknown caller gets exactly one new, unassigned Lead and a linked inbound Call", async () => {
+    const { kit, service } = setup();
+    kit.addUser({ phone: "9123456789" }); // matches the fixture's DialWhomNumber, so the agent resolves
+
+    const result = processed(await service.processWebhook(inboundCallReport()));
+
+    assert.equal(kit.state.leads.length, 1, "exactly one Lead was created");
+    assert.equal(kit.state.leads[0]!.normalizedMobile, "9876543210");
+    assert.equal(kit.state.leads[0]!.ownerId, null, "unassigned, same convention as other webhook-sourced leads");
+    assert.equal(result.callCreated, true);
+    assert.equal(kit.state.calls.length, 1);
+    assert.equal(kit.state.calls[0]!.leadId, kit.state.leads[0]!.id);
+  });
+
+  it("the same caller calling again reuses the Lead created on their first call - no duplicate", async () => {
+    const { kit, service } = setup();
+    kit.addUser({ phone: "9123456789" });
+
+    await service.processWebhook(inboundCallReport());
+    assert.equal(kit.state.leads.length, 1);
+
+    const second = processed(await service.processWebhook(inboundCallReport({ CallSid: "second-call-sid" })));
+
+    assert.equal(kit.state.leads.length, 1, "still exactly one Lead");
+    assert.equal(second.callCreated, true);
+    assert.equal(kit.state.calls.length, 2, "a second, separate Call for the second ring");
+    assert.equal(kit.state.calls[1]!.leadId, kit.state.leads[0]!.id);
+  });
+
+  it("a caller who already matches an existing (non-IVR) Lead reuses it - no new Lead is created", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit); // seeds a lead with normalizedMobile 919876543210, matching the fixture's caller
+
+    processed(await service.processWebhook(inboundCallReport()));
+
+    assert.equal(kit.state.leads.length, 1, "no second Lead created for an already-known caller");
+  });
+
+  it("unmatched lead: an unnormalizable caller number is stored safely as RECEIVED, no Call, no Activity, no Lead", async () => {
     const { kit, service } = setup();
 
-    const result = await service.processWebhook(inboundCallReport());
+    const result = await service.processWebhook(inboundCallReport({ SourceNumber: "123" }));
 
     assert.equal(result.outcome, "UNMATCHED");
     assert.equal(result.outcome === "UNMATCHED" && result.reason, "NO_LEAD_MATCH");
+    assert.equal(kit.state.leads.length, 0);
     assert.equal(kit.state.calls.length, 0);
     assert.equal(kit.state.activities.length, 0);
     assert.equal(kit.state.webhookEvents.length, 1);
     assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.RECEIVED);
-    assert.deepEqual(kit.state.webhookEvents[0]!.payload, inboundCallReport());
   });
 
-  it("an unmatched event is reconciled by a later retry once the lead exists", async () => {
+  it("an unmatched event (no resolvable agent) is reconciled by a later retry, reusing the Lead already created", async () => {
     const { kit, service } = setup();
-    await service.processWebhook(inboundCallReport());
+    const first = await service.processWebhook(inboundCallReport());
+    assert.equal(first.outcome, "UNMATCHED");
+    assert.equal(first.outcome === "UNMATCHED" && first.reason, "NO_AGENT_RESOLVED");
+    assert.equal(kit.state.leads.length, 1, "the Lead still committed even though the Call did not");
     assert.equal(kit.state.calls.length, 0);
 
-    seedInboundWorld(kit);
+    kit.addUser({ phone: "9123456789" }); // the agent can now be resolved
     const retry = processed(await service.processWebhook(inboundCallReport()));
 
     assert.equal(retry.callCreated, true);
+    assert.equal(kit.state.leads.length, 1, "still the same Lead, not a second one");
     assert.equal(kit.state.calls.length, 1);
     assert.equal(kit.state.webhookEvents.length, 1, "the stored event is reused, not duplicated");
     assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.PROCESSED);

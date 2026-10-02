@@ -1,10 +1,10 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { callHistoryDetailQueryOptions, callHistoryListQueryOptions } from "@/lib/api-client/queries/call-history.queries";
+import { callHistoryDetailQueryOptions, callHistoryListQueryOptions, callHistorySummaryQueryOptions } from "@/lib/api-client/queries/call-history.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useAuthStore } from "@/stores/auth-store";
-import type { CallListParams } from "@/lib/api-client/types/call-history.types";
+import type { CallListParams, CallSummaryParams } from "@/lib/api-client/types/call-history.types";
 
 export function useCallHistoryList(params: CallListParams) {
   const token = useAuthStore((s) => s.token);
@@ -15,6 +15,19 @@ export function useCallHistoryList(params: CallListParams) {
     isLoading: query.isPending && query.fetchStatus !== "idle",
     isFetching: query.isFetching,
     error: query.error ? getErrorMessage(query.error, "Failed to load call history.") : null,
+    refetch: query.refetch,
+  };
+}
+
+/** Backs the IVR Inbound/Outbound summary cards - same endpoint/filters as the list, aggregated. */
+export function useCallHistorySummary(params: CallSummaryParams) {
+  const token = useAuthStore((s) => s.token);
+  const query = useQuery({ ...callHistorySummaryQueryOptions(params), enabled: Boolean(token), retry: false });
+
+  return {
+    data: query.data ?? null,
+    isLoading: query.isPending && query.fetchStatus !== "idle",
+    error: query.error ? getErrorMessage(query.error, "Failed to load call summary.") : null,
     refetch: query.refetch,
   };
 }

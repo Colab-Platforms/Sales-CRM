@@ -31,9 +31,12 @@ import type { CallEventStore, CallEventTx, CallPatch, StoredCall } from "./calle
  *  1. calls.provider_call_id = CallSid
  *  2. OUTBOUND only: calls.provider_call_id = campid (a click-to-call request id stored at
  *     initiation); on a match the row is upgraded to the real CallSid
- *  3. INBOUND only: caller number -> exactly one lead. 0 or 2+ leads = unmatched.
+ *  3. INBOUND only: caller number -> exactly one lead. 2+ leads = unmatched (never guessed).
+ *     0 leads = "IVR caller = Lead": a new, unassigned Lead is created (source "IVR Inquiry",
+ *     see createIvrLead in callerdesk.store.ts) and used from here on, same as a match.
  *     The agent is the active user whose phone equals DialWhomNumber, else the lead owner;
- *     with neither, the event stays unmatched (calls.agent_id is required).
+ *     with neither, the event stays unmatched (calls.agent_id is required) - the Lead already
+ *     committed still appears in Leads, only the Call is deferred to the next delivery/retry.
  *  Otherwise the event is stored unmatched.
  */
 
@@ -138,10 +141,15 @@ async function correlate(tx: CallEventTx, event: NormalizedCallEvent, provider: 
   if (!event.customerNumber) return { kind: "UNMATCHED", reason: "NO_CUSTOMER_NUMBER" };
 
   const leads = await tx.findLeadsByNormalizedMobile(buildMobileLookupCandidates(event.customerNumber));
-  if (leads.length === 0) return { kind: "UNMATCHED", reason: "NO_LEAD_MATCH" };
   if (leads.length > 1) return { kind: "UNMATCHED", reason: "AMBIGUOUS_LEAD_MATCH" };
 
-  const lead = leads[0]!;
+  // "IVR caller = Lead": a first-time caller becomes a new, unassigned Lead (source "IVR Inquiry"),
+  // created here before the Call row - Call.leadId stays required, no migration needed. If agent
+  // resolution then fails below, the Lead still commits (self-healing: the next call from the same
+  // number matches it normally); this never invents an assignment just to satisfy Call.agentId.
+  const lead = leads.length === 1 ? leads[0]! : await tx.createIvrLead(event.customerNumber);
+  if (!lead) return { kind: "UNMATCHED", reason: "NO_LEAD_MATCH" };
+
   const agentId = await resolveAgentId(tx, event, lead.ownerId);
   if (!agentId) return { kind: "UNMATCHED", reason: "NO_AGENT_RESOLVED" };
 

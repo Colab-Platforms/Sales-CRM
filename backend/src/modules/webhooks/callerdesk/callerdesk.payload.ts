@@ -66,7 +66,7 @@ const payloadFieldsSchema = z.object({
 
 type PayloadFields = z.infer<typeof payloadFieldsSchema>;
 
-function lowerCaseKeys(body: Record<string, unknown>): Record<string, unknown> {
+export function lowerCaseKeys(body: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(body)) {
     const lower = key.toLowerCase();
