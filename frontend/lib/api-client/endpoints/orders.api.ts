@@ -3,6 +3,7 @@ import type { ApiEnvelope } from "../types/common.types";
 import type {
   CancelOrderInput,
   CancelOrderResult,
+  RevertCancellationResult,
   CreateManualOrderInput,
   CreateManualOrderResult,
   LiveOrderCancelResult,
@@ -57,6 +58,11 @@ export const ordersApi = {
 
   async cancel(orderId: string, input: CancelOrderInput): Promise<CancelOrderResult> {
     const res = await apiClient.post<ApiEnvelope<CancelOrderResult>>(`/orders/${orderId}/cancel`, input);
+    return res.data.data;
+  },
+
+  async revertCancellation(orderId: string): Promise<RevertCancellationResult> {
+    const res = await apiClient.post<ApiEnvelope<RevertCancellationResult>>(`/orders/${orderId}/revert-cancel`);
     return res.data.data;
   },
 

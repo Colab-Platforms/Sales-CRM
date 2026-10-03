@@ -3,7 +3,7 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
-import { cancelOrder, createOrder, getLastShippingAddress, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShopifyPaymentSync } from "./orders.controller.js";
+import { cancelOrder, revertCancellation, createOrder, getLastShippingAddress, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShopifyPaymentSync } from "./orders.controller.js";
 import { cancelLiveOrder, getLiveOrderDetail, getLiveOrderHistory, listLiveOrders } from "./orders.live.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
@@ -44,6 +44,8 @@ router.post("/:id/shopify-payment-sync/retry", requireAuth, requireRole(Role.ADM
 // Cancel/Revert - same role set as creating an order (order-management permission); real scoping is
 // server-side (see cancelOrder). Never physically deletes anything.
 router.post("/:id/cancel", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), cancelOrder);
+// Revert a cancellation - identical role gate and server-side scoping as cancel itself.
+router.post("/:id/revert-cancel", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), revertCancellation);
 
 // Cashfree payment link for the order's exact pending amount. Every role may collect on orders inside their own lead scope.
 router.post("/:orderId/payment-links", requireAuth, createPaymentLink);

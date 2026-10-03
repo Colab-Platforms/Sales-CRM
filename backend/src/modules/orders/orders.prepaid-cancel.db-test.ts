@@ -448,3 +448,87 @@ describe("cancelOrder - Cashfree payment link", () => {
     });
   });
 });
+
+describe("revertCancellation", () => {
+  async function makeOrder(tx: Prisma.TransactionClient, admin: { id: string }, overrides: Partial<Prisma.OrderUncheckedCreateInput> = {}) {
+    const lead = await makeLead(tx);
+    const order = await tx.order.create({
+      data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: admin.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "699.00", confirmedAt: new Date(), ...overrides },
+      select: { id: true, leadId: true },
+    });
+    return { lead, order };
+  }
+
+  it("restores the exact pre-cancel status and leaves payment, amount, items and customer untouched", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const { order } = await makeOrder(tx, admin, { status: "PROCESSING" });
+      await tx.payment.create({ data: { orderId: order.id, amount: "699.00", status: "SUCCESS", method: "UPI", paidAt: new Date() } });
+      const svc = new OrdersService(tx, () => fakeShopifyClient());
+      const before = await svc.getOrder(as(admin, Role.ADMIN), order.id);
+
+      const cancelled = await svc.cancelOrder(as(admin, Role.ADMIN), order.id, { reason: "test order" });
+      assert.equal(cancelled.order.status, "CANCELLED");
+
+      const reverted = await svc.revertCancellation(as(admin, Role.ADMIN), order.id);
+      assert.equal(reverted.alreadyActive, false);
+      assert.equal(reverted.restoredStatus, "PROCESSING");
+      assert.equal(reverted.order.status, "PROCESSING", "restored to the recorded state, not a guessed CONFIRMED");
+      assert.equal(reverted.order.cancelledAt, null);
+      assert.equal(reverted.order.cancelReason, null);
+      for (const key of ["totalAmount", "subtotal", "paymentStatus", "paidAmount", "outstandingAmount", "customer", "items", "shipments"] as const) {
+        assert.deepEqual(reverted.order[key], before[key], `${key} must be unchanged by cancel + revert`);
+      }
+      assert.equal(await tx.activity.count({ where: { orderId: order.id, type: ActivityType.ORDER_STATUS_CHANGED, title: "Order cancellation reverted" } }), 1);
+    });
+  });
+
+  it("can be cancelled again after a revert without re-calling an already-cancelled Shopify order", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const { order } = await makeOrder(tx, admin, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/9" });
+      await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(admin, Role.ADMIN), order.id, {});
+      await new OrdersService(tx, () => fakeShopifyClient()).revertCancellation(as(admin, Role.ADMIN), order.id);
+
+      let shopifyCalls = 0;
+      const counting = fakeShopifyClient(async () => { shopifyCalls += 1; return { orderCancel: { job: null, orderCancelUserErrors: [] } }; });
+      const again = await new OrdersService(tx, () => counting).cancelOrder(as(admin, Role.ADMIN), order.id, {});
+      assert.equal(again.order.status, "CANCELLED");
+      assert.equal(shopifyCalls, 0);
+    });
+  });
+
+  it("a second (double-click) revert is a harmless no-op", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const { order } = await makeOrder(tx, admin);
+      const svc = new OrdersService(tx, () => fakeShopifyClient());
+      await svc.cancelOrder(as(admin, Role.ADMIN), order.id, {});
+      await svc.revertCancellation(as(admin, Role.ADMIN), order.id);
+      const second = await svc.revertCancellation(as(admin, Role.ADMIN), order.id);
+      assert.equal(second.alreadyActive, true);
+      assert.equal(second.order.status, "CONFIRMED");
+      assert.equal(await tx.activity.count({ where: { orderId: order.id, title: "Order cancellation reverted" } }), 1);
+    });
+  });
+
+  it("refuses to guess when no previous status was recorded (cancelled before this feature)", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const { order } = await makeOrder(tx, admin, { status: "CANCELLED", cancelledAt: new Date() });
+      await assert.rejects(() => new OrdersService(tx, () => fakeShopifyClient()).revertCancellation(as(admin, Role.ADMIN), order.id), (e: any) => e.statusCode === 409);
+      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } })).status, "CANCELLED");
+    });
+  });
+
+  it("keeps existing scoping: a salesperson cannot revert an order on someone else's lead", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const { order } = await makeOrder(tx, admin);
+      await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(admin, Role.ADMIN), order.id, {});
+      await assert.rejects(() => new OrdersService(tx, () => fakeShopifyClient()).revertCancellation(as(rep, Role.SALESPERSON), order.id), (e: any) => e.statusCode === 404);
+      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } })).status, "CANCELLED");
+    });
+  });
+});

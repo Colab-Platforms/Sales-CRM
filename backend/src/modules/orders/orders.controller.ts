@@ -122,6 +122,21 @@ export const cancelOrder = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+// Revert a CRM cancellation back to the status recorded at cancel time. Same RBAC as cancelOrder.
+export const revertCancellation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) {
+      sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await ordersService.revertCancellation(req.user!, params.value.id);
+    sendResponse(res, true, result, result.alreadyActive ? "This order is not cancelled" : "Order cancellation reverted", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getLastShippingAddress = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const leadId = typeof req.query.leadId === "string" ? req.query.leadId : "";

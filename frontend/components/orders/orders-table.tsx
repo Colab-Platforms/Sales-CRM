@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import { OrderStatusBadge } from "./order-status-badge";
 import { PaymentStatusBadge } from "./payment-status-badge";
+import { OrderRowActions } from "./order-row-actions";
 import type { LiveOrderListItem, OrderListItem } from "@/lib/api-client/types/orders.types";
 
 // Accepts either the CRM-DB-backed list item or the live-Shopify one. The live one's customer link is
@@ -26,7 +27,7 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-const COLUMN_COUNT = 9;
+const COLUMN_COUNT = 10;
 
 const HEADERS = [
   "Order",
@@ -38,6 +39,7 @@ const HEADERS = [
   "Payment",
   "Status",
   "Date",
+  "Actions",
 ];
 
 export function orderDetailHref(id: string) {
@@ -53,7 +55,7 @@ function OrdersTableHeader() {
     <TableHeader>
       <TableRow>
         {HEADERS.map((header) => (
-          <TableHead key={header} className={header === "Total" ? "text-right" : undefined}>
+          <TableHead key={header} className={header === "Total" || header === "Actions" ? "text-right" : undefined}>
             {header}
           </TableHead>
         ))}
@@ -152,6 +154,11 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
               ) : null}
             </TableCell>
             <TableCell className="text-muted-foreground">{formatDate(order.createdAt)}</TableCell>
+            {/* stopPropagation: the row itself navigates on click, and React bubbles events from the dialogs
+                (portalled, but still inside this cell's React tree) up through here too. */}
+            <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+              <OrderRowActions order={order} />
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { ActivitySource, ActivityType, Role, UserStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, OrderStatus, Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, getManagerTeam, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
@@ -13,6 +13,7 @@ import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
 import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
+import { clearLiveOrderCaches } from "./orders.live.service.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
@@ -31,6 +32,7 @@ import {
   type CancelOrderInput,
   type LastShippingAddress,
   type CancelOrderResult,
+  type RevertCancellationResult,
   type CreateManualOrderInput,
   type CreateManualOrderResult,
   type ListOrdersQuery,
@@ -750,6 +752,12 @@ class OrdersService {
       if (!alreadyCancelled) {
         const { count } = await this.db.order.updateMany({ where: { id: orderId, status: { not: "CANCELLED" } }, data: { status: "CANCELLED", cancelledAt: now, cancelReason: input.reason ?? null } });
         cancelledNow = count > 0;
+        if (cancelledNow) {
+          // Remembered so revertCancellation() can restore exactly this state instead of guessing one.
+          await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...meta, preCancelStatus: order.status } as Prisma.InputJsonValue } });
+          meta.preCancelStatus = order.status;
+          clearLiveOrderCaches();
+        }
         if (!cancelledNow) {
           // Lost the race to a concurrent cancel that is already handling Shopify, Cashfree and the audit event.
           return {
@@ -763,7 +771,7 @@ class OrdersService {
 
       // Shopify: on the first cancel, or when its previous attempt failed. Never re-called otherwise (e.g. when only Cashfree is being retried).
       let shopify: ShopifyCancelResult = priorShopify;
-      if (cancelledNow || priorCancellation?.status === "failed") {
+      if ((cancelledNow && priorCancellation?.status !== "cancelled") || priorCancellation?.status === "failed") {
         if (!order.externalId) {
           shopify = { status: "not_linked" };
         } else {
@@ -831,6 +839,50 @@ class OrdersService {
     } finally {
       if (alreadyCancelled) OrdersService.retryingCancellations.delete(orderId);
     }
+  }
+
+  // Undoes a CRM cancellation by restoring the status recorded when it was cancelled (metadata.preCancelStatus) -
+  // never a guessed one. Only the order's own cancellation fields change: payments, shipments, amounts, items and
+  // the customer are not touched. Shopify (and any Cashfree link) cancelled at cancel time stay cancelled - neither
+  // can be undone from here - which shopifyCancellation in metadata keeps recording truthfully.
+  async revertCancellation(user: AuthUser, orderId: string): Promise<RevertCancellationResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, leadId: true, status: true, metadata: true } });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    if (order.status !== "CANCELLED") {
+      return { order: await this.getOrder(user, orderId), restoredStatus: order.status, alreadyActive: true };
+    }
+
+    const meta = (order.metadata as Record<string, unknown> | null) ?? {};
+    const previous = meta.preCancelStatus;
+    if (typeof previous !== "string" || previous === "CANCELLED" || !(previous in OrderStatus)) {
+      throw new ApiError("The status before cancellation was not recorded for this order (it was cancelled before reverting was supported), so it cannot be restored automatically.", STATUS_CODES.CONFLICT);
+    }
+    const restoredStatus = previous as OrderStatus;
+
+    // Conditional on still being CANCELLED, so two concurrent reverts (a double click) cannot both win.
+    const { count } = await this.db.order.updateMany({ where: { id: orderId, status: "CANCELLED" }, data: { status: restoredStatus, cancelledAt: null, cancelReason: null } });
+    if (count === 0) return { order: await this.getOrder(user, orderId), restoredStatus, alreadyActive: true };
+    clearLiveOrderCaches();
+
+    const { preCancelStatus: _consumed, ...rest } = meta;
+    await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...rest, cancellationReverted: { at: new Date().toISOString(), by: user.id, restoredStatus } } as Prisma.InputJsonValue } });
+    await this.db.activity.create({
+      data: {
+        leadId: order.leadId,
+        orderId,
+        actorId: user.id,
+        actorRole: user.role,
+        type: ActivityType.ORDER_STATUS_CHANGED,
+        referenceType: ORDER_REFERENCE_TYPE,
+        referenceId: orderId,
+        source: ActivitySource.USER,
+        title: "Order cancellation reverted",
+        description: `Restored from Cancelled to ${restoredStatus}`,
+      },
+    });
+
+    return { order: await this.getOrder(user, orderId), restoredStatus, alreadyActive: false };
   }
 
   // Foundation only: there is no status-history table yet, so this combines recorded

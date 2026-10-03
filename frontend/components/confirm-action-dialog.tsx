@@ -40,7 +40,7 @@ export function ConfirmActionDialog({
         </DialogHeader>
         {children}
         <DialogFooter>
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
+          <Button type="button" variant="outline" autoFocus onClick={() => onOpenChange(false)} disabled={pending}>
             {dismissLabel}
           </Button>
           <Button type="button" variant={destructive ? "destructive" : "default"} onClick={() => (pending ? undefined : onConfirm())} disabled={pending}>

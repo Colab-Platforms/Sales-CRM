@@ -51,6 +51,13 @@ interface HistoryCacheEntry {
 }
 const historyCache = new Map<string, HistoryCacheEntry>();
 
+/** Drops the cached live list/history pages. They embed the CRM overlay (status, payment...), so a CRM-side change such
+ *  as cancel/revert must call this or the Orders list keeps showing the old status for up to CACHE_TTL_MS. */
+export function clearLiveOrderCaches(): void {
+  listCache.clear();
+  historyCache.clear();
+}
+
 // The shop's own timezone rarely changes - cached much longer, and shared across all callers/roles
 // (it is not RBAC-sensitive, unlike the order list itself).
 let shopTimeZoneCache: { value: string; expiresAt: number } | null = null;

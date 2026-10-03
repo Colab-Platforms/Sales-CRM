@@ -187,6 +187,14 @@ export interface CancelOrderResult {
   alreadyCancelled: boolean;
 }
 
+export interface RevertCancellationResult {
+  order: OrderDetail;
+  /** The status the order was restored to (recorded when it was cancelled). */
+  restoredStatus: OrderStatus;
+  /** true when the order was not cancelled (or another revert already won) - nothing changed on this call. */
+  alreadyActive: boolean;
+}
+
 export interface OrdersListParams {
   page: number;
   pageSize: number;
