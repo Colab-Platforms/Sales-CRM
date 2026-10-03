@@ -57,11 +57,9 @@ interface DeepgramResponse {
   };
 }
 
-// Groups diarized words into speaker turns and guesses which is the agent: whichever speaker's
-// first word comes first in the recording. Holds for the normal click-to-call flow (agent's leg
-// connects and they greet first) - not verified identity, just an ordering heuristic, per the
-// tradeoff the user signed off on. Null when there's only one speaker (nothing to label) or no
-// diarization data at all.
+// Groups diarized words into speaker turns, labeled "Speaker 1", "Speaker 2" in order of first
+// appearance. No Agent/Customer guess - Deepgram can't tell the two apart on mono phone audio.
+// Null when there's only one speaker (nothing to separate) or no diarization data at all.
 function buildDiarizedText(words: DeepgramWord[] | undefined): string | null {
   if (!words?.length) return null;
 
@@ -77,11 +75,7 @@ function buildDiarizedText(words: DeepgramWord[] | undefined): string | null {
   const speakerOrder = [...new Set(segments.map((s) => s.speaker))];
   if (speakerOrder.length < 2) return null; // one voice on the recording - nothing to attribute
 
-  const label = (speaker: number): string => {
-    const idx = speakerOrder.indexOf(speaker);
-    if (speakerOrder.length === 2) return idx === 0 ? "Agent" : "Customer";
-    return `Speaker ${idx + 1}`; // more than 2 distinct voices - the 2-party guess no longer applies
-  };
+  const label = (speaker: number): string => `Speaker ${speakerOrder.indexOf(speaker) + 1}`;
 
   return segments.map((s) => `${label(s.speaker)}: ${s.text}`).join("\n");
 }
@@ -96,7 +90,7 @@ async function transcribeWithDeepgram(
   // Deepgram's supported list (not per-word code-switching across languages - no ASR vendor does
   // that reliably yet). diarize: separates speakers.
   const res = await fetch(
-    "https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&punctuate=true&detect_language=true&diarize=true&diarize_version=latest",
+    "https://api.deepgram.com/v1/listen?model=nova-3&language=multi&smart_format=true&punctuate=true&diarize=true&diarize_version=latest",
     {
       method: "POST",
       headers: {
