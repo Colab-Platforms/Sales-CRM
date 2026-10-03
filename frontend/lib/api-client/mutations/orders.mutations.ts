@@ -3,7 +3,7 @@ import { ordersApi } from "../endpoints/orders.api";
 import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { CancelOrderInput, CancelOrderResult, CreateManualOrderInput, CreateManualOrderResult, ShopifyPushResult } from "../types/orders.types";
+import type { CancelOrderInput, CancelOrderResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -29,6 +29,18 @@ export function useCancelOrderMutation() {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
       queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
       queryClient.invalidateQueries({ queryKey: customersKeys.detail(result.order.customer.leadId) });
+    },
+  });
+}
+
+/** Cancels a Shopify order not yet synced into the CRM - the only destructive action Shopify supports. */
+export function useCancelLiveOrderMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<LiveOrderCancelResult, unknown, string>({
+    mutationFn: (externalId) => ordersApi.cancelLive(externalId),
+    onSuccess: (_, externalId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveDetail(externalId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
     },
   });
 }

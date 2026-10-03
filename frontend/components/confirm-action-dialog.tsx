@@ -14,6 +14,7 @@ export function ConfirmActionDialog({
   children,
   confirmLabel,
   pendingLabel,
+  dismissLabel = "Keep",
   pending,
   destructive,
   onConfirm,
@@ -25,6 +26,7 @@ export function ConfirmActionDialog({
   children?: ReactNode;
   confirmLabel: string;
   pendingLabel: string;
+  dismissLabel?: string;
   pending: boolean;
   destructive?: boolean;
   onConfirm: () => void;
@@ -39,7 +41,7 @@ export function ConfirmActionDialog({
         {children}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
-            Keep
+            {dismissLabel}
           </Button>
           <Button type="button" variant={destructive ? "destructive" : "default"} onClick={() => (pending ? undefined : onConfirm())} disabled={pending}>
             {pending ? pendingLabel : confirmLabel}

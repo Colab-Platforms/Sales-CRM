@@ -4,7 +4,7 @@ import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { cancelOrder, createOrder, getLastShippingAddress, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShopifyPaymentSync } from "./orders.controller.js";
-import { getLiveOrderDetail, getLiveOrderHistory, listLiveOrders } from "./orders.live.controller.js";
+import { cancelLiveOrder, getLiveOrderDetail, getLiveOrderHistory, listLiveOrders } from "./orders.live.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 
@@ -27,6 +27,9 @@ router.get("/live/:externalId", requireAuth, getLiveOrderDetail);
 // "Previous Orders" on that same live detail page - registered as its own literal "customer" segment
 // so it never collides with "/live/:externalId" above (different, unrelated path shape).
 router.get("/live/customer/:customerId/history", requireAuth, getLiveOrderHistory);
+// Cancel a Shopify order the CRM has not synced yet - ADMIN-only, same gate as the detail page (see
+// orders.live.controller.ts). Shopify has no "delete order" operation, only cancellation.
+router.post("/live/:externalId/cancel", requireAuth, requireRole(Role.ADMIN), cancelLiveOrder);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);

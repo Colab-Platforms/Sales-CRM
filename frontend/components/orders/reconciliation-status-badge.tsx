@@ -5,7 +5,7 @@ import type { ReconciliationStatus } from "@/lib/api-client/types/reconciliation
 
 export function ReconciliationStatusBadge({ status }: { status: ReconciliationStatus }) {
   return (
-    <Badge variant="outline" className={cn("border-transparent", RECONCILIATION_STATUS_COLORS[status])}>
+    <Badge variant="outline" className={cn("border-current/20", RECONCILIATION_STATUS_COLORS[status])}>
       {RECONCILIATION_STATUS_LABELS[status]}
     </Badge>
   );

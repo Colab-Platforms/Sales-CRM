@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, MessageCircle, MessagesSquare, Plus, Search } from "lucide-react";
+import { ArrowLeft, MessageCircle, MessagesSquare, Plus, Search, Star } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -23,12 +23,14 @@ import { useAuthStore } from "@/stores/auth-store";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
 import { DeleteCustomerDialog } from "@/components/customers/delete-customer-dialog";
 import { ConversationChat } from "./conversation-chat";
+import { StarredMessagesDialog } from "./starred-messages-dialog";
 import { ConversationListItem } from "./conversation-list-item";
 import { CreateOrderDialog } from "./create-order-dialog";
 import { BulkSendDialog } from "./bulk-send-dialog";
 import { MessageComposer } from "./message-composer";
 import { NewChatDialog } from "./new-chat-dialog";
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
+import type { WhatsAppMessageHistoryItem } from "@/lib/api-client/types/whatsapp-history.types";
 
 const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 300;
@@ -234,6 +236,10 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const { data, isLoading, error } = useCustomer360(leadId);
   const [sendOpen, setSendOpen] = useState(false);
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
+  const [replyTarget, setReplyTarget] = useState<WhatsAppMessageHistoryItem | null>(null);
+  // "Correct Message" reuses the exact same reply/composer mechanism as plain "Reply" - only this flag
+  // (and the composer's own prefilled text/visual framing) differs. Never a second send pipeline.
+  const [isCorrection, setIsCorrection] = useState(false);
   // A lead with messages predating the conversation model has no conversation row yet (404), so the detail query can be empty.
   // Whether free text is allowed is decided by the backend (active provider + Meta 24-hour service window) and only
   // displayed here - never inferred from the conversation row.
@@ -246,6 +252,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const unarchiveMutation = useUnarchiveConversationMutation();
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [deleteCustomerOpen, setDeleteCustomerOpen] = useState(false);
+  const [starredOpen, setStarredOpen] = useState(false);
   // "Delete Chat" reuses the existing archive/unarchive infrastructure (Part 7): nothing here ever
   // deletes messages. Archiving is the safe removal that already exists end-to-end, and the backend
   // (not this component) decides what "archived" means.
@@ -271,6 +278,31 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only re-run when the unread count changes for this conversation
   }, [leadId, unread]);
 
+  // Switching conversations clears any in-progress reply/correction - it belongs to the conversation it was started in.
+  const prevReplyLeadId = useRef(leadId);
+  useEffect(() => {
+    if (prevReplyLeadId.current !== leadId) {
+      prevReplyLeadId.current = leadId;
+      setReplyTarget(null);
+      setIsCorrection(false);
+    }
+  }, [leadId]);
+
+  function handleReply(message: WhatsAppMessageHistoryItem) {
+    setIsCorrection(false);
+    setReplyTarget(message);
+  }
+
+  function handleCorrect(message: WhatsAppMessageHistoryItem) {
+    setIsCorrection(true);
+    setReplyTarget(message);
+  }
+
+  function cancelReply() {
+    setReplyTarget(null);
+    setIsCorrection(false);
+  }
+
   return (
     <div className="flex h-full min-h-0">
       <div className="flex h-full min-w-0 flex-1 flex-col">
@@ -281,6 +313,9 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           <div className="flex min-w-0 items-center gap-2">
             <Button variant="ghost" size="icon-sm" className="md:hidden" onClick={onBack} aria-label="Back to conversations">
               <ArrowLeft />
+            </Button>
+            <Button variant="ghost" size="icon-sm" onClick={() => setStarredOpen(true)} aria-label="Starred messages" title="Starred messages">
+              <Star className="size-4" />
             </Button>
             {isLoading ? (
               <Skeleton className="h-6 w-40" />
@@ -329,7 +364,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
         </div>
 
         <div className="min-h-0 flex-1">
-          <ConversationChat leadId={leadId} />
+          <ConversationChat leadId={leadId} onReply={handleReply} onCorrect={handleCorrect} />
         </div>
 
         {/* Sticky composer: a real, typable text box (per spec), but AiSensy's Campaign API - the
@@ -338,7 +373,16 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
             actually reaches the backend is the template button, which opens the same existing
             SendWhatsAppDialog/sendTemplate() path used everywhere else. */}
         <div className="border-t p-3">
-          <MessageComposer leadId={leadId} canSendFreeText={canSendFreeText} blockedMessage={capability?.freeText.message ?? null} onOpenTemplateSend={() => setSendOpen(true)} disabled={!data?.profile.mobile} />
+          <MessageComposer
+            leadId={leadId}
+            canSendFreeText={canSendFreeText}
+            blockedMessage={capability?.freeText.message ?? null}
+            onOpenTemplateSend={() => setSendOpen(true)}
+            disabled={!data?.profile.mobile}
+            replyTarget={replyTarget}
+            isCorrection={isCorrection}
+            onCancelReply={cancelReply}
+          />
         </div>
       </div>
 
@@ -378,6 +422,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           <DeleteCustomerDialog open={deleteCustomerOpen} onOpenChange={setDeleteCustomerOpen} leadId={leadId} customerName={data.profile.name} onDeactivated={onBack} />
         </>
       ) : null}
+      <StarredMessagesDialog leadId={leadId} open={starredOpen} onOpenChange={setStarredOpen} />
     </div>
   );
 }

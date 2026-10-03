@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
+import { OrderSource, OrderStatus, PaymentStatus } from "../../../generated/prisma/enums.js";
+import { NO_PAYMENT } from "./orders.types.js";
 import type { LiveOrderHistoryQuery, LiveOrdersQuery } from "./orders.live.types.js";
 
 const optional = <T extends z.ZodType>(schema: T) =>
@@ -14,6 +16,10 @@ const liveOrdersQuerySchema = z
     search: optional(z.string().trim().max(100, "search must be 100 characters or fewer")),
     dateFrom: optional(z.iso.datetime({ offset: true, error: "dateFrom must be an ISO date-time" }).transform((v) => new Date(v))),
     dateTo: optional(z.iso.datetime({ offset: true, error: "dateTo must be an ISO date-time" }).transform((v) => new Date(v))),
+    status: optional(z.enum(OrderStatus, { error: "Invalid order status" })),
+    paymentStatus: optional(z.enum([...Object.values(PaymentStatus), NO_PAYMENT], { error: "Invalid payment status" })),
+    source: optional(z.enum(OrderSource, { error: "Invalid order source" })),
+    salespersonId: optional(z.uuid({ error: "Invalid salesperson id" })),
   })
   .refine((q) => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
     error: "dateFrom must not be after dateTo",

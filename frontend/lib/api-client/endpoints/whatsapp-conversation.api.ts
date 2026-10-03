@@ -26,8 +26,10 @@ export const whatsappConversationApi = {
     const res = await apiClient.post<ApiEnvelope<ConversationDetail>>(`/whatsapp/conversations/${leadId}/ai-mode`);
     return res.data.data;
   },
-  async sendText(leadId: string, text: string): Promise<void> {
-    await apiClient.post(`/whatsapp/conversations/${leadId}/messages`, { text });
+  /** replyToMessageId: the CRM's own internal WhatsAppMessage id to quote - resolved server-side to
+   *  the real wamid (Meta's context.message_id) before sending, never trusted client-side. */
+  async sendText(leadId: string, text: string, replyToMessageId?: string): Promise<void> {
+    await apiClient.post(`/whatsapp/conversations/${leadId}/messages`, { text, replyToMessageId });
   },
   async archive(leadId: string): Promise<{ archived: boolean }> {
     const res = await apiClient.post<ApiEnvelope<{ archived: boolean }>>(`/whatsapp/conversations/${leadId}/archive`);

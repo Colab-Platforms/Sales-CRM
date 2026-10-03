@@ -53,6 +53,10 @@ export interface MetaTextMessage {
   to: string;
   body: string;
   previewUrl?: boolean;
+  /** Meta's documented `context.message_id` - the wamid of the message this one replies to, shown
+   *  as a quoted reply in the customer's WhatsApp. Confirmed real Meta Cloud API capability (the same
+   *  field inbound webhooks already report back as context.id, read by parseIncomingWebhook). */
+  replyToMessageId?: string;
 }
 
 export interface MetaMediaMessage {
@@ -79,6 +83,12 @@ export interface MetaCatalogMessage {
   sections?: { title: string; productRetailerIds: string[] }[];
 }
 
+// No deleteMessage()/recallMessage() method exists on this provider, and none should be added: the
+// current WhatsApp Cloud API reference documents no endpoint for a business to delete, recall, or
+// unsend an already-sent message (verified against graph.facebook.com's Messages and Webhooks
+// reference docs - only POST /{phoneNumberId}/messages for sending, and DELETE /{media-id} for an
+// uploaded media asset, which is unrelated). See whatsapp.message-actions.service.ts's header comment
+// for the full capability finding across all configured providers.
 export class MetaCloudApiProvider implements WhatsAppProvider {
   readonly id = "META" as const;
   private readonly fetchImpl: typeof fetch;
@@ -163,7 +173,15 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
   }
 
   async sendText(input: MetaTextMessage): Promise<SendTemplateMessageResult> {
-    const body = await this.post({ to: input.to, type: "text", text: { body: input.body, preview_url: input.previewUrl ?? false } }, "text");
+    const body = await this.post(
+      {
+        to: input.to,
+        type: "text",
+        text: { body: input.body, preview_url: input.previewUrl ?? false },
+        ...(input.replyToMessageId ? { context: { message_id: input.replyToMessageId } } : {}),
+      },
+      "text",
+    );
     return { providerMessageId: firstMessageId(body), raw: body };
   }
 

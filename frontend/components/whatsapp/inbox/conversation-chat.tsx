@@ -2,14 +2,18 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { MessagesSquare } from "lucide-react";
+import { toast } from "sonner";
+import { Forward, MessagesSquare, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { whatsappMessageListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
+import { useBulkDeleteMessagesForMeMutation, useDeleteMessageForMeMutation } from "@/lib/api-client/mutations/whatsapp-history.mutations";
 import { useAuthStore } from "@/stores/auth-store";
 import { MessageBubble } from "./message-bubble";
 import { MessageDetailDialog } from "../conversation/message-detail-dialog";
+import { ForwardMessageDialog } from "./forward-message-dialog";
 import type { WhatsAppMessageHistoryItem } from "@/lib/api-client/types/whatsapp-history.types";
 
 const PAGE_SIZE_STEP = 30;
@@ -27,20 +31,40 @@ function messageDay(message: WhatsAppMessageHistoryItem): string {
 // a second send path. Growing `pageSize` on the SAME page-1 query (rather than tracking separate
 // pages) means a post-send invalidation of whatsappHistoryKeys.all naturally refetches exactly what
 // is on screen, latest message included, with no manual merge/dedupe logic to get wrong.
-export function ConversationChat({ leadId }: { leadId: string }) {
+export function ConversationChat({
+  leadId,
+  onReply,
+  onCorrect,
+}: {
+  leadId: string;
+  onReply?: (message: WhatsAppMessageHistoryItem) => void;
+  onCorrect?: (message: WhatsAppMessageHistoryItem) => void;
+}) {
   const token = useAuthStore((s) => s.token);
   const [pageSize, setPageSize] = useState(PAGE_SIZE_STEP);
   const [selected, setSelected] = useState<WhatsAppMessageHistoryItem | null>(null);
+  const [forwardTarget, setForwardTarget] = useState<WhatsAppMessageHistoryItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<WhatsAppMessageHistoryItem | null>(null);
+  // WhatsApp-style multi-select: entered via a bubble's own "Select" menu action or its selection
+  // checkbox once active - a pure CRM UI concern, never anything persisted or sent to the provider.
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevLeadId = useRef(leadId);
   const prevCount = useRef(0);
 
-  // Switching conversations starts back at the latest page-size window.
+  const deleteForMe = useDeleteMessageForMeMutation();
+  const bulkDeleteForMe = useBulkDeleteMessagesForMeMutation();
+
+  // Switching conversations starts back at the latest page-size window and leaves selection mode.
   useEffect(() => {
     if (prevLeadId.current !== leadId) {
       prevLeadId.current = leadId;
       setPageSize(PAGE_SIZE_STEP);
       prevCount.current = 0;
+      setSelectionMode(false);
+      setSelectedIds(new Set());
     }
   }, [leadId]);
 
@@ -72,6 +96,39 @@ export function ConversationChat({ leadId }: { leadId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data?.items.map((m) => m.id).join(","), leadId]);
 
+  function toggleSelect(message: WhatsAppMessageHistoryItem) {
+    setSelectionMode(true);
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(message.id)) next.delete(message.id);
+      else next.add(message.id);
+      return next;
+    });
+  }
+
+  function cancelSelection() {
+    setSelectionMode(false);
+    setSelectedIds(new Set());
+  }
+
+  function confirmDeleteForMe() {
+    if (!deleteTarget) return;
+    deleteForMe.mutate(deleteTarget.id, {
+      onSuccess: () => setDeleteTarget(null),
+      onError: (err) => toast.error(getErrorMessage(err, "Could not delete the message.")),
+    });
+  }
+
+  function confirmBulkDeleteForMe() {
+    bulkDeleteForMe.mutate([...selectedIds], {
+      onSuccess: () => {
+        setBulkDeleteOpen(false);
+        cancelSelection();
+      },
+      onError: (err) => toast.error(getErrorMessage(err, "Could not delete the selected messages.")),
+    });
+  }
+
   if (isLoading) {
     return (
       <div className="flex h-full flex-col justify-end gap-3 p-4">
@@ -102,37 +159,102 @@ export function ConversationChat({ leadId }: { leadId: string }) {
   }
 
   return (
-    <div ref={scrollRef} className="h-full overflow-y-auto p-4">
-      {canLoadOlder ? (
-        <div className="mb-3 flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => setPageSize((n) => Math.min(n + PAGE_SIZE_STEP, MAX_PAGE_SIZE))} disabled={query.isFetching}>
-            {query.isFetching ? "Loading…" : "Load earlier messages"}
-          </Button>
+    <div className="flex h-full min-h-0 flex-col">
+      {selectionMode ? (
+        <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-4 py-2">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon-sm" onClick={cancelSelection} aria-label="Cancel selection">
+              <X className="size-4" />
+            </Button>
+            <span className="text-sm font-medium">{selectedIds.size} selected</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={selectedIds.size !== 1}
+              title={selectedIds.size !== 1 ? "Select exactly one text message to forward" : undefined}
+              onClick={() => {
+                const only = messages.find((m) => selectedIds.has(m.id));
+                if (only) setForwardTarget(only);
+              }}
+            >
+              <Forward data-icon="inline-start" />
+              Forward
+            </Button>
+            <Button variant="ghost" size="sm" disabled={selectedIds.size === 0} onClick={() => setBulkDeleteOpen(true)} className="text-destructive hover:text-destructive">
+              <Trash2 data-icon="inline-start" />
+              Delete
+            </Button>
+          </div>
         </div>
       ) : null}
-      <div className="flex flex-col gap-2">
-        {messages.map((message, i) => {
-          const day = messageDay(message);
-          const showSeparator = i === 0 || day !== messageDay(messages[i - 1]!);
-          return (
-            <div key={message.id}>
-              {showSeparator && day ? (
-                <div className="my-3 flex justify-center">
-                  <span className="rounded-full bg-muted px-3 py-1 text-[0.7rem] font-medium text-muted-foreground">
-                    {DATE_SEPARATOR_FORMAT.format(new Date(day))}
-                  </span>
-                </div>
-              ) : null}
-              <MessageBubble
-                message={message}
-                onSelect={() => setSelected(message)}
-                replyTo={message.replyToProviderMessageId ? byProviderMessageId.get(message.replyToProviderMessageId) : undefined}
-              />
-            </div>
-          );
-        })}
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4">
+        {canLoadOlder ? (
+          <div className="mb-3 flex justify-center">
+            <Button variant="outline" size="sm" onClick={() => setPageSize((n) => Math.min(n + PAGE_SIZE_STEP, MAX_PAGE_SIZE))} disabled={query.isFetching}>
+              {query.isFetching ? "Loading…" : "Load earlier messages"}
+            </Button>
+          </div>
+        ) : null}
+        <div className="flex flex-col gap-2">
+          {messages.map((message, i) => {
+            const day = messageDay(message);
+            const showSeparator = i === 0 || day !== messageDay(messages[i - 1]!);
+            return (
+              <div key={message.id}>
+                {showSeparator && day ? (
+                  <div className="my-3 flex justify-center">
+                    <span className="rounded-full bg-muted px-3 py-1 text-[0.7rem] font-medium text-muted-foreground">
+                      {DATE_SEPARATOR_FORMAT.format(new Date(day))}
+                    </span>
+                  </div>
+                ) : null}
+                <MessageBubble
+                  message={message}
+                  onSelect={() => setSelected(message)}
+                  replyTo={message.replyToProviderMessageId ? byProviderMessageId.get(message.replyToProviderMessageId) : undefined}
+                  selectionMode={selectionMode}
+                  selected={selectedIds.has(message.id)}
+                  onToggleSelect={() => toggleSelect(message)}
+                  onReply={(m) => onReply?.(m)}
+                  onCorrect={(m) => onCorrect?.(m)}
+                  onForward={(m) => setForwardTarget(m)}
+                  onDeleteForMe={(m) => setDeleteTarget(m)}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
+
       <MessageDetailDialog message={selected} onOpenChange={(open) => !open && setSelected(null)} />
+      <ForwardMessageDialog message={forwardTarget} onOpenChange={(open) => !open && setForwardTarget(null)} />
+
+      <ConfirmActionDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title="Delete message?"
+        description="This removes the message from your own CRM view only - it stays visible to any other CRM user, and nothing is deleted from the customer's actual WhatsApp."
+        confirmLabel="Delete for me"
+        pendingLabel="Deleting…"
+        pending={deleteForMe.isPending}
+        destructive
+        onConfirm={confirmDeleteForMe}
+      />
+
+      <ConfirmActionDialog
+        open={bulkDeleteOpen}
+        onOpenChange={setBulkDeleteOpen}
+        title={`Delete ${selectedIds.size} message${selectedIds.size === 1 ? "" : "s"}?`}
+        description="This removes them from your own CRM view only - they stay visible to any other CRM user, and nothing is deleted from the customer's actual WhatsApp. WhatsApp Business does not support deleting a sent message for everyone."
+        confirmLabel="Delete for me"
+        pendingLabel="Deleting…"
+        pending={bulkDeleteForMe.isPending}
+        destructive
+        onConfirm={confirmBulkDeleteForMe}
+      />
     </div>
   );
 }

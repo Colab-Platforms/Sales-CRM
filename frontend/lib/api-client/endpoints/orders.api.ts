@@ -5,6 +5,7 @@ import type {
   CancelOrderResult,
   CreateManualOrderInput,
   CreateManualOrderResult,
+  LiveOrderCancelResult,
   LiveOrderDetailResult,
   LiveOrderHistoryParams,
   LiveOrderHistoryResult,
@@ -56,6 +57,12 @@ export const ordersApi = {
 
   async cancel(orderId: string, input: CancelOrderInput): Promise<CancelOrderResult> {
     const res = await apiClient.post<ApiEnvelope<CancelOrderResult>>(`/orders/${orderId}/cancel`, input);
+    return res.data.data;
+  },
+
+  /** Cancels a Shopify order not yet synced into the CRM - the only destructive action Shopify supports. */
+  async cancelLive(externalId: string): Promise<LiveOrderCancelResult> {
+    const res = await apiClient.post<ApiEnvelope<LiveOrderCancelResult>>(`/orders/live/${externalId}/cancel`);
     return res.data.data;
   },
 

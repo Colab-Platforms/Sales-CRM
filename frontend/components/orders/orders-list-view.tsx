@@ -5,9 +5,20 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useLiveOrders } from "@/hooks/useOrders";
-import type { LiveOrdersListParams } from "@/lib/api-client/types/orders.types";
-import { LiveOrdersFiltersBar, type LiveOrdersFilters } from "./orders-live-filters";
+import { useLiveOrders, useOrderFilterOptions } from "@/hooks/useOrders";
+import { useAuthStore } from "@/stores/auth-store";
+import {
+  ORDER_SOURCE_ORDER,
+  ORDER_STATUS_ORDER,
+  PAYMENT_STATUS_ORDER,
+} from "@/lib/order-status";
+import type {
+  LiveOrdersListParams,
+  OrderSource,
+  OrderStatus,
+  PaymentStatusFilter,
+} from "@/lib/api-client/types/orders.types";
+import { OrdersFiltersBar, type OrdersFilters } from "./orders-filters";
 import { OrdersCursorPagination } from "./orders-cursor-pagination";
 import { OrdersTable, OrdersTableSkeleton, orderDetailHref } from "./orders-table";
 
@@ -16,8 +27,10 @@ import { OrdersTable, OrdersTableSkeleton, orderDetailHref } from "./orders-tabl
 const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 350;
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const PAYMENT_FILTER_VALUES: readonly string[] = [...PAYMENT_STATUS_ORDER, "NONE"];
 
-interface ParsedState extends LiveOrdersFilters {
+interface ParsedState extends OrdersFilters {
   search: string;
 }
 
@@ -25,14 +38,27 @@ interface ParsedState extends LiveOrdersFilters {
 // cursor position itself is deliberately NOT persisted to the URL - Shopify's cursors are opaque
 // and not meant to be bookmarked; a refresh goes back to the first page, same as opening the
 // page fresh. Anything unrecognised in the URL is ignored rather than sent to the API.
+//
+// status/paymentStatus/source/salespersonId are CRM-overlay filters (see orders.live.service.ts) -
+// restored here from the original DB-backed Orders page, reusing the exact same OrdersFiltersBar
+// component rather than a second, Shopify-only filter bar.
 function parseState(params: URLSearchParams): ParsedState {
+  const oneOf = <T extends string>(key: string, allowed: readonly string[]): T | undefined => {
+    const value = params.get(key);
+    return value && allowed.includes(value) ? (value as T) : undefined;
+  };
   const date = (key: string) => {
     const value = params.get(key);
     return value && DATE_PATTERN.test(value) ? value : undefined;
   };
+  const salespersonId = params.get("salespersonId");
 
   return {
     search: (params.get("search") ?? "").slice(0, 100),
+    status: oneOf<OrderStatus>("status", ORDER_STATUS_ORDER),
+    paymentStatus: oneOf<PaymentStatusFilter>("paymentStatus", PAYMENT_FILTER_VALUES),
+    source: oneOf<OrderSource>("source", ORDER_SOURCE_ORDER),
+    salespersonId: salespersonId && UUID_PATTERN.test(salespersonId) ? salespersonId : undefined,
     dateFrom: date("dateFrom"),
     dateTo: date("dateTo"),
   };
@@ -49,6 +75,7 @@ export function OrdersListView() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const role = useAuthStore((s) => s.user?.role);
 
   const state = parseState(new URLSearchParams(searchParams.toString()));
   const [searchText, setSearchText] = useState(state.search);
@@ -56,8 +83,8 @@ export function OrdersListView() {
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
   // Stack of Shopify "after" cursors used to reach each page past the first (page 1 has none).
-  // Reset whenever the search text or date range changes, since the cursor sequence belongs to
-  // that specific query - a leftover cursor from a different search would page through the wrong result set.
+  // Reset whenever the search text/filters change, since the cursor sequence belongs to that
+  // specific query - a leftover cursor from a different query would page through the wrong result set.
   const [afterStack, setAfterStack] = useState<string[]>([]);
   const currentAfter = afterStack.length > 0 ? afterStack[afterStack.length - 1] : undefined;
 
@@ -88,13 +115,29 @@ export function OrdersListView() {
     router.replace(pathname, { scroll: false });
   };
 
+  const showSalesperson = role !== undefined && role !== "SALESPERSON";
+  const { salespeople } = useOrderFilterOptions(showSalesperson);
+
   const dateRangeInvalid = Boolean(state.dateFrom && state.dateTo && state.dateFrom > state.dateTo);
-  const hasActiveFilters = Boolean(state.search || searchText.trim() || state.dateFrom || state.dateTo);
+  const hasActiveFilters = Boolean(
+    state.search ||
+      searchText.trim() ||
+      state.status ||
+      state.paymentStatus ||
+      state.source ||
+      state.salespersonId ||
+      state.dateFrom ||
+      state.dateTo,
+  );
 
   const params: LiveOrdersListParams = {
     after: currentAfter,
     first: PAGE_SIZE,
     search: state.search || undefined,
+    status: state.status,
+    paymentStatus: state.paymentStatus,
+    source: state.source,
+    salespersonId: state.salespersonId,
     dateFrom: dayBoundary(state.dateFrom, "00:00:00"),
     dateTo: dayBoundary(state.dateTo, "23:59:59.999"),
   };
@@ -172,7 +215,7 @@ export function OrdersListView() {
         <p className="text-sm text-muted-foreground">Live from Shopify - track customer purchases, payments and order status.</p>
       </div>
 
-      <LiveOrdersFiltersBar
+      <OrdersFiltersBar
         searchText={searchText}
         onSearchChange={handleSearchChange}
         filters={state}
@@ -186,6 +229,8 @@ export function OrdersListView() {
         }
         onClear={handleClear}
         hasActiveFilters={hasActiveFilters}
+        salespeople={salespeople}
+        showSalesperson={showSalesperson}
         dateRangeInvalid={dateRangeInvalid}
       />
 

@@ -242,6 +242,12 @@ export interface LiveOrdersListParams {
   // ISO date-times
   dateFrom?: string;
   dateTo?: string;
+  // CRM-overlay filters - see backend LiveOrdersQuery: applied after the Shopify page is fetched, so
+  // an active filter can return fewer than `first` rows (an unsynced order never matches any of them).
+  status?: OrderStatus;
+  paymentStatus?: PaymentStatusFilter;
+  source?: OrderSource;
+  salespersonId?: string;
 }
 
 export interface LiveOrderListItem {
@@ -261,6 +267,13 @@ export interface LiveOrderListItem {
   leadSource: { id: string; name: string } | null;
   /** false = Shopify has this order but the CRM has not synced it yet (ADMIN-only, see the backend). */
   linkedInCrm: boolean;
+  // ---- Shopify-native display fields, from the live Shopify read this page always makes regardless
+  // of linkedInCrm - never missing just because an order hasn't synced yet. null for a non-Shopify order. ----
+  /** Shopify's own displayFulfillmentStatus (e.g. "FULFILLED"/"PARTIALLY_FULFILLED"/"UNFULFILLED"). */
+  fulfillmentStatus: string | null;
+  hasTracking: boolean;
+  /** Shopify's own shipping rate name (e.g. "Standard"), null when the order has no shipping line. */
+  shippingMethod: string | null;
 }
 
 export interface LiveOrderPageInfo {
@@ -408,6 +421,8 @@ export interface ShopifyLiveOrder {
     quantity: number;
     unitPrice: string | null;
     discounts: string[];
+    /** Per-tax-line amounts Shopify reported (optional: absent on responses from older backends). */
+    taxes?: string[];
     productId: string | null;
     variantId: string | null;
   }[];
@@ -422,7 +437,7 @@ export interface ShopifyLiveOrder {
     processedAt: string | null;
     errorCode: string | null;
   }[];
-  fulfillments: { status: string; displayStatus: string | null; createdAt: string | null; trackingCompany: string | null; trackingNumber: string | null; trackingUrl: string | null }[];
+  fulfillments: { status: string; displayStatus: string | null; createdAt: string | null; deliveredAt?: string | null; trackingCompany: string | null; trackingNumber: string | null; trackingUrl: string | null }[];
 }
 
 // A Shopify order the CRM has not synced yet has no CRM order id, so the Orders list gives it an id
@@ -488,6 +503,12 @@ export interface LiveOrderHistoryResult {
   items: LiveOrderHistoryItem[];
   pageInfo: LiveOrderPageInfo;
   error?: string;
+}
+
+// POST /orders/live/:externalId/cancel - Shopify has no "delete order" operation, only cancellation.
+export interface LiveOrderCancelResult {
+  cancelled: boolean;
+  reason?: string;
 }
 
 export type StatusHistoryEvent = "CREATED" | "PLACED" | "CONFIRMED" | "CANCELLED" | "STATUS_CHANGE";

@@ -100,6 +100,32 @@ describe("free-text send - META conversation", () => {
     assert.equal(out.providerMessageId, "wamid.OUT1");
   });
 
+  it("with a reply target: passes the real providerMessageId through as Meta's context.message_id, and persists it", async () => {
+    const { db, messages } = fakeDb({
+      conversations: [{ leadId: "lead-1", provider: "META" }],
+      messages: [{ leadId: "lead-1", provider: "META", direction: "INBOUND", createdAt: ago(2 * HOUR), receivedAt: ago(2 * HOUR) }],
+    });
+    const { meta, sent } = fakeMeta();
+
+    const result = await service(db, meta).sendText(lead, "Quoting you", "user-1", undefined, "wamid.CUSTOMER_MSG");
+
+    assert.deepEqual(sent, [{ to: "+919876543210", body: "Quoting you", replyToMessageId: "wamid.CUSTOMER_MSG" }]);
+    const out = messages.find((m) => m.id === result.id)!;
+    assert.equal(out.replyToProviderMessageId, "wamid.CUSTOMER_MSG");
+  });
+
+  it("without a reply target: never sends a replyToMessageId key at all (not even undefined)", async () => {
+    const { db } = fakeDb({
+      conversations: [{ leadId: "lead-1", provider: "META" }],
+      messages: [{ leadId: "lead-1", provider: "META", direction: "INBOUND", createdAt: ago(2 * HOUR), receivedAt: ago(2 * HOUR) }],
+    });
+    const { meta, sent } = fakeMeta();
+
+    await service(db, meta).sendText(lead, "Plain message", "user-1");
+
+    assert.deepEqual(sent, [{ to: "+919876543210", body: "Plain message" }]);
+  });
+
   it("OUTSIDE the window: refuses with a clear template-required message and sends nothing", async () => {
     const { db, messages } = fakeDb({
       conversations: [{ leadId: "lead-1", provider: "META" }],

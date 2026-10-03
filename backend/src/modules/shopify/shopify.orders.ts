@@ -261,6 +261,37 @@ function normalizeAddress(address: z.infer<typeof addressSchema> | null | undefi
   };
 }
 
+// Shared by normalizeOrder() (the full per-order fetch) and normalizeOrderListNode() below (the
+// lighter list fetch, which now also requests transactions/fulfillments - see ORDER_LIST_QUERY) so
+// there is exactly one place that turns Shopify's raw transaction/fulfillment shape into the
+// normalized one, never two slightly-different copies of the same mapping.
+function normalizeTransactions(transactions: z.infer<typeof transactionSchema>[] | null | undefined): NormalizedTransaction[] {
+  return (transactions ?? []).map((t) => ({
+    id: t.id,
+    kind: t.kind,
+    status: t.status,
+    gateway: t.gateway ?? null,
+    amount: amountOf(t.amountSet),
+    processedAt: t.processedAt ?? null,
+    errorCode: t.errorCode ?? null,
+    paymentId: t.paymentId ?? null,
+    parentId: t.parentTransaction?.id ?? null,
+  }));
+}
+
+function normalizeFulfillments(fulfillments: z.infer<typeof fulfillmentSchema>[] | null | undefined): NormalizedFulfillment[] {
+  return (fulfillments ?? []).map((f) => ({
+    id: f.id,
+    status: f.status,
+    displayStatus: f.displayStatus ?? null,
+    createdAt: f.createdAt ?? null,
+    deliveredAt: f.deliveredAt ?? null,
+    trackingCompany: f.trackingInfo?.[0]?.company ?? null,
+    trackingNumber: f.trackingInfo?.[0]?.number ?? null,
+    trackingUrl: f.trackingInfo?.[0]?.url ?? null,
+  }));
+}
+
 export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): NormalizedOrder {
   const customer = node.customer ?? null;
   const email = customer?.email ?? node.email ?? null;
@@ -314,27 +345,8 @@ export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): Normalize
       productId: item.product?.id ?? null,
       variantId: item.variant?.id ?? null,
     })),
-    transactions: (node.transactions ?? []).map((t) => ({
-      id: t.id,
-      kind: t.kind,
-      status: t.status,
-      gateway: t.gateway ?? null,
-      amount: amountOf(t.amountSet),
-      processedAt: t.processedAt ?? null,
-      errorCode: t.errorCode ?? null,
-      paymentId: t.paymentId ?? null,
-      parentId: t.parentTransaction?.id ?? null,
-    })),
-    fulfillments: (node.fulfillments ?? []).map((f) => ({
-      id: f.id,
-      status: f.status,
-      displayStatus: f.displayStatus ?? null,
-      createdAt: f.createdAt ?? null,
-      deliveredAt: f.deliveredAt ?? null,
-      trackingCompany: f.trackingInfo?.[0]?.company ?? null,
-      trackingNumber: f.trackingInfo?.[0]?.number ?? null,
-      trackingUrl: f.trackingInfo?.[0]?.url ?? null,
-    })),
+    transactions: normalizeTransactions(node.transactions),
+    fulfillments: normalizeFulfillments(node.fulfillments),
     itemsTruncated: node.lineItems.pageInfo.hasNextPage,
   };
 }
@@ -419,13 +431,23 @@ const orderListNodeSchema = z.object({
   id: z.string(),
   name: z.string(),
   createdAt: z.string(),
+  processedAt: z.string().nullish(),
+  cancelledAt: z.string().nullish(),
   displayFinancialStatus: z.string().nullish(),
   displayFulfillmentStatus: z.string().nullish(),
+  returnStatus: z.string().nullish(),
+  tags: z.array(z.string()).nullish(),
   paymentGatewayNames: z.array(z.string()).nullish(),
   email: z.string().nullish(),
   phone: z.string().nullish(),
   customer: z.object({ firstName: z.string().nullish(), lastName: z.string().nullish(), email: z.string().nullish(), phone: z.string().nullish() }).nullish(),
+  shippingLine: z.object({ title: z.string().nullish() }).nullish(),
   totalPriceSet: moneyBag.nullish(),
+  totalRefundedSet: moneyBag.nullish(),
+  // Same per-order data mapOrderStatus/mapPayments (shopify.mapper.ts) need, kept light - no per-item
+  // pricing/addresses, which the list has no use for and would make one page's query far heavier.
+  transactions: z.array(transactionSchema).nullish(),
+  fulfillments: z.array(fulfillmentSchema).nullish(),
   lineItems: z.object({ nodes: z.array(z.object({ id: z.string() })) }).nullish(),
 });
 
@@ -444,14 +466,28 @@ export interface NormalizedOrderListItem {
   /** e.g. "#1002". */
   name: string;
   createdAt: string;
+  processedAt: string | null;
+  cancelledAt: string | null;
   financialStatus: string | null;
   fulfillmentStatus: string | null;
+  returnStatus: string | null;
+  tags: string[];
   paymentGateways: string[];
   customerName: string | null;
   customerEmail: string | null;
   customerPhone: string | null;
   currency: string | null;
   totalAmount: string | null;
+  refundedAmount: string | null;
+  /** e.g. "Standard" - the Shopify shipping rate name, null when the order has no shipping line. */
+  shippingMethod: string | null;
+  /** True when at least one of this order's fulfillments has a real tracking number. */
+  hasTracking: boolean;
+  /** Light per-order data (no per-item pricing/addresses) needed to derive the exact same
+   *  OrderStatus/PaymentStatus/PaymentMethod a real sync would produce - see
+   *  shopify.mapper.ts's mapListOrderStatusAndPayments, the single place that interprets these. */
+  transactions: NormalizedTransaction[];
+  fulfillments: NormalizedFulfillment[];
   /** Number of line-item rows on the order (matches how the CRM's own Order._count.items counts
    *  them - distinct line items, not summed quantity). Capped at the 50 fetched - see ORDER_LIST_QUERY. */
   itemCount: number;
@@ -470,19 +506,29 @@ function normalizeOrderListNode(node: z.infer<typeof orderListNodeSchema>): Norm
   const firstName = customer?.firstName ?? null;
   const lastName = customer?.lastName ?? null;
   const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const fulfillments = normalizeFulfillments(node.fulfillments);
   return {
     id: node.id,
     externalId: gidToIdLocal(node.id),
     name: node.name,
     createdAt: node.createdAt,
+    processedAt: node.processedAt ?? null,
+    cancelledAt: node.cancelledAt ?? null,
     financialStatus: node.displayFinancialStatus ?? null,
     fulfillmentStatus: node.displayFulfillmentStatus ?? null,
+    returnStatus: node.returnStatus ?? null,
+    tags: node.tags ?? [],
     paymentGateways: node.paymentGatewayNames ?? [],
     customerName: name || null,
     customerEmail: customer?.email ?? node.email ?? null,
     customerPhone: customer?.phone ?? node.phone ?? null,
     currency: node.totalPriceSet?.shopMoney.currencyCode ?? null,
     totalAmount: amountOf(node.totalPriceSet),
+    refundedAmount: amountOf(node.totalRefundedSet),
+    shippingMethod: node.shippingLine?.title ?? null,
+    hasTracking: fulfillments.some((f) => Boolean(f.trackingNumber)),
+    transactions: normalizeTransactions(node.transactions),
+    fulfillments,
     itemCount: node.lineItems?.nodes.length ?? 0,
   };
 }

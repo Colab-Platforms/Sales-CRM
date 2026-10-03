@@ -2,10 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { ScrollText } from "lucide-react";
+import { CardContent, CardFooter } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ActivityTypeBadge } from "@/components/audit/activity-type-badge";
 import { AuditSourceBadge } from "@/components/audit/audit-source-badge";
+import { AccentCard, SectionTitle, TimelineList } from "./order-detail-parts";
 import { OrdersPagination } from "./orders-pagination";
 import { useOrderAudit } from "@/hooks/useAudit";
 import { formatDateTime } from "@/lib/order-status";
@@ -21,10 +23,8 @@ export function OrderAuditHistory({ orderId }: { orderId: string }) {
   const { data, isLoading, isFetching, error } = useOrderAudit(orderId, { page, pageSize: PAGE_SIZE });
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Audit History</CardTitle>
-      </CardHeader>
+    <AccentCard accent="slate">
+      <SectionTitle icon={<ScrollText />}>Audit History</SectionTitle>
       <CardContent className={isFetching ? "opacity-60 transition-opacity" : "transition-opacity"}>
         {isLoading ? (
           <div className="space-y-3" aria-busy="true" aria-label="Loading audit history">
@@ -37,13 +37,13 @@ export function OrderAuditHistory({ orderId }: { orderId: string }) {
         ) : data.items.length === 0 ? (
           <p className="text-sm text-muted-foreground">No audit events recorded for this order yet.</p>
         ) : (
-          <ol className="space-y-4 border-l pl-4">
+          <TimelineList>
             {data.items.map((entry) => (
-              <li key={entry.id} className="relative">
-                <span className="absolute top-1.5 -left-[1.3rem] size-2 rounded-full bg-primary" aria-hidden="true" />
+              <li key={entry.id} className="relative pl-6">
+                <span className="absolute -left-[5px] top-1.5 size-2.5 rounded-full border-2 border-slate-400 bg-background" aria-hidden="true" />
                 <div className="flex flex-wrap items-center gap-2">
-                  <ActivityTypeBadge type={entry.type} />
                   <AuditSourceBadge source={entry.source} />
+                  <ActivityTypeBadge type={entry.type} />
                 </div>
                 <p className="mt-1 text-sm font-medium">{entry.title}</p>
                 {entry.description ? <p className="text-sm text-muted-foreground">{entry.description}</p> : null}
@@ -53,7 +53,7 @@ export function OrderAuditHistory({ orderId }: { orderId: string }) {
                 </p>
               </li>
             ))}
-          </ol>
+          </TimelineList>
         )}
         {data ? <OrdersPagination pagination={data.pagination} onPageChange={setPage} disabled={isFetching} /> : null}
       </CardContent>
@@ -62,6 +62,6 @@ export function OrderAuditHistory({ orderId }: { orderId: string }) {
           View in Audit Trail
         </Link>
       </CardFooter>
-    </Card>
+    </AccentCard>
   );
 }

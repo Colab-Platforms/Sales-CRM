@@ -83,8 +83,12 @@ export const ORDER_LIST_QUERY = /* GraphQL */ `
         id
         name
         createdAt
+        processedAt
+        cancelledAt
         displayFinancialStatus
         displayFulfillmentStatus
+        returnStatus
+        tags
         paymentGatewayNames
         email
         phone
@@ -94,7 +98,16 @@ export const ORDER_LIST_QUERY = /* GraphQL */ `
           email
           phone
         }
+        shippingLine {
+          title
+        }
         totalPriceSet {
+          shopMoney {
+            amount
+            currencyCode
+          }
+        }
+        totalRefundedSet {
           shopMoney {
             amount
             currencyCode
@@ -106,6 +119,37 @@ export const ORDER_LIST_QUERY = /* GraphQL */ `
         lineItems(first: 50) {
           nodes {
             id
+          }
+        }
+        # Light - typically 0-3 per order, nowhere near as heavy as lineItems - fetched so the list can
+        # derive the exact same payment/fulfillment/tracking status a real sync would (see
+        # shopify.mapper.ts's mapListOrderStatusAndPayments), never a second/guessed interpretation.
+        transactions(first: 10) {
+          id
+          kind
+          status
+          gateway
+          processedAt
+          errorCode
+          paymentId
+          amountSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+          }
+          parentTransaction {
+            id
+          }
+        }
+        fulfillments(first: 5) {
+          id
+          status
+          displayStatus
+          trackingInfo {
+            company
+            number
+            url
           }
         }
       }

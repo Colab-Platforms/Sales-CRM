@@ -22,6 +22,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { CustomerTimeline } from "@/components/customers/customer-timeline";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
+import { CreateOrderDialog } from "@/components/whatsapp/inbox/create-order-dialog";
 import { AssignmentHistoryCard } from "./assignment-history-card";
 import { EditLeadDialog } from "./edit-lead-dialog";
 import { DeleteLeadDialog } from "./delete-lead-dialog";
@@ -77,6 +78,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"calls" | "timeline" | "assignments" | "abandonment">("calls");
   const [sendWhatsAppOpen, setSendWhatsAppOpen] = useState(false);
+  const [createOrderOpen, setCreateOrderOpen] = useState(false);
 
   if (isLoading) return <LeadDetailSkeleton />;
 
@@ -120,6 +122,20 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <span>Send WhatsApp</span>
             </button>
           ) : null}
+
+          {/* Reuses the exact same Create Order dialog/flow (product+variant selection, address
+              prefill via the customer's last order, COD/prepaid, Cashfree payment-link generation,
+              Shopify push) the WhatsApp Inbox's "Create Order" action already uses - never a second
+              order-creation implementation. leadId/customerName/customerMobile are the same generic
+              props that dialog already takes; only the entry point differs. */}
+          <button
+            type="button"
+            onClick={() => setCreateOrderOpen(true)}
+            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+          >
+            <ShoppingCart className="size-3.5 text-primary" />
+            <span>Create Order</span>
+          </button>
 
           {/* Tactile Doodle Edit Button */}
           <button
@@ -436,6 +452,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           optional and stays hidden whenever there are none, exactly as it does for a customer with
           no orders yet on Customer 360. */}
       <SendWhatsAppDialog open={sendWhatsAppOpen} onOpenChange={setSendWhatsAppOpen} leadId={lead.id} customerName={name} orders={[]} />
+      <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={lead.id} customerName={name} customerMobile={lead.mobile} />
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import type { OrderSource, OrderStatus, PaymentStatus } from "../../../generated/prisma/enums.js";
-import type { PaymentMode } from "./orders.types.js";
+import type { PaymentMode, PaymentStatusFilter } from "./orders.types.js";
 import type { NormalizedOrder } from "../shopify/shopify.orders.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 
@@ -18,6 +18,16 @@ export interface LiveOrdersQuery {
   search?: string;
   dateFrom?: Date;
   dateTo?: Date;
+  // CRM-overlay filters (status/paymentStatus/source/salesperson are all CRM-owned - Shopify itself
+  // has no concept of any of them). Applied AFTER the Shopify page is fetched and joined to the CRM
+  // overlay, so a page with one of these set can legitimately return fewer than `first` rows (an
+  // unlinked order never matches any of them, since it has no CRM status/salesperson to compare) -
+  // the same documented tradeoff the free-text `search` param already has for anything CRM-only
+  // (lead number, payment reference) that Shopify's own search has no concept of either.
+  status?: OrderStatus;
+  paymentStatus?: PaymentStatusFilter;
+  source?: OrderSource;
+  salespersonId?: string;
 }
 
 type Money = string;
@@ -46,6 +56,18 @@ export interface LiveOrderListItem {
    *  joined in for the CRM-owned fields above. False = Shopify has this order but the CRM has not
    *  synced it yet (e.g. a webhook still pending) - shown to ADMIN only, see the RBAC note in the service. */
   linkedInCrm: boolean;
+  // ---- Shopify-native display fields, straight from the live Shopify order read this page always
+  // makes regardless of linkedInCrm - never missing just because an order hasn't synced yet. null for
+  // a non-Shopify order (source !== "SHOPIFY"), which has no Shopify fulfillment/shipping data at all. ----
+  /** Shopify's own `displayFulfillmentStatus` (e.g. "FULFILLED"/"PARTIALLY_FULFILLED"/"UNFULFILLED"),
+   *  shown as-is next to `status` - CRM OrderStatus and Shopify fulfillment status are different
+   *  vocabularies (one is the CRM's own lifecycle, the other Shopify's shipping state), so this is
+   *  never collapsed into `status` nor guessed when absent. */
+  fulfillmentStatus: string | null;
+  /** True when at least one Shopify fulfillment on this order has a real tracking number. */
+  hasTracking: boolean;
+  /** Shopify's own shipping rate name (e.g. "Standard"), null when the order has no shipping line. */
+  shippingMethod: string | null;
 }
 
 export interface LiveOrderPageInfo {
@@ -112,4 +134,14 @@ export interface LiveOrderHistoryResult {
   items: LiveOrderHistoryItem[];
   pageInfo: LiveOrderPageInfo;
   error?: string;
+}
+
+// POST /orders/live/:externalId/cancel - Shopify has no "delete order" operation, only cancellation
+// (orderCancel), so this is the one and only destructive action available for an unsynced order -
+// same ADMIN-only visibility as the detail page itself, same cancelShopifyOrder() mutation the
+// CRM-linked order's own cancel button already uses (see orders.service.ts's cancelOrder).
+export interface LiveOrderCancelResult {
+  cancelled: boolean;
+  /** Set only when cancelled is false - Shopify's own rejection reason. */
+  reason?: string;
 }

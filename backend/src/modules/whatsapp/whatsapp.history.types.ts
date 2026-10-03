@@ -51,6 +51,9 @@ export interface WhatsAppMessageHistoryItem {
   template: { id: string; name: string } | null;
   order: { id: string; orderNumber: string; externalNumber: string | null } | null;
   sentBy: { id: string; name: string } | null;
+  /** Whether the CURRENT caller has starred this message - per-user state (WhatsAppMessageUserState),
+   *  never a property of the message itself. */
+  starred: boolean;
 }
 
 export interface WhatsAppMessageListResult {

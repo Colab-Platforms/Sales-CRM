@@ -8,10 +8,23 @@ import { OrderStatusBadge } from "./order-status-badge";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import type { LiveOrderListItem, OrderListItem } from "@/lib/api-client/types/orders.types";
 
-// Accepts either the CRM-DB-backed list item or the live-Shopify one. The live one's status/customer
-// fields are nullable for a Shopify order the CRM hasn't synced yet (ADMIN-only, see
-// orders.live.service.ts) - rendered below as "Not synced to CRM" rather than crashing on a null link.
+// Accepts either the CRM-DB-backed list item or the live-Shopify one. The live one's customer link is
+// nullable for a Shopify order the CRM hasn't synced yet (ADMIN-only, see orders.live.service.ts) -
+// "Not synced to CRM" is shown as an ADDITIONAL caption below the real status/payment badges (which
+// now always reflect Shopify's own data, synced or not), never as a stand-in for missing status.
 type TableOrderItem = OrderListItem | LiveOrderListItem;
+
+function hasShopifyDisplayFields(order: TableOrderItem): order is LiveOrderListItem {
+  return "fulfillmentStatus" in order;
+}
+
+function titleCase(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
 
 const COLUMN_COUNT = 9;
 
@@ -116,15 +129,27 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
             <TableCell>
               <PaymentStatusBadge status={order.paymentStatus} />
               {order.paymentMode ? (
-                <div className="mt-0.5 text-xs text-muted-foreground">{PAYMENT_MODE_LABELS[order.paymentMode]}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {/* e.g. "Standard (Prepaid)" - Shopify's own shipping method plus the payment mode
+                      derived from Shopify's own gateway/COD data (see shopify.mapper.ts's isCodOrder),
+                      shown together compactly rather than as separate columns. */}
+                  {hasShopifyDisplayFields(order) && order.shippingMethod
+                    ? `${order.shippingMethod} (${PAYMENT_MODE_LABELS[order.paymentMode]})`
+                    : PAYMENT_MODE_LABELS[order.paymentMode]}
+                </div>
               ) : null}
             </TableCell>
             <TableCell>
-              {order.status ? (
-                <OrderStatusBadge status={order.status} />
-              ) : (
-                <span className="text-xs text-muted-foreground">Not synced to CRM</span>
-              )}
+              {order.status ? <OrderStatusBadge status={order.status} /> : <span className="text-xs text-muted-foreground">Unknown</span>}
+              {hasShopifyDisplayFields(order) && order.fulfillmentStatus ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {titleCase(order.fulfillmentStatus)}
+                  {order.fulfillmentStatus.includes("FULFILLED") && order.fulfillmentStatus !== "UNFULFILLED" ? (order.hasTracking ? " · Tracking added" : " · No tracking") : ""}
+                </div>
+              ) : null}
+              {hasShopifyDisplayFields(order) && !order.linkedInCrm ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">Not synced to CRM</div>
+              ) : null}
             </TableCell>
             <TableCell className="text-muted-foreground">{formatDate(order.createdAt)}</TableCell>
           </TableRow>

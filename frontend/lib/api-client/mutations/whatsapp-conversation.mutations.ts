@@ -43,7 +43,7 @@ export function useUnarchiveConversationMutation() {
 }
 
 export function useSendConversationTextMutation() {
-  return useConversationAction<{ text: string }>((leadId, { text }) => whatsappConversationApi.sendText(leadId, text));
+  return useConversationAction<{ text: string; replyToMessageId?: string }>((leadId, { text, replyToMessageId }) => whatsappConversationApi.sendText(leadId, text, replyToMessageId));
 }
 
 export function useConfirmOrderDraftMutation() {

@@ -90,6 +90,36 @@ model WhatsAppMessage {
 
   automationRuns WhatsAppAutomationRun[]
   campaignRecipients WhatsAppCampaignRecipient[]
+  userStates     WhatsAppMessageUserState[]
+}
+
+// Per-CRM-user state on a shared WhatsAppMessage row - "starred" and "deleted for me" are both
+// genuinely per-viewer (two salespeople looking at the same conversation must not share either),
+// so this is a separate relation rather than a column on WhatsAppMessage itself, which is shared
+// data. One row per (message, user) that has ever starred/hidden it; no row at all is the default
+// (not starred, not hidden) - never a WhatsAppMessage field like `deleted: true`, which would hide
+// the message for every CRM user, not just the one who deleted it for themselves.
+model WhatsAppMessageUserState {
+  id String @id @default(uuid()) @db.Uuid
+
+  messageId String          @map("message_id") @db.Uuid
+  message   WhatsAppMessage @relation(fields: [messageId], references: [id])
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+
+  starred Boolean @default(false) @map("starred")
+  // Set = this user chose "Delete for me" - the message stays fully intact for every other CRM
+  // user and is never touched on WhatsApp/Meta's side. Null = not hidden (the default).
+  hiddenAt DateTime? @map("hidden_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([messageId, userId])
+  @@index([userId, starred])
+  @@index([userId, hiddenAt])
+  @@map("whatsapp_message_user_states")
 }
 
 // E7.2 Template Management. A row is either a local DRAFT the CRM created (never sent to the

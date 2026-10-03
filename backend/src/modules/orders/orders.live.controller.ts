@@ -24,6 +24,28 @@ export const listLiveOrders = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
+// Cancels a Shopify order the CRM has not synced yet - the only destructive action Shopify actually
+// supports (no delete). ADMIN-only, same visibility as the detail page itself.
+export const cancelLiveOrder = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const externalId = String(req.params.externalId ?? "");
+    if (!/^\d+$/.test(externalId)) {
+      sendResponse(res, false, null, "Order not found", STATUS_CODES.NOT_FOUND);
+      return;
+    }
+
+    const result = await ordersLiveService.cancelLiveOrder(req.user!, externalId);
+    if (!result.cancelled) {
+      const notFound = result.reason === "Not found";
+      sendResponse(res, false, null, result.reason ?? "Could not cancel the order", notFound ? STATUS_CODES.NOT_FOUND : STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 // "Previous Orders" on the live Order Detail page - the Shopify customer's other orders, cursor-
 // paginated. Same ADMIN-only visibility as the detail page it's called from.
 export const getLiveOrderHistory = async (req: AuthRequest, res: Response): Promise<void> => {

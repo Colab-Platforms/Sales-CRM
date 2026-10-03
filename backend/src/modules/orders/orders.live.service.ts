@@ -17,10 +17,13 @@ import { ShopifyClient, ShopifyApiError } from "../shopify/shopify.client.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { checkConnection, fetchOrder, listOrdersForDisplay, type NormalizedOrderListItem } from "../shopify/shopify.orders.js";
 import { DEFAULT_START_DATE, resolveWindow, windowSearch, type WindowSpec } from "../shopify/shopify.window.js";
+import { cancelShopifyOrder, ShopifyOrderCancelError } from "../shopify/shopify.orders.write.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
+import { mapListOrderStatusAndPayments } from "../shopify/shopify.mapper.js";
 import { derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
 import {
   LIVE_ORDER_ID_PREFIX,
+  type LiveOrderCancelResult,
   type LiveOrderCrmLink,
   type LiveOrderDetailResult,
   type LiveOrderHistoryQuery,
@@ -78,6 +81,10 @@ class OrdersLiveService {
       search: query.search ?? null,
       dateFrom: query.dateFrom?.toISOString() ?? null,
       dateTo: query.dateTo?.toISOString() ?? null,
+      status: query.status ?? null,
+      paymentStatus: query.paymentStatus ?? null,
+      source: query.source ?? null,
+      salespersonId: query.salespersonId ?? null,
     });
     const cached = listCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
@@ -109,7 +116,12 @@ class OrdersLiveService {
       return { items: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, endCursor: null }, error: message };
     }
 
-    const result = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor);
+    const result = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, {
+      status: query.status,
+      paymentStatus: query.paymentStatus,
+      source: query.source,
+      salespersonId: query.salespersonId,
+    });
     listCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
   }
@@ -130,6 +142,7 @@ class OrdersLiveService {
     hasNextPage: boolean,
     hasPreviousPage: boolean,
     endCursor: string | null,
+    overlayFilters: Pick<LiveOrdersQuery, "status" | "paymentStatus" | "source" | "salespersonId">,
   ): Promise<LiveOrderListResult> {
     if (shopifyItems.length === 0) {
       return { items: [], pageInfo: { hasNextPage, hasPreviousPage, endCursor } };
@@ -178,7 +191,25 @@ class OrdersLiveService {
       items.push(this.mapLinked(shopifyOrder, crm!));
     }
 
-    return { items, pageInfo: { hasNextPage, hasPreviousPage, endCursor }, partialError };
+    const filtered = this.applyOverlayFilters(items, overlayFilters);
+    return { items: filtered, pageInfo: { hasNextPage, hasPreviousPage, endCursor }, partialError };
+  }
+
+  // status/paymentStatus/source/salespersonId are all CRM-owned - Shopify's own order list has no
+  // concept of any of them, so they can only be applied here, after the CRM overlay above has already
+  // run. An unlinked order never matches any of them (it has no CRM status/salesperson to compare
+  // against) and is always excluded once one of these filters is active - see the LiveOrdersQuery
+  // comment for why a filtered page can legitimately come back with fewer than `first` rows.
+  private applyOverlayFilters(items: LiveOrderListItem[], filters: Pick<LiveOrdersQuery, "status" | "paymentStatus" | "source" | "salespersonId">): LiveOrderListItem[] {
+    const { status, paymentStatus, source, salespersonId } = filters;
+    if (!status && !paymentStatus && !source && !salespersonId) return items;
+    return items.filter((item) => {
+      if (status && item.status !== status) return false;
+      if (paymentStatus && (paymentStatus === "NONE" ? item.paymentStatus !== null : item.paymentStatus !== paymentStatus)) return false;
+      if (source && item.source !== source) return false;
+      if (salespersonId && item.salesperson?.id !== salespersonId) return false;
+      return true;
+    });
   }
 
   private fetchCrmRows(externalIds: string[]) {
@@ -188,6 +219,7 @@ class OrdersLiveService {
         id: true,
         externalId: true,
         status: true,
+        source: true,
         payments: { select: { status: true, method: true } },
         createdBy: { select: { id: true, name: true } },
         _count: { select: { items: true } },
@@ -211,7 +243,10 @@ class OrdersLiveService {
       id: crm.id,
       orderNumber: shopifyOrder.name,
       status: crm.status,
-      source: "SHOPIFY",
+      // The CRM's own source (e.g. a salesperson-booked order later pushed to Shopify still reads as
+      // "Salesperson", not "Shopify") - previously hardcoded to "SHOPIFY" regardless, which lost that
+      // distinction for every linked order once the list became Shopify-sourced.
+      source: crm.source,
       currency: shopifyOrder.currency ?? "INR",
       totalAmount: shopifyOrder.totalAmount ?? "0",
       itemCount: crm._count.items,
@@ -223,6 +258,11 @@ class OrdersLiveService {
       salesperson: salesperson ? { id: salesperson.id, name: salesperson.name } : null,
       leadSource: crm.lead.source,
       linkedInCrm: true,
+      // Straight from the same live Shopify read this page already made - never a second Shopify call,
+      // and never derived from the CRM's own OrderStatus (a different vocabulary - see the type's comment).
+      fulfillmentStatus: shopifyOrder.fulfillmentStatus,
+      hasTracking: shopifyOrder.hasTracking,
+      shippingMethod: shopifyOrder.shippingMethod,
     };
   }
 
@@ -230,23 +270,56 @@ class OrdersLiveService {
   // no CRM identity to link to. id is prefixed (not the raw Shopify GID, which contains "/" and would
   // break the frontend's single-segment /dashboard/orders/[id] route) so Order Detail can tell this
   // apart from a CRM order id and fetch it via getLiveOrderDetail() below instead.
+  // ROOT CAUSE of the "No payment"/no-status bug this previously had: status/paymentStatus/paymentMode
+  // were hardcoded to null for every unsynced order, discarding the real Shopify financialStatus/
+  // fulfillmentStatus already present on `shopifyOrder` (fetched by the SAME listOrdersForDisplay call
+  // every linked row also uses) - a Shopify order being unsynced into the CRM DB has nothing to do with
+  // whether Shopify itself reports it as paid/fulfilled. Fixed by running that real Shopify data through
+  // mapListOrderStatusAndPayments - the EXACT SAME OrderStatus/PaymentStatus/PaymentMethod derivation
+  // shopify.persist.ts's real sync uses (via shopify.mapper.ts's mapOrder/mapOrderStatus/mapPayments) -
+  // so this unsynced row can never disagree with what it would show once actually synced, and
+  // derivePaymentStatus/derivePaymentMode (orders.filters.ts) stay the one place that reduces a
+  // payment list to a single status/mode, exactly like the linked branch above already does.
   private mapUnlinked(shopifyOrder: NormalizedOrderListItem): LiveOrderListItem {
+    const { status, payments } = mapListOrderStatusAndPayments({
+      id: shopifyOrder.id,
+      currency: shopifyOrder.currency ?? "INR",
+      cancelledAt: shopifyOrder.cancelledAt,
+      financialStatus: shopifyOrder.financialStatus,
+      fulfillmentStatus: shopifyOrder.fulfillmentStatus,
+      returnStatus: shopifyOrder.returnStatus,
+      fulfillments: shopifyOrder.fulfillments,
+      tags: shopifyOrder.tags,
+      paymentGateways: shopifyOrder.paymentGateways,
+      transactions: shopifyOrder.transactions,
+      amounts: { subtotal: null, discount: null, tax: null, shipping: null, total: shopifyOrder.totalAmount, refunded: shopifyOrder.refundedAmount },
+      processedAt: shopifyOrder.processedAt,
+      // The list doesn't fetch Shopify's own `updatedAt` (not needed anywhere else on this page) -
+      // only used as a last-resort timestamp fallback when processedAt is also absent, so falling back
+      // to createdAt here is harmless (never affects which status is chosen, only a paidAt timestamp
+      // this list view doesn't even display).
+      updatedAt: shopifyOrder.createdAt,
+    });
+
     return {
       id: `${LIVE_ORDER_ID_PREFIX}${shopifyOrder.externalId}`,
       orderNumber: shopifyOrder.name,
-      status: null,
+      status,
       source: "SHOPIFY",
       currency: shopifyOrder.currency ?? "INR",
       totalAmount: shopifyOrder.totalAmount ?? "0",
       itemCount: shopifyOrder.itemCount,
-      paymentStatus: null,
-      paymentMode: null,
+      paymentStatus: derivePaymentStatus(payments),
+      paymentMode: derivePaymentMode(payments),
       externalNumber: shopifyOrder.name,
       createdAt: new Date(shopifyOrder.createdAt),
       customer: { leadId: null, leadNumber: null, name: shopifyOrder.customerName ?? shopifyOrder.customerEmail ?? shopifyOrder.customerPhone ?? "Unknown" },
       salesperson: null,
       leadSource: null,
       linkedInCrm: false,
+      fulfillmentStatus: shopifyOrder.fulfillmentStatus,
+      hasTracking: shopifyOrder.hasTracking,
+      shippingMethod: shopifyOrder.shippingMethod,
     };
   }
 
@@ -363,6 +436,35 @@ class OrdersLiveService {
     };
     historyCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
+  }
+
+  // Cancels a Shopify order the CRM has not synced yet. Shopify has no "delete order" mutation at
+  // all - orderCancel (the same one orders.service.ts's cancelOrder already uses for a CRM-linked
+  // order) is the only destructive action that exists, so that is the one offered here too, never a
+  // fabricated "delete". Same ADMIN-only visibility as getLiveOrderDetail - there is no CRM lead to
+  // scope this to for a non-admin, same as every other unlinked-order action.
+  async cancelLiveOrder(user: AuthUser, externalId: string): Promise<LiveOrderCancelResult> {
+    if (user.role !== Role.ADMIN) {
+      return { cancelled: false, reason: "Not found" };
+    }
+
+    let client: ShopifyClient;
+    try {
+      client = this.getShopifyClient();
+    } catch (error) {
+      return { cancelled: false, reason: error instanceof ShopifyConfigError ? error.message : "Shopify is not configured." };
+    }
+
+    try {
+      await cancelShopifyOrder(client, `gid://shopify/Order/${externalId}`);
+      // Any cached list/detail page may now show a stale (pre-cancellation) status - cheaper to drop
+      // the whole small in-process cache than to track which keys this order could appear under.
+      listCache.clear();
+      historyCache.clear();
+      return { cancelled: true };
+    } catch (error) {
+      return { cancelled: false, reason: error instanceof ShopifyOrderCancelError ? error.message : "Could not reach Shopify - please try again." };
+    }
   }
 }
 

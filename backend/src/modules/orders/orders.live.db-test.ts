@@ -49,7 +49,26 @@ const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200
 
 const connectionBody = { data: { shop: { name: "Demo", myshopifyDomain: "demo-store.myshopify.com", currencyCode: "INR", ianaTimezone: "Asia/Kolkata" }, currentAppInstallation: { accessScopes: [{ handle: "read_orders" }] } } };
 
-function orderListBody(nodes: Array<{ id: string; name: string; createdAt?: string; customerName?: string; lineItemCount?: number }>, pageInfo: Partial<{ hasNextPage: boolean; hasPreviousPage: boolean; startCursor: string | null; endCursor: string | null }> = {}) {
+interface OrderListNodeFixture {
+  id: string;
+  name: string;
+  createdAt?: string;
+  customerName?: string;
+  lineItemCount?: number;
+  financialStatus?: string | null;
+  fulfillmentStatus?: string | null;
+  paymentGateways?: string[];
+  cancelledAt?: string | null;
+  returnStatus?: string | null;
+  tags?: string[];
+  shippingMethod?: string | null;
+  totalAmount?: string;
+  refundedAmount?: string | null;
+  trackingNumbers?: (string | null)[];
+  transactions?: Array<{ id: string; kind: string; status: string; gateway?: string | null; amount?: string }>;
+}
+
+function orderListBody(nodes: OrderListNodeFixture[], pageInfo: Partial<{ hasNextPage: boolean; hasPreviousPage: boolean; startCursor: string | null; endCursor: string | null }> = {}) {
   return {
     data: {
       orders: {
@@ -58,14 +77,30 @@ function orderListBody(nodes: Array<{ id: string; name: string; createdAt?: stri
           id: n.id,
           name: n.name,
           createdAt: n.createdAt ?? new Date().toISOString(),
-          displayFinancialStatus: "PAID",
-          displayFulfillmentStatus: "FULFILLED",
-          paymentGatewayNames: ["cod"],
+          processedAt: n.createdAt ?? new Date().toISOString(),
+          cancelledAt: n.cancelledAt ?? null,
+          displayFinancialStatus: n.financialStatus === undefined ? "PAID" : n.financialStatus,
+          displayFulfillmentStatus: n.fulfillmentStatus === undefined ? "FULFILLED" : n.fulfillmentStatus,
+          returnStatus: n.returnStatus ?? null,
+          tags: n.tags ?? [],
+          paymentGatewayNames: n.paymentGateways ?? ["cod"],
           email: "shopper@example.invalid",
           phone: null,
           customer: n.customerName ? { firstName: n.customerName.split(" ")[0], lastName: n.customerName.split(" ")[1] ?? null, email: "shopper@example.invalid", phone: null } : null,
-          totalPriceSet: { shopMoney: { amount: "699.00", currencyCode: "INR" } },
+          shippingLine: n.shippingMethod === undefined ? { title: "Standard" } : n.shippingMethod === null ? null : { title: n.shippingMethod },
+          totalPriceSet: { shopMoney: { amount: n.totalAmount ?? "699.00", currencyCode: "INR" } },
+          totalRefundedSet: n.refundedAmount ? { shopMoney: { amount: n.refundedAmount, currencyCode: "INR" } } : null,
           lineItems: { nodes: Array.from({ length: n.lineItemCount ?? 1 }, (_, i) => ({ id: `gid://shopify/LineItem/${i}` })) },
+          transactions: n.transactions ?? [],
+          fulfillments:
+            n.trackingNumbers === undefined
+              ? []
+              : n.trackingNumbers.map((num, i) => ({
+                  id: `gid://shopify/Fulfillment/${i}`,
+                  status: "SUCCESS",
+                  displayStatus: "DELIVERED",
+                  trackingInfo: num ? [{ company: "BlueDart", number: num, url: `https://track.example/${num}` }] : [],
+                })),
         })),
       },
     },
@@ -309,6 +344,175 @@ describe("OrdersLiveService.listLiveOrders", () => {
     });
   });
 
+  // Regression coverage for the "No payment"/missing-status bug: an UNSYNCED Shopify order must show
+  // its real Shopify-reported payment/fulfillment/tracking/shipping data, never null/"No payment" just
+  // because the CRM hasn't synced it yet. Each case feeds orders.live.service.ts's mapUnlinked() through
+  // the exact same shopify.mapper.ts mapping a real sync would use (mapListOrderStatusAndPayments).
+  describe("Shopify status/payment mapping for an UNSYNCED order (the 'No payment' bug)", () => {
+    it("paid + fulfilled + tracking: shows a real payment/order status, fulfillment, and tracking - never 'No payment'/'Not synced to CRM' standing in for them", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}1`;
+        const { client } = fakeShopifyClient(
+          orderListBody([
+            {
+              id: `gid://shopify/Order/${extId}`,
+              name: "#AWL100205",
+              customerName: "Shridhar Gauraha",
+              financialStatus: "PAID",
+              fulfillmentStatus: "FULFILLED",
+              paymentGateways: ["Cashfree"],
+              shippingMethod: "Standard",
+              totalAmount: "649.00",
+              trackingNumbers: ["AWB12345"],
+            },
+          ]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        const item = result.items[0]!;
+        assert.equal(item.linkedInCrm, false);
+        assert.notEqual(item.paymentStatus, null, "a Shopify-confirmed PAID order must never show as 'No payment'");
+        assert.equal(item.paymentStatus, "SUCCESS");
+        assert.equal(item.paymentMode, "PREPAID", "Cashfree is not a COD gateway");
+        assert.notEqual(item.status, null, "a real Shopify order must never show as unsynced-with-no-status");
+        assert.equal(item.fulfillmentStatus, "FULFILLED");
+        assert.equal(item.hasTracking, true);
+        assert.equal(item.shippingMethod, "Standard");
+      });
+    });
+
+    it("paid + unfulfilled: payment is confirmed but fulfillment/tracking correctly show nothing shipped yet", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}2`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1003", financialStatus: "PAID", fulfillmentStatus: "UNFULFILLED", paymentGateways: ["Razorpay"] }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        const item = result.items[0]!;
+        assert.equal(item.paymentStatus, "SUCCESS");
+        assert.equal(item.fulfillmentStatus, "UNFULFILLED");
+        assert.equal(item.hasTracking, false);
+      });
+    });
+
+    it("pending/unpaid: shows a real pending payment status, never 'No payment'", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}3`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1004", financialStatus: "PENDING", fulfillmentStatus: "UNFULFILLED", paymentGateways: ["Razorpay"] }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        const item = result.items[0]!;
+        assert.equal(item.paymentStatus, "PENDING");
+        assert.notEqual(item.paymentStatus, null);
+      });
+    });
+
+    it("partially paid: shows SUCCESS (the CRM's PaymentStatus vocabulary has no separate 'partial' bucket until a refund occurs)", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}4`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1005", financialStatus: "PARTIALLY_PAID", fulfillmentStatus: "UNFULFILLED", paymentGateways: ["Razorpay"] }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        assert.notEqual(result.items[0]!.paymentStatus, null);
+      });
+    });
+
+    it("refunded: shows REFUNDED, not 'No payment'", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}5`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1006", financialStatus: "REFUNDED", fulfillmentStatus: "FULFILLED", paymentGateways: ["Razorpay"], refundedAmount: "699.00" }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        assert.equal(result.items[0]!.paymentStatus, "REFUNDED");
+      });
+    });
+
+    it("partially refunded: shows PARTIALLY_REFUNDED, not 'No payment'", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}6`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1007", financialStatus: "PARTIALLY_REFUNDED", fulfillmentStatus: "FULFILLED", paymentGateways: ["Razorpay"], refundedAmount: "200.00" }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        assert.equal(result.items[0]!.paymentStatus, "PARTIALLY_REFUNDED");
+      });
+    });
+
+    it("fulfilled without tracking: fulfillment shows Fulfilled, but hasTracking is honestly false - never fabricated", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}7`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1008", financialStatus: "PAID", fulfillmentStatus: "FULFILLED", trackingNumbers: [null] }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        const item = result.items[0]!;
+        assert.equal(item.fulfillmentStatus, "FULFILLED");
+        assert.equal(item.hasTracking, false);
+      });
+    });
+
+    it("multiple fulfillments, only one with tracking: hasTracking is still correctly true", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}8`;
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1009", financialStatus: "PAID", fulfillmentStatus: "PARTIALLY_FULFILLED", trackingNumbers: [null, "AWB99999"] }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        const item = result.items[0]!;
+        assert.equal(item.fulfillmentStatus, "PARTIALLY_FULFILLED");
+        assert.equal(item.hasTracking, true);
+      });
+    });
+
+    it("no shipping line: shippingMethod is honestly null, never a fabricated 'Standard'", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const extId = `${Date.now()}9`;
+        const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1010", shippingMethod: null }]));
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        assert.equal(result.items[0]!.shippingMethod, null);
+      });
+    });
+
+    it("a linked (already-synced) order's fulfillmentStatus/hasTracking/shippingMethod also come from the SAME live Shopify read, not left null just because it's linked", async () => {
+      await inRollback(async (tx) => {
+        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const lead = await makeLead(tx);
+        const extId = `${Date.now()}10`;
+        await makeShopifyOrder(tx, lead.id, extId);
+        const { client } = fakeShopifyClient(
+          orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1011", fulfillmentStatus: "FULFILLED", shippingMethod: "Express", trackingNumbers: ["AWB1"] }]),
+        );
+
+        const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+        const item = result.items[0]!;
+        assert.equal(item.linkedInCrm, true);
+        assert.equal(item.fulfillmentStatus, "FULFILLED");
+        assert.equal(item.hasTracking, true);
+        assert.equal(item.shippingMethod, "Express");
+      });
+    });
+  });
+
   it("RBAC: a salesperson only sees Shopify orders linked to their own leads, never a colleague's", async () => {
     await inRollback(async (tx) => {
       const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
@@ -388,6 +592,100 @@ describe("OrdersLiveService.listLiveOrders", () => {
       assert.match(searchString, /created_at:>=/);
       assert.match(searchString, /created_at:</);
       assert.match(searchString, /aftab/);
+    });
+  });
+
+  it("a linked order reports the CRM's own source (e.g. Salesperson), not a hardcoded Shopify", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const extId = `${Date.now()}`;
+      await makeShopifyOrder(tx, lead.id, extId, { source: "SALESPERSON" });
+      const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#6001" }]));
+
+      const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+      assert.equal(result.items[0]!.source, "SALESPERSON");
+    });
+  });
+
+  it("status/paymentStatus/source/salespersonId filter the page to matching linked orders only", async () => {
+    await inRollback(async (tx) => {
+      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const leadA = await makeLead(tx, { ownerId: repA.id, normalizedMobile: "+913333300001", mobile: "3333300001" });
+      const leadB = await makeLead(tx, { ownerId: repB.id, normalizedMobile: "+913333300002", mobile: "3333300002" });
+      const extA = `${Date.now()}a`;
+      const extB = `${Date.now()}b`;
+      await makeShopifyOrder(tx, leadA.id, extA, { status: "CONFIRMED", createdById: repA.id });
+      await makeShopifyOrder(tx, leadB.id, extB, { status: "SHIPPED", createdById: repB.id });
+
+      const { client } = fakeShopifyClient(orderListBody([
+        { id: `gid://shopify/Order/${extA}`, name: "#7001" },
+        { id: `gid://shopify/Order/${extB}`, name: "#7002" },
+      ]));
+
+      const admin = await tx.user.create({ data: { name: "Admin", email: `adm-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const byStatus = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, status: "SHIPPED" });
+      assert.equal(byStatus.items.length, 1);
+      assert.equal(byStatus.items[0]!.orderNumber, "#7002");
+
+      const { client: client2 } = fakeShopifyClient(orderListBody([
+        { id: `gid://shopify/Order/${extA}`, name: "#7001" },
+        { id: `gid://shopify/Order/${extB}`, name: "#7002" },
+      ]));
+      const bySalesperson = await new OrdersLiveService(tx, () => client2).listLiveOrders(as(admin, Role.ADMIN), { first: 25, salespersonId: repA.id });
+      assert.equal(bySalesperson.items.length, 1);
+      assert.equal(bySalesperson.items[0]!.orderNumber, "#7001");
+    });
+  });
+
+  it("an unsynced (unlinked) order never matches a status/salesperson filter, since it has neither", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const extId = `${Date.now()}`;
+      const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#8001" }]));
+
+      const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, status: "CONFIRMED" });
+      assert.equal(result.items.length, 0);
+    });
+  });
+});
+
+function fakeCancelClient(response: unknown) {
+  return { query: async () => response } as unknown as ShopifyClient;
+}
+
+describe("OrdersLiveService.cancelLiveOrder", () => {
+  it("ADMIN can cancel a Shopify order the CRM has not synced yet - the only destructive action Shopify supports", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const client = fakeCancelClient({ orderCancel: { job: { id: "1", done: true }, orderCancelUserErrors: [] } });
+
+      const result = await new OrdersLiveService(tx, () => client).cancelLiveOrder(as(admin, Role.ADMIN), "123456");
+      assert.deepEqual(result, { cancelled: true });
+    });
+  });
+
+  it("a non-admin cannot cancel an unsynced order - reports cleanly, never calls Shopify", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      let called = false;
+      const client = { query: async () => { called = true; return {}; } } as unknown as ShopifyClient;
+
+      const result = await new OrdersLiveService(tx, () => client).cancelLiveOrder(as(rep, Role.SALESPERSON), "123456");
+      assert.equal(result.cancelled, false);
+      assert.equal(called, false, "Shopify must never be called for a request that was refused on RBAC alone");
+    });
+  });
+
+  it("Shopify rejects the cancellation: reports the real reason, never claims success", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const client = fakeCancelClient({ orderCancel: { job: null, orderCancelUserErrors: [{ field: null, message: "Order is already cancelled" }] } });
+
+      const result = await new OrdersLiveService(tx, () => client).cancelLiveOrder(as(admin, Role.ADMIN), "123456");
+      assert.equal(result.cancelled, false);
+      assert.match(result.reason ?? "", /already cancelled/);
     });
   });
 });

@@ -3,9 +3,11 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { History } from "lucide-react";
+import { CardContent } from "@/components/ui/card";
+import { AccentCard, SectionTitle } from "./order-detail-parts";
 import { OrdersCursorPagination } from "./orders-cursor-pagination";
+import { ShopifyStatusBadge, SourceBadge } from "./shopify-status-badge";
 import { orderDetailHref } from "./orders-table";
 import { useLiveOrderHistory } from "@/hooks/useOrders";
 import { formatDate, formatMoney } from "@/lib/order-status";
@@ -56,17 +58,17 @@ export function LiveOrderHistoryTable({ shopifyCustomerId, excludeExternalId }: 
             {data.items.map((item) => (
               <TableRow key={item.id}>
                 <TableCell>
-                  <Link href={orderDetailHref(item.id)} className="font-medium hover:underline">
+                  <Link href={orderDetailHref(item.id)} className="font-semibold text-blue-600 hover:underline dark:text-blue-400">
                     {item.orderNumber}
                   </Link>
                   {!item.linkedInCrm ? <div className="text-xs text-muted-foreground">Not synced to CRM</div> : null}
                 </TableCell>
                 <TableCell>
-                  <Badge variant="outline">Shopify</Badge>
+                  <SourceBadge>Shopify</SourceBadge>
                 </TableCell>
-                <TableCell className="text-right tabular-nums">{formatMoney(item.totalAmount, item.currency)}</TableCell>
-                <TableCell>{item.financialStatus ?? "—"}</TableCell>
-                <TableCell>{item.fulfillmentStatus ?? "—"}</TableCell>
+                <TableCell className="text-right font-semibold tabular-nums">{formatMoney(item.totalAmount, item.currency)}</TableCell>
+                <TableCell>{item.financialStatus ? <ShopifyStatusBadge status={item.financialStatus} /> : "—"}</TableCell>
+                <TableCell>{item.fulfillmentStatus ? <ShopifyStatusBadge status={item.fulfillmentStatus} /> : "—"}</TableCell>
                 <TableCell className="text-muted-foreground">{formatDate(item.createdAt)}</TableCell>
               </TableRow>
             ))}
@@ -84,11 +86,9 @@ export function LiveOrderHistoryTable({ shopifyCustomerId, excludeExternalId }: 
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Previous Orders</CardTitle>
-      </CardHeader>
+    <AccentCard accent="slate">
+      <SectionTitle icon={<History />}>Previous Orders</SectionTitle>
       <CardContent>{content}</CardContent>
-    </Card>
+    </AccentCard>
   );
 }

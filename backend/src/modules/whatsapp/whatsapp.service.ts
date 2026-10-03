@@ -189,7 +189,7 @@ class WhatsAppService {
       if (!lead) return { items: [], pagination: { page: query.page, pageSize: query.pageSize, totalItems: 0, totalPages: 0 } };
     }
 
-    const where = buildMessageWhere(query, leadScope);
+    const where = buildMessageWhere(query, leadScope, user.id);
     const [totalItems, rows] = await Promise.all([
       this.db.whatsAppMessage.count({ where }),
       this.db.whatsAppMessage.findMany({
@@ -201,8 +201,15 @@ class WhatsAppService {
       }),
     ]);
 
+    // Starred is per-viewer (WhatsAppMessageUserState), so it's a separate small lookup rather than
+    // a field HISTORY_SELECT could carry for an unparametrized static select - same "overlay a second,
+    // targeted query onto an already-fetched page" idiom orders.live.service.ts's CRM join already uses.
+    const starredIds = rows.length > 0
+      ? new Set((await this.db.whatsAppMessageUserState.findMany({ where: { userId: user.id, messageId: { in: rows.map((r) => r.id) }, starred: true }, select: { messageId: true } })).map((s) => s.messageId))
+      : new Set<string>();
+
     return {
-      items: rows.map(mapMessageHistoryItem),
+      items: rows.map((row) => mapMessageHistoryItem(row, starredIds.has(row.id))),
       pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
     };
   }
@@ -211,7 +218,26 @@ class WhatsAppService {
     const leadScope = await getLeadScope(user, this.db);
     const row = await this.db.whatsAppMessage.findFirst({ where: scopedMessageWhere(id, leadScope), select: HISTORY_SELECT });
     if (!row) throw new ApiError("Message not found", STATUS_CODES.NOT_FOUND);
-    return mapMessageHistoryItem(row);
+    const state = await this.db.whatsAppMessageUserState.findUnique({ where: { messageId_userId: { messageId: id, userId: user.id } }, select: { starred: true } });
+    return mapMessageHistoryItem(row, state?.starred ?? false);
+  }
+
+  // Starred messages for the current user, optionally scoped to one conversation - the same
+  // "Starred messages" idea WhatsApp itself has, built on the same WhatsAppMessageUserState rows
+  // setStarred() above writes. RBAC: a message whose lead has since left this user's scope (a
+  // reassignment, say) is excluded, the same as every other lead-scoped read.
+  async listStarredMessages(user: AuthUser, leadId?: string): Promise<WhatsAppMessageHistoryItem[]> {
+    const leadScope = await getLeadScope(user, this.db);
+    const states = await this.db.whatsAppMessageUserState.findMany({
+      where: {
+        userId: user.id,
+        starred: true,
+        message: { AND: [leadId ? { leadId } : {}, Object.keys(leadScope).length > 0 ? { lead: leadScope } : {}] },
+      },
+      select: { message: { select: HISTORY_SELECT } },
+      orderBy: { updatedAt: "desc" },
+    });
+    return states.map((s) => mapMessageHistoryItem(s.message, true));
   }
 
   // Central WhatsApp Inbox's conversation list: one row per Lead, carrying only their latest

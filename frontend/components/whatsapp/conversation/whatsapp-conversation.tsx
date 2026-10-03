@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownLeft, ArrowUpRight, MessageCircle } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, MessageCircle, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { whatsappMessageListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
+import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { formatDateTime } from "@/lib/order-status";
 import { MESSAGE_HISTORY_FILTER_LABELS, type MessageHistoryFilter } from "@/lib/whatsapp-message-status";
@@ -37,16 +38,23 @@ function paramsForFilter(filter: MessageHistoryFilter): Pick<ListMessagesParams,
 function MessageRow({ message, onSelect }: { message: WhatsAppMessageHistoryItem; onSelect: () => void }) {
   const outbound = message.direction === "OUTBOUND";
   return (
-    <li className="relative">
-      <span className="absolute top-1.5 -left-[1.3rem] size-2 rounded-full bg-primary" aria-hidden="true" />
-      <button type="button" onClick={onSelect} className="w-full text-left">
+    <li className={cn("flex", outbound ? "justify-end" : "justify-start")}>
+      <button
+        type="button"
+        onClick={onSelect}
+        className={cn(
+          "max-w-[88%] min-w-0 rounded-2xl border px-3.5 py-2 text-left shadow-xs transition-colors sm:max-w-[75%]",
+          outbound ? "rounded-br-sm border-emerald-500/25 bg-emerald-500/10 hover:bg-emerald-500/15" : "rounded-bl-sm border-border bg-muted/60 hover:bg-muted",
+        )}
+      >
         <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
           {outbound ? <ArrowUpRight className="size-3.5" /> : <ArrowDownLeft className="size-3.5" />}
           {outbound ? "Outgoing" : "Incoming"}
           {message.template ? ` · Template: ${message.template.name}` : null}
+          {message.starred ? <Star className="ml-auto size-3.5 fill-amber-400 text-amber-500" aria-label="Starred" /> : null}
         </p>
-        <p className="text-sm">{message.body || (message.template ? "(template message)" : "—")}</p>
-        <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <p className="mt-1 text-sm break-words whitespace-pre-wrap">{message.body || (message.template ? "(template message)" : "—")}</p>
+        <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <MessageStatusBadge status={message.status} />
           {formatDateTime(outbound ? (message.sentAt ?? message.createdAt) : (message.receivedAt ?? message.createdAt))}
           {outbound && message.sentBy ? ` · Sent by ${message.sentBy.name}` : null}
@@ -89,9 +97,12 @@ export function WhatsAppConversation({
   const error = query.isError ? getErrorMessage(query.error, "Failed to load WhatsApp conversation.") : null;
 
   return (
-    <Card>
+    <Card className="border-l-4 border-l-emerald-500/70">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
-        <CardTitle>{title}</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-lg">
+          <MessageCircle className="size-[18px] text-emerald-600 dark:text-emerald-400" />
+          {title}
+        </CardTitle>
         <Select
           value={filter}
           items={MESSAGE_HISTORY_FILTER_LABELS}
@@ -142,7 +153,7 @@ export function WhatsAppConversation({
           )
         ) : (
           <>
-            <ol className="space-y-4 border-l pl-4">
+            <ol className="space-y-3 rounded-xl bg-emerald-500/[0.04] p-3">
               {data.items.map((message) => (
                 <MessageRow key={message.id} message={message} onSelect={() => setSelected(message)} />
               ))}
