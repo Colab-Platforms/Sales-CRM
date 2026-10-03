@@ -8,6 +8,7 @@ export const whatsappHistoryKeys = {
   list: (params: ListMessagesParams) => [...whatsappHistoryKeys.all, "list", params] as const,
   detail: (id: string) => [...whatsappHistoryKeys.all, "detail", id] as const,
   conversations: (params: ListConversationsParams) => [...whatsappHistoryKeys.all, "conversations", params] as const,
+  starred: (leadId?: string) => [...whatsappHistoryKeys.all, "starred", leadId ?? null] as const,
 };
 
 const STALE_TIME_MS = 30 * 1000;
@@ -32,6 +33,15 @@ export function whatsappMessageDetailQueryOptions(id: string) {
   return queryOptions({
     queryKey: whatsappHistoryKeys.detail(id),
     queryFn: () => whatsappHistoryApi.get(id),
+    staleTime: STALE_TIME_MS,
+    retry: retryUnlessClientError,
+  });
+}
+
+export function whatsappStarredMessagesQueryOptions(leadId?: string) {
+  return queryOptions({
+    queryKey: whatsappHistoryKeys.starred(leadId),
+    queryFn: () => whatsappHistoryApi.listStarred(leadId),
     staleTime: STALE_TIME_MS,
     retry: retryUnlessClientError,
   });

@@ -63,6 +63,7 @@ model User {
   activitiesAsActor Activity[] @relation("ActivityActor")
 
   whatsAppMessagesSent WhatsAppMessage[] @relation("WhatsAppMessageSentBy")
+  whatsAppMessageStates WhatsAppMessageUserState[]
   whatsAppTemplatesCreated WhatsAppTemplate[] @relation("WhatsAppTemplateCreatedBy")
   whatsAppAutomationConfigsUpdated WhatsAppAutomationConfig[] @relation("WhatsAppAutomationConfigUpdatedBy")
   whatsAppCampaignsCreated WhatsAppCampaign[] @relation("WhatsAppCampaignCreatedBy")

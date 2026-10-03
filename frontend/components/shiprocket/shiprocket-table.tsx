@@ -90,6 +90,9 @@ export function ShiprocketTable({ items, isFetching, onOpenDetail }: ShiprocketT
             <TableCell>
               <ShipmentStatusBadge status={shipment.status} />
               {shipment.providerStatus ? <div className="mt-0.5 text-xs text-muted-foreground">{shipment.providerStatus}</div> : null}
+              {shipment.liveTracking?.tracking ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">Live: {shipment.liveTracking.tracking.currentStatus ?? "—"}</div>
+              ) : null}
             </TableCell>
             <TableCell>{shipment.paymentMode ? PAYMENT_MODE_LABELS[shipment.paymentMode] : <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell className="text-right tabular-nums">{formatMoney(shipment.amount, shipment.currency)}</TableCell>

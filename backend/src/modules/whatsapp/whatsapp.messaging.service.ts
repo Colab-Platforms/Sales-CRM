@@ -12,7 +12,6 @@ import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
 import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
-import { findConversationProvider } from "./whatsapp.conversation-provider.js";
 import { PROVIDER_DISPLAY_NAMES } from "./whatsapp.freetext.service.js";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
 import type { OrderConfirmationTestResult, PreviewTemplateInput, SendOrderConfirmationTestInput, SendTemplateInput, TemplatePreviewResult } from "./whatsapp.messaging.types.js";
@@ -160,38 +159,23 @@ class WhatsAppMessagingService {
   }
 
   /** Which provider a template send goes through.
-   *  - System senders (lifecycle automation, campaigns): the legacy env-configured provider, exactly as before.
-   *  - A signed-in user: the provider the lead's conversation is on (same resolver the free-text capability uses),
-   *    never overridden by the global WHATSAPP_PROVIDER. META -> the active Meta config; AISENSY/GUPSHUP -> the
-   *    legacy provider, but only if it really is that provider (never silently sent through the other one).
-   *  - A lead with no WhatsApp history at all: the legacy provider if configured (unchanged behavior), else Meta. */
-  private async resolveSendProvider(actor: SendActor, leadId: string): Promise<{ provider: WhatsAppProvider; fromConversation: boolean }> {
+   *  - System senders (lifecycle automation, campaigns): the legacy env-configured provider, exactly as before -
+   *    untouched by the Meta-only policy below, since campaigns/lifecycle automation are out of scope for it.
+   *  - A signed-in user (Inbox, Send WhatsApp, Customer 360, bulk send): Meta Cloud API is the ONLY provider.
+   *    AiSensy/Gupshup are disabled for every user-initiated send, regardless of which provider a lead's past
+   *    conversation history happens to be on - `findConversationProvider` remains an honest historical record
+   *    (used elsewhere, e.g. the Inbox's read-only "last seen on" display) but is deliberately not consulted
+   *    here for routing a new send. */
+  private async resolveSendProvider(actor: SendActor, _leadId: string): Promise<{ provider: WhatsAppProvider; fromConversation: boolean }> {
     const legacy = this.getProvider();
     if (actor.kind === "system") {
       if (!legacy) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
       return { provider: legacy, fromConversation: false };
     }
 
-    const { provider: conversationProvider } = await findConversationProvider(this.db, leadId);
-
-    if (conversationProvider === "META") {
-      const meta = await this.metaProvider();
-      if (!meta) throw new ApiError("This conversation is on Meta Cloud API, but Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
-      return { provider: meta, fromConversation: true };
-    }
-
-    if (conversationProvider) {
-      if (!legacy) throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
-      if (legacy.id !== conversationProvider) {
-        throw new ApiError(`This conversation is on ${PROVIDER_DISPLAY_NAMES[conversationProvider]}, but ${PROVIDER_DISPLAY_NAMES[conversationProvider]} is not the configured provider (${PROVIDER_DISPLAY_NAMES[legacy.id]} is), so a template cannot be sent from here.`, STATUS_CODES.BAD_REQUEST);
-      }
-      return { provider: legacy, fromConversation: true };
-    }
-
-    if (legacy) return { provider: legacy, fromConversation: false };
     const meta = await this.metaProvider();
-    if (meta) return { provider: meta, fromConversation: false };
-    throw new ApiError("WhatsApp is not configured", STATUS_CODES.SERVICE_UNAVAILABLE);
+    if (!meta) throw new ApiError("Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
+    return { provider: meta, fromConversation: false };
   }
 
   /** Which provider a template sent by this user to this lead would go through - the same resolution send() uses -

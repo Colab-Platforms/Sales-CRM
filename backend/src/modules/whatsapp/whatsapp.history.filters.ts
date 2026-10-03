@@ -2,7 +2,10 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { fullName } from "../orders/orders.filters.js";
 import type { ListMessagesQuery, WhatsAppMessageHistoryItem } from "./whatsapp.history.types.js";
 
-export function buildMessageWhere(query: ListMessagesQuery, leadScope: Prisma.LeadWhereInput): Prisma.WhatsAppMessageWhereInput {
+// userId: whoever is asking - a message this user chose "Delete for me" on is excluded for them
+// alone (WhatsAppMessageUserState is per-user; everyone else still sees it). The row itself is
+// never touched, so this can never hide a message "for everyone" by accident.
+export function buildMessageWhere(query: ListMessagesQuery, leadScope: Prisma.LeadWhereInput, userId: string): Prisma.WhatsAppMessageWhereInput {
   const and: Prisma.WhatsAppMessageWhereInput[] = [];
 
   // A message with no lead (an inbound sender the CRM could not match, E7.1) has no lead to
@@ -20,6 +23,7 @@ export function buildMessageWhere(query: ListMessagesQuery, leadScope: Prisma.Le
     const contains = { contains: query.search, mode: "insensitive" as const };
     and.push({ OR: [{ body: contains }, { templateName: contains }] });
   }
+  and.push({ NOT: { userStates: { some: { userId, hiddenAt: { not: null } } } } });
 
   return and.length > 0 ? { AND: and } : {};
 }
@@ -50,8 +54,10 @@ export interface MessageHistoryRow {
   messageType: WhatsAppMessageHistoryItem["messageType"];
   status: WhatsAppMessageHistoryItem["status"];
   providerMessageId: string | null;
+  replyToProviderMessageId: string | null;
   body: string | null;
   errorMessage: string | null;
+  errorCode: string | null;
   createdAt: Date;
   sentAt: Date | null;
   deliveredAt: Date | null;
@@ -64,16 +70,19 @@ export interface MessageHistoryRow {
   sentBy: { id: string; name: string } | null;
 }
 
-export function mapMessageHistoryItem(row: MessageHistoryRow): WhatsAppMessageHistoryItem {
+export function mapMessageHistoryItem(row: MessageHistoryRow, starred: boolean = false): WhatsAppMessageHistoryItem {
   return {
+    starred,
     id: row.id,
     provider: row.provider,
     direction: row.direction,
     messageType: row.messageType,
     status: row.status,
     providerMessageId: row.providerMessageId,
+    replyToProviderMessageId: row.replyToProviderMessageId,
     body: row.body,
     errorMessage: row.errorMessage,
+    errorCode: row.errorCode,
     createdAt: row.createdAt,
     sentAt: row.sentAt,
     deliveredAt: row.deliveredAt,

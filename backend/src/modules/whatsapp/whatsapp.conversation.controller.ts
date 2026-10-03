@@ -9,7 +9,7 @@ import WhatsAppOrderConversationService from "./whatsapp.order-conversation.serv
 import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
 import WhatsAppMessagingService from "./whatsapp.messaging.service.js";
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope } from "@/lib/leadScope.js";
+import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { ApiError } from "@/utils/apiError.js";
 
@@ -19,7 +19,9 @@ const freeTextService = new WhatsAppFreeTextService();
 const messagingService = new WhatsAppMessagingService();
 
 const assignSchema = z.object({ userId: z.string().uuid() });
-const sendTextSchema = z.object({ text: z.string().min(1).max(4000) });
+// replyToMessageId is the CRM's own internal WhatsAppMessage id (never a client-supplied provider
+// wamid, so it can be looked up server-side and scope-checked before trusting it as a reply target).
+const sendTextSchema = z.object({ text: z.string().min(1).max(4000), replyToMessageId: z.uuid().optional() });
 
 export const getConversationDetail = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -102,6 +104,19 @@ const loadScopedLead = async (req: AuthRequest) => {
   return lead;
 };
 
+// Resolves a client-supplied CRM message id (the "reply to" / "correct" target - same mechanism for
+// both, "Correct Message" is just a pre-filled Reply) to that message's real providerMessageId
+// (wamid), scoped to the SAME lead/conversation the send is already scoped to. Exported standalone so
+// this exact security/correctness boundary - a message id from another lead's conversation can never
+// be used as a reply target, and a message with no real providerMessageId can never be quoted - is
+// independently testable without going through the Express req/res layer.
+export async function resolveReplyToProviderMessageId(leadId: string, replyToMessageId: string | undefined, db: DbClient = prisma): Promise<string | undefined> {
+  if (!replyToMessageId) return undefined;
+  const target = await db.whatsAppMessage.findFirst({ where: { id: replyToMessageId, leadId }, select: { providerMessageId: true } });
+  if (!target?.providerMessageId) throw new ApiError("The message you're replying to is not available to quote.", STATUS_CODES.BAD_REQUEST);
+  return target.providerMessageId;
+}
+
 export const sendConversationText = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateSchema(sendTextSchema, req.body);
@@ -112,7 +127,11 @@ export const sendConversationText = async (req: AuthRequest, res: Response): Pro
     const lead = await loadScopedLead(req);
     if (!lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
 
-    const row = await freeTextService.sendText({ id: lead.id, normalizedMobile: lead.normalizedMobile }, value.text, req.user!.id);
+    // The reply/correction target must belong to this same conversation - resolved server-side to its
+    // real providerMessageId (wamid), never trusting a client-supplied one directly.
+    const replyToProviderMessageId = await resolveReplyToProviderMessageId(lead.id, value.replyToMessageId);
+
+    const row = await freeTextService.sendText({ id: lead.id, normalizedMobile: lead.normalizedMobile }, value.text, req.user!.id, undefined, replyToProviderMessageId);
     sendResponse(res, true, { id: row.id }, "Message sent.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);

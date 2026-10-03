@@ -1,4 +1,6 @@
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Truck } from "lucide-react";
+import { CardContent } from "@/components/ui/card";
+import { AccentCard, EmptyState, LinkButton, SectionTitle } from "./order-detail-parts";
 import { DetailField, DetailGrid } from "./detail-field";
 import { CreateShipmentButton, ShipmentActions } from "./shipment-actions";
 import { ShipmentStatusBadge } from "./shipment-status-badge";
@@ -12,7 +14,7 @@ const SOURCE_LABELS = { SHOPIFY: "Shopify", SHIPROCKET: "Shiprocket (created her
 function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
   const source = shipment.source === "SHOPIFY" || shipment.source === "SHIPROCKET" ? SOURCE_LABELS[shipment.source] : null;
   return (
-    <div className="space-y-3 rounded-lg border p-4">
+    <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
       <div className="flex flex-wrap items-center gap-2">
         <ShipmentStatusBadge status={shipment.status} />
         {source ? <span className="text-xs text-muted-foreground">{source}</span> : null}
@@ -21,16 +23,28 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
       {shipment.linkedShipmentId ? (
         <p className="text-xs text-muted-foreground">The same parcel is also tracked directly in Shiprocket (same AWB) - see that shipment.</p>
       ) : null}
+      {shipment.liveTracking ? (
+        shipment.liveTracking.tracking ? (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs">
+            <span className="font-medium">Live from Shiprocket:</span> {shipment.liveTracking.tracking.currentStatus ?? "Status not available"}
+            {shipment.liveTracking.tracking.courierName ? ` · ${shipment.liveTracking.tracking.courierName}` : ""}
+          </p>
+        ) : (
+          <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
+            Live Shiprocket status unavailable: {shipment.liveTracking.error ?? "unknown reason"}
+          </p>
+        )
+      ) : null}
       <DetailGrid>
         <DetailField label="Courier">{shipment.courier ?? NOT_AVAILABLE}</DetailField>
         <DetailField label="Tracking / AWB number">
-          {shipment.trackingNumber ? <span className="font-mono text-xs">{shipment.trackingNumber}</span> : NOT_AVAILABLE}
+          {shipment.trackingNumber ? <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{shipment.trackingNumber}</span> : NOT_AVAILABLE}
         </DetailField>
         <DetailField label="Tracking link">
           {shipment.trackingUrl ? (
-            <a href={shipment.trackingUrl} target="_blank" rel="noreferrer" className="text-primary hover:underline">
-              Track shipment
-            </a>
+            <LinkButton href={shipment.trackingUrl} external>
+              Track shipment →
+            </LinkButton>
           ) : (
             NOT_AVAILABLE
           )}
@@ -58,17 +72,13 @@ interface OrderShipmentSectionProps {
 
 export function OrderShipmentSection({ shipments, orderId, orderNumber, orderStatus, currency }: OrderShipmentSectionProps) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-3">
-        <CardTitle>Fulfilment & Shipment</CardTitle>
-        <CreateShipmentButton orderId={orderId} orderNumber={orderNumber} orderStatus={orderStatus} currency={currency} shipments={shipments} />
-      </CardHeader>
+    <AccentCard accent="blue">
+      <SectionTitle icon={<Truck />} accent="blue" aside={<CreateShipmentButton orderId={orderId} orderNumber={orderNumber} orderStatus={orderStatus} currency={currency} shipments={shipments} />}>
+        Fulfilment &amp; Shipment
+      </SectionTitle>
       <CardContent className="space-y-3">
         {shipments.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            This order has no shipment recorded yet - details appear automatically once courier and tracking
-            information sync from Shopify, or when a shipment is created here in Shiprocket.
-          </p>
+          <EmptyState title="No shipment recorded yet" message="Shipment details will appear automatically when courier and tracking information syncs from Shopify, or when a shipment is created here in Shiprocket." />
         ) : (
           <>
             {shipments.map((shipment) => (
@@ -80,6 +90,6 @@ export function OrderShipmentSection({ shipments, orderId, orderNumber, orderSta
           </>
         )}
       </CardContent>
-    </Card>
+    </AccentCard>
   );
 }

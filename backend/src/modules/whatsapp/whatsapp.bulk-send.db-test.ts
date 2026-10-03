@@ -42,7 +42,7 @@ async function makeWebinarTemplate(tx: Prisma.TransactionClient, overrides: Part
   return tx.whatsAppTemplate.create({
     data: {
       name: `webinar_${uid()}`,
-      provider: "AISENSY",
+      provider: "META",
       language: "en",
       body: "Hi {{customer_name}}, join our {{webinar_name}}!",
       variables: ["customer_name", "webinar_name"],
@@ -53,9 +53,13 @@ async function makeWebinarTemplate(tx: Prisma.TransactionClient, overrides: Part
   });
 }
 
+// A signed-in user's send always goes through Meta now (AiSensy is disabled for user-initiated
+// sends - see WhatsAppMessagingService.resolveSendProvider), and bulk send always acts as a
+// signed-in user - so this fake stands in for the Meta provider (passed as the 3rd/getMeta
+// constructor arg below, not the legacy 2nd arg).
 function fakeProvider(overrides: Partial<WhatsAppProvider> = {}): WhatsAppProvider {
   return {
-    id: "AISENSY",
+    id: "META",
     sendTemplateMessage: async () => ({ providerMessageId: `wamid-${uid()}`, raw: { ok: true } }),
     verifyWebhook: () => true,
     parseIncomingWebhook: () => [],
@@ -66,7 +70,7 @@ function fakeProvider(overrides: Partial<WhatsAppProvider> = {}): WhatsAppProvid
 }
 
 function makeServices(tx: Prisma.TransactionClient, provider: WhatsAppProvider = fakeProvider()) {
-  const messaging = new WhatsAppMessagingService(tx, () => provider);
+  const messaging = new WhatsAppMessagingService(tx, () => null, async () => provider);
   return { messaging, bulk: new WhatsAppBulkSendService(tx, messaging) };
 }
 

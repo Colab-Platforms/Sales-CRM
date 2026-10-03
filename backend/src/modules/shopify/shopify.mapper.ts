@@ -167,7 +167,16 @@ function rootStatus(tx: NormalizedTransaction, captured: boolean, voided: boolea
   return PaymentStatus.PENDING;
 }
 
-export function mapPayments(order: NormalizedOrder): MappedPayment[] {
+// Narrowed to only the fields this function actually reads (never the full item/address data) so it
+// can also be called from the Orders LIST (shopify.orders.ts's lighter NormalizedOrderListItem, via
+// mapListOrderStatusAndPayments below) without fabricating a full NormalizedOrder - every existing
+// caller already passes a full NormalizedOrder, which trivially satisfies this Pick.
+type PaymentMappingInput = Pick<
+  NormalizedOrder,
+  "id" | "currency" | "transactions" | "financialStatus" | "amounts" | "processedAt" | "updatedAt" | "paymentGateways" | "tags"
+>;
+
+export function mapPayments(order: PaymentMappingInput): MappedPayment[] {
   const cod = isCodOrder(order);
   const orderId = gidToId(order.id);
   const currency = order.currency;
@@ -218,13 +227,38 @@ export function mapPayments(order: NormalizedOrder): MappedPayment[] {
   });
 }
 
+/** Everything the Orders LIST needs to derive the exact same OrderStatus/PaymentStatus/PaymentMethod a
+ *  real sync (mapOrder, used by shopify.persist.ts) would produce for this Shopify order - reused so a
+ *  not-yet-synced order's list row can never disagree with what it would show once actually synced.
+ *  Needs only the lighter set of fields the Orders list's own GraphQL query fetches (see
+ *  shopify.orders.ts's NormalizedOrderListItem) - never the full per-item/address data mapOrder()
+ *  itself needs (which the list deliberately does not fetch, to keep one list page one cheap call). */
+export function mapListOrderStatusAndPayments(
+  order: Pick<
+    NormalizedOrder,
+    "id" | "currency" | "cancelledAt" | "financialStatus" | "fulfillmentStatus" | "returnStatus" | "fulfillments" | "tags" | "paymentGateways" | "transactions" | "amounts" | "processedAt" | "updatedAt"
+  >,
+): { status: OrderStatus; payments: MappedPayment[] } {
+  const cod = isCodOrder(order);
+  const { status } = mapOrderStatus({
+    cancelledAt: order.cancelledAt,
+    financialStatus: order.financialStatus,
+    fulfillmentStatus: order.fulfillmentStatus,
+    returnStatus: order.returnStatus,
+    fulfillments: order.fulfillments,
+    tags: order.tags,
+    isCod: cod,
+  });
+  return { status, payments: mapPayments(order) };
+}
+
 /** The successful transaction that settled this payment (a capture, or a follow-up sale marking it paid), if any. */
-const settlementOf = (order: NormalizedOrder, rootId: string): NormalizedTransaction | undefined =>
+const settlementOf = (order: Pick<NormalizedOrder, "transactions">, rootId: string): NormalizedTransaction | undefined =>
   order.transactions.find((t) => (t.kind === "CAPTURE" || t.kind === "SALE") && t.status === "SUCCESS" && t.parentId === rootId);
 
 // Orders with no gateway transaction (typical for cash on delivery, or a payment not yet started) still need a
 // payment record so payment status and COD/prepaid are visible. It is replaced once a real transaction appears.
-function synthesizePayment(order: NormalizedOrder, cod: boolean, orderId: string): MappedPayment[] {
+function synthesizePayment(order: PaymentMappingInput, cod: boolean, orderId: string): MappedPayment[] {
   const financial = order.financialStatus ?? "";
   const total = order.amounts.total ?? "0";
   if (toCents(total) <= 0) return [];

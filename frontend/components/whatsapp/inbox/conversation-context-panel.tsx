@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import axios from "axios";
 import { toast } from "sonner";
+import { useState } from "react";
 import {
   Archive,
   ArchiveRestore,
@@ -10,13 +11,17 @@ import {
   ClipboardList,
   Mail,
   MessageCircle,
+  Pencil,
   Phone,
   ShoppingCart,
   User as UserIcon,
+  UserPlus,
   UserX,
   Zap,
 } from "lucide-react";
 import { useCustomer360 } from "@/hooks/useCustomers";
+import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
+import { EditLeadDialog } from "@/components/leads/edit-lead-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { conversationDetailQueryOptions, orderDraftQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
 import {
@@ -46,10 +51,10 @@ function AiHandoffCard({ leadId }: { leadId: string }) {
   const returnToAi = useReturnConversationToAiMutation();
 
   return (
-    <Card size="sm">
+    <Card className="shrink-0">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          {data?.mode === "AI" ? <Bot className="size-3.5" /> : <UserIcon className="size-3.5" />}
+        <CardTitle className="flex items-center gap-2">
+          {data?.mode === "AI" ? <Bot className="size-4" /> : <UserIcon className="size-4" />}
           Conversation Mode
         </CardTitle>
       </CardHeader>
@@ -129,7 +134,7 @@ function OrderDraftCard({ leadId }: { leadId: string }) {
   const { data, isPending } = useQuery(orderDraftQueryOptions(leadId));
   const confirm = useConfirmOrderDraftMutation();
 
-  if (isPending) return <Skeleton className="h-32 w-full" />;
+  if (isPending) return <Skeleton className="h-32 w-full shrink-0" />;
   const draft = data?.orderDraft;
   if (!draft || !draft.productId) return null;
 
@@ -139,9 +144,9 @@ function OrderDraftCard({ leadId }: { leadId: string }) {
   const canConfirm = data?.orderState === "ORDER_REVIEW" || data?.orderState === "CUSTOMER_CONFIRMED";
 
   return (
-    <Card size="sm">
+    <Card className="shrink-0">
       <CardHeader>
-        <CardTitle className="text-sm">AI Order Draft</CardTitle>
+        <CardTitle>AI Order Draft</CardTitle>
         <CardDescription>{data?.orderState.replace(/_/g, " ")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-1.5 text-sm">
@@ -178,6 +183,8 @@ function ActionsCard({
   isArchived,
   onDeleteChat,
   onDeleteCustomer,
+  onAddContact,
+  onEditContact,
 }: {
   data: Customer360 | null | undefined;
   canSendWhatsApp: boolean;
@@ -186,29 +193,56 @@ function ActionsCard({
   isArchived: boolean;
   onDeleteChat: () => void;
   onDeleteCustomer: () => void;
+  onAddContact: () => void;
+  onEditContact: () => void;
 }) {
   return (
-    <Card size="sm">
+    <Card className="shrink-0">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <Zap className="size-3.5" />
+        <CardTitle className="flex items-center gap-2">
+          <Zap className="size-4" />
           Actions
         </CardTitle>
       </CardHeader>
       <CardContent className="grid grid-cols-2 gap-2">
-        <Button size="sm" onClick={onSendWhatsApp} disabled={!canSendWhatsApp}>
+        {/* Part 4 (WhatsApp Inbox): reuses the exact same Lead create/update APIs and dialogs the
+            Leads page already uses (CreateLeadDialog/EditLeadDialog, POST/PATCH /leads) - never a
+            second contact model or a duplicate customer record.
+
+            Button's own base classes are `shrink-0 whitespace-nowrap` (correct for a button sitting
+            next to other inline content) - but here each button IS the full grid cell, so those two
+            defaults are exactly what caused "Rename / Edit Contact" to force its column wider than
+            the narrow sidebar and get clipped by the Card's overflow-hidden. min-w-0 lets a grid item
+            shrink below its text's natural width; whitespace-normal then lets that text wrap onto a
+            second line instead of overflowing. w-full + h-auto/min-h-8 keeps every button filling its
+            cell at a consistent height whether its label wraps or not. */}
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onAddContact}>
+          <UserPlus data-icon="inline-start" />
+          Add Contact
+        </Button>
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onEditContact} disabled={!data}>
+          <Pencil data-icon="inline-start" />
+          Rename / Edit Contact
+        </Button>
+        <Button size="sm" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onSendWhatsApp} disabled={!canSendWhatsApp}>
           <MessageCircle data-icon="inline-start" />
           Send WhatsApp
         </Button>
-        <Button size="sm" variant="outline" onClick={onCreateOrder} disabled={!data}>
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onCreateOrder} disabled={!data}>
           <ShoppingCart data-icon="inline-start" />
           Create Order
         </Button>
-        <Button size="sm" variant="outline" onClick={onDeleteChat} disabled={!data}>
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onDeleteChat} disabled={!data}>
           {isArchived ? <ArchiveRestore data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
           {isArchived ? "Restore Chat" : "Delete Chat"}
         </Button>
-        <Button size="sm" variant="outline" className="text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={onDeleteCustomer} disabled={!data}>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal text-destructive hover:bg-destructive/10 hover:text-destructive"
+          onClick={onDeleteCustomer}
+          disabled={!data}
+        >
           <UserX data-icon="inline-start" />
           Delete Customer
         </Button>
@@ -220,10 +254,10 @@ function ActionsCard({
 function CustomerCard({ customer }: { customer: Customer360 }) {
   const { profile } = customer;
   return (
-    <Card size="sm">
+    <Card className="shrink-0">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <UserIcon className="size-3.5" />
+        <CardTitle className="flex items-center gap-2">
+          <UserIcon className="size-4" />
           Customer
         </CardTitle>
       </CardHeader>
@@ -252,10 +286,10 @@ function CustomerCard({ customer }: { customer: Customer360 }) {
 function CustomerDetailsCard({ customer }: { customer: Customer360 }) {
   const { profile } = customer;
   return (
-    <Card size="sm">
+    <Card className="shrink-0">
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-sm">
-          <ClipboardList className="size-3.5" />
+        <CardTitle className="flex items-center gap-2">
+          <ClipboardList className="size-4" />
           Customer Details
         </CardTitle>
       </CardHeader>
@@ -290,16 +324,18 @@ export function ConversationContextPanel({
   onDeleteCustomer: () => void;
 }) {
   const { data, isLoading, error } = useCustomer360(leadId);
+  const [addContactOpen, setAddContactOpen] = useState(false);
+  const [editContactOpen, setEditContactOpen] = useState(false);
 
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3">
-      {/* Required hierarchy: CUSTOMER, ACTIONS, CUSTOMER DETAILS, NEXT BEST ACTION, ORDERS. AI
-          handoff/order-draft (a separate, existing automation feature, not part of this hierarchy)
-          are kept below it rather than removed. */}
+      {/* Required hierarchy: CUSTOMER, ACTIONS, CUSTOMER DETAILS, NEXT BEST ACTION, ORDERS,
+          CONVERSATION MODE. AI Order Draft (a separate, existing AI order-taking feature, not part
+          of this hierarchy) is kept after it rather than removed. */}
       {isLoading ? (
         <>
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-28 w-full" />
+          <Skeleton className="h-24 w-full shrink-0" />
+          <Skeleton className="h-28 w-full shrink-0" />
         </>
       ) : error || !data ? (
         <p className="text-sm text-destructive">{error ?? "Could not load customer."}</p>
@@ -314,6 +350,8 @@ export function ConversationContextPanel({
             isArchived={isArchived}
             onDeleteChat={onDeleteChat}
             onDeleteCustomer={onDeleteCustomer}
+            onAddContact={() => setAddContactOpen(true)}
+            onEditContact={() => setEditContactOpen(true)}
           />
           <CustomerDetailsCard customer={data} />
           <NextBestActionCard nba={data.nextBestAction} compact />
@@ -322,6 +360,9 @@ export function ConversationContextPanel({
       )}
       <AiHandoffCard leadId={leadId} />
       <OrderDraftCard leadId={leadId} />
+
+      <CreateLeadDialog open={addContactOpen} onOpenChange={setAddContactOpen} onDone={() => setAddContactOpen(false)} />
+      <EditLeadDialog leadId={leadId} open={editContactOpen} onOpenChange={setEditContactOpen} onDone={() => setEditContactOpen(false)} />
     </div>
   );
 }

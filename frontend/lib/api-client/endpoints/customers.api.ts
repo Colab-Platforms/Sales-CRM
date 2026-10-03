@@ -7,12 +7,21 @@ import type {
   CustomerTimelineParams,
   CustomerTimelineResult,
   CustomersListParams,
+  LiveCustomerListResult,
+  LiveCustomersListParams,
 } from "../types/customers.types";
 
 export const customersApi = {
   async list(params: CustomersListParams): Promise<CustomerListResult> {
     // axios drops undefined params, so unset filters never reach the URL.
     const res = await apiClient.get<ApiEnvelope<CustomerListResult>>("/customers", { params });
+    return res.data.data;
+  },
+
+  /** Live from Shopify, cursor-paginated. See GET /customers above (kept, unchanged) for the
+   *  original CRM-DB-backed list still used by the main Customers page. */
+  async listLive(params: LiveCustomersListParams): Promise<LiveCustomerListResult> {
+    const res = await apiClient.get<ApiEnvelope<LiveCustomerListResult>>("/customers/live", { params });
     return res.data.data;
   },
 

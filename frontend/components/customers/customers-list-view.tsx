@@ -2,10 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Users } from "lucide-react";
+import { Cloud, Plus, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { OrdersPagination } from "@/components/orders/orders-pagination";
+import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
 import { useCustomersList } from "@/hooks/useCustomers";
 import { useOrderFilterOptions } from "@/hooks/useOrders";
 import { useAuthStore } from "@/stores/auth-store";
@@ -16,6 +17,7 @@ import type { PaymentStatusFilter, ShipmentStatus } from "@/lib/api-client/types
 import type { CustomersListParams, CustomerSegment, NbaAction, NbaPriority } from "@/lib/api-client/types/customers.types";
 import { CustomersFiltersBar, type CustomersFilters } from "./customers-filters";
 import { CustomersTable, CustomersTableSkeleton } from "./customers-table";
+import { LiveCustomersPanel } from "./live-customers-panel";
 
 const PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 350;
@@ -71,6 +73,8 @@ export function CustomersListView() {
 
   const state = parseState(new URLSearchParams(searchParams.toString()));
   const [searchText, setSearchText] = useState(state.search);
+  const [createContactOpen, setCreateContactOpen] = useState(false);
+  const [showLive, setShowLive] = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
@@ -197,12 +201,28 @@ export function CustomersListView() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
-        <p className="text-sm text-muted-foreground">
-          {data ? `${data.pagination.totalItems} customers` : "Customer segments and post-sale status, derived from real order and payment activity."}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Customers</h1>
+          <p className="text-sm text-muted-foreground">
+            {data ? `${data.pagination.totalItems} customers` : "Customer segments and post-sale status, derived from real order and payment activity."}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant={showLive ? "default" : "outline"} onClick={() => setShowLive((v) => !v)}>
+            <Cloud />
+            {showLive ? "Showing live Shopify data" : "Live from Shopify"}
+          </Button>
+          {/* Same Lead create flow/API the Leads page's "New Lead" already uses (POST /lead/leads) -
+              a Lead IS the customer/contact record here, never a second, separate contact model. */}
+          <Button onClick={() => setCreateContactOpen(true)}>
+            <Plus />
+            Create Contact
+          </Button>
+        </div>
       </div>
+
+      {showLive ? <LiveCustomersPanel /> : null}
 
       <CustomersFiltersBar
         searchText={searchText}
@@ -226,6 +246,8 @@ export function CustomersListView() {
       <Card>
         <CardContent>{content}</CardContent>
       </Card>
+
+      <CreateLeadDialog open={createContactOpen} onOpenChange={setCreateContactOpen} onDone={() => setCreateContactOpen(false)} />
     </div>
   );
 }

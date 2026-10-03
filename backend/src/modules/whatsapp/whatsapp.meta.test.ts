@@ -264,7 +264,29 @@ describe("MetaCloudApiProvider", () => {
       metadata: { display_phone_number: "919876500000" },
       messages: [{ id: "wamid.IN1", from: "919876543210", type: "text", text: { body: "Hi there" }, timestamp: "1700000000" }],
     });
-    assert.deepEqual(provider.parseIncomingWebhook(payload), [{ providerMessageId: "wamid.IN1", from: "919876543210", to: "919876500000", messageType: "TEXT", text: "Hi there", timestamp: new Date(1700000000 * 1000) }]);
+    assert.deepEqual(provider.parseIncomingWebhook(payload), [{ providerMessageId: "wamid.IN1", from: "919876543210", to: "919876500000", messageType: "TEXT", text: "Hi there", timestamp: new Date(1700000000 * 1000), replyToProviderMessageId: null }]);
+  });
+
+  // Part 1 (WhatsApp Inbox reply association): Meta's documented `context.id` - present only when
+  // the customer actually tapped "reply" on a specific earlier message. Read verbatim, never guessed.
+  it("carries the real reply reference (context.id) when the customer replied to a specific message", () => {
+    const provider = new MetaCloudApiProvider(credentials());
+    const payload = metaEnvelope({
+      metadata: { display_phone_number: "919876500000" },
+      messages: [{ id: "wamid.IN2", from: "919876543210", type: "text", text: { body: "Yess" }, timestamp: "1700000000", context: { from: "919876500000", id: "wamid.OUT1" } }],
+    });
+    const [message] = provider.parseIncomingWebhook(payload);
+    assert.equal(message?.replyToProviderMessageId, "wamid.OUT1");
+  });
+
+  it("leaves replyToProviderMessageId null when the inbound message carries no context at all (the common case)", () => {
+    const provider = new MetaCloudApiProvider(credentials());
+    const payload = metaEnvelope({
+      metadata: { display_phone_number: "919876500000" },
+      messages: [{ id: "wamid.IN3", from: "919876543210", type: "text", text: { body: "Hello" }, timestamp: "1700000000" }],
+    });
+    const [message] = provider.parseIncomingWebhook(payload);
+    assert.equal(message?.replyToProviderMessageId, null);
   });
 
   it("parses a delivery status update, mapping the documented status values", () => {
@@ -278,6 +300,50 @@ describe("MetaCloudApiProvider", () => {
     assert.deepEqual(provider.parseIncomingWebhook({ unexpected: true }), []);
     assert.deepEqual(provider.parseIncomingWebhook(null), []);
     assert.deepEqual(provider.parseDeliveryStatusWebhook("not an object"), []);
+  });
+
+  // Regression: a real delivery-status failure ("hello_world" accepted by Meta's synchronous POST,
+  // then failed asynchronously via this webhook) previously surfaced only the short `title` -
+  // "Business eligibility payment issue" - and silently discarded `error_data.details`, the numeric
+  // `code`, and `href`, which is where Meta actually explains what to fix. Captured live against a
+  // real WABA whose billing/currency was not configured (Meta error 131042).
+  it("surfaces the FULL actionable detail from a delivery-status error (code, details, href) - not just the short title", () => {
+    const provider = new MetaCloudApiProvider(credentials());
+    const payload = metaEnvelope({
+      statuses: [
+        {
+          id: "wamid.FAILED1",
+          status: "failed",
+          timestamp: "1790661877",
+          errors: [
+            {
+              code: 131042,
+              href: "https://business.facebook.com/billing_hub/accounts/details/?business_id=123&asset_id=456&wizard_name=CHANGE_COUNTRY_CURRENCY&account_type=whatsapp-business-account",
+              title: "Business eligibility payment issue",
+              message: "Business eligibility payment issue",
+              error_data: { details: "Message failed to send because your WhatsApp Business account currency is not configured. Visit https://business.facebook.com/billing_hub to resolve this issue." },
+            },
+          ],
+        },
+      ],
+    });
+    const [update] = provider.parseDeliveryStatusWebhook(payload);
+    assert.equal(update?.providerMessageId, "wamid.FAILED1");
+    assert.equal(update?.status, "FAILED");
+    assert.equal(update?.errorCode, "131042");
+    assert.match(update?.errorMessage ?? "", /Business eligibility payment issue/);
+    assert.match(update?.errorMessage ?? "", /currency is not configured/, "error_data.details must not be dropped - it's the only actionable part of the message");
+    assert.match(update?.errorMessage ?? "", /code 131042/);
+    assert.match(update?.errorMessage ?? "", /billing_hub/, "the href Meta gives to actually resolve it must not be dropped either");
+  });
+
+  it("does not duplicate the detail when title and error_data.details are identical", () => {
+    const provider = new MetaCloudApiProvider(credentials());
+    const payload = metaEnvelope({
+      statuses: [{ id: "wamid.FAILED2", status: "failed", timestamp: "1700000000", errors: [{ code: 131053, title: "Media upload error", error_data: { details: "Media upload error" } }] }],
+    });
+    const [update] = provider.parseDeliveryStatusWebhook(payload);
+    assert.equal((update?.errorMessage?.match(/Media upload error/g) ?? []).length, 1);
   });
 });
 

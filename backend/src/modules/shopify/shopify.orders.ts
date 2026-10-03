@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ShopifyApiError, type ShopifyClient } from "./shopify.client.js";
-import { CONNECTION_QUERY, countQuery, ORDER_BY_ID_QUERY, ORDER_REFS_QUERY, type CountField } from "./shopify.queries.js";
+import { CONNECTION_QUERY, countQuery, ORDER_BY_ID_QUERY, ORDER_LIST_QUERY, ORDER_REFS_QUERY, type CountField } from "./shopify.queries.js";
 
 // ---- Shopify response shapes (only what we read) ----
 
@@ -83,6 +83,8 @@ export const orderNodeSchema = z.object({
     })
     .nullish(),
   shippingAddress: addressSchema.nullish(),
+  billingAddress: addressSchema.nullish(),
+  shippingLine: z.object({ title: z.string().nullish() }).nullish(),
   subtotalPriceSet: moneyBag.nullish(),
   totalDiscountsSet: moneyBag.nullish(),
   totalTaxSet: moneyBag.nullish(),
@@ -193,6 +195,10 @@ export interface NormalizedOrder {
   discountCodes: string[];
   customer: NormalizedCustomer;
   shippingAddress: NormalizedAddress | null;
+  billingAddress: NormalizedAddress | null;
+  /** e.g. "Standard Shipping" - the rate name Shopify shows, not itself a currency amount
+   *  (see amounts.shipping for the charge). Null when the order has no shipping line. */
+  shippingMethod: string | null;
   /** Decimal strings in the store currency. */
   amounts: {
     subtotal: string | null;
@@ -237,6 +243,55 @@ export interface RefsPage {
 
 const amountOf = (bag: z.infer<typeof moneyBag> | null | undefined) => bag?.shopMoney.amount ?? null;
 
+function normalizeAddress(address: z.infer<typeof addressSchema> | null | undefined): NormalizedAddress | null {
+  if (!address) return null;
+  return {
+    name: address.name ?? null,
+    firstName: address.firstName ?? null,
+    lastName: address.lastName ?? null,
+    address1: address.address1 ?? null,
+    address2: address.address2 ?? null,
+    city: address.city ?? null,
+    province: address.province ?? null,
+    provinceCode: address.provinceCode ?? null,
+    zip: address.zip ?? null,
+    country: address.country ?? null,
+    countryCode: address.countryCodeV2 ?? null,
+    phone: address.phone ?? null,
+  };
+}
+
+// Shared by normalizeOrder() (the full per-order fetch) and normalizeOrderListNode() below (the
+// lighter list fetch, which now also requests transactions/fulfillments - see ORDER_LIST_QUERY) so
+// there is exactly one place that turns Shopify's raw transaction/fulfillment shape into the
+// normalized one, never two slightly-different copies of the same mapping.
+function normalizeTransactions(transactions: z.infer<typeof transactionSchema>[] | null | undefined): NormalizedTransaction[] {
+  return (transactions ?? []).map((t) => ({
+    id: t.id,
+    kind: t.kind,
+    status: t.status,
+    gateway: t.gateway ?? null,
+    amount: amountOf(t.amountSet),
+    processedAt: t.processedAt ?? null,
+    errorCode: t.errorCode ?? null,
+    paymentId: t.paymentId ?? null,
+    parentId: t.parentTransaction?.id ?? null,
+  }));
+}
+
+function normalizeFulfillments(fulfillments: z.infer<typeof fulfillmentSchema>[] | null | undefined): NormalizedFulfillment[] {
+  return (fulfillments ?? []).map((f) => ({
+    id: f.id,
+    status: f.status,
+    displayStatus: f.displayStatus ?? null,
+    createdAt: f.createdAt ?? null,
+    deliveredAt: f.deliveredAt ?? null,
+    trackingCompany: f.trackingInfo?.[0]?.company ?? null,
+    trackingNumber: f.trackingInfo?.[0]?.number ?? null,
+    trackingUrl: f.trackingInfo?.[0]?.url ?? null,
+  }));
+}
+
 export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): NormalizedOrder {
   const customer = node.customer ?? null;
   const email = customer?.email ?? node.email ?? null;
@@ -267,20 +322,9 @@ export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): Normalize
       phone,
       source: customer ? "customer" : email || phone ? "order" : "none",
     },
-    shippingAddress: address && {
-      name: address.name ?? null,
-      firstName: address.firstName ?? null,
-      lastName: address.lastName ?? null,
-      address1: address.address1 ?? null,
-      address2: address.address2 ?? null,
-      city: address.city ?? null,
-      province: address.province ?? null,
-      provinceCode: address.provinceCode ?? null,
-      zip: address.zip ?? null,
-      country: address.country ?? null,
-      countryCode: address.countryCodeV2 ?? null,
-      phone: address.phone ?? null,
-    },
+    shippingAddress: normalizeAddress(address),
+    billingAddress: normalizeAddress(node.billingAddress),
+    shippingMethod: node.shippingLine?.title ?? null,
     amounts: {
       subtotal: amountOf(node.subtotalPriceSet),
       discount: amountOf(node.totalDiscountsSet),
@@ -301,27 +345,8 @@ export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): Normalize
       productId: item.product?.id ?? null,
       variantId: item.variant?.id ?? null,
     })),
-    transactions: (node.transactions ?? []).map((t) => ({
-      id: t.id,
-      kind: t.kind,
-      status: t.status,
-      gateway: t.gateway ?? null,
-      amount: amountOf(t.amountSet),
-      processedAt: t.processedAt ?? null,
-      errorCode: t.errorCode ?? null,
-      paymentId: t.paymentId ?? null,
-      parentId: t.parentTransaction?.id ?? null,
-    })),
-    fulfillments: (node.fulfillments ?? []).map((f) => ({
-      id: f.id,
-      status: f.status,
-      displayStatus: f.displayStatus ?? null,
-      createdAt: f.createdAt ?? null,
-      deliveredAt: f.deliveredAt ?? null,
-      trackingCompany: f.trackingInfo?.[0]?.company ?? null,
-      trackingNumber: f.trackingInfo?.[0]?.number ?? null,
-      trackingUrl: f.trackingInfo?.[0]?.url ?? null,
-    })),
+    transactions: normalizeTransactions(node.transactions),
+    fulfillments: normalizeFulfillments(node.fulfillments),
     itemsTruncated: node.lineItems.pageInfo.hasNextPage,
   };
 }
@@ -395,4 +420,153 @@ export async function countRecords(client: ShopifyClient, field: CountField, sea
 export async function fetchOrder(client: ShopifyClient, gid: string): Promise<NormalizedOrder | null> {
   const data = parseOrFail(orderByIdResponse, await client.query<unknown>(ORDER_BY_ID_QUERY, { id: gid }), "the order");
   return data.order ? normalizeOrder(data.order) : null;
+}
+
+// ---- Live listing for display (Orders page) - a lighter shape than NormalizedOrder, fetched one
+// page at a time directly from Shopify. Never stored; the CRM's own Order/Lead rows (already synced
+// via webhooks/shopify.persist.ts) are joined on afterwards by whoever calls this, for the
+// CRM-owned fields (salesperson, notes, lead number) this intentionally does not carry. ----
+
+const orderListNodeSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.string(),
+  processedAt: z.string().nullish(),
+  cancelledAt: z.string().nullish(),
+  displayFinancialStatus: z.string().nullish(),
+  displayFulfillmentStatus: z.string().nullish(),
+  returnStatus: z.string().nullish(),
+  tags: z.array(z.string()).nullish(),
+  paymentGatewayNames: z.array(z.string()).nullish(),
+  email: z.string().nullish(),
+  phone: z.string().nullish(),
+  customer: z.object({ firstName: z.string().nullish(), lastName: z.string().nullish(), email: z.string().nullish(), phone: z.string().nullish() }).nullish(),
+  shippingLine: z.object({ title: z.string().nullish() }).nullish(),
+  totalPriceSet: moneyBag.nullish(),
+  totalRefundedSet: moneyBag.nullish(),
+  // Same per-order data mapOrderStatus/mapPayments (shopify.mapper.ts) need, kept light - no per-item
+  // pricing/addresses, which the list has no use for and would make one page's query far heavier.
+  transactions: z.array(transactionSchema).nullish(),
+  fulfillments: z.array(fulfillmentSchema).nullish(),
+  lineItems: z.object({ nodes: z.array(z.object({ id: z.string() })) }).nullish(),
+});
+
+const orderListResponse = z.object({
+  orders: z.object({
+    pageInfo: z.object({ hasNextPage: z.boolean(), hasPreviousPage: z.boolean(), startCursor: z.string().nullish(), endCursor: z.string().nullish() }),
+    nodes: z.array(orderListNodeSchema),
+  }),
+});
+
+export interface NormalizedOrderListItem {
+  /** Shopify GID, e.g. "gid://shopify/Order/123456789". */
+  id: string;
+  /** Numeric Shopify order id, matching Order.externalId as already written by shopify.persist.ts (gidToId). */
+  externalId: string;
+  /** e.g. "#1002". */
+  name: string;
+  createdAt: string;
+  processedAt: string | null;
+  cancelledAt: string | null;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  returnStatus: string | null;
+  tags: string[];
+  paymentGateways: string[];
+  customerName: string | null;
+  customerEmail: string | null;
+  customerPhone: string | null;
+  currency: string | null;
+  totalAmount: string | null;
+  refundedAmount: string | null;
+  /** e.g. "Standard" - the Shopify shipping rate name, null when the order has no shipping line. */
+  shippingMethod: string | null;
+  /** True when at least one of this order's fulfillments has a real tracking number. */
+  hasTracking: boolean;
+  /** Light per-order data (no per-item pricing/addresses) needed to derive the exact same
+   *  OrderStatus/PaymentStatus/PaymentMethod a real sync would produce - see
+   *  shopify.mapper.ts's mapListOrderStatusAndPayments, the single place that interprets these. */
+  transactions: NormalizedTransaction[];
+  fulfillments: NormalizedFulfillment[];
+  /** Number of line-item rows on the order (matches how the CRM's own Order._count.items counts
+   *  them - distinct line items, not summed quantity). Capped at the 50 fetched - see ORDER_LIST_QUERY. */
+  itemCount: number;
+}
+
+export interface LiveOrdersPage {
+  items: NormalizedOrderListItem[];
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  startCursor: string | null;
+  endCursor: string | null;
+}
+
+function normalizeOrderListNode(node: z.infer<typeof orderListNodeSchema>): NormalizedOrderListItem {
+  const customer = node.customer ?? null;
+  const firstName = customer?.firstName ?? null;
+  const lastName = customer?.lastName ?? null;
+  const name = [firstName, lastName].filter(Boolean).join(" ").trim();
+  const fulfillments = normalizeFulfillments(node.fulfillments);
+  return {
+    id: node.id,
+    externalId: gidToIdLocal(node.id),
+    name: node.name,
+    createdAt: node.createdAt,
+    processedAt: node.processedAt ?? null,
+    cancelledAt: node.cancelledAt ?? null,
+    financialStatus: node.displayFinancialStatus ?? null,
+    fulfillmentStatus: node.displayFulfillmentStatus ?? null,
+    returnStatus: node.returnStatus ?? null,
+    tags: node.tags ?? [],
+    paymentGateways: node.paymentGatewayNames ?? [],
+    customerName: name || null,
+    customerEmail: customer?.email ?? node.email ?? null,
+    customerPhone: customer?.phone ?? node.phone ?? null,
+    currency: node.totalPriceSet?.shopMoney.currencyCode ?? null,
+    totalAmount: amountOf(node.totalPriceSet),
+    refundedAmount: amountOf(node.totalRefundedSet),
+    shippingMethod: node.shippingLine?.title ?? null,
+    hasTracking: fulfillments.some((f) => Boolean(f.trackingNumber)),
+    transactions: normalizeTransactions(node.transactions),
+    fulfillments,
+    itemCount: node.lineItems?.nodes.length ?? 0,
+  };
+}
+
+// Deliberately not importing shopify.money.js's gidToId here to avoid a circular-looking extra import
+// for one line - same trivial "last path segment" extraction, kept local to this list-only helper.
+function gidToIdLocal(gid: string): string {
+  return gid.split("/").pop() ?? gid;
+}
+
+export interface LiveListParams {
+  first: number;
+  /** Relay cursor from a previous page's endCursor. The caller (orders.live.service.ts) tracks a
+   *  stack of visited cursors client-side to support "Previous" without needing Shopify's separate
+   *  last/before backward-pagination arguments. */
+  after?: string | null;
+  /** Shopify search syntax, e.g. windowSearch() plus a free-text term. */
+  search?: string | null;
+}
+
+/** One page of orders with exactly the fields a list row needs, fetched live - never a per-row full fetch. */
+export async function listOrdersForDisplay(client: ShopifyClient, params: LiveListParams): Promise<LiveOrdersPage> {
+  const data = parseOrFail(
+    orderListResponse,
+    await client.query<unknown>(ORDER_LIST_QUERY, {
+      first: params.first,
+      after: params.after ?? null,
+      query: params.search ?? null,
+      sortKey: "CREATED_AT",
+      reverse: true, // newest first, matching the existing CRM Orders list's default ordering
+    }),
+    "the order list",
+  );
+  return {
+    items: data.orders.nodes.map(normalizeOrderListNode),
+    hasNextPage: data.orders.pageInfo.hasNextPage,
+    hasPreviousPage: data.orders.pageInfo.hasPreviousPage,
+    startCursor: data.orders.pageInfo.startCursor ?? null,
+    endCursor: data.orders.pageInfo.endCursor ?? null,
+  };
 }

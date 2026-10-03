@@ -2,12 +2,18 @@ import { Router } from "express";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import {
+  bulkDeleteMessagesForMe,
+  deleteMessageForMe,
+  forwardMessage,
   getCustomerWhatsAppStatus,
   getWhatsAppMessage,
   getWhatsAppStatus,
+  listStarredMessages,
   listWhatsAppConversations,
   listWhatsAppMessages,
   sendWhatsAppMessage,
+  starMessage,
+  unstarMessage,
 } from "./whatsapp.controller.js";
 import { previewTemplateMessage, sendOrderConfirmationTest, sendTemplateMessage as sendTemplateMessageV2 } from "./whatsapp.messaging.controller.js";
 import { classifyBulkRecipients, sendBulkTemplate } from "./whatsapp.bulk-send.controller.js";
@@ -96,6 +102,18 @@ router.post("/messages/template/bulk-send", requireAuth, sendBulkTemplate);
 // No separate GET /customers/:leadId/whatsapp/messages route: this one already serves that case
 // via ?leadId=, so a second route would only duplicate it.
 router.get("/messages", requireAuth, listWhatsAppMessages);
+// WhatsApp-style per-message actions - per-CRM-user state (star/delete-for-me) or a real outbound
+// send (forward), never a second messaging architecture. Registered before "/messages/:id" so
+// "starred"/"bulk" are never read as a message id. See whatsapp.message-actions.service.ts for what
+// each one does and doesn't touch (e.g. "delete for me" never touches the real WhatsApp message).
+router.get("/messages/starred", requireAuth, listStarredMessages);
+router.post("/messages/bulk/delete-for-me", requireAuth, bulkDeleteMessagesForMe);
+router.post("/messages/:id/star", requireAuth, starMessage);
+router.delete("/messages/:id/star", requireAuth, unstarMessage);
+router.post("/messages/:id/delete-for-me", requireAuth, deleteMessageForMe);
+router.post("/messages/:id/forward", requireAuth, forwardMessage);
+// "Edit" is not a separate endpoint: a correction is sent as a new message through the existing
+// POST /whatsapp/conversations/:leadId/messages (sendConversationText) with replyToMessageId.
 router.get("/messages/:id", requireAuth, getWhatsAppMessage);
 
 // Central WhatsApp Inbox (Admin/Telecaller conversation list) - one row per Lead with a message,

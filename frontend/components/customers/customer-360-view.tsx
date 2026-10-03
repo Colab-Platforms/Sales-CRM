@@ -93,7 +93,7 @@ export function Customer360View({ leadId }: { leadId: string }) {
       <NextBestActionCard nba={data.nextBestAction} />
       <CustomerPaymentSummaryCard summary={data.paymentSummary} currency={currency} />
       <CustomerOrdersList orders={data.orders} />
-      <WhatsAppConversation leadId={leadId} />
+      <WhatsAppConversation leadId={leadId} onStartWhatsApp={data.profile.mobile ? () => setSendOpen(true) : undefined} />
       <CustomerTimeline leadId={leadId} />
       <div className="flex flex-wrap gap-x-6 gap-y-1">
         <Link href={`/dashboard/leads/${leadId}`} className="text-sm text-primary hover:underline">

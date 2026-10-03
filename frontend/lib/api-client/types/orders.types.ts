@@ -53,6 +53,21 @@ export type ShipmentStatus =
 // Where a payment or shipment record comes from: Shopify sync, or something the CRM created directly with the provider.
 export type ExternalSource = "SHOPIFY" | "CASHFREE" | "SHIPROCKET";
 
+// Live from Shiprocket (backend: shiprocket.live-tracking.ts) - fetched read-only, cached briefly,
+// never written back to the CRM's own shipment row. Absent (undefined) when the shipment has no AWB
+// to look up; `tracking: null` with `error` set when Shiprocket couldn't answer.
+export interface LiveTracking {
+  tracking: {
+    awb: string;
+    currentStatus: string | null;
+    trackUrl: string | null;
+    etd: string | null;
+    courierName: string | null;
+    activities: { date: string | null; status: string | null; location: string | null }[];
+  } | null;
+  error?: string;
+}
+
 // A shipment with no tracking/courier/dates yet (only the fulfilment record itself has synced) is
 // not the same as "no shipment at all" - null fields mean "not known", not zero.
 export interface ShipmentDetail {
@@ -66,6 +81,7 @@ export interface ShipmentDetail {
   deliveredAt: string | null;
   returnedAt: string | null;
   createdAt: string;
+  liveTracking?: LiveTracking;
   // Only on the order detail (the customer summary that reuses this type does not carry them).
   source?: ExternalSource | null;
   providerStatus?: string | null;
@@ -171,6 +187,14 @@ export interface CancelOrderResult {
   alreadyCancelled: boolean;
 }
 
+export interface RevertCancellationResult {
+  order: OrderDetail;
+  /** The status the order was restored to (recorded when it was cancelled). */
+  restoredStatus: OrderStatus;
+  /** true when the order was not cancelled (or another revert already won) - nothing changed on this call. */
+  alreadyActive: boolean;
+}
+
 export interface OrdersListParams {
   page: number;
   pageSize: number;
@@ -212,6 +236,67 @@ export interface Pagination {
 export interface OrderListResult {
   items: OrderListItem[];
   pagination: Pagination;
+}
+
+// ---- Live Orders list (reads directly from Shopify - GET /orders/live) ----
+// Cursor-paginated, never the whole history in one page. Same OrderListItem shape as the CRM-DB-backed
+// list above (minus status/source/paymentStatus/salesperson filters, which this endpoint does not
+// support yet) plus `linkedInCrm`, so the existing OrdersTable component renders either source as-is.
+
+export interface LiveOrdersListParams {
+  after?: string;
+  first: number;
+  search?: string;
+  // ISO date-times
+  dateFrom?: string;
+  dateTo?: string;
+  // CRM-overlay filters - see backend LiveOrdersQuery: applied after the Shopify page is fetched, so
+  // an active filter can return fewer than `first` rows (an unsynced order never matches any of them).
+  status?: OrderStatus;
+  paymentStatus?: PaymentStatusFilter;
+  source?: OrderSource;
+  salespersonId?: string;
+}
+
+export interface LiveOrderListItem {
+  id: string;
+  orderNumber: string;
+  status: OrderStatus | null;
+  source: OrderSource;
+  currency: string;
+  totalAmount: string;
+  itemCount: number;
+  paymentStatus: PaymentStatus | null;
+  paymentMode: PaymentMode | null;
+  externalNumber: string | null;
+  createdAt: string;
+  customer: { leadId: string | null; leadNumber: string | null; name: string };
+  salesperson: { id: string; name: string } | null;
+  leadSource: { id: string; name: string } | null;
+  /** false = Shopify has this order but the CRM has not synced it yet (ADMIN-only, see the backend). */
+  linkedInCrm: boolean;
+  // ---- Shopify-native display fields, from the live Shopify read this page always makes regardless
+  // of linkedInCrm - never missing just because an order hasn't synced yet. null for a non-Shopify order. ----
+  /** Shopify's own displayFulfillmentStatus (e.g. "FULFILLED"/"PARTIALLY_FULFILLED"/"UNFULFILLED"). */
+  fulfillmentStatus: string | null;
+  hasTracking: boolean;
+  /** Shopify's own shipping rate name (e.g. "Standard"), null when the order has no shipping line. */
+  shippingMethod: string | null;
+}
+
+export interface LiveOrderPageInfo {
+  hasNextPage: boolean;
+  hasPreviousPage: boolean;
+  endCursor: string | null;
+}
+
+export interface LiveOrderListResult {
+  items: LiveOrderListItem[];
+  pageInfo: LiveOrderPageInfo;
+  /** Shopify could not be reached at all - items is always [] when this is set. */
+  error?: string;
+  /** Shopify loaded, but the CRM-owned overlay (salesperson/lead) partially failed. */
+  partialError?: string;
 }
 
 export interface OrderItemDetail {
@@ -297,6 +382,141 @@ export interface OrderDetail {
   items: OrderItemDetail[];
   payments: PaymentDetail[];
   shipments: ShipmentDetail[];
+  // Live snapshot fetched directly from Shopify for a synced order - additive overlay, never replaces
+  // the CRM-owned fields above. null when unlinked, not yet fetched, or Shopify was unreachable
+  // (see shopifyLiveError). See backend: orders.service.ts's getOrder().
+  shopifyLive: ShopifyLiveOrder | null;
+  shopifyLiveError?: string;
+}
+
+export interface LiveOrderAddress {
+  name: string | null;
+  address1: string | null;
+  address2: string | null;
+  city: string | null;
+  province: string | null;
+  zip: string | null;
+  country: string | null;
+  phone: string | null;
+}
+
+// A read-only, live snapshot of the order as Shopify currently has it - only what Order Detail shows.
+export interface ShopifyLiveOrder {
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  currency: string;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  returnStatus: string | null;
+  taxesIncluded: boolean | null;
+  tags: string[];
+  paymentGateways: string[];
+  discountCodes: string[];
+  customer: { id: string | null; firstName: string | null; lastName: string | null; email: string | null; phone: string | null };
+  shippingAddress: LiveOrderAddress | null;
+  billingAddress: LiveOrderAddress | null;
+  /** e.g. "Standard Shipping" - the rate name, not the charge itself (see amounts.shipping). */
+  shippingMethod: string | null;
+  amounts: { subtotal: string | null; discount: string | null; tax: string | null; shipping: string | null; total: string | null; refunded: string | null };
+  items: {
+    id: string;
+    title: string;
+    variantTitle: string | null;
+    sku: string | null;
+    quantity: number;
+    unitPrice: string | null;
+    discounts: string[];
+    /** Per-tax-line amounts Shopify reported (optional: absent on responses from older backends). */
+    taxes?: string[];
+    productId: string | null;
+    variantId: string | null;
+  }[];
+  /** True when the order has more line items than were fetched (see ORDER_BY_ID_QUERY's first: 100). */
+  itemsTruncated: boolean;
+  transactions: {
+    id: string;
+    kind: string;
+    status: string;
+    gateway: string | null;
+    amount: string | null;
+    processedAt: string | null;
+    errorCode: string | null;
+  }[];
+  fulfillments: { status: string; displayStatus: string | null; createdAt: string | null; deliveredAt?: string | null; trackingCompany: string | null; trackingNumber: string | null; trackingUrl: string | null }[];
+}
+
+// A Shopify order the CRM has not synced yet has no CRM order id, so the Orders list gives it an id
+// of the form `${LIVE_ORDER_ID_PREFIX}<externalId>` instead of the raw (slash-containing) Shopify GID -
+// see backend orders.live.types.ts for why. orderDetailHref/the [id] route both just pass this through
+// as an opaque string; only the Order Detail page itself needs to tell the two cases apart.
+export const LIVE_ORDER_ID_PREFIX = "shopify:";
+
+// On a client-side (soft) navigation, Next.js's App Router can hand the dynamic [id] segment through
+// still percent-encoded (e.g. "shopify%3A123" for "shopify:123") - a full page load/refresh decodes it
+// first, but a <Link>/router.push transition does not always. Decoding here (once, centrally) makes
+// both forms recognized without every caller needing its own decodeURIComponent() call. A normal CRM
+// UUID has no percent-encoding to begin with, so decoding it is a no-op - existing behavior for it is
+// unchanged. An id with an invalid escape sequence (malformed %) is treated as not a live order id,
+// same as any other non-matching string, rather than throwing.
+export function parseLiveOrderId(id: string): string | null {
+  let decoded = id;
+  try {
+    decoded = decodeURIComponent(id);
+  } catch {
+    // Malformed percent-encoding - fall through with the original string (won't match the prefix).
+  }
+  return decoded.startsWith(LIVE_ORDER_ID_PREFIX) ? decoded.slice(LIVE_ORDER_ID_PREFIX.length) : null;
+}
+
+// If the Shopify customer can be matched (by phone) to an existing CRM lead - a pointer to the real
+// Customer 360 page, never a duplicate rendering of CRM-owned data here.
+export interface LiveOrderCrmLink {
+  leadId: string;
+  leadNumber: string;
+  owner: { id: string; name: string } | null;
+}
+
+// GET /orders/live/:externalId - Order Detail for a Shopify order not yet synced into the CRM.
+export interface LiveOrderDetailResult {
+  order: ShopifyLiveOrder | null;
+  /** Keyed by tracking number, for each fulfillment.trackingNumber Shopify reported. */
+  liveTracking: Record<string, LiveTracking>;
+  crmLink?: LiveOrderCrmLink | null;
+  error?: string;
+}
+
+// GET /orders/live/customer/:customerId/history - "Previous Orders" on the live detail page, cursor-paginated.
+export interface LiveOrderHistoryParams {
+  first: number;
+  after?: string;
+  excludeExternalId: string;
+}
+
+export interface LiveOrderHistoryItem {
+  /** A ready-to-navigate Order Detail id - a real CRM order id when synced, "shopify:<externalId>" otherwise. */
+  id: string;
+  orderNumber: string;
+  currency: string;
+  totalAmount: string;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  createdAt: string;
+  linkedInCrm: boolean;
+}
+
+export interface LiveOrderHistoryResult {
+  items: LiveOrderHistoryItem[];
+  pageInfo: LiveOrderPageInfo;
+  error?: string;
+}
+
+// POST /orders/live/:externalId/cancel - Shopify has no "delete order" operation, only cancellation.
+export interface LiveOrderCancelResult {
+  cancelled: boolean;
+  reason?: string;
 }
 
 export type StatusHistoryEvent = "CREATED" | "PLACED" | "CONFIRMED" | "CANCELLED" | "STATUS_CHANGE";

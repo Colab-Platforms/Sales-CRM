@@ -80,6 +80,12 @@ export interface NormalizedIncomingMessage {
    *  non-text message. */
   text: string | null;
   timestamp: Date;
+  /** The providerMessageId this message is a real, provider-reported reply to (Meta's documented
+   *  inbound `context.id` - set only when the customer actually tapped "reply" on a specific message
+   *  in WhatsApp). Undefined/null for the large majority of inbound messages, which carry no context
+   *  at all - never inferred when the provider didn't say so. AiSensy/Gupshup document no equivalent,
+   *  so their parsers never set this. */
+  replyToProviderMessageId?: string | null;
 }
 
 export type WhatsAppDeliveryStatus = "SENT" | "DELIVERED" | "READ" | "FAILED";

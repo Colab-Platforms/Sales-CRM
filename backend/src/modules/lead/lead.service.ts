@@ -6,7 +6,19 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { generateLeadNumber } from "@/utils/leadNumber.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
 import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
-import { normalizeMobile, normalizeEmail } from "@/utils/normalize.js";
+// Root-cause fix: this used to import from @/utils/normalize.js, a second, DIFFERENT normalizeMobile
+// that just strips non-digit characters - no "+" prefix, no default-country-code inference for a bare
+// 10-digit number. Every lead ever created here (createLead - including the WhatsApp page's "Create
+// Contact" - and createLeadFromSource, used by WhatsApp-inbound auto-creation, Shopify and Meta
+// imports) got a normalizedMobile in that divergent shape, while whatsapp.matching.ts's
+// matchSenderToLead has only ever matched against @/lib/leadIdentity.js's canonical "+"-prefixed
+// form. That mismatch is what kept manufacturing brand-new "legacy-format" leads for this task's
+// matching fix to work around - the matching-side patches were treating the symptom; this is the
+// actual source. @/lib/leadIdentity.js is the one canonical phone/email identity function used
+// everywhere else in the codebase (shopify.persist.ts, whatsapp.matching.ts, etc.) - this file now
+// agrees with them, so a lead created here will always be found by the same lookup a WhatsApp reply
+// (or a Shopify/Meta match) uses, with no special-casing needed on either side.
+import { normalizeMobile, normalizeEmail } from "@/lib/leadIdentity.js";
 import {
   Role,
   UserStatus,
@@ -322,70 +334,71 @@ class LeadService {
     return this.presentForRole(updated, user.role);
   }
 
-  // Hard-deletes a Lead. The schema already protects real lead history at the DB level -
-  // activities/orders/calls/tasks/interestedPeriods/abandonments/recoveryActions/assignments/
-  // communicationPreferences/whatsAppCampaignRecipients all have an explicit ON DELETE RESTRICT
-  // FK to leads, and would raise a raw Postgres error if deletion were attempted anyway.
-  // whatsAppMessages/whatsAppAutomationRuns are ON DELETE SET NULL instead, so the DB alone
-  // wouldn't stop a delete there - but doing so would silently orphan a customer's WhatsApp
-  // history and Lead -> WhatsApp linking, which is explicitly never allowed to happen. So every
-  // one of these is checked up front and reported as one clear, actionable error, rather than
-  // ever attempting to work around any of them with a cascading delete or a schema change.
-  private async assertLeadIsDeletable(id: string): Promise<void> {
-    const [
-      activityCount,
-      orderCount,
-      callCount,
-      taskCount,
-      interestedPeriodCount,
-      abandonmentCount,
-      recoveryActionCount,
-      assignmentCount,
-      communicationPreferenceCount,
-      whatsAppMessageCount,
-      whatsAppAutomationRunCount,
-      whatsAppCampaignRecipientCount,
-    ] = await Promise.all([
-      prisma.activity.count({ where: { leadId: id } }),
-      prisma.order.count({ where: { leadId: id } }),
-      prisma.call.count({ where: { leadId: id } }),
-      prisma.task.count({ where: { leadId: id } }),
-      prisma.interestedLeadPeriod.count({ where: { leadId: id } }),
-      prisma.abandonment.count({ where: { leadId: id } }),
-      prisma.recoveryAction.count({ where: { leadId: id } }),
-      prisma.leadAssignment.count({ where: { leadId: id } }),
-      prisma.communicationPreference.count({ where: { leadId: id } }),
-      prisma.whatsAppMessage.count({ where: { leadId: id } }),
-      prisma.whatsAppAutomationRun.count({ where: { leadId: id } }),
-      prisma.whatsAppCampaignRecipient.count({ where: { leadId: id } }),
-    ]);
-
-    const blockers: string[] = [];
-    if (activityCount > 0) blockers.push(`${activityCount} activity record(s)`);
-    if (orderCount > 0) blockers.push(`${orderCount} order(s)`);
-    if (callCount > 0) blockers.push(`${callCount} call(s)`);
-    if (taskCount > 0) blockers.push(`${taskCount} task(s)`);
-    if (interestedPeriodCount > 0) blockers.push(`${interestedPeriodCount} interested-period record(s)`);
-    if (abandonmentCount > 0) blockers.push(`${abandonmentCount} abandonment record(s)`);
-    if (recoveryActionCount > 0) blockers.push(`${recoveryActionCount} recovery action(s)`);
-    if (assignmentCount > 0) blockers.push(`${assignmentCount} assignment record(s)`);
-    if (communicationPreferenceCount > 0) blockers.push(`${communicationPreferenceCount} communication preference(s)`);
-    if (whatsAppMessageCount > 0) blockers.push(`${whatsAppMessageCount} WhatsApp message(s)`);
-    if (whatsAppAutomationRunCount > 0) blockers.push(`${whatsAppAutomationRunCount} WhatsApp automation run(s)`);
-    if (whatsAppCampaignRecipientCount > 0) blockers.push(`${whatsAppCampaignRecipientCount} WhatsApp campaign recipient record(s)`);
-
-    if (blockers.length > 0) {
-      throw new ApiError(
-        `Cannot delete this lead: it has existing ${blockers.join(", ")}. Deletion is only allowed for a lead with no recorded history.`,
-        STATUS_CODES.CONFLICT,
-      );
-    }
-  }
-
+  // Hard-deletes a Lead AND every CRM-owned record that points at it, in one transaction. Previously
+  // this refused to delete any lead with recorded history at all (activities/orders/calls/tasks/
+  // interestedPeriods/abandonments/recoveryActions/assignments/communicationPreferences/
+  // whatsAppCampaignRecipients all have an onDelete: Restrict FK to leads, so a bare `lead.delete`
+  // would fail at the DB level for any of them) - by explicit instruction this is now a real cascade
+  // delete instead of a block, run inside one `$transaction` so a failure partway through leaves
+  // nothing partially deleted.
+  //
+  // Deletion order matters: children before parents, so no FK is ever violated mid-transaction.
+  //   1. Order's own children (OrderItem/Payment/Shipment - each onDelete: Restrict on orderId)
+  //   2. WhatsAppMessage/WhatsAppAutomationRun matched by leadId OR orderId (both nullable FKs that
+  //      default to onDelete: SetNull, but a null-leadId/orphaned-orderId row would just be silently
+  //      orphaned history with no owner - explicitly deleted instead, never left behind)
+  //   3. WhatsAppCampaignRecipient, WhatsAppConversation (both leadId: Restrict, not required to be
+  //      empty by the old blocker check - WhatsAppConversation in particular was MISSING from it
+  //      entirely, a real gap: a lead with a conversation row but no messages could previously reach
+  //      `lead.delete` and fail with a raw, un-actionable Postgres FK error)
+  //   4. RecoveryAction (references Abandonment too) then Abandonment
+  //   5. Activity (onDelete: Restrict - the one FK that would otherwise always block the final delete),
+  //      Call, InterestedLeadPeriod, LeadAssignment, CommunicationPreference, Task
+  //   6. Order itself
+  //   7. Lead itself
+  //
+  // What this never touches: Shopify and Shiprocket. Order/Payment/Shipment rows deleted here are the
+  // CRM's own local mirror/link of an external record (identified by externalId) - deleting them only
+  // removes the CRM's own copy and its link to this lead. No Shopify or Shiprocket API call is made
+  // anywhere in this function, so the real order/shipment on those platforms is completely unaffected;
+  // only the CRM stops knowing about it.
   async deleteLead(user: AuthUser, id: string): Promise<{ id: string }> {
     await this.getLeadById(user, id); // same RBAC scope + 404 as every other single-lead action
-    await this.assertLeadIsDeletable(id);
-    await prisma.lead.delete({ where: { id } });
+
+    await prisma.$transaction(async (tx) => {
+      const orders = await tx.order.findMany({ where: { leadId: id }, select: { id: true } });
+      const orderIds = orders.map((o) => o.id);
+      const abandonments = await tx.abandonment.findMany({ where: { leadId: id }, select: { id: true } });
+      const abandonmentIds = abandonments.map((a) => a.id);
+
+      if (orderIds.length > 0) {
+        await tx.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
+        await tx.payment.deleteMany({ where: { orderId: { in: orderIds } } });
+        await tx.shipment.deleteMany({ where: { orderId: { in: orderIds } } });
+      }
+
+      await tx.whatsAppMessage.deleteMany({ where: { OR: [{ leadId: id }, ...(orderIds.length > 0 ? [{ orderId: { in: orderIds } }] : [])] } });
+      await tx.whatsAppAutomationRun.deleteMany({ where: { OR: [{ leadId: id }, ...(orderIds.length > 0 ? [{ orderId: { in: orderIds } }] : [])] } });
+      await tx.whatsAppCampaignRecipient.deleteMany({ where: { leadId: id } });
+      await tx.whatsAppConversation.deleteMany({ where: { leadId: id } });
+
+      await tx.recoveryAction.deleteMany({ where: { OR: [{ leadId: id }, ...(abandonmentIds.length > 0 ? [{ abandonmentId: { in: abandonmentIds } }] : [])] } });
+      await tx.abandonment.deleteMany({ where: { leadId: id } });
+
+      await tx.activity.deleteMany({ where: { leadId: id } });
+      await tx.call.deleteMany({ where: { leadId: id } });
+      await tx.interestedLeadPeriod.deleteMany({ where: { leadId: id } });
+      await tx.leadAssignment.deleteMany({ where: { leadId: id } });
+      await tx.communicationPreference.deleteMany({ where: { leadId: id } });
+      await tx.task.deleteMany({ where: { leadId: id } });
+
+      if (orderIds.length > 0) {
+        await tx.order.deleteMany({ where: { id: { in: orderIds } } });
+      }
+
+      await tx.lead.delete({ where: { id } });
+    });
+
     return { id };
   }
 

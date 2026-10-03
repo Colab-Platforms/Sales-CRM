@@ -17,10 +17,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { TemplatePicker } from "@/components/whatsapp/template-picker";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { usePreviewTemplateMutation, useSendTemplateMutation } from "@/lib/api-client/mutations/whatsapp-messaging.mutations";
 import { whatsappTemplateListQueryOptions } from "@/lib/api-client/queries/whatsapp-templates.queries";
-import { messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
 import type { CustomerOrderSummary } from "@/lib/api-client/types/customers.types";
 import type { TemplateVariableField, WhatsAppMessageResult } from "@/lib/api-client/types/whatsapp-messaging.types";
 import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
@@ -66,26 +66,41 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
     setManualValues({});
   }
 
+  // Every APPROVED Meta template is offered here, never narrowed by which lead/conversation this
+  // dialog happens to be open for (no "customer must already have a conversation" filter, and no
+  // per-lead provider-match pre-filter - that redundant client-side copy was removed in favor of the
+  // one real check, server-side, in loadAndResolve). Filtered to provider: META because Meta Cloud
+  // API is the CRM's only active send path for a signed-in user (see resolveSendProvider) - an
+  // AiSensy template would list here but always fail to send, which is worse than not listing it.
   const templatesQuery = useQuery({
-    ...whatsappTemplateListQueryOptions({ page: 1, pageSize: 100, status: "APPROVED" }),
+    ...whatsappTemplateListQueryOptions({ page: 1, pageSize: 100, status: "APPROVED", provider: "META" }),
     enabled: open,
   });
-  // Only templates belonging to the provider this customer's conversation is on can be sent (the backend enforces the
-  // same rule): a Meta conversation never offers an AiSensy template, and vice versa.
-  const capabilityQuery = useQuery({ ...messagingCapabilityQueryOptions(leadId), enabled: open, retry: false });
-  const templateProvider = capabilityQuery.data?.templates.provider ?? null;
-  const templateBlockedMessage = capabilityQuery.data?.templates.message ?? null;
-  const templates = useMemo(() => {
-    const all = templatesQuery.data?.items ?? [];
-    return templateProvider ? all.filter((t) => t.provider === templateProvider) : all;
-  }, [templatesQuery.data, templateProvider]);
+  const templates = templatesQuery.data?.items ?? [];
   const selectedTemplate = templates.find((t) => t.id === templateId) ?? null;
 
+  // Two separate calls to the same preview endpoint, on purpose:
+  //
+  // `baselineMutation` learns the template's variable STRUCTURE (names, order, crm-vs-manual
+  // classification - whatsapp.variable-resolver.ts's classifyVariable, the single shared source of
+  // truth) exactly once per template/order selection - never on a keystroke. The input list is
+  // rendered from this alone, so its length/order/identity never changes while typing, which is what
+  // actually keeps focus stable: React only remounts a field's <Input> if the list around it changes
+  // shape, and nothing here ever does that mid-typing.
+  //
+  // `previewMutation` re-resolves the actual message text as manual values are typed (debounced), for
+  // the Preview block only - it never drives what inputs are rendered.
+  const baselineMutation = usePreviewTemplateMutation();
   const previewMutation = usePreviewTemplateMutation();
   const sendMutation = useSendTemplateMutation();
 
-  // Re-preview whenever the template or order selection changes, debounced so flipping through
-  // options quickly doesn't fire a request per click.
+  useEffect(() => {
+    if (!templateId) return;
+    baselineMutation.mutate({ leadId, templateId, orderId: orderId === NO_ORDER ? undefined : orderId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId, orderId, leadId]);
+
+  // Debounced so continuous typing fires one request per pause, not one per keystroke.
   useEffect(() => {
     if (!templateId) return;
     const timer = setTimeout(() => {
@@ -95,29 +110,32 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [templateId, orderId, leadId, manualValues]);
 
-  const templateItems = useMemo(() => Object.fromEntries(templates.map((t) => [t.id, `${t.name} (${PROVIDER_LABELS[t.provider] ?? t.provider})`])), [templates]);
   const orderItems = useMemo(() => ({ [NO_ORDER]: "No order", ...Object.fromEntries(orders.map((o) => [o.id, o.orderNumber])) }), [orders]);
 
+  // Stable structure: the field list a person types into, fixed for as long as the template/order
+  // selection is unchanged. Falls back to the template's own (unclassified) variable list before the
+  // first baseline response lands, so fields appear immediately rather than popping in.
+  const fields: TemplateVariableField[] = baselineMutation.data?.fields ?? (selectedTemplate?.variables.map((name) => ({ name, source: "crm" as const, value: null })) ?? []);
+  // A field still needs a value if it has neither a CRM-resolved value nor anything typed for it yet -
+  // computed client-side from state already in hand, so the Send button's enabled state never lags
+  // behind what's on screen waiting for a network round trip.
+  const isFieldMissing = (f: TemplateVariableField) => !manualValues[f.name]?.trim() && f.value === null;
+  const missingRequiredFields = fields.filter(isFieldMissing);
+
+  // Keeps the last successfully resolved message visible while a newer one is still in flight,
+  // instead of blanking out to "Resolving…" on every keystroke's debounced re-check.
   const preview = previewMutation.data;
   const previewError = previewMutation.isError ? getErrorMessage(previewMutation.error, "Could not preview this message.") : null;
-
-  // Before the first preview response comes back (or if it errored), fall back to the template's own
-  // variable list so the fields render immediately - every one defaults to "auto-filled" until the
-  // backend's classification (the single source of truth - see whatsapp.variable-resolver.ts's
-  // classifyVariable) says otherwise.
-  const fields: TemplateVariableField[] = preview?.fields ?? (selectedTemplate?.variables.map((name) => ({ name, source: "crm" as const, value: null })) ?? []);
-  const missingRequiredFields = fields.filter((f) => f.value === null);
 
   // Client-side pre-check only, for a fast/clear error before submitting - the backend
   // (assertValidMediaUrl) is still the real, authoritative gate against a local/non-public URL.
   const mediaUrlTrimmed = mediaUrl.trim();
-  const mediaUrlError = mediaUrlTrimmed && !mediaUrlTrimmed.startsWith("https://") ? "Media URL must start with https:// (AiSensy requires a publicly accessible URL)." : null;
+  const mediaUrlError = mediaUrlTrimmed && !mediaUrlTrimmed.startsWith("https://") ? "Media URL must start with https:// - it needs to be a publicly accessible link." : null;
 
   const canSend =
     Boolean(templateId) &&
     Boolean(preview) &&
     missingRequiredFields.length === 0 &&
-    !previewMutation.isPending &&
     !sendMutation.isPending &&
     !sendResult &&
     !mediaUrlError;
@@ -158,27 +176,14 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
               <label className="text-sm font-medium">Template</label>
               {templatesQuery.isPending ? (
                 <p className="text-sm text-muted-foreground">Loading templates…</p>
-              ) : templateBlockedMessage ? (
-                <p role="alert" className="text-sm text-amber-700 dark:text-amber-400">{templateBlockedMessage}</p>
+              ) : templatesQuery.isError ? (
+                <p role="alert" className="text-sm text-destructive">{getErrorMessage(templatesQuery.error, "Could not load templates.")}</p>
               ) : templates.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  {templateProvider === "META"
-                    ? "No approved Meta templates yet. An admin can sync them from WhatsApp → Templates → Sync Meta templates."
-                    : "No approved templates are available yet."}
+                  No approved templates yet. An admin can create/submit one from WhatsApp → Templates, or sync approved Meta templates from there.
                 </p>
               ) : (
-                <Select value={templateId || null} items={templateItems} onValueChange={(v) => handleTemplateChange(v ?? "")}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select an approved template" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {templates.map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.name} <span className="text-muted-foreground">({PROVIDER_LABELS[t.provider] ?? t.provider})</span>
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <TemplatePicker templates={templates} value={templateId} onChange={handleTemplateChange} />
               )}
             </div>
 
@@ -234,9 +239,9 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
                       value={manualValues[field.name] ?? field.value ?? ""}
                       placeholder={field.source === "crm" ? "Resolved automatically from customer/order data" : `Enter a value for ${field.name}`}
                       onChange={(e) => setManualValues((prev) => ({ ...prev, [field.name]: e.target.value }))}
-                      aria-invalid={field.value === null}
+                      aria-invalid={isFieldMissing(field)}
                     />
-                    {field.value === null ? <p className="text-xs text-destructive">Value required for {field.name}</p> : null}
+                    {isFieldMissing(field) ? <p className="text-xs text-destructive">Value required for {field.name}</p> : null}
                   </div>
                 ))}
               </div>
@@ -244,20 +249,31 @@ export function SendWhatsAppDialog({ open, onOpenChange, leadId, customerName, o
 
             {templateId ? (
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium">Preview</label>
-                {previewMutation.isPending ? (
-                  <p className="text-sm text-muted-foreground">Resolving…</p>
-                ) : previewError ? (
+                <label className="flex items-center gap-2 text-sm font-medium">
+                  Preview
+                  {/* A quiet in-progress hint, not a replacement for the text below - the last
+                      resolved message stays visible the whole time a newer one is still loading, so
+                      typing never blanks the preview out or makes it appear to blink. */}
+                  {previewMutation.isPending ? <span className="text-xs font-normal text-muted-foreground">Updating…</span> : null}
+                </label>
+                {previewError && !preview ? (
                   <p role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive">
                     {previewError}
                   </p>
                 ) : preview ? (
                   <p className="rounded-lg border bg-muted/30 p-3 text-sm whitespace-pre-wrap">{preview.resolvedBody}</p>
-                ) : null}
+                ) : (
+                  <p className="text-sm text-muted-foreground">Resolving…</p>
+                )}
               </div>
             ) : null}
 
-            {templateId ? (
+            {/* Media attachment is currently only wired through the AiSensy Campaign API - Meta's
+                Send Message API call (whatsapp.meta.provider.ts's sendTemplateMessage) does not accept
+                a media field at all, so it would be silently dropped. Shown only when it would
+                actually reach the provider, driven by the selected template's own stored provider -
+                never a user-facing provider choice. */}
+            {selectedTemplate?.provider === "AISENSY" ? (
               <div className="grid gap-1.5 border-t pt-3">
                 <Label htmlFor="wa-media-url">Attach media (optional)</Label>
                 <p className="text-xs text-muted-foreground">

@@ -10,10 +10,12 @@ import {
   getNextBestAction,
   listCustomers,
 } from "./customers.controller.js";
+import { listLiveCustomers } from "./customers.live.controller.js";
 
 const router = Router();
 
-// Registered before "/:leadId" so "/" (the list) is never read as a customer id.
+// Registered before "/:leadId" so "/live" and "/" (the list) are never read as a customer id.
+router.get("/live", requireAuth, listLiveCustomers);
 router.get("/", requireAuth, listCustomers);
 router.get("/:leadId", requireAuth, getCustomer360);
 router.get("/:leadId/timeline", requireAuth, getCustomerTimeline);

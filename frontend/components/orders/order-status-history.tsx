@@ -2,7 +2,7 @@
 
 import { useOrderStatusHistory } from "@/hooks/useOrders";
 import { Skeleton } from "@/components/ui/skeleton";
-import { formatDateTime } from "@/lib/order-status";
+import { TimelineEvent, TimelineList } from "./order-detail-parts";
 
 export function OrderStatusHistory({ orderId }: { orderId: string }) {
   const { data, isLoading, error } = useOrderStatusHistory(orderId);
@@ -25,19 +25,11 @@ export function OrderStatusHistory({ orderId }: { orderId: string }) {
       {data.entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">No status events have been recorded for this order yet.</p>
       ) : (
-        <ol className="space-y-3 border-l pl-4">
+        <TimelineList>
           {data.entries.map((entry) => (
-            <li key={entry.id} className="relative">
-              <span className="absolute top-1.5 -left-[1.3rem] size-2 rounded-full bg-primary" aria-hidden="true" />
-              <p className="text-sm font-medium">{entry.title}</p>
-              {entry.description ? <p className="text-sm text-muted-foreground">{entry.description}</p> : null}
-              <p className="text-xs text-muted-foreground">
-                {formatDateTime(entry.occurredAt)}
-                {entry.actor ? ` · ${entry.actor.name}` : null}
-              </p>
-            </li>
+            <TimelineEvent key={entry.id} source="CRM" title={entry.title} at={entry.occurredAt} detail={[entry.description, entry.actor?.name].filter(Boolean).join(" · ") || null} />
           ))}
-        </ol>
+        </TimelineList>
       )}
       <p className="text-xs text-muted-foreground">
         Shows recorded milestones only. Detailed status-by-status changes will appear once status tracking is added.

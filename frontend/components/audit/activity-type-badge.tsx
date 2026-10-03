@@ -5,7 +5,7 @@ import type { ActivityType } from "@/lib/api-client/types/audit.types";
 
 export function ActivityTypeBadge({ type }: { type: ActivityType }) {
   return (
-    <Badge variant="outline" className={cn("border-transparent", ACTIVITY_TYPE_COLORS[type])}>
+    <Badge variant="outline" className={cn("border-current/20", ACTIVITY_TYPE_COLORS[type])}>
       {ACTIVITY_TYPE_LABELS[type]}
     </Badge>
   );

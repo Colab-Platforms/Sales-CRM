@@ -1,4 +1,4 @@
-import type { OrderSource, PaymentMode, Pagination, ShipmentStatus } from "./orders.types";
+import type { LiveTracking, OrderSource, PaymentMode, Pagination, ShipmentStatus } from "./orders.types";
 
 // The centralized Shiprocket shipment listing/tracking page ("/dashboard/shiprocket"). Distinct from
 // ShipmentActionResult in integrations.types.ts, which is the result of an action (create/assign/pickup/label/track),
@@ -43,6 +43,8 @@ export interface ShipmentListItem {
   updatedAt: string;
   order: { id: string; orderNumber: string; externalNumber: string | null; source: OrderSource };
   customer: { leadId: string; leadNumber: string; name: string; mobile: string | null };
+  /** Live from Shiprocket - undefined when this shipment has no AWB yet. */
+  liveTracking?: LiveTracking;
 }
 
 export interface ListShipmentsResult {

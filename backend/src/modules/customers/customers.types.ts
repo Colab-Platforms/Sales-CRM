@@ -7,6 +7,7 @@ import type {
   ShipmentStatus,
 } from "../../../generated/prisma/enums.js";
 import type { PaymentMode, PaymentStatusFilter, ShipmentDetail } from "../orders/orders.types.js";
+import type { NormalizedCustomerListItem } from "../shopify/shopify.customers.js";
 import type { CustomerSegment, SegmentMetrics } from "./segment.js";
 import type { NbaAction, NbaChannel, NbaPriority } from "./nba.js";
 
@@ -104,6 +105,11 @@ export interface Customer360 {
   latestOrder: CustomerOrderSummary | null;
   currentOrderStatus: OrderStatus | null;
   orders: CustomerOrderSummary[];
+  // Live Shopify identity matched by mobile/email (see shopify.customers.ts's findCustomerByContact) -
+  // additive overlay only; CRM-owned fields above (owner, segment, activities, etc.) are never replaced
+  // by it. null when no Shopify customer matched, or Shopify couldn't be reached (see shopifyError).
+  shopifyCustomer: NormalizedCustomerListItem | null;
+  shopifyError?: string;
 }
 
 export type TimelineEventType =
