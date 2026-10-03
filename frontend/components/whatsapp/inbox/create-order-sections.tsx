@@ -26,7 +26,6 @@ export interface DraftItem {
   variantId: string;
   quantity: string;
   unitPrice: string;
-  discountAmount: string;
 }
 
 export interface AddressDraft {
@@ -39,7 +38,7 @@ export interface AddressDraft {
   pincode: string;
 }
 
-export const emptyItem = (): DraftItem => ({ key: crypto.randomUUID(), productId: "", variantId: "", quantity: "1", unitPrice: "", discountAmount: "" });
+export const emptyItem = (): DraftItem => ({ key: crypto.randomUUID(), productId: "", variantId: "", quantity: "1", unitPrice: "" });
 
 export const cents = (value: string): number => {
   const n = Number(value);
@@ -47,7 +46,7 @@ export const cents = (value: string): number => {
 };
 export const fromCents = (c: number): string => (c / 100).toFixed(2);
 
-export const lineTotalCents = (i: Pick<DraftItem, "unitPrice" | "quantity" | "discountAmount">) => Math.max(cents(i.unitPrice) * (Number(i.quantity) || 0) - cents(i.discountAmount || "0"), 0);
+export const lineTotalCents = (i: Pick<DraftItem, "unitPrice" | "quantity">) => Math.max(cents(i.unitPrice) * (Number(i.quantity) || 0), 0);
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 /** True when what was typed and what the pincode resolves to plausibly name the same place (either contains the other). */
@@ -170,15 +169,12 @@ export function ItemCard({
         </Field>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Field label="Quantity" htmlFor={`qty-${item.key}`}>
           <Input id={`qty-${item.key}`} type="number" min="1" inputMode="numeric" value={item.quantity} onChange={(e) => onChange({ quantity: e.target.value })} />
         </Field>
         <Field label="Unit price (₹)" htmlFor={`price-${item.key}`}>
           <Input id={`price-${item.key}`} inputMode="decimal" value={item.unitPrice} onChange={(e) => onChange({ unitPrice: e.target.value })} placeholder="0.00" />
-        </Field>
-        <Field label="Discount (₹)" htmlFor={`disc-${item.key}`}>
-          <Input id={`disc-${item.key}`} inputMode="decimal" value={item.discountAmount} onChange={(e) => onChange({ discountAmount: e.target.value })} placeholder="0" />
         </Field>
         <div className="grid gap-1.5">
           <span className="text-xs font-medium">Line total</span>

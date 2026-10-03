@@ -11,6 +11,7 @@ import { lastAddressQueryOptions, pincodeQueryOptions, serviceabilityQueryOption
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { formatMoney } from "@/lib/order-status";
+import { DiscountPricing, parseDiscountPercent, percentDiscountCents } from "./discount-section";
 import { CreateShipmentDialog } from "@/components/orders/create-shipment-dialog";
 import type { CreateManualOrderItemInput, CreateManualOrderResult } from "@/lib/api-client/types/orders.types";
 import {
@@ -61,6 +62,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // One key per order ATTEMPT, reused by every submit of that attempt (so a double click / Enter / retry after a slow
   // response is collapsed into one order by the backend) and replaced only once that attempt has succeeded or the
   // dialog is closed. `submittingRef` closes the window before React re-renders with `isPending`.
+  // Custom Discount: only the percentage is sent; the server recomputes everything from it.
+  const [discountPercent, setDiscountPercent] = useState<string | null>(null);
   const idempotencyKey = useRef<string>(crypto.randomUUID());
   const submittingRef = useRef(false);
 
@@ -125,6 +128,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
       setEdits({});
       setWeight("");
       setShippingAmount("");
+      setDiscountPercent(null);
       setResult(null);
       setShipmentOpen(false);
       setStepIndex(0);
@@ -161,12 +165,15 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     variantId: i.variantId || undefined,
     quantity: Number(i.quantity),
     unitPrice: i.unitPrice,
-    discountAmount: i.discountAmount || undefined,
   }));
 
   // Display-only totals (the backend recomputes the authoritative ones). Tax is not charged on manual orders.
   const subtotalCents = validItems.reduce((sum, i) => sum + cents(i.unitPrice) * i.quantity, 0);
-  const discountCents = validItems.reduce((sum, i) => sum + cents(i.discountAmount ?? "0"), 0);
+  // No flat/line discount exists in this form any more: the only discount is the Custom Discount percentage below.
+  const itemDiscountCents = 0;
+  const parsedPercent = discountPercent ? parseDiscountPercent(discountPercent) : null;
+  const customDiscountCents = parsedPercent?.ok ? percentDiscountCents(Math.max(subtotalCents - itemDiscountCents, 0), parsedPercent.hundredths) : 0;
+  const discountCents = itemDiscountCents + customDiscountCents;
   const shippingCents = cents(shippingAmount);
   const totalCents = Math.max(subtotalCents - discountCents + shippingCents, 0);
 
@@ -229,6 +236,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         },
         shippingPincode: address.pincode,
         shippingAmount: shippingAmount || undefined,
+        discountPercent: discountPercent ?? undefined,
         idempotencyKey: idempotencyKey.current,
       },
       {
@@ -287,14 +295,16 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                     </li>
                   ))}
                 </ul>
-                <dl className="mt-3 grid gap-1.5 border-t pt-3">
-                  <SummaryRow label="Subtotal" value={formatMoney(summary.subtotal)} />
-                  <SummaryRow label="Discount" value={`−${formatMoney(summary.discount)}`} />
-                  <SummaryRow label="Shipping" value={formatMoney(summary.shipping)} />
-                  <SummaryRow label="Tax" value={formatMoney("0")} />
-                  <SummaryRow label="Final amount" value={formatMoney(summary.total)} strong />
-                </dl>
               </div>
+              <DiscountPricing
+                subtotalCents={subtotalCents}
+                itemDiscountCents={itemDiscountCents}
+                shippingCents={shippingCents}
+                appliedPercent={discountPercent}
+                onApply={setDiscountPercent}
+                isPrepaid={orderType !== "COD"}
+                disabled={createOrder.isPending}
+              />
               <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
                 <dl className="grid gap-1.5">
                   <SummaryRow label="Payment method" value={`${typeInfo.title} · ${typeInfo.subtitle}`} />
