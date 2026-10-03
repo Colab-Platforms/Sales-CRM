@@ -4,6 +4,7 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import CallingService from "./calling.service.js";
+import { transcriptEventName, transcriptEvents, type TranscriptEventPayload } from "./calling.events.js";
 import {
   validateLeadIdParamSchema,
   validateInitiateCallBodySchema,
@@ -140,6 +141,63 @@ export const submitCallOutcome = async (req: AuthRequest, res: Response): Promis
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
+};
+
+const TERMINAL_TRANSCRIPT_STATUSES = new Set(["COMPLETED", "EMPTY", "FAILED"]);
+const TRANSCRIPT_STREAM_TIMEOUT_MS = 90_000; // covers the worker's retries (backoff across 3 attempts) plus normal transcribe time
+
+function writeSseEvent(res: Response, payload: TranscriptEventPayload): void {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+// Pushes the transcript the moment it's ready instead of the browser tab polling for it - see
+// calling.events.ts for how the pg-boss worker notifies this (same process, in-memory EventEmitter).
+// Closes the connection itself once it has sent one terminal event (or after a timeout), so it never
+// holds a connection open indefinitely.
+export const streamCallTranscript = async (req: AuthRequest, res: Response): Promise<void> => {
+  const { error, value: params } = validateCallIdParamSchema(req.params);
+  if (error) {
+    sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    return;
+  }
+
+  let transcript;
+  try {
+    transcript = await callingService.getTranscriptForCall(req.user!, params.id);
+  } catch (err: any) {
+    sendResponse(res, false, null, err.message, err.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    return;
+  }
+
+  res.writeHead(STATUS_CODES.OK, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+  });
+
+  if (transcript && TERMINAL_TRANSCRIPT_STATUSES.has(transcript.status ?? "")) {
+    writeSseEvent(res, { callId: params.id, status: transcript.status, transcriptText: transcript.transcriptText });
+    res.end();
+    return;
+  }
+
+  const eventName = transcriptEventName(params.id);
+  const onEvent = (payload: TranscriptEventPayload) => {
+    writeSseEvent(res, payload);
+    cleanup();
+    res.end();
+  };
+  const timer = setTimeout(() => {
+    cleanup();
+    res.end();
+  }, TRANSCRIPT_STREAM_TIMEOUT_MS);
+  function cleanup() {
+    clearTimeout(timer);
+    transcriptEvents.off(eventName, onEvent);
+  }
+
+  transcriptEvents.on(eventName, onEvent);
+  req.on("close", cleanup);
 };
 
 export const receiveCallWebhook = async (req: Request, res: Response): Promise<void> => {

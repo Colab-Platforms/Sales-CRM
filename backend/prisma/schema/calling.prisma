@@ -121,6 +121,10 @@ model CallTranscript {
   call   Call   @relation(fields: [callId], references: [id])
 
   transcriptText String? @map("transcript_text")
+  // Same words as transcriptText, reformatted into speaker-labeled lines ("Agent: ...\nCustomer: ...")
+  // from Deepgram's diarization. Null when diarization found only one speaker (nothing to label).
+  diarizedText   String? @map("diarized_text")
+  summary        String? @map("summary")
 
   language String? @map("language") @db.VarChar(20)
   provider String? @map("provider") @db.VarChar(100)

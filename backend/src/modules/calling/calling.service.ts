@@ -6,6 +6,7 @@ import { triggerClickToCall } from "./callerdesk.client.js";
 import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType } from "../../../generated/prisma/enums.js";
 import { OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
 import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
+import { enqueueTranscription } from "./calling.transcription.js";
 import type {
   CallerDeskWebhookPayload,
   ClickToCallResult,
@@ -200,17 +201,37 @@ class CallingService {
       include: {
         agent: { select: { id: true, name: true } },
         recording: true,
+        transcript: { select: { transcriptText: true, diarizedText: true, status: true } },
         outcome: { select: { id: true, name: true, code: true } },
       },
       orderBy: { createdAt: "desc" },
     });
 
-    // Salespersons see their own call log (status, duration) but can't hear the
-    // recording — only managers/admins can listen.
+    // Salespersons see their own call log (status, duration) but can't hear the recording or read
+    // the transcript — only managers/admins can, same gate as the recording itself.
     if (user.role === Role.SALESPERSON) {
-      return calls.map((call) => (call.recording ? { ...call, recording: { ...call.recording, recordingUrl: null } } : call));
+      return calls.map((call) => ({
+        ...call,
+        recording: call.recording ? { ...call.recording, recordingUrl: null } : null,
+        transcript: null,
+      }));
     }
     return calls;
+  }
+
+  // Manager/admin-only, same gate as the recording/transcript fields in listCallsForLead - backs the
+  // transcript SSE stream's initial check and its authorization (a call this user can't see a
+  // transcript for also isn't one they should be allowed to open a stream for).
+  async getTranscriptForCall(user: AuthUser, callId: string) {
+    if (user.role === Role.SALESPERSON) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
+
+    const call = await prisma.call.findUnique({ where: { id: callId }, include: { lead: true, transcript: true } });
+    if (!call) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
+    if (user.role === Role.MANAGER && call.lead.assignedManagerId !== user.id) {
+      throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
+    }
+
+    return call.transcript;
   }
 
   async listCallOutcomes() {
@@ -349,6 +370,9 @@ class CallingService {
         create: { callId: call.id, recordingUrl: payload.CallRecordingUrl, durationSeconds },
         update: { recordingUrl: payload.CallRecordingUrl, durationSeconds },
       });
+      // Fire-and-forget: queues the job and returns immediately, so this webhook's response never
+      // waits on transcription (which happens off-request - see calling.transcription.ts).
+      void enqueueTranscription(call.id);
     }
 
     await prisma.activity.create({

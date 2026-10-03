@@ -27,6 +27,9 @@ export function leadCallsQueryOptions(leadId: string) {
   return queryOptions({
     queryKey: callingKeys.leadCalls(leadId),
     queryFn: () => callingApi.listLeadCalls(leadId),
+    // No polling here - a call still waiting on its transcript gets pushed the update via SSE
+    // (use-call-transcript-stream.ts, which invalidates this query the instant it lands) instead of
+    // this query refetching itself on a timer.
   });
 }
 

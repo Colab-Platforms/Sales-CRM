@@ -26,6 +26,7 @@ import { DeleteLeadDialog } from "./delete-lead-dialog";
 import { ClickToCallButton, CallHistoryEntry } from "./calling";
 import { useAuthStore } from "@/stores/auth-store";
 import { leadDetailQueryOptions } from "@/lib/api-client/queries/lead.queries";
+import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { abandonmentByLeadQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { AbandonmentPanel } from "@/components/abandonment/abandonment-panel";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -66,6 +67,10 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
   const { data: lead, isLoading, error, refetch } = useQuery(leadDetailQueryOptions(leadId));
   const { data: abandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  // Dedicated calls query, not `lead.calls` - it's the endpoint that already selects `transcript` and
+  // polls while one is still transcribing (leadCallsQueryOptions), same one the table's call-history
+  // popup uses. `lead.calls` (from the Lead fetch above) never carried transcript data at all.
+  const { data: calls = [] } = useQuery({ ...leadCallsQueryOptions(leadId), enabled: Boolean(lead) });
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"calls" | "timeline" | "assignments" | "abandonment">("calls");
@@ -268,7 +273,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <Phone className="size-3.5" />
               <span>Calls &amp; Feedback</span>
               <span className="rounded-full bg-primary/15 px-1.5 py-0.2 font-mono text-[10px] font-bold text-primary">
-                {lead.calls.length}
+                {calls.length}
               </span>
             </button>
 
@@ -330,7 +335,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                   </div>
                 </div>
 
-                {lead.calls.length === 0 ? (
+                {calls.length === 0 ? (
                   <div className="sketch-dashed flex flex-col items-center justify-center p-8 text-center">
                     <Phone className="size-8 text-muted-foreground/50" />
                     <p className="mt-2 text-sm font-bold text-foreground">No calls logged yet</p>
@@ -340,7 +345,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                   </div>
                 ) : (
                   <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
-                    {lead.calls.map((call) => (
+                    {calls.map((call) => (
                       <CallHistoryEntry key={call.id} leadId={lead.id} call={call} currentFollowUp={lead.tasks[0]} />
                     ))}
                   </div>

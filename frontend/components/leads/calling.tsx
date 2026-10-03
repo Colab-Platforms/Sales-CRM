@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Mic, Phone, PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { FileText, Mic, Phone, PhoneIncoming, PhoneOutgoing } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +17,7 @@ import {
   TERMINAL_CALL_STATUSES,
 } from "@/components/calling/active-call-dialog";
 import { Button } from "@/components/ui/button";
+import { useCallTranscriptStream } from "./use-call-transcript-stream";
 import type { Call } from "@/lib/api-client/types/calling.types";
 import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
 
@@ -52,6 +53,13 @@ export function CallHistoryEntry({ leadId, call, currentFollowUp }: { leadId: st
   const DirectionIcon = call.direction === "INBOUND" ? PhoneIncoming : PhoneOutgoing;
   const duration = formatDuration(call.durationSeconds);
 
+  const transcriptStatus = call.transcript?.status;
+  const transcriptPending = Boolean(call.recording?.recordingUrl) && (!transcriptStatus || transcriptStatus === "PROCESSING");
+  // Pushed, not polled - see use-call-transcript-stream.ts. Only opens a connection while this
+  // specific call is actually waiting on one, and only for ADMIN/MANAGER (the only ones who can see
+  // a transcript at all - a SALESPERSON never has `call.recording.recordingUrl` to begin with).
+  useCallTranscriptStream(leadId, call.id, transcriptPending);
+
   // If the user is a SALESPERSON and this call was handled by a different salesperson (e.g. prior to reassignment),
   // they cannot change/log the outcome or notes. It is strictly read-only for them (no outcome form rendered).
   const isReadOnlyForCurrentSalesperson =
@@ -82,6 +90,38 @@ export function CallHistoryEntry({ leadId, call, currentFollowUp }: { leadId: st
           <Mic className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
           <audio controls className="h-8 w-full min-w-0" src={call.recording.recordingUrl} />
         </div>
+      ) : null}
+
+      {/* Manager/admin-only, same gate as the recording above. Transcription runs in the background
+          after the recording lands, so it can take a bit to appear - shown as a status line meanwhile. */}
+      {call.recording?.recordingUrl ? (
+        call.transcript?.transcriptText ? (
+          <div className="space-y-2">
+            <div className="flex items-start gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
+              <FileText className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+              {call.transcript.diarizedText ? (
+                <div className="min-w-0 flex-1 space-y-1">
+                  {call.transcript.diarizedText.split("\n").map((line, i) => {
+                    const [label, ...rest] = line.split(": ");
+                    const text = rest.join(": ");
+                    return (
+                      <p key={i} className="text-muted-foreground leading-relaxed">
+                        <span className={label === "Agent" ? "font-semibold text-primary" : "font-semibold text-foreground"}>{label}: </span>
+                        {text}
+                      </p>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-muted-foreground leading-relaxed">{call.transcript.transcriptText}</p>
+              )}
+            </div>
+          </div>
+        ) : call.transcript?.status === "FAILED" ? (
+          <p className="text-xs text-muted-foreground">Transcription failed for this call.</p>
+        ) : call.transcript?.status === "EMPTY" ? null : (
+          <p className="text-xs text-muted-foreground">Transcribing…</p>
+        )
       ) : null}
 
       {call.outcome || call.notes ? (

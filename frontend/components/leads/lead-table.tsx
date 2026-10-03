@@ -5,8 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlarmClock, Phone } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { Inbox, Pencil, Trash2, History, ArrowRight, Lock, Mic, PhoneIncoming, PhoneOutgoing } from "lucide-react";
-import { useAuthStore } from "@/stores/auth-store";
+import { Inbox, Pencil, Trash2, History, ArrowRight } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -28,13 +27,7 @@ import {
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { useInitiateCallMutation } from "@/lib/api-client/mutations/calling.mutations";
-import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
-import {
-  ActiveCallDialog,
-  CallOutcomeForm,
-  CALL_STATUS_VARIANT,
-  TERMINAL_CALL_STATUSES,
-} from "@/components/calling/active-call-dialog";
+import { virtualNumbersQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import { ScheduleFollowUpDialog } from "@/components/follow-ups/schedule-follow-up-dialog";
@@ -54,7 +47,6 @@ import type {
 } from "@/lib/api-client/types/lead.types";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
-import { Badge } from "../ui/badge";
 
 // Every history-showing surface (this table's popup, the lead detail page) links back to a single
 // per-lead page, so a salesperson's "My Leads" list stops routing into the unrelated Customer 360
@@ -67,20 +59,21 @@ const CALL_HISTORY_PREVIEW_COUNT = 5;
 
 // Minimal shape this popup needs off a lead - satisfied structurally by both the full Lead type
 // (leads pages) and AbandonmentListItem.lead (abandoned-leads pages), so both reuse the exact same
-// call-history/outcome UI instead of the abandoned-leads queue duplicating it.
+// call-history/outcome UI instead of the abandoned-leads queue duplicating it. Calls are fetched
+// here directly (leadCallsQueryOptions) rather than trusted from the caller's list data, which never
+// carried `transcript` and never polled while one was still being generated.
 export interface CallHistoryLead {
   id: string;
   firstName: string;
   lastName?: string | null;
-  calls: Lead["calls"];
   tasks: Lead["tasks"];
 }
 
 function CallHistoryDialogContent({ lead }: { lead: CallHistoryLead }) {
-  const currentUser = useAuthStore((s) => s.user);
-  // lead.calls already arrives newest-first from the API, so slicing the front gives the latest N.
-  const recentCalls = lead.calls.slice(0, CALL_HISTORY_PREVIEW_COUNT);
-  const hiddenCount = lead.calls.length - recentCalls.length;
+  const { data: calls = [], isPending } = useQuery(leadCallsQueryOptions(lead.id));
+  // Calls already arrive newest-first from the API, so slicing the front gives the latest N.
+  const recentCalls = calls.slice(0, CALL_HISTORY_PREVIEW_COUNT);
+  const hiddenCount = calls.length - recentCalls.length;
 
   return (
     <DialogContent className="sm:max-w-140">
@@ -90,69 +83,19 @@ function CallHistoryDialogContent({ lead }: { lead: CallHistoryLead }) {
         </DialogTitle>
         <DialogDescription>
           {hiddenCount > 0
-            ? `Showing the ${recentCalls.length} most recent of ${lead.calls.length} calls.`
+            ? `Showing the ${recentCalls.length} most recent of ${calls.length} calls.`
             : "Click-to-call attempts logged for this lead."}
         </DialogDescription>
       </DialogHeader>
-      {recentCalls.length === 0 ? (
+      {isPending ? (
+        <Skeleton className="h-24 w-full" />
+      ) : recentCalls.length === 0 ? (
         <p className="text-sm text-muted-foreground">No calls yet.</p>
       ) : (
         <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
-          {recentCalls.map((call) => {
-            // A salesperson can see how a call another salesperson handled turned out, but
-            // can't touch the outcome — only the agent who took the call (or a manager/admin) can.
-            const isOthersCall =
-              currentUser?.role === "SALESPERSON" &&
-              Boolean(call.agent?.id && call.agent.id !== currentUser.id);
-            const DirectionIcon = call.direction === "INBOUND" ? PhoneIncoming : PhoneOutgoing;
-
-            return (
-              <div
-                key={call.id}
-                className={cn(
-                  "sketch-outline space-y-2.5 p-3 text-sm",
-                  isOthersCall ? "bg-muted/30" : "bg-card/60",
-                )}
-              >
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2">
-                    <DirectionIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                    <div>
-                      <p className="font-semibold text-foreground">
-                        {call.startedAt ? new Date(call.startedAt).toLocaleString() : "Not started"}
-                      </p>
-                      <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                        {isOthersCall ? <Lock className="size-3 shrink-0" aria-hidden="true" /> : null}
-                        {call.agent?.name ?? "Unknown agent"}
-                        {call.durationSeconds ? ` · ${call.durationSeconds}s` : ""}
-                      </p>
-                    </div>
-                  </div>
-                  <Badge variant={CALL_STATUS_VARIANT[call.status]}>
-                    {call.status.replaceAll("_", " ")}
-                  </Badge>
-                </div>
-
-                {call.recording?.recordingUrl ? (
-                  <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-2">
-                    <Mic className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                    <audio controls className="h-8 w-full min-w-0" src={call.recording.recordingUrl} />
-                  </div>
-                ) : null}
-
-                {call.outcome || call.notes ? (
-                  <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
-                    {call.outcome ? <p className="font-semibold text-foreground">Outcome: {call.outcome.name}</p> : null}
-                    {call.notes ? <p className="mt-1 text-muted-foreground leading-relaxed">{call.notes}</p> : null}
-                  </div>
-                ) : null}
-
-                {TERMINAL_CALL_STATUSES.has(call.status) && !isOthersCall ? (
-                  <CallOutcomeForm leadId={lead.id} currentFollowUp={lead.tasks[0]} call={call} />
-                ) : null}
-              </div>
-            );
-          })}
+          {recentCalls.map((call) => (
+            <CallHistoryEntry key={call.id} leadId={lead.id} call={call} currentFollowUp={lead.tasks[0]} />
+          ))}
         </div>
       )}
       {hiddenCount > 0 ? (
