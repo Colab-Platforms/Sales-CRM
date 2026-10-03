@@ -62,6 +62,9 @@ const createManualOrderSchema = z.object({
   shippingPincode: optional(z.string().trim().regex(/^[1-9]\d{5}$/, "Pincode must be a valid 6-digit Indian pincode")),
   shippingAmount: optional(money("shippingAmount")),
   discountAmount: optional(money("discountAmount")),
+  // Custom Discount: a percentage, validated and applied only by computePercentDiscount() in the service (a string, so
+  // "-1", "abc" or "101" reach it intact and get its specific messages instead of a generic type error).
+  discountPercent: optional(z.union([z.string(), z.number()]).transform((v) => String(v))),
   discountReason: optional(z.string().trim().max(255)),
   idempotencyKey: optional(z.string().trim().min(8).max(100)),
 });

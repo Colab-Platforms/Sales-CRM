@@ -45,6 +45,8 @@ export interface CreateManualOrderInput {
   shippingPincode?: string;
   shippingAmount?: Money;
   discountAmount?: Money;
+  /** Order-level Custom Discount, percent of (subtotal - line discounts). Mutually exclusive with discountAmount. */
+  discountPercent?: string;
   discountReason?: string;
 }
 

@@ -13,6 +13,7 @@ import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
 import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
+import { computePercentDiscount } from "./orders.discount.js";
 import { clearLiveOrderCaches } from "./orders.live.service.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
@@ -464,7 +465,13 @@ class OrdersService {
 
     const subtotalCents = itemRows.reduce((sum, r) => sum + toCents(r.unitPrice) * r.quantity, 0);
     const itemDiscountCents = itemRows.reduce((sum, r) => sum + toCents(r.discountAmount), 0);
-    const orderDiscountCents = toCents(input.discountAmount);
+    // Custom Discount (percentage): the backend is authoritative - whatever total the browser showed is ignored, and the
+    // total below is what the order row, the Cashfree link (which reads Order.totalAmount) and the WhatsApp message use.
+    if (input.discountPercent !== undefined && input.discountAmount !== undefined) {
+      throw new ApiError("Send either discountPercent or discountAmount, not both", STATUS_CODES.BAD_REQUEST);
+    }
+    const percentDiscount = input.discountPercent !== undefined ? computePercentDiscount(subtotalCents - itemDiscountCents, input.discountPercent) : null;
+    const orderDiscountCents = percentDiscount ? percentDiscount.discountCents : toCents(input.discountAmount);
     const shippingCents = toCents(input.shippingAmount);
     const totalCents = Math.max(subtotalCents - itemDiscountCents - orderDiscountCents + shippingCents, 0);
 
@@ -500,7 +507,11 @@ class OrdersService {
               shippingPincode: input.shippingPincode ?? input.shippingAddress?.pincode,
               // Free-form, existing field (Order.metadata) - never a new column. paymentMode mirrors
               // the exact same derived value Shopify-synced orders already carry (shopify.mapper.ts).
-              metadata: { paymentMode: isCod ? "COD" : "PREPAID", createdVia: "WHATSAPP_INBOX" },
+              metadata: {
+                paymentMode: isCod ? "COD" : "PREPAID",
+                createdVia: "WHATSAPP_INBOX",
+                ...(percentDiscount && percentDiscount.discountCents > 0 ? { customDiscount: { percent: percentDiscount.percent, amount: fromCents(percentDiscount.discountCents), appliedById: user.id } } : {}),
+              },
               placedAt: now,
               confirmedAt: isCod ? now : null,
               items: { createMany: { data: itemRows } },
@@ -658,7 +669,9 @@ class OrdersService {
       // Reflects the CRM's own recorded payment status, not the payment METHOD - a not-yet-collected
       // prepaid order is exactly as unpaid as a COD one until a payment actually succeeds.
       financialStatus: order.payments[0]?.status === "SUCCESS" ? "PAID" : "PENDING",
-      note: `Created in the CRM (${order.orderNumber}) via the WhatsApp Inbox.`,
+      // Shopify's orderCreate here is sent at list prices (as it always was for CRM-side discounts), so a CRM discount is
+      // NOT applied on the Shopify order. It is stated in the note so the two systems are never silently inconsistent.
+      note: `Created in the CRM (${order.orderNumber}) via the WhatsApp Inbox.${Number(order.discountAmount) > 0 ? ` CRM discount of ${order.discountAmount} applied; amount to collect in the CRM is ${order.totalAmount}.` : ""}`,
       shippingAddress,
     };
 

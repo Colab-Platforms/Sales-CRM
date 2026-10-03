@@ -119,6 +119,8 @@ export interface CreateManualOrderInput {
   shippingPincode?: string;
   shippingAmount?: string;
   discountAmount?: string;
+  /** Custom Discount percentage - the backend validates it and computes the amount itself. */
+  discountPercent?: string;
   discountReason?: string;
 }
 
