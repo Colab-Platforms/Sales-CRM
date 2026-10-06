@@ -19,11 +19,13 @@ import type { CallDetail, CallListItem, CallListResult, CallSummary, CallSummary
  * migration-ordering gap — see the audit/customers modules) - the Call table itself, and everything
  * selected here, is unaffected by that gap.
  *
- * Authorisation mirrors OrdersService exactly: `getLeadScope` gives the same
+ * Authorisation starts from OrdersService's exact pattern: `getLeadScope` gives the same
  * ADMIN-sees-all / MANAGER-sees-their-team / SALESPERSON-sees-their-own scoping already used by
- * orders/customers/audit, applied here through the Call -> Lead relation (Call itself has no owner
- * field, so it is never used as the authorisation boundary on its own). The IVR pages use this same
- * scoping - there is no second authorisation system for them.
+ * orders/customers/audit, applied here through the Call -> Lead relation. On top of that, every
+ * call here also passes `user.id` as `buildCallWhere`/`scopedCallWhere`'s `viewerId` - which OR's
+ * in "or I am this call's agent", so a call on an unassigned Lead (e.g. a new "IVR Inquiry" Lead)
+ * is still visible to the salesperson who actually took it. The IVR pages use this same scoping -
+ * there is no second authorisation system for them.
  */
 
 const LIST_SELECT = {
@@ -101,7 +103,7 @@ export class CallHistoryService {
 
   async listCalls(user: AuthUser, query: ListCallsQuery): Promise<CallListResult> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildCallWhere(query, leadScope);
+    const where = buildCallWhere(query, leadScope, user.id);
 
     // Single findMany with nested selects (one query with joins), not N+1: the same pattern
     // orders.service.ts#listOrders uses for its own lead/payments relations.
@@ -126,7 +128,7 @@ export class CallHistoryService {
   /** Aggregate counts/talk-time for the IVR summary cards - same filters/scope as `listCalls`, no rows returned. */
   async getCallSummary(user: AuthUser, query: CallSummaryQuery): Promise<CallSummary> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildCallWhere(query, leadScope);
+    const where = buildCallWhere(query, leadScope, user.id);
 
     const [counts, totalTalkTime] = await Promise.all([
       this.db.call.groupBy({ by: ["status"], where, _count: { _all: true } }),
@@ -138,7 +140,7 @@ export class CallHistoryService {
 
   async getCallById(user: AuthUser, id: string): Promise<CallDetail> {
     const leadScope = await getLeadScope(user, this.db);
-    const call = await this.db.call.findFirst({ where: scopedCallWhere(id, leadScope), select: DETAIL_SELECT });
+    const call = await this.db.call.findFirst({ where: scopedCallWhere(id, leadScope, user.id), select: DETAIL_SELECT });
 
     // Out-of-scope calls look the same as missing ones so ids can't be probed (matches getOrder).
     if (!call) {

@@ -1,0 +1,86 @@
+// Website Chat Live Queue (CRM backend foundation, Phase 1). Reuses Lead as the one customer
+// entity (no new Customer/Contact model) and the existing ConversationMode enum (AI/HUMAN) - see
+// the approved architecture audit. Deliberately NOT a generalization of WhatsAppConversation/
+// WhatsAppMessage: those are schema-bound to WhatsApp (provider enum, delivery-status enum,
+// `leadId @unique`) and a website visitor must be representable with no Lead at all until
+// identity/handoff - exactly the opposite of WhatsAppConversation's required, unique leadId.
+model WebChatConversation {
+  id String @id @default(uuid()) @db.Uuid
+
+  // The chatbot's own anonymous session id (crypto.randomUUID(), localStorage) - the one durable
+  // identifier that exists from message one, before any Lead can possibly exist.
+  externalConversationId String @unique @map("external_conversation_id") @db.VarChar(100)
+
+  // Nullable AND not unique on purpose: an anonymous visitor has no Lead yet (see createIvrLead-
+  // style matching in website-chat.store.ts), and unlike WhatsApp's one-thread-per-number model, a
+  // website visitor can start a brand-new session later - one Lead may have many conversations.
+  leadId String? @map("lead_id") @db.Uuid
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  mode ConversationMode @default(AI) @map("mode")
+
+  assignedToId String? @map("assigned_to_id") @db.Uuid
+  assignedTo   User?   @relation("WebChatConversationAssignedTo", fields: [assignedToId], references: [id])
+
+  // CRM-side "has an agent viewed this" marker, same convention as WhatsAppConversation.lastReadAt -
+  // unread count is computed as CUSTOMER/AI messages with createdAt > lastReadAt.
+  lastReadAt    DateTime? @map("last_read_at")
+  lastMessageAt DateTime? @map("last_message_at")
+
+  // Set, never deleted - archiving hides a conversation from the active queue without removing
+  // history, same guarantee as every other archive/soft-delete pattern in this CRM.
+  archivedAt DateTime? @map("archived_at")
+
+  // Best-effort, surfaced from the chatbot's own order-taking flow when supplied - never required,
+  // never guessed here.
+  intent          String? @map("intent") @db.VarChar(255)
+  productInterest String? @map("product_interest") @db.VarChar(255)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  messages WebChatMessage[]
+
+  @@index([leadId])
+  @@index([assignedToId])
+  @@index([mode])
+  @@index([lastMessageAt])
+  @@map("web_chat_conversations")
+}
+
+model WebChatMessage {
+  id String @id @default(uuid()) @db.Uuid
+
+  conversationId String              @map("conversation_id") @db.Uuid
+  conversation   WebChatConversation @relation(fields: [conversationId], references: [id])
+
+  // The chatbot's own message id, when it sends one. Nullable - idempotency for a webhook delivery
+  // with no externalMessageId is handled by the service layer's advisory lock, not this column
+  // alone (Postgres does not treat NULL as equal to NULL for a unique index, so the constraint
+  // below only protects deliveries that actually carry an id - see website-chat.service.ts).
+  externalMessageId String? @map("external_message_id") @db.VarChar(100)
+
+  sender WebChatSender @map("sender")
+
+  // Set only when sender = AGENT - who in the CRM sent this reply.
+  sentById String? @map("sent_by_id") @db.Uuid
+  sentBy   User?   @relation("WebChatMessageSentBy", fields: [sentById], references: [id])
+
+  body     String @map("body")
+  metadata Json?  @map("metadata")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([conversationId, externalMessageId])
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("web_chat_messages")
+}
+
+enum WebChatSender {
+  CUSTOMER
+  AI
+  AGENT
+
+  @@map("web_chat_sender")
+}

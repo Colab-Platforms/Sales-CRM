@@ -62,6 +62,7 @@ model Lead {
   whatsAppConversation     WhatsAppConversation?
   whatsAppAutomationRuns   WhatsAppAutomationRun[]
   whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
+  webChatConversations       WebChatConversation[]
 
   @@unique([externalSource, externalId])
   @@index([normalizedMobile])

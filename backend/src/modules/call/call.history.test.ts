@@ -66,6 +66,22 @@ describe("buildCallWhere", () => {
     const clause = (where.AND as { createdAt?: unknown }[])[0];
     assert.ok(clause?.createdAt, "the date filter must target createdAt");
   });
+
+  it("with a viewerId, widens the lead-scope clause to also match calls the viewer personally agented - e.g. an inbound IVR call on a still-unassigned Lead", () => {
+    const salespersonScope = { ownerId: "salesperson-1" };
+    const where = buildCallWhere(baseQuery, salespersonScope, "salesperson-1");
+    assert.deepEqual(where, { AND: [{ OR: [{ lead: salespersonScope }, { agentId: "salesperson-1" }] }] });
+  });
+
+  it("without a viewerId, behaves exactly as before - lead scope only, no widening", () => {
+    const salespersonScope = { ownerId: "salesperson-1" };
+    assert.deepEqual(buildCallWhere(baseQuery, salespersonScope), { AND: [{ lead: salespersonScope }] });
+    assert.deepEqual(buildCallWhere(baseQuery, salespersonScope, null), { AND: [{ lead: salespersonScope }] });
+  });
+
+  it("a viewerId never widens anything for ADMIN - lead scope is already empty, so there is nothing to OR against", () => {
+    assert.deepEqual(buildCallWhere(baseQuery, {}, "admin-1"), {});
+  });
 });
 
 describe("scopedCallWhere", () => {
@@ -76,6 +92,12 @@ describe("scopedCallWhere", () => {
   it("ANDs the id with the lead scope for a restricted caller - an out-of-scope id looks identical to a missing one", () => {
     assert.deepEqual(scopedCallWhere(UUID, { ownerId: "salesperson-1" }), {
       AND: [{ id: UUID }, { lead: { ownerId: "salesperson-1" } }],
+    });
+  });
+
+  it("with a viewerId, also matches a call the viewer personally agented even if its Lead is out of their scope", () => {
+    assert.deepEqual(scopedCallWhere(UUID, { ownerId: "salesperson-1" }, "salesperson-1"), {
+      AND: [{ id: UUID }, { OR: [{ lead: { ownerId: "salesperson-1" } }, { agentId: "salesperson-1" }] }],
     });
   });
 });

@@ -56,7 +56,7 @@ const post = (body: unknown, url = baseUrl) =>
 
 describe("POST /api/webhooks/callerdesk", () => {
   it("accepts a valid JSON payload without authentication and hands it to the service", async () => {
-    nextResult = { outcome: "PROCESSED", webhookEventId: "e1", callId: "c1", correlation: "PHONE_NUMBER", callCreated: true, recording: "created", activityCreated: true };
+    nextResult = { outcome: "PROCESSED", webhookEventId: "e1", callId: "c1", leadId: "l1", leadCreated: false, correlation: "PHONE_NUMBER", callCreated: true, recording: "created", activityCreated: true };
 
     const res = await post(inboundCallReport());
     const body = (await res.json()) as Record<string, unknown>;

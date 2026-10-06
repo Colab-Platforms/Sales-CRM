@@ -57,12 +57,14 @@ export type CallerDeskWebhookResult =
       outcome: "PROCESSED";
       webhookEventId: string;
       callId: string;
+      leadId: string;
+      leadCreated: boolean;
       correlation: CorrelationMethod;
       callCreated: boolean;
       recording: "created" | "updated" | "unchanged" | "none";
       activityCreated: boolean;
     }
-  | { outcome: "UNMATCHED"; webhookEventId: string; reason: UnmatchedReason }
+  | { outcome: "UNMATCHED"; webhookEventId: string; reason: UnmatchedReason; leadId?: string }
   | { outcome: "IGNORED"; webhookEventId: string; reason: string }
   | { outcome: "FAILED" };
 
@@ -91,10 +93,19 @@ function logToken(value: string | null | undefined, max = 60): string {
   return value.replace(/[^\w.\-|:() ]/g, "?").slice(0, max);
 }
 
+/** Diagnostic-only: last 4 digits, never the full number - the README's "no phone numbers logged"
+ * mitigation stays intact (a 4-digit suffix alone cannot be dialled or used to look someone up),
+ * while still letting a log line be matched back to a specific real test call during UAT. */
+function maskPhone(value: string | null | undefined): string {
+  if (!value) return "none";
+  const digits = value.replace(/\D/g, "");
+  return digits.length > 4 ? `***${digits.slice(-4)}` : "none";
+}
+
 type Correlation =
   | { kind: "CALL"; call: StoredCall; method: "PROVIDER_CALL_ID" | "CAMPAIGN_ID" }
-  | { kind: "CREATE"; leadId: string; agentId: string; virtualNumberId: string | null }
-  | { kind: "UNMATCHED"; reason: UnmatchedReason };
+  | { kind: "CREATE"; leadId: string; agentId: string; virtualNumberId: string | null; leadCreated: boolean }
+  | { kind: "UNMATCHED"; reason: UnmatchedReason; leadId?: string };
 
 function eventTypeDbValue(event: NormalizedCallEvent): string {
   return event.eventType === "CALL_REPORT" ? "call_report" : "live_call";
@@ -147,14 +158,18 @@ async function correlate(tx: CallEventTx, event: NormalizedCallEvent, provider: 
   // created here before the Call row - Call.leadId stays required, no migration needed. If agent
   // resolution then fails below, the Lead still commits (self-healing: the next call from the same
   // number matches it normally); this never invents an assignment just to satisfy Call.agentId.
+  const leadCreated = leads.length === 0;
   const lead = leads.length === 1 ? leads[0]! : await tx.createIvrLead(event.customerNumber);
   if (!lead) return { kind: "UNMATCHED", reason: "NO_LEAD_MATCH" };
 
   const agentId = await resolveAgentId(tx, event, lead.ownerId);
-  if (!agentId) return { kind: "UNMATCHED", reason: "NO_AGENT_RESOLVED" };
+  // The Lead above has already committed (it's created inside the same transaction as everything
+  // else here) even when this returns UNMATCHED - carrying its id through means the diagnostic log
+  // below, and WebhookEvent reconciliation, both know a Lead exists even though no Call does yet.
+  if (!agentId) return { kind: "UNMATCHED", reason: "NO_AGENT_RESOLVED", leadId: lead.id };
 
   const virtualNumberId = await tx.findVirtualNumberId(virtualNumberCandidates(event));
-  return { kind: "CREATE", leadId: lead.id, agentId, virtualNumberId };
+  return { kind: "CREATE", leadId: lead.id, agentId, virtualNumberId, leadCreated };
 }
 
 /**
@@ -236,12 +251,13 @@ export function createCallerDeskWebhookService(store: CallEventStore, options: C
       if (existing && existing.status === WebhookStatus.FAILED) {
         await tx.updateWebhookEvent(webhookEvent.id, { status: WebhookStatus.RECEIVED, errorMessage: null });
       }
-      return { outcome: "UNMATCHED", webhookEventId: webhookEvent.id, reason: correlation.reason };
+      return { outcome: "UNMATCHED", webhookEventId: webhookEvent.id, reason: correlation.reason, ...(correlation.leadId ? { leadId: correlation.leadId } : {}) };
     }
 
     let call: StoredCall;
     let callCreated = false;
     let method: CorrelationMethod;
+    const leadCreated = correlation.kind === "CREATE" && correlation.leadCreated;
 
     if (correlation.kind === "CALL") {
       method = correlation.method;
@@ -308,6 +324,8 @@ export function createCallerDeskWebhookService(store: CallEventStore, options: C
       outcome: "PROCESSED",
       webhookEventId: webhookEvent.id,
       callId: call.id,
+      leadId: call.leadId,
+      leadCreated,
       correlation: method,
       callCreated,
       recording,
@@ -342,6 +360,28 @@ export function createCallerDeskWebhookService(store: CallEventStore, options: C
               ? ` reason=${result.reason}`
               : ""),
       );
+
+      // Diagnostic-only, kept separate from the line above so its format stays stable: every safe
+      // identifier needed to trace one inbound call end-to-end during UAT, without ever logging a
+      // full phone number (see maskPhone) or the raw payload.
+      if (event.direction === "INBOUND") {
+        const leadFoundOrCreated =
+          result.outcome === "PROCESSED"
+            ? (result.leadCreated ? "CREATED" : "FOUND")
+            : result.outcome === "UNMATCHED" && result.leadId
+              ? "CREATED"
+              : "NONE";
+        const skipReason = result.outcome === "UNMATCHED" ? result.reason : result.outcome === "FAILED" ? "PROCESSING_FAILED" : "none";
+        logger.info(
+          `CallerDesk inbound diagnostic: callSid=${logToken(event.externalCallId)} direction=${event.direction} ` +
+            `status=${logToken(event.rawStatus, 40)} campid=${logToken(event.campaignId)} ` +
+            `sourceNumber=${maskPhone(event.customerNumber)} destinationNumber=${maskPhone(event.businessNumber ?? event.destinationNumber)} ` +
+            `agentNumber=${maskPhone(event.agentNumber)} lead=${leadFoundOrCreated} ` +
+            `leadId=${result.outcome === "PROCESSED" ? result.leadId : (result.outcome === "UNMATCHED" ? (result.leadId ?? "none") : "none")} ` +
+            `callCreated=${result.outcome === "PROCESSED" ? String(result.callCreated) : "false"} ` +
+            `callId=${result.outcome === "PROCESSED" ? result.callId : "none"} skipReason=${skipReason}`,
+        );
+      }
 
       return result;
     } catch (err) {

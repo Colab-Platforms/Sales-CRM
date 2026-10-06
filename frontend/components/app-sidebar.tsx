@@ -39,7 +39,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
-import { ChevronRight, PhoneIncoming, PhoneOutgoing, Radio } from "lucide-react";
+import { ChevronRight, MessagesSquare, PhoneIncoming } from "lucide-react";
 import { NavUser } from "@/components/nav-user";
 import { BrandMark } from "@/components/brand-mark";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
@@ -53,9 +53,11 @@ interface NavItem {
   // up Status. Every other item keeps the default prefix match, which is what lets e.g. viewing an
   // order's detail page still highlight "Orders".
   exact?: boolean;
-  // Leads and IVR are the only nav items with real sub-pages rather than one page per item -
-  // everything else in this sidebar stays flat on purpose. Recursive so "Leads" can nest "IVR"
-  // which itself nests "Inbound" (IVR is part of the Leads feature, not a separate module).
+  // Leads is the only nav item with real sub-pages rather than one page per item - everything
+  // else in this sidebar stays flat on purpose. "Inbound IVR" is one of its children, not a
+  // separate module or its own nested submenu: IVR is part of the Leads feature. The type stays
+  // recursive (NavItem[], not a fixed one-level shape) only so a future nested case doesn't need
+  // a second rendering path - today nothing actually nests more than one level deep.
   children?: NavItem[];
 }
 
@@ -191,14 +193,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: Users,
           children: [
             { title: "All Leads", href: "/dashboard/leads", icon: Users, exact: true },
-            {
-              title: "IVR",
-              icon: Radio,
-              children: [
-                { title: "Inbound", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
-                { title: "Outbound", href: "/dashboard/leads/ivr/outbound", icon: PhoneOutgoing },
-              ],
-            },
+            { title: "Inbound IVR", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
           ],
         },
         {
@@ -223,6 +218,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           title: "WhatsApp Templates",
           href: "/dashboard/whatsapp/templates",
           icon: FileText,
+        },
+        {
+          title: "Website Chat",
+          href: "/dashboard/webchat",
+          icon: MessagesSquare,
         },
       ],
     },
@@ -270,14 +270,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: Users,
           children: [
             { title: "All Leads", href: "/dashboard/leads", icon: Users, exact: true },
-            {
-              title: "IVR",
-              icon: Radio,
-              children: [
-                { title: "Inbound", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
-                { title: "Outbound", href: "/dashboard/leads/ivr/outbound", icon: PhoneOutgoing },
-              ],
-            },
+            { title: "Inbound IVR", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
           ],
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
@@ -318,6 +311,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           title: "WhatsApp Templates",
           href: "/dashboard/whatsapp/templates",
           icon: FileText,
+        },
+        {
+          title: "Website Chat",
+          href: "/dashboard/webchat",
+          icon: MessagesSquare,
         },
         {
           title: "WhatsApp Campaigns",
@@ -362,14 +360,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: Users,
           children: [
             { title: "All Leads", href: "/dashboard/leads", icon: Users, exact: true },
-            {
-              title: "IVR",
-              icon: Radio,
-              children: [
-                { title: "Inbound", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
-                { title: "Outbound", href: "/dashboard/leads/ivr/outbound", icon: PhoneOutgoing },
-              ],
-            },
+            { title: "Inbound IVR", href: "/dashboard/leads/ivr/inbound", icon: PhoneIncoming },
           ],
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
@@ -417,6 +408,11 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: FileText,
         },
         {
+          title: "Website Chat",
+          href: "/dashboard/webchat",
+          icon: MessagesSquare,
+        },
+        {
           title: "WhatsApp Automations",
           href: "/dashboard/whatsapp/automations",
           icon: Workflow,
@@ -448,9 +444,9 @@ function itemHasActiveDescendant(item: NavItem, pathname: string): boolean {
   return item.children?.some((child) => itemHasActiveDescendant(child, pathname)) ?? false;
 }
 
-/** Every item with children (e.g. "Leads", "Leads/IVR") that must start expanded so the active
- * route's parents are already open on first paint/direct navigation - a plain prefix match on
- * href, same rule isActivePath already uses for non-exact items. */
+/** Every item with children (e.g. "Leads") that must start expanded so the active route's parents
+ * are already open on first paint/direct navigation - a plain prefix match on href, same rule
+ * isActivePath already uses for non-exact items. */
 function collectAutoExpandedIds(items: NavItem[], pathname: string, parentId = ""): string[] {
   const ids: string[] = [];
   for (const item of items) {
@@ -463,10 +459,10 @@ function collectAutoExpandedIds(items: NavItem[], pathname: string, parentId = "
   return ids;
 }
 
-/** Renders one child inside a SidebarMenuSub, recursing when that child itself has children
- * (e.g. Leads > IVR > Inbound/Outbound) - nesting another SidebarMenuSub inside the
- * SidebarMenuSubItem's <li>, which the primitive supports structurally. A parent with children
- * is a click-to-expand toggle, not a link - only leaves (Inbound/Outbound/All Leads) navigate. */
+/** Renders one child inside a SidebarMenuSub. Recurses if that child itself ever has children
+ * (none do today - "All Leads" and "Inbound IVR" are both leaves), nesting another SidebarMenuSub
+ * inside the SidebarMenuSubItem's <li>, which the primitive supports structurally. A parent with
+ * children is a click-to-expand toggle, not a link - only leaves navigate. */
 function SidebarSubNavItem({
   item,
   parentId,

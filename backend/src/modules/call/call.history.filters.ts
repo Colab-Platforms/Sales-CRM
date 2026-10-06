@@ -23,13 +23,22 @@ export function searchWhere(search: string): Prisma.CallWhereInput {
 
 // Mirrors orders.filters.ts#buildOrderWhere: the lead scope (who may see this call, via its lead)
 // is just one more AND-ed clause alongside the query's own filters.
+//
+// `viewerId`, when given, widens that clause to "my lead scope OR I am this call's agent" - without
+// it, a call on a still-unassigned Lead (ownerId/groupId both null - e.g. a new "IVR Inquiry" Lead,
+// see callerdesk.store.ts#createIvrLead) would be invisible to the very salesperson who answered it,
+// even though Call.agentId already correctly identifies them. This never widens who may see an
+// already-owned Lead's calls - only adds back calls the viewer personally handled on an unowned one.
 export function buildCallWhere(
   query: Pick<ListCallsQuery, "search" | "status" | "direction" | "dateFrom" | "dateTo" | "agentId" | "virtualNumberId" | "hasRecording">,
   leadScope: Prisma.LeadWhereInput,
+  viewerId?: string | null,
 ): Prisma.CallWhereInput {
   const and: Prisma.CallWhereInput[] = [];
 
-  if (Object.keys(leadScope).length > 0) and.push({ lead: leadScope });
+  if (Object.keys(leadScope).length > 0) {
+    and.push(viewerId ? { OR: [{ lead: leadScope }, { agentId: viewerId }] } : { lead: leadScope });
+  }
   if (query.search) and.push(searchWhere(query.search));
   if (query.status) and.push({ status: query.status });
   if (query.direction) and.push({ direction: query.direction });
@@ -59,8 +68,10 @@ export function buildCallSummary(
   return { total, byStatus, totalTalkTimeSeconds: totalTalkTimeSeconds ?? 0 };
 }
 
-// One call, but only if the user's lead scope allows it. Mirrors orders.filters.ts#scopedOrderWhere
-// so a call id that exists but is out of scope looks the same as a missing one - no existence leak.
-export function scopedCallWhere(id: string, leadScope: Prisma.LeadWhereInput): Prisma.CallWhereInput {
-  return Object.keys(leadScope).length > 0 ? { AND: [{ id }, { lead: leadScope }] } : { id };
+// One call, but only if the user's lead scope (or, with viewerId, their own agent assignment -
+// see buildCallWhere above) allows it. Mirrors orders.filters.ts#scopedOrderWhere so a call id that
+// exists but is out of scope looks the same as a missing one - no existence leak.
+export function scopedCallWhere(id: string, leadScope: Prisma.LeadWhereInput, viewerId?: string | null): Prisma.CallWhereInput {
+  if (Object.keys(leadScope).length === 0) return { id };
+  return { AND: [{ id }, viewerId ? { OR: [{ lead: leadScope }, { agentId: viewerId }] } : { lead: leadScope }] };
 }

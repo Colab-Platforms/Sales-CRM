@@ -12,17 +12,18 @@ import { IvrInboundSummaryCards, IvrOutboundSummaryCards } from "./ivr-summary-c
 const PAGE_SIZE = 20;
 
 /**
- * Shared list view for Leads -> IVR -> Inbound / Outbound. Both pages are the exact same `Call`
- * rows (`GET /api/calls`, same as the plain Call History page) filtered by `direction` -
- * CallerDesk's own "IVR" = inbound, "WEBOBD" = outbound (see
- * backend/src/modules/webhooks/callerdesk/callerdesk.payload.ts's `mapDirection`), which is
- * exactly what already populates `Call.direction`. There is no second data source and no
- * duplicate calling implementation - this page only adds reporting/filtering on top of data the
- * CRM already has. Every inbound call here is already linked to a Lead (an existing one it
- * matched, or one created for it with source "IVR Inquiry" - see callerdesk.service.ts's
- * correlate()); outbound calls are the same calls already visible on each Lead's own Calls &
- * Feedback history. This is not a separate IVR lead database - rows link to the normal Lead
- * Details / Call Details pages, never a separate IVR detail view.
+ * List view for Leads -> Inbound IVR (the only page that renders this today - outbound calls are
+ * reached through each Lead's own Calls & Feedback history instead, with no separate sidebar item
+ * or page, so this component's `direction` prop is only ever "INBOUND" in practice; it stays
+ * generic because the OUTBOUND code path costs nothing to keep and this exact component was Leads
+ * -> IVR -> Outbound's view before that page was removed). Rows are the exact same `Call` rows
+ * (`GET /api/calls`, same as the plain Call History page) filtered by `direction` - CallerDesk's
+ * own "IVR" = inbound (see backend/src/modules/webhooks/callerdesk/callerdesk.payload.ts's
+ * `mapDirection`), which is exactly what already populates `Call.direction`. There is no second
+ * data source and no duplicate calling implementation. Every inbound call here is already linked
+ * to a Lead (an existing one it matched, or one created for it with source "IVR Inquiry" - see
+ * callerdesk.service.ts's correlate()). This is not a separate IVR lead database - rows link to
+ * the normal Lead Details / Call Details pages, never a separate IVR detail view.
  */
 export function IvrCallListView({ direction }: { direction: "INBOUND" | "OUTBOUND" }) {
   const isInbound = direction === "INBOUND";

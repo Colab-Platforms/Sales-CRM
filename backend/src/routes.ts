@@ -15,6 +15,8 @@ import integrationsRoutes from "@modules/integrations/integrations.routes.js";
 import callingRoutes from "@modules/calling/calling.routes.js";
 import exotelIvrRoutes from "@modules/webhooks/exotel/exotelIvr.routes.js";
 import callerDeskRoutes from "@modules/webhooks/callerdesk/callerdesk.routes.js";
+import websiteChatWebhookRoutes from "@modules/webhooks/website-chat/website-chat.routes.js";
+import webChatRoutes from "@modules/webchat/webchat.routes.js";
 import callRoutes from "@modules/call/call.routes.js";
 import tasksRoutes from "@modules/tasks/tasks.routes.js";
 import deliveryRoutes from "@modules/delivery/delivery.routes.js";
@@ -25,6 +27,7 @@ const router = Router();
 // Provider webhooks: system-to-system, deliberately not behind requireAuth (see each controller).
 router.use("/webhooks/exotel", exotelIvrRoutes);
 router.use("/webhooks/callerdesk", callerDeskRoutes);
+router.use("/webhooks/website-chat", websiteChatWebhookRoutes);
 
 router.get("/health", (_req, res) => {
   res.status(200).json({ success: true, message: "ok" });
@@ -45,6 +48,7 @@ router.use("/integrations", integrationsRoutes);
 router.use("/lead", leadRoutes);
 router.use("/calling", callingRoutes);
 router.use("/calls", callRoutes);
+router.use("/webchat", webChatRoutes);
 router.use("/tasks", tasksRoutes);
 router.use("/delivery", deliveryRoutes);
 router.use("/abandonments", abandonmentRoutes);
