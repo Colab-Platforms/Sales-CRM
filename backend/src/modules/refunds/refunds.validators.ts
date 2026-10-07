@@ -54,6 +54,8 @@ const listQuerySchema = z.object({
 export const validateCreateBody = (body: unknown) => validateSchema<{ paymentId: string; amount: string; reason: string; submissionKey?: string }>(createBodySchema, body ?? {});
 export const validateDecisionBody = (body: unknown) => validateSchema<{ note?: string }>(decisionBodySchema, body ?? {});
 export const validateRejectBody = (body: unknown) => validateSchema<{ note: string }>(rejectBodySchema, body ?? {});
+const orderPaymentParamsSchema = z.object({ orderId: z.uuid({ error: "Invalid order id" }), paymentId: z.uuid({ error: "Invalid payment id" }) });
+export const validateOrderPaymentParams = (params: unknown) => validateSchema<{ orderId: string; paymentId: string }>(orderPaymentParamsSchema, params);
 export const validateOrderParams = (params: unknown) => validateSchema<{ orderId: string }>(orderParamsSchema, params);
 export const validateIdParams = (params: unknown) => validateSchema<{ id: string }>(idParamsSchema, params);
 export const validateListQuery = (query: unknown) => validateSchema<ListRefundRequestsQuery>(listQuerySchema as never, query);

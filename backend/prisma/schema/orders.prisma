@@ -249,8 +249,22 @@ model RefundRequest {
   decisionAt    DateTime? @map("decision_at")
   decisionNote  String?   @map("decision_note")
 
-  // Reserved for the future execution phase; nothing in the approval workflow writes it.
-  failureReason String? @map("failure_reason")
+  // ---- Execution (Cashfree). All NULL until an approver executes the APPROVED request. ----
+  executionStatus RefundExecutionStatus? @map("execution_status")
+  // The refund_id sent to Cashfree: derived from this request's id, so every retry reuses it (never a fresh random one).
+  refundId String? @unique @map("refund_id") @db.VarChar(40)
+  // Cashfree's own refund id (cf_refund_id) and its raw refund_status, as last reported.
+  cfRefundId     String?   @map("cf_refund_id") @db.VarChar(100)
+  providerStatus String?   @map("provider_status") @db.VarChar(50)
+  executedById   String?   @map("executed_by_id") @db.Uuid
+  executedBy     User?     @relation("RefundExecutedBy", fields: [executedById], references: [id])
+  executedByRole Role?     @map("executed_by_role")
+  executionStartedAt   DateTime? @map("execution_started_at")
+  executionCompletedAt DateTime? @map("execution_completed_at")
+  executionAttempts    Int       @default(0) @map("execution_attempts")
+  // Sanitised provider error (never credentials) when execution failed.
+  failureReason     String? @map("failure_reason")
+  providerErrorCode String? @map("provider_error_code") @db.VarChar(100)
 
   // The browser's id for ONE submission, so a double click / retry returns the same request instead of creating a second.
   // This is an internal submission key, NOT a provider refund id.

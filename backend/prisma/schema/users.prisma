@@ -34,6 +34,7 @@ model User {
 
   refundRequestsMade    RefundRequest[] @relation("RefundRequestedBy")
   refundRequestsDecided RefundRequest[] @relation("RefundDecidedBy")
+  refundRequestsExecuted RefundRequest[] @relation("RefundExecutedBy")
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 

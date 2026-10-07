@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Activity, ArrowLeft, Ban, CreditCard, Hash, Mail, Phone, ScrollText, ShoppingBag, Truck, User, Wallet } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Activity, ArrowLeft, Ban, CreditCard, Hash, Mail, Phone, RefreshCw, ScrollText, ShoppingBag, Truck, User, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { CardContent } from "@/components/ui/card";
@@ -10,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { WhatsAppConversation } from "@/components/whatsapp/conversation/whatsapp-conversation";
 import { useLiveOrderDetail } from "@/hooks/useOrders";
-import { useCancelLiveOrderMutation } from "@/lib/api-client/mutations/orders.mutations";
+import { useCancelLiveOrderMutation, useSyncLiveOrderMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { DetailField, DetailGrid } from "./detail-field";
 import { customerDetailHref } from "./orders-table";
@@ -20,7 +21,7 @@ import { PrepaidUpgradeCard } from "./prepaid-upgrade-card";
 import { LiveOrderHistoryTable } from "./live-order-history-table";
 import { CrmBadge, ShopifyStatusBadge, SourceBadge, ToneBadge, titleCaseStatus as titleCase } from "./shopify-status-badge";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
-import type { ShopifyLiveOrder } from "@/lib/api-client/types/orders.types";
+import type { LiveOrderCrmLink, ShopifyLiveOrder } from "@/lib/api-client/types/orders.types";
 
 const ORDERS_HREF = "/dashboard/orders";
 
@@ -82,6 +83,48 @@ function CancelLiveOrderButton({ externalId, orderName, alreadyCancelled }: { ex
         </ul>
       </ConfirmActionDialog>
     </>
+  );
+}
+
+/**
+ * The live page exists only for a Shopify order that has NO CRM Order row. `crmLink` is just the customer matched to a CRM lead by phone - it says nothing
+ * about the order, so the two are shown separately and the customer link is never presented as the order being synced.
+ */
+export function LiveCrmStatus({ crmLink }: { crmLink: LiveOrderCrmLink | null | undefined }) {
+  return (
+    <>
+      <ToneBadge tone="warning">Order not in CRM</ToneBadge>
+      {crmLink ? <CrmBadge>Customer linked to CRM</CrmBadge> : <ToneBadge tone="neutral">Customer not linked to CRM</ToneBadge>}
+    </>
+  );
+}
+
+/** Brings this Shopify order into the CRM through the normal Shopify sync, then opens the CRM order page (payment, refunds and the rest live there). */
+function SyncOrderToCrmButton({ externalId }: { externalId: string }) {
+  const router = useRouter();
+  const sync = useSyncLiveOrderMutation();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={sync.isPending}
+      title="Create/update this order in the CRM from Shopify. Refunds, payments and the full order page need it."
+      onClick={() =>
+        sync.mutate(externalId, {
+          onSuccess: (r) => {
+            if (r.synced && r.orderId) {
+              toast.success(r.action === "created" ? "Order added to the CRM." : "Order is up to date in the CRM.");
+              router.push(`/dashboard/orders/${r.orderId}`);
+            } else toast.error(r.reason ?? "Could not sync the order.");
+          },
+          onError: (error) => toast.error(getErrorMessage(error, "Could not sync the order.")),
+        })
+      }
+    >
+      <RefreshCw data-icon="inline-start" />
+      {sync.isPending ? "Syncing…" : "Sync order to CRM"}
+    </Button>
   );
 }
 
@@ -197,6 +240,7 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <BackLink />
           <div className="flex flex-wrap items-start justify-end gap-2">
+            <SyncOrderToCrmButton externalId={externalId} />
             <PrepaidUpgradeAction target={upgradeTarget} onOpen={() => setUpgradeOpen(true)} />
             <CancelLiveOrderButton externalId={externalId} orderName={order.name} alreadyCancelled={isCancelled} />
           </div>
@@ -208,7 +252,7 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
           <ShopifyStatusBadge status={order.fulfillmentStatus} />
           {isCancelled ? <ShopifyStatusBadge status="CANCELLED" /> : null}
           {order.returnStatus && order.returnStatus !== "NO_RETURN" ? <ShopifyStatusBadge status={order.returnStatus} /> : null}
-          {crmLink ? <CrmBadge>CRM Synced</CrmBadge> : <ToneBadge tone="neutral">Not synced to CRM</ToneBadge>}
+          <LiveCrmStatus crmLink={crmLink} />
         </div>
         <p className="text-sm text-muted-foreground">
           Placed {formatDateTime(order.createdAt)} · Last updated {formatDateTime(order.updatedAt)}
@@ -248,7 +292,7 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
               <DetailField label="Order number"><span className="text-base font-semibold">{order.name}</span></DetailField>
               <DetailField label="Order date">{formatDateTime(order.createdAt)}</DetailField>
               <DetailField label="Order source"><SourceBadge>Shopify</SourceBadge></DetailField>
-              <DetailField label="CRM sync">{crmLink ? <CrmBadge>Synced to CRM</CrmBadge> : <ToneBadge tone="neutral">Not synced to CRM</ToneBadge>}</DetailField>
+              <DetailField label="CRM sync"><span className="inline-flex flex-wrap gap-1"><LiveCrmStatus crmLink={crmLink} /></span></DetailField>
               <DetailField label="Currency">{currency}</DetailField>
               {order.discountCodes.length > 0 ? <DetailField label="Discount codes">{order.discountCodes.join(", ")}</DetailField> : null}
               {order.tags.length > 0 ? <DetailField label="Tags">{order.tags.join(", ")}</DetailField> : null}
