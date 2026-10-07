@@ -4,7 +4,7 @@ import { refundsKeys } from "../queries/refunds.queries";
 import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
-import type { CreateRefundRequestInput, RefundRequestView } from "../types/refunds.types";
+import type { CreateRefundRequestInput, RefundRequestView, ResolveCashfreeResult } from "../types/refunds.types";
 
 // A request or a decision changes: the order's refund section, the approval queue + badge, the audit trail and the customer timeline.
 function useRefreshAfterChange() {
@@ -30,6 +30,30 @@ export function useApproveRefundMutation() {
   const refresh = useRefreshAfterChange();
   return useMutation<RefundRequestView, unknown, { id: string; note?: string }>({
     mutationFn: ({ id, note }) => refundsApi.approve(id, note),
+    onSuccess: (r) => refresh(r.orderId, r.customer.leadId),
+  });
+}
+
+export function useResolveCashfreeMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<ResolveCashfreeResult, unknown, { orderId: string; paymentId: string }>({
+    mutationFn: ({ orderId, paymentId }) => refundsApi.resolveCashfree(orderId, paymentId),
+    onSuccess: (_, v) => queryClient.invalidateQueries({ queryKey: ordersKeys.detail(v.orderId) }),
+  });
+}
+
+export function useExecuteRefundMutation() {
+  const refresh = useRefreshAfterChange();
+  return useMutation<RefundRequestView, unknown, { id: string }>({
+    mutationFn: ({ id }) => refundsApi.execute(id),
+    onSuccess: (r) => refresh(r.orderId, r.customer.leadId),
+  });
+}
+
+export function useRefreshRefundExecutionMutation() {
+  const refresh = useRefreshAfterChange();
+  return useMutation<RefundRequestView, unknown, { id: string }>({
+    mutationFn: ({ id }) => refundsApi.refreshExecution(id),
     onSuccess: (r) => refresh(r.orderId, r.customer.leadId),
   });
 }

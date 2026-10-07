@@ -35,6 +35,33 @@ export const getLiveTagOptions = async (_req: AuthRequest, res: Response): Promi
   }
 };
 
+/** A Shopify order id as the live page carries it (the digits of gid://shopify/Order/<digits>). Anything else is never looked up. */
+export const isShopifyOrderId = (value: string): boolean => /^[0-9]{1,20}$/.test(value);
+
+// Brings a live-only Shopify order into the CRM through the normal Shopify sync (ADMIN only, like the live page). The CRM order page then takes over.
+// The service is injectable so the request handling (id check, status codes) can be tested without Shopify or a database.
+export const makeSyncLiveOrder =
+  (service: Pick<OrdersLiveService, "syncLiveOrderToCrm">) =>
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const externalId = String(req.params.externalId ?? "");
+      if (!isShopifyOrderId(externalId)) {
+        sendResponse(res, false, null, "Order not found", STATUS_CODES.NOT_FOUND);
+        return;
+      }
+      const result = await service.syncLiveOrderToCrm(req.user!, externalId);
+      if (!result.synced) {
+        sendResponse(res, false, null, result.reason ?? "Could not sync the order", result.reason === "Not found" ? STATUS_CODES.NOT_FOUND : STATUS_CODES.BAD_REQUEST);
+        return;
+      }
+      sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+    } catch (error: any) {
+      sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    }
+  };
+
+export const syncLiveOrder = makeSyncLiveOrder(ordersLiveService);
+
 export const cancelLiveOrder = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const externalId = String(req.params.externalId ?? "");

@@ -22,6 +22,7 @@ import type { CashfreeLink } from "./cashfree.client.js";
 import { loadCashfreeConfig } from "./cashfree.config.js";
 import CashfreePaymentsService, { type CashfreeApi } from "./cashfree.payments.service.js";
 import { processCashfreeEvent } from "./cashfree.webhook.processor.js";
+import { parseLinkOrders, parseOrderPayments } from "./cashfree.client.js";
 import { sendPaymentSuccessNotification, syncShopifyPayment } from "./cashfree.payment-success.js";
 
 class Rollback extends Error {}
@@ -734,6 +735,112 @@ describe("sending the payment link with a chosen Meta template (existing order)"
       const t = await metaTemplate(tx, { providerTemplateId: null });
       await assert.rejects(w.svc.sendPaymentLinkWhatsApp(w.user, w.link.paymentId, t.id), /not available or approved/);
       assert.equal(w.sent.length, 0);
+    });
+  });
+});
+
+describe("refresh resolves the Cashfree order / payment ids of a paid link (read-only lookups)", () => {
+  const ORDER = { order_id: "CFPay_ord_1", cf_order_id: "9001", link_id: "x", order_status: "PAID", order_amount: 649 };
+  const PAY = { cf_payment_id: "7777", payment_status: "SUCCESS", payment_amount: 649, bank_reference: "BANKREF-1" };
+  const world = async (tx: Db, runner: TxRunner, lookups: { orders?: unknown[]; payments?: unknown[]; calls?: string[] } = {}) => {
+    const rep = await makeRep(tx);
+    const lead = await makeLead(tx, rep.id);
+    const order = await makeOrder(tx, lead.id, { status: OrderStatus.PENDING_PAYMENT });
+    const user = as(rep, Role.SALESPERSON);
+    const base = fakeApi();
+    const created = await service(runner, base.api).createPaymentLink(user, order.id);
+    const calls = lookups.calls ?? [];
+    const paidApi = fakeApi({
+      getLink: async (id) => base.link(id, { linkStatus: "PAID", linkAmountPaid: "649.00" }),
+      getLinkOrders: async (id) => { calls.push(`orders:${id}`); return parseLinkOrders(lookups.orders ?? [ORDER])!; },
+      getOrderPayments: async (id) => { calls.push(`payments:${id}`); return parseOrderPayments(lookups.payments ?? [PAY])!; },
+    }).api;
+    return { user, order, created, paid: service(runner, paidApi), calls };
+  };
+  const row = async (tx: Db, orderId: string) => (await cashfreePayments(tx, orderId))[0]!;
+  const cf = (p: { metadata: unknown }) => ((p.metadata as Record<string, any>).cashfree ?? {}) as Record<string, unknown>;
+
+  it("stores Cashfree's order_id and the real cf_payment_id; status, amount, method and refund fields are untouched", async () => {
+    await inRollback(async (tx, runner) => {
+      const calls: string[] = [];
+      const { user, order, created, paid } = await world(tx, runner, { calls });
+      const before = await row(tx, order.id);
+      const result = await paid.refreshPaymentLink(user, created.paymentId);
+      assert.equal(result.status, PaymentStatus.SUCCESS);
+      const after = await row(tx, order.id);
+      assert.equal(after.providerPaymentId, "7777");
+      assert.equal(cf(after).cashfreeOrderId, "CFPay_ord_1");
+      assert.equal(cf(after).cfLinkId, cf(before).cfLinkId, "the link's own id is a different field and is kept");
+      assert.notEqual(after.providerPaymentId, after.externalId, "never the link id");
+      assert.equal(after.transactionReference, "BANKREF-1");
+      assert.equal(after.amount.toString(), before.amount.toString());
+      assert.equal(after.method, PaymentMethod.PAYMENT_LINK);
+      assert.deepEqual([after.refundedAmount, after.refundedAt], [null, null]);
+      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: order.id } })).status, OrderStatus.PENDING_PAYMENT);
+      assert.equal(await tx.refundRequest.count({ where: { orderId: order.id } }), 0);
+      assert.deepEqual(calls, [`orders:${before.externalId}`, "payments:CFPay_ord_1"]);
+    });
+  });
+
+  it("an already-SUCCESS payment (paid earlier, ids never recorded) is filled in without any status change or second audit event", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, created, paid } = await world(tx, runner);
+      await paid.refreshPaymentLink(user, created.paymentId);
+      await tx.payment.update({ where: { id: created.paymentId }, data: { providerPaymentId: null, transactionReference: null } });
+      await tx.payment.update({ where: { id: created.paymentId }, data: { metadata: { cashfree: { cfLinkId: "1", linkStatus: "PAID" } } } });
+      const events = await tx.activity.count({ where: { orderId: order.id, type: ActivityType.PAYMENT_STATUS_CHANGED } });
+      await paid.refreshPaymentLink(user, created.paymentId);
+      const after = await row(tx, order.id);
+      assert.equal(after.providerPaymentId, "7777");
+      assert.equal(cf(after).cashfreeOrderId, "CFPay_ord_1");
+      assert.equal(after.status, PaymentStatus.SUCCESS);
+      assert.equal(await tx.activity.count({ where: { orderId: order.id, type: ActivityType.PAYMENT_STATUS_CHANGED } }), events);
+    });
+  });
+
+  it("no order returned: the payment still becomes SUCCESS, no id is invented, the reason is recorded", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, created, paid } = await world(tx, runner, { orders: [] });
+      assert.equal((await paid.refreshPaymentLink(user, created.paymentId)).status, PaymentStatus.SUCCESS);
+      const after = await row(tx, order.id);
+      assert.deepEqual([after.providerPaymentId, cf(after).cashfreeOrderId], [null, undefined]);
+      assert.match(String(cf(after).idLookupNote), /no paid order/);
+    });
+  });
+
+  it("an order but no successful payment: only the order id is stored", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, created, paid } = await world(tx, runner, { payments: [{ ...PAY, payment_status: "FAILED" }] });
+      await paid.refreshPaymentLink(user, created.paymentId);
+      const after = await row(tx, order.id);
+      assert.equal(after.status, PaymentStatus.SUCCESS);
+      assert.deepEqual([after.providerPaymentId, cf(after).cashfreeOrderId], [null, "CFPay_ord_1"]);
+    });
+  });
+
+  it("ambiguous results (two successful payments) never pick one", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, created, paid } = await world(tx, runner, { payments: [PAY, { ...PAY, cf_payment_id: "7778" }] });
+      await paid.refreshPaymentLink(user, created.paymentId);
+      assert.equal((await row(tx, order.id)).providerPaymentId, null);
+    });
+  });
+
+  it("an unpaid link makes no lookups; an id already recorded (e.g. by the webhook) is never overwritten", async () => {
+    await inRollback(async (tx, runner) => {
+      const calls: string[] = [];
+      const rep = await makeRep(tx);
+      const lead = await makeLead(tx, rep.id);
+      const order = await makeOrder(tx, lead.id, { status: OrderStatus.PENDING_PAYMENT });
+      const user = as(rep, Role.SALESPERSON);
+      const active = fakeApi({ getLinkOrders: async () => { calls.push("orders"); return []; }, getOrderPayments: async () => { calls.push("payments"); return []; } });
+      const created = await service(runner, active.api).createPaymentLink(user, order.id);
+      await service(runner, active.api).refreshPaymentLink(user, created.paymentId);
+      assert.deepEqual(calls, []);
+      const w = await world(tx, runner);
+      await tx.payment.update({ where: { id: w.created.paymentId }, data: { providerPaymentId: "FROM_WEBHOOK" } });
+      await w.paid.refreshPaymentLink(w.user, w.created.paymentId);
+      assert.equal((await row(tx, w.order.id)).providerPaymentId, "FROM_WEBHOOK");
     });
   });
 });

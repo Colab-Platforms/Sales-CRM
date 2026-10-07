@@ -9,10 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { useApproveRefundMutation, useRejectRefundMutation } from "@/lib/api-client/mutations/refunds.mutations";
+import { useApproveRefundMutation, useExecuteRefundMutation, useRefreshRefundExecutionMutation, useRejectRefundMutation } from "@/lib/api-client/mutations/refunds.mutations";
+import { integrationStatusQueryOptions } from "@/lib/api-client/queries/integrations.queries";
 import { refundQueueQueryOptions } from "@/lib/api-client/queries/refunds.queries";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
-import { APPROVAL_DISCLAIMER, REFUND_STATUS_NOTE, canDecide, isApprover } from "@/lib/refund-status";
+import { APPROVAL_DISCLAIMER, approvalCopy, approvalCancelsOrder, canDecide, canExecute, canRefreshExecution, isApprover, refundDisplay } from "@/lib/refund-status";
 import { useAuthStore } from "@/stores/auth-store";
 import type { RefundRequestStatus, RefundRequestView } from "@/lib/api-client/types/refunds.types";
 import { RefundStatusBadge } from "./refund-status-badge";
@@ -33,6 +34,8 @@ export function RefundQueueTable({
   busyId,
   onApprove,
   onReject,
+  onExecute,
+  onRefreshExecution,
 }: {
   items: RefundRequestView[];
   role: string | undefined;
@@ -40,6 +43,8 @@ export function RefundQueueTable({
   busyId?: string | null;
   onApprove: (r: RefundRequestView) => void;
   onReject: (r: RefundRequestView) => void;
+  onExecute?: (r: RefundRequestView) => void;
+  onRefreshExecution?: (r: RefundRequestView) => void;
 }) {
   if (items.length === 0) return <p className="p-6 text-center text-sm text-muted-foreground">No refund requests here.</p>;
   return (
@@ -92,19 +97,28 @@ export function RefundQueueTable({
                 </td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">{formatDateTime(r.createdAt)}</td>
                 <td className="px-3 py-2">
-                  <RefundStatusBadge status={r.status} />
-                  <span className="mt-1 block text-xs text-muted-foreground">{REFUND_STATUS_NOTE[r.status]}</span>
+                  <RefundStatusBadge status={r.status} executionStatus={r.executionStatus} />
+                  <span className="mt-1 block text-xs text-muted-foreground">{refundDisplay(r).note}</span>
+                  {r.cfRefundId ? <span className="mt-1 block font-mono text-[10px] text-muted-foreground">Cashfree refund {r.cfRefundId}</span> : null}
                 </td>
                 <td className="px-3 py-2">
                   {canDecide(role, userId, r) ? (
                     <div className="flex gap-2">
-                      <Button type="button" size="sm" disabled={busyId === r.id} onClick={() => onApprove(r)}>
-                        Approve
+                      <Button type="button" size="sm" disabled={busyId === r.id} onClick={() => onApprove(r)} data-testid="approve-button">
+                        {approvalCopy(r).button}
                       </Button>
                       <Button type="button" size="sm" variant="outline" disabled={busyId === r.id} onClick={() => onReject(r)}>
                         Reject
                       </Button>
                     </div>
+                  ) : canExecute(role, userId, r) && onExecute ? (
+                    <Button type="button" size="sm" disabled={busyId === r.id} onClick={() => onExecute(r)}>
+                      {r.executionStatus === "FAILED" ? "Retry Refund" : "Execute Refund"}
+                    </Button>
+                  ) : canRefreshExecution(role, r) && onRefreshExecution ? (
+                    <Button type="button" size="sm" variant="outline" disabled={busyId === r.id} onClick={() => onRefreshExecution(r)}>
+                      Check refund status
+                    </Button>
                   ) : r.status === "PENDING" && own ? (
                     <span className="text-xs text-muted-foreground" data-testid="own-request-note">
                       Your request — another approver decides it
@@ -121,22 +135,51 @@ export function RefundQueueTable({
 }
 
 export function ApproveRefundDialog({ request, busy, onConfirm, onClose }: { request: RefundRequestView; busy: boolean; onConfirm: () => void; onClose: () => void }) {
+  const copy = approvalCopy(request);
   return (
     <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
       <DialogContent className="sm:max-w-[440px]">
         <DialogHeader>
-          <DialogTitle>Approve refund request?</DialogTitle>
+          <DialogTitle>{copy.title}</DialogTitle>
           <DialogDescription>
             {formatMoney(request.amount, request.currency)} for order {request.orderNumber}. {APPROVAL_DISCLAIMER}
           </DialogDescription>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">Approving does not refund the customer now and does not change the order or payment.</p>
+        <p className={approvalCancelsOrder(request) ? "rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm font-medium" : "text-sm text-muted-foreground"} data-testid="approval-cancels-order">
+          {copy.warning}
+        </p>
         <DialogFooter>
           <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
           <Button type="button" onClick={onConfirm} disabled={busy}>
-            {busy ? "Approving…" : "Confirm approval"}
+            {busy ? "Approving…" : copy.confirm}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Sending the refund to Cashfree: explicit confirmation with the amount and the Cashfree environment. */
+export function ExecuteRefundDialog({ request, environment, busy, onConfirm, onClose }: { request: RefundRequestView; environment: string | null | undefined; busy: boolean; onConfirm: () => void; onClose: () => void }) {
+  const sandbox = environment === "sandbox";
+  return (
+    <Dialog open onOpenChange={(o) => !o && !busy && onClose()}>
+      <DialogContent className="sm:max-w-[460px]">
+        <DialogHeader>
+          <DialogTitle>Execute refund of {formatMoney(request.amount, request.currency)}?</DialogTitle>
+          <DialogDescription>
+            This will send the refund for order {request.orderNumber} to Cashfree{sandbox ? " (SANDBOX — test money only)" : environment ? ` (${environment.toUpperCase()})` : ""}.
+          </DialogDescription>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">The refund is shown as processing until Cashfree confirms it. Nothing is marked refunded before that.</p>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? "Sending…" : "Send refund to Cashfree"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -202,10 +245,14 @@ export function RefundQueueView() {
   const [filter, setFilter] = useState<Filter>("PENDING");
   const [approving, setApproving] = useState<RefundRequestView | null>(null);
   const [rejecting, setRejecting] = useState<RefundRequestView | null>(null);
+  const [executing, setExecuting] = useState<RefundRequestView | null>(null);
+  const execute = useExecuteRefundMutation();
+  const refreshExec = useRefreshRefundExecutionMutation();
+  const integration = useQuery({ ...integrationStatusQueryOptions(), enabled: isApprover(user?.role) });
   const queue = useQuery({ ...refundQueueQueryOptions({ status: filter, page: 1, pageSize: 50 }), enabled: isApprover(user?.role) });
   const approve = useApproveRefundMutation();
   const reject = useRejectRefundMutation();
-  const busy = approve.isPending || reject.isPending;
+  const busy = approve.isPending || reject.isPending || execute.isPending || refreshExec.isPending;
 
   if (user && !isApprover(user.role)) return <p className="text-sm text-muted-foreground">Only managers and admins can review refund requests.</p>;
 
@@ -229,7 +276,16 @@ export function RefundQueueView() {
           {queue.isPending ? (
             <p className="p-4 text-sm text-muted-foreground">Loading refund requests…</p>
           ) : (
-            <RefundQueueTable items={queue.data?.items ?? []} role={user?.role} userId={user?.id} busyId={busy ? (approving ?? rejecting)?.id : null} onApprove={setApproving} onReject={setRejecting} />
+            <RefundQueueTable items={queue.data?.items ?? []} role={user?.role} userId={user?.id} busyId={busy ? (approving ?? rejecting)?.id : null} onApprove={setApproving}
+              onReject={setRejecting}
+              onExecute={setExecuting}
+              onRefreshExecution={(r) =>
+                refreshExec.mutate(
+                  { id: r.id },
+                  { onSuccess: (x) => toast.success(x.executionStatus === "COMPLETED" ? "Cashfree confirmed the refund." : x.executionStatus === "FAILED" ? "Cashfree did not complete the refund." : "Still processing at Cashfree."), onError: (e) => toast.error(getErrorMessage(e, "Could not check the refund status.")) },
+                )
+              }
+            />
           )}
         </CardContent>
       </Card>
@@ -249,6 +305,29 @@ export function RefundQueueView() {
                 onError: (e) => {
                   toast.error(getErrorMessage(e, "Could not approve the request."));
                   setApproving(null);
+                },
+              },
+            )
+          }
+        />
+      ) : null}
+      {executing ? (
+        <ExecuteRefundDialog
+          request={executing}
+          environment={integration.data?.cashfree.environment}
+          busy={execute.isPending}
+          onClose={() => setExecuting(null)}
+          onConfirm={() =>
+            execute.mutate(
+              { id: executing.id },
+              {
+                onSuccess: () => {
+                  toast.success("Refund sent to Cashfree. It is processing until Cashfree confirms it.");
+                  setExecuting(null);
+                },
+                onError: (e) => {
+                  toast.error(getErrorMessage(e, "Could not execute the refund."));
+                  setExecuting(null);
                 },
               },
             )

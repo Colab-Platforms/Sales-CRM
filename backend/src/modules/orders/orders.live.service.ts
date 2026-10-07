@@ -14,6 +14,11 @@ import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { ShopifyClient, ShopifyApiError } from "../shopify/shopify.client.js";
+import { normalizeShopifyOrderId, shopifyOrderIdVariants } from "../shopify/shopify.money.js";
+import { syncOrderById, type SyncDeps } from "../shopify/shopify.sync.js";
+import { createCashfreeAutoVerifyHook } from "../refunds/refunds.autoverify.js";
+import type { TxRunner } from "../shopify/shopify.persist.js";
+import { ActivitySource } from "../../../generated/prisma/enums.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { checkConnection, fetchOrder, listOrdersForDisplay, type NormalizedOrderListItem } from "../shopify/shopify.orders.js";
 import { DEFAULT_START_DATE, resolveWindow, windowSearch, type WindowSpec } from "../shopify/shopify.window.js";
@@ -32,6 +37,7 @@ import {
   type LiveOrderHistoryResult,
   type LiveOrderListItem,
   type LiveOrderListResult,
+  type LiveOrderSyncResult,
   type LiveOrdersQuery,
   type LiveOrderTagOptionsResult,
 } from "./orders.live.types.js";
@@ -132,6 +138,10 @@ class OrdersLiveService {
   constructor(
     private readonly db: DbClient = prisma,
     private readonly getShopifyClient: () => ShopifyClient = () => new ShopifyClient(loadShopifyConfig()),
+    private readonly runner: TxRunner = prisma,
+    private readonly syncOrder: typeof syncOrderById = syncOrderById,
+    /** The post-sync step (read Shopify's refundable amount, verify the Cashfree payment). Injectable so tests never reach Shopify or Cashfree. */
+    private readonly makeAfterCommit: (client: ShopifyClient, runner: TxRunner) => SyncDeps["afterCommit"] = (client, runner) => createCashfreeAutoVerifyHook(client, runner),
   ) {}
 
   async listLiveOrders(user: AuthUser, query: LiveOrdersQuery): Promise<LiveOrderListResult> {
@@ -259,7 +269,8 @@ class OrdersLiveService {
     } catch {
       partialError = "Salesperson/lead details could not be loaded for this page - showing Shopify data only.";
     }
-    const byExternalId = new Map(crmRows.map((row) => [row.externalId!, row]));
+    // Keyed by the canonical numeric id, so a legacy row holding the GID form (an order the CRM pushed to Shopify) is still found.
+    const byExternalId = new Map(crmRows.map((row) => [normalizeShopifyOrderId(row.externalId!), row]));
 
     // For a MANAGER/SALESPERSON, an in-scope check needs to be evaluated per-lead - cheapest as a
     // second, tiny query for just the lead ids already found above, reusing the exact same leadScope
@@ -271,7 +282,7 @@ class OrdersLiveService {
 
     const items: LiveOrderListItem[] = [];
     for (const shopifyOrder of shopifyItems) {
-      const crm = byExternalId.get(shopifyOrder.externalId) ?? null;
+      const crm = byExternalId.get(normalizeShopifyOrderId(shopifyOrder.externalId)) ?? null;
       const linkedInCrm = Boolean(crm);
 
       if (!linkedInCrm) {
@@ -300,7 +311,7 @@ class OrdersLiveService {
 
   private fetchCrmRows(externalIds: string[]) {
     return this.db.order.findMany({
-      where: { externalSource: "SHOPIFY", externalId: { in: externalIds } },
+      where: { externalSource: "SHOPIFY", externalId: { in: externalIds.flatMap(shopifyOrderIdVariants) } },
       select: {
         id: true,
         externalId: true,
@@ -539,13 +550,13 @@ class OrdersLiveService {
     // ADMIN-only, and ADMIN sees every CRM order regardless of lead ownership.
     const externalIds = others.map((i) => i.externalId);
     const crmRows = externalIds.length > 0
-      ? await this.db.order.findMany({ where: { externalSource: "SHOPIFY", externalId: { in: externalIds } }, select: { id: true, externalId: true } })
+      ? await this.db.order.findMany({ where: { externalSource: "SHOPIFY", externalId: { in: externalIds.flatMap(shopifyOrderIdVariants) } }, select: { id: true, externalId: true } })
       : [];
-    const crmIdByExternalId = new Map(crmRows.map((r) => [r.externalId!, r.id]));
+    const crmIdByExternalId = new Map(crmRows.map((r) => [normalizeShopifyOrderId(r.externalId!), r.id]));
 
     const result: LiveOrderHistoryResult = {
       items: others.map((i) => {
-        const crmId = crmIdByExternalId.get(i.externalId);
+        const crmId = crmIdByExternalId.get(normalizeShopifyOrderId(i.externalId));
         return {
           id: crmId ?? `${LIVE_ORDER_ID_PREFIX}${i.externalId}`,
           orderNumber: i.name,
@@ -561,6 +572,32 @@ class OrdersLiveService {
     };
     historyCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
+  }
+
+  // Brings a Shopify order that has no CRM Order row into the CRM, through the SAME sync every webhook and `shopify:sync` run uses (upsertOrder:
+  // idempotent on the Shopify order id under an advisory lock + unique key, so repeating it - or racing a webhook - never creates a duplicate). Reads the
+  // order from Shopify (read-only) and writes the Order, items, lead link and payments; it never creates a refund and never contacts Cashfree. The
+  // lifecycle WhatsApp automation is skipped: catching an order up must not message the customer late. ADMIN only, like the live page it is offered on.
+  async syncLiveOrderToCrm(user: AuthUser, externalId: string): Promise<LiveOrderSyncResult> {
+    if (user.role !== Role.ADMIN) return { synced: false, reason: "Not found" };
+
+    let client: ShopifyClient;
+    try {
+      client = this.getShopifyClient();
+    } catch (error) {
+      return { synced: false, reason: error instanceof ShopifyConfigError ? error.message : "Shopify is not configured." };
+    }
+
+    try {
+      const outcome = await this.syncOrder({ client, runner: this.runner, afterCommit: this.makeAfterCommit(client, this.runner) }, `gid://shopify/Order/${externalId}`, { source: ActivitySource.SHOPIFY_SYNC, automation: false });
+      if (outcome.notFound || !outcome.result?.orderId) return { synced: false, reason: "Shopify no longer has this order." };
+      // The list/detail caches still describe this order as live-only.
+      listCache.clear();
+      historyCache.clear();
+      return { synced: true, orderId: outcome.result.orderId, action: outcome.result.action };
+    } catch (error) {
+      return { synced: false, reason: error instanceof ShopifyApiError ? error.message : "Could not sync the order - nothing was changed. Please try again." };
+    }
   }
 
   // Cancels a Shopify order the CRM has not synced yet. Shopify has no "delete order" mutation at

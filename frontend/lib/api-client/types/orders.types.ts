@@ -571,6 +571,14 @@ export interface LiveOrderHistoryResult {
 }
 
 // POST /orders/live/:externalId/cancel - Shopify has no "delete order" operation, only cancellation.
+/** POST /orders/live/:externalId/sync - brings the Shopify order into the CRM; `orderId` is the CRM order page to open instead. */
+export interface LiveOrderSyncResult {
+  synced: boolean;
+  orderId?: string;
+  action?: "created" | "updated" | "skipped";
+  reason?: string;
+}
+
 export interface LiveOrderCancelResult {
   cancelled: boolean;
   reason?: string;

@@ -5,7 +5,9 @@ import { ActivitySource } from "../../../generated/prisma/enums.js";
 import { ShopifyClient } from "./shopify.client.js";
 import { loadShopifyConfig, loadWebhookConfig } from "./shopify.config.js";
 import { checkConnection } from "./shopify.orders.js";
-import { syncCustomerById, syncOrderById, syncProductById, type SyncDeps } from "./shopify.sync.js";
+import { runSync, syncCustomerById, syncOrderById, syncProductById, type SyncDeps } from "./shopify.sync.js";
+import { createCatchUp, loadCatchUpConfig } from "./shopify.catchup.js";
+import { createCashfreeAutoVerifyHook } from "../refunds/refunds.autoverify.js";
 import { isValidTimeZone, startFloor } from "./shopify.window.js";
 import { handleShopifyWebhook } from "./shopify.webhook.handler.js";
 import { processWebhookEvent } from "./shopify.webhook.processor.js";
@@ -18,7 +20,10 @@ import { startWebhookWorker } from "./shopify.webhook.worker.js";
 const store = createPrismaWebhookStore(prisma);
 
 // Built per event so the current environment is always used, and a misconfiguration surfaces as a recorded failure.
-const syncDeps = (): SyncDeps => ({ client: new ShopifyClient(loadShopifyConfig()), runner: prisma });
+const syncDeps = (): SyncDeps => {
+  const client = new ShopifyClient(loadShopifyConfig());
+  return { client, runner: prisma, afterCommit: createCashfreeAutoVerifyHook(client, prisma) };
+};
 
 // The CRM keeps orders from SHOPIFY_SYNC_START_DATE onwards. Editing an old order in Shopify must not pull it in, so
 // webhook processing ignores anything created before that day. The store's time zone (one query, then remembered)
@@ -83,4 +88,33 @@ export function startShopifyWebhookWorker() {
   if (!config?.syncEnabled) return null;
   logger.info("Shopify webhook worker started");
   return startWebhookWorker({ store, process, onError: (e) => logger.error("Shopify webhook worker error", e) });
+}
+
+/**
+ * Starts the periodic catch-up (see shopify.catchup.ts) so an order whose webhook was missed or failed still becomes a CRM order. Only when
+ * SHOPIFY_SYNC_ENABLED=true and the interval is not 0; otherwise nothing runs.
+ */
+export function startShopifyCatchUp() {
+  const config = loadCatchUpConfig();
+  if (!config) return null;
+  const runner = createCatchUp({
+    config,
+    run: (options) => {
+      const shopify = loadShopifyConfig();
+      const client = new ShopifyClient(shopify);
+      return runSync({ client, runner: prisma, defaultStart: shopify.syncStartDate, afterCommit: createCashfreeAutoVerifyHook(client, prisma) }, options);
+    },
+    onResult: (report) => {
+      const c = report.counts.orders;
+      if (c.created + c.updated + c.failed > 0) logger.info(`Shopify catch-up: ${c.created} created, ${c.updated} updated, ${c.failed} failed`);
+    },
+    onError: (error) => logger.error("Shopify catch-up failed", error),
+  });
+  // First pass shortly after start (picks up what was missed while the server was down), then on the interval.
+  const first = setTimeout(() => void runner.tick(), 60_000);
+  const timer = setInterval(() => void runner.tick(), config.intervalMinutes * 60_000);
+  first.unref();
+  timer.unref();
+  logger.info(`Shopify catch-up started (every ${config.intervalMinutes} min, look-back ${config.lookbackHours} h)`);
+  return { tick: runner.tick, stop: () => { clearTimeout(first); clearInterval(timer); } };
 }

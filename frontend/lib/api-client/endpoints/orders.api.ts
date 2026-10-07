@@ -8,6 +8,7 @@ import type {
   CreateManualOrderInput,
   CreateManualOrderResult,
   LiveOrderCancelResult,
+  LiveOrderSyncResult,
   LiveOrderDetailResult,
   LiveOrderHistoryParams,
   LiveOrderHistoryResult,
@@ -71,6 +72,12 @@ export const ordersApi = {
   },
 
   /** Cancels a Shopify order not yet synced into the CRM - the only destructive action Shopify supports. */
+  /** Brings a live-only Shopify order into the CRM through the normal Shopify sync (ADMIN). */
+  async syncLive(externalId: string): Promise<LiveOrderSyncResult> {
+    const res = await apiClient.post<ApiEnvelope<LiveOrderSyncResult>>(`/orders/live/${externalId}/sync`);
+    return res.data.data;
+  },
+
   async cancelLive(externalId: string): Promise<LiveOrderCancelResult> {
     const res = await apiClient.post<ApiEnvelope<LiveOrderCancelResult>>(`/orders/live/${externalId}/cancel`);
     return res.data.data;

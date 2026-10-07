@@ -177,9 +177,11 @@ interface OrderCancelResponse {
  *  processes the cancel asynchronously (a job), so `cancelledAt` here is best-effort/not always set;
  *  the CRM's own Order.cancelledAt (set by the caller) is the authoritative timestamp either way. */
 export async function cancelShopifyOrder(client: ShopifyClient, shopifyOrderId: string): Promise<ShopifyOrderCancelResult> {
+  // Order.externalId is the canonical numeric id (or a legacy GID); orderCancel needs the GID.
+  const gid = /^d+$/.test(shopifyOrderId.trim()) ? `gid://shopify/Order/${shopifyOrderId.trim()}` : shopifyOrderId;
   let data: OrderCancelResponse;
   try {
-    data = await client.query<OrderCancelResponse>(ORDER_CANCEL_MUTATION, { orderId: shopifyOrderId, reason: "OTHER", refund: false, restock: false, notifyCustomer: false });
+    data = await client.query<OrderCancelResponse>(ORDER_CANCEL_MUTATION, { orderId: gid, reason: "OTHER", refund: false, restock: false, notifyCustomer: false });
   } catch (error) {
     if (error instanceof ShopifyGraphQLError) throw new ShopifyOrderCancelError(error.message, error);
     throw error;

@@ -394,6 +394,11 @@ enum ActivityType {
   REFUND_APPROVED
   REFUND_REJECTED
 
+  // Refund EXECUTION (Cashfree): started / completed (provider confirmed) / failed. A completed refund also writes PAYMENT_REFUNDED (the accounting event).
+  REFUND_EXECUTION_STARTED
+  REFUND_COMPLETED
+  REFUND_EXECUTION_FAILED
+
   @@map("activity_type")
 }
 
@@ -597,4 +602,14 @@ enum RefundRequestStatus {
   REJECTED
 
   @@map("refund_request_status")
+}
+
+// Where the provider refund of an APPROVED RefundRequest stands. Kept apart from RefundRequestStatus (the approval decision): APPROVED never becomes
+// COMPLETED. NULL on the request = execution has not been started.
+enum RefundExecutionStatus {
+  PROCESSING // sent to Cashfree (or about to be); final provider confirmation pending
+  COMPLETED // Cashfree confirmed the refund; Payment accounting has been applied
+  FAILED // Cashfree rejected / cancelled it; retryable with the SAME refund id
+
+  @@map("refund_execution_status")
 }

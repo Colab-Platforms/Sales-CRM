@@ -4,11 +4,11 @@ import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { cancelOrder, revertCancellation, createOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
-import { cancelLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
+import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
-import { createRefundRequest } from "../refunds/refunds.controller.js";
+import { createRefundRequest, resolveCashfreeReferences } from "../refunds/refunds.controller.js";
 
 const router = Router();
 
@@ -39,6 +39,8 @@ router.get("/live/customer/:customerId/history", requireAuth, getLiveOrderHistor
 // Cancel a Shopify order the CRM has not synced yet - ADMIN-only, same gate as the detail page (see
 // orders.live.controller.ts). Shopify has no "delete order" operation, only cancellation.
 router.post("/live/:externalId/cancel", requireAuth, requireRole(Role.ADMIN), cancelLiveOrder);
+// Brings a live-only Shopify order into the CRM through the normal Shopify sync (idempotent). Same ADMIN-only gate as the live page.
+router.post("/live/:externalId/sync", requireAuth, requireRole(Role.ADMIN), syncLiveOrder);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);
@@ -66,6 +68,7 @@ router.post("/:id/revert-cancel", requireAuth, requireRole(Role.ADMIN, Role.MANA
 // Cashfree payment link for the order's exact pending amount. Every role may collect on orders inside their own lead scope.
 router.post("/:orderId/payment-links", requireAuth, createPaymentLink);
 // Refund APPROVAL workflow: raise a request (no refund is executed here or on approval). Same role set + lead scope as order creation.
+router.post("/:orderId/payments/:paymentId/resolve-cashfree", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), resolveCashfreeReferences);
 router.post("/:orderId/refund-requests", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createRefundRequest);
 // Shiprocket shipment for the order. Shipping is an operational step: ADMIN/MANAGER, within their lead scope.
 router.post("/:orderId/shipments", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), createShipment);

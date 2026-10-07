@@ -51,6 +51,90 @@ export function parseLink(json: unknown): CashfreeLink | null {
   };
 }
 
+/** One order Cashfree created behind a payment link (read-only lookup: GET /links/{link_id}/orders). `orderId` is Cashfree's order_id, NOT the CRM link id. */
+export interface CashfreeLinkOrder {
+  orderId: string;
+  cfOrderId: string | null;
+  linkId: string | null;
+  orderStatus: string;
+  orderAmount: string | null;
+}
+
+export function parseLinkOrders(json: unknown): CashfreeLinkOrder[] | null {
+  if (!Array.isArray(json)) return null;
+  const orders: CashfreeLinkOrder[] = [];
+  for (const raw of json) {
+    const o = asRecord(raw);
+    const orderId = asString(o.order_id);
+    const orderStatus = asString(o.order_status);
+    if (!orderId || !orderStatus) continue;
+    orders.push({ orderId, cfOrderId: asString(o.cf_order_id), linkId: asString(o.link_id), orderStatus: orderStatus.toUpperCase(), orderAmount: asString(o.order_amount) });
+  }
+  return orders;
+}
+
+/** One payment attempt on a Cashfree order (read-only lookup: GET /orders/{order_id}/payments). `cfPaymentId` is the payment's own id (cf_payment_id). */
+export interface CashfreeOrderPayment {
+  cfPaymentId: string;
+  paymentStatus: string;
+  paymentAmount: string | null;
+  bankReference: string | null;
+  paymentGroup: string | null;
+  paymentTime: string | null;
+}
+
+export function parseOrderPayments(json: unknown): CashfreeOrderPayment[] | null {
+  if (!Array.isArray(json)) return null;
+  const payments: CashfreeOrderPayment[] = [];
+  for (const raw of json) {
+    const p = asRecord(raw);
+    const cfPaymentId = asString(p.cf_payment_id);
+    const paymentStatus = asString(p.payment_status);
+    if (!cfPaymentId || !paymentStatus) continue;
+    payments.push({ cfPaymentId, paymentStatus: paymentStatus.toUpperCase(), paymentAmount: asString(p.payment_amount), bankReference: asString(p.bank_reference), paymentGroup: asString(p.payment_group), paymentTime: asString(p.payment_time) });
+  }
+  return payments;
+}
+
+/** Body of POST /orders/{order_id}/refunds. refund_id is 3-40 alphanumeric characters; refund_note 3-100 characters. */
+export interface CreateRefundRequest {
+  refund_amount: number;
+  refund_id: string;
+  refund_note: string;
+  refund_speed: "STANDARD";
+}
+
+/** A refund as Cashfree reports it (create answer or status lookup). `refundStatus` is Cashfree's own text (SUCCESS, PENDING, PENDING_APPROVAL, CANCELLED, ONHOLD, REJECTED). */
+export interface CashfreeRefund {
+  cfRefundId: string | null;
+  refundId: string;
+  orderId: string | null;
+  refundStatus: string;
+  refundAmount: string | null;
+  refundCurrency: string | null;
+  statusDescription: string | null;
+  refundArn: string | null;
+  processedAt: string | null;
+}
+
+export function parseRefund(json: unknown): CashfreeRefund | null {
+  const r = asRecord(json);
+  const refundId = asString(r.refund_id);
+  const refundStatus = asString(r.refund_status);
+  if (!refundId || !refundStatus) return null;
+  return {
+    cfRefundId: asString(r.cf_refund_id),
+    refundId,
+    orderId: asString(r.order_id),
+    refundStatus: refundStatus.toUpperCase(),
+    refundAmount: asString(r.refund_amount),
+    refundCurrency: asString(r.refund_currency),
+    statusDescription: asString(r.status_description),
+    refundArn: asString(r.refund_arn),
+    processedAt: asString(r.processed_at),
+  };
+}
+
 export class CashfreeClient {
   constructor(
     private readonly config: CashfreeConfig,
@@ -89,6 +173,37 @@ export class CashfreeClient {
     const link = parseLink(await this.call("GET", `/links/${encodeURIComponent(linkId)}`));
     if (!link) throw new Error("Cashfree answered without link details");
     return link;
+  }
+
+  /** The orders Cashfree created behind a link (status=ALL: this sandbox rejects status=PAID with HTTP 400; callers filter PAID themselves). Read-only (GET). */
+  async getLinkOrders(linkId: string): Promise<CashfreeLinkOrder[]> {
+    const orders = parseLinkOrders(await this.call("GET", `/links/${encodeURIComponent(linkId)}/orders?status=ALL`));
+    if (!orders) throw new Error("Cashfree answered without a list of orders for the link");
+    return orders;
+  }
+
+  /** The payment attempts on one Cashfree order. Read-only (GET). */
+  async getOrderPayments(cashfreeOrderId: string): Promise<CashfreeOrderPayment[]> {
+    const payments = parseOrderPayments(await this.call("GET", `/orders/${encodeURIComponent(cashfreeOrderId)}/payments`));
+    if (!payments) throw new Error("Cashfree answered without a list of payments for the order");
+    return payments;
+  }
+
+  /**
+   * Create Refund: POST /orders/{order_id}/refunds. `cashfreeOrderId` is Cashfree's order_id (metadata.cashfree.cashfreeOrderId), never the CRM link id
+   * or a payment id. The idempotency key (a UUID) makes a repeat of the SAME request safe; the refund_id is also unique per refund at Cashfree.
+   */
+  async createRefund(cashfreeOrderId: string, request: CreateRefundRequest, idempotencyKey: string): Promise<CashfreeRefund> {
+    const refund = parseRefund(await this.call("POST", `/orders/${encodeURIComponent(cashfreeOrderId)}/refunds`, request, { "x-idempotency-key": idempotencyKey }));
+    if (!refund) throw new Error("Cashfree answered without refund details");
+    return refund;
+  }
+
+  /** Get Refund (read-only): GET /orders/{order_id}/refunds/{refund_id}. */
+  async getRefund(cashfreeOrderId: string, refundId: string): Promise<CashfreeRefund> {
+    const refund = parseRefund(await this.call("GET", `/orders/${encodeURIComponent(cashfreeOrderId)}/refunds/${encodeURIComponent(refundId)}`));
+    if (!refund) throw new Error("Cashfree answered without refund details");
+    return refund;
   }
 
   async cancelLink(linkId: string): Promise<CashfreeLink | null> {

@@ -15,8 +15,9 @@ import { firstContactBlockReason, notifyPaymentLink, recordOrderNotification, ty
 import type { WhatsAppMessageSummary } from "../whatsapp/whatsapp.types.js";
 import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { readOffer } from "../orders/orders.prepaid-upgrade.hooks.js";
+import { reconcileCashfreePayment } from "./cashfree.reconcile.js";
 import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE } from "./cashfree.apply.js";
-import { CashfreeClient, type CashfreeLink, type CreateLinkRequest } from "./cashfree.client.js";
+import { CashfreeClient, type CashfreeLink, type CashfreeLinkOrder, type CashfreeOrderPayment, type CreateLinkRequest } from "./cashfree.client.js";
 import { CashfreeConfigError, isCashfreeEnabled, loadCashfreeConfig, type CashfreeConfig } from "./cashfree.config.js";
 
 // Creates and manages Cashfree payment links for an existing CRM order. The order is the business reference: no Shopify
@@ -27,6 +28,54 @@ export interface CashfreeApi {
   createLink(request: CreateLinkRequest, idempotencyKey: string): Promise<CashfreeLink>;
   getLink(linkId: string): Promise<CashfreeLink>;
   cancelLink(linkId: string): Promise<CashfreeLink | null>;
+  /** Read-only identifier lookups used by refresh (optional so an API without them simply skips the lookup). */
+  getLinkOrders?(linkId: string): Promise<CashfreeLinkOrder[]>;
+  getOrderPayments?(cashfreeOrderId: string): Promise<CashfreeOrderPayment[]>;
+}
+
+export interface ResolvedCashfreeIds {
+  /** Cashfree's order_id behind the link (not the link id, not cf_order_id). */
+  cashfreeOrderId: string | null;
+  cfOrderId: string | null;
+  /** The successful payment's cf_payment_id (not the link id, not the order id). */
+  cfPaymentId: string | null;
+  bankReference: string | null;
+  /** Why an identifier could not be resolved (diagnostics only; never a credential). */
+  note: string | null;
+}
+
+/**
+ * Resolves the identifiers a refund will need from Cashfree itself, with two READ-ONLY lookups: the paid order(s) behind the link, then the payments
+ * on that order. An identifier is returned only when exactly one candidate exists; otherwise it stays null and `note` says why. Never throws.
+ */
+/** The first entry for each distinct key (order of first appearance kept). */
+function distinctBy<T>(items: T[], key: (item: T) => string): T[] {
+  const seen = new Map<string, T>();
+  for (const item of items) if (!seen.has(key(item))) seen.set(key(item), item);
+  return [...seen.values()];
+}
+
+export async function resolveCashfreeIds(api: CashfreeApi, linkId: string): Promise<ResolvedCashfreeIds> {
+  const none: ResolvedCashfreeIds = { cashfreeOrderId: null, cfOrderId: null, cfPaymentId: null, bankReference: null, note: null };
+  if (!api.getLinkOrders || !api.getOrderPayments) return { ...none, note: "identifier lookup not available" };
+  try {
+    // Cashfree lists the same order once per checkout session, so the SAME order can come back several times. Distinct orders are told apart by
+    // order_id; two entries with one order_id but different cf_order_ids contradict each other and are treated as ambiguous, never merged.
+    const paidEntries = (await api.getLinkOrders(linkId)).filter((o) => o.orderStatus === "PAID");
+    const paidOrders = distinctBy(paidEntries, (o) => o.orderId);
+    if (paidOrders.length === 0) return { ...none, note: "Cashfree returned no paid order for the link" };
+    if (paidOrders.length > 1) return { ...none, note: `${paidOrders.length} different paid orders on the link; not unique` };
+    if (new Set(paidEntries.map((o) => o.cfOrderId)).size > 1) return { ...none, note: "the same order_id was returned with different cf_order_ids; not unique" };
+    const order = paidOrders[0]!;
+    const base = { ...none, cashfreeOrderId: order.orderId, cfOrderId: order.cfOrderId };
+    // Likewise one payment can be listed more than once; payments are told apart by cf_payment_id.
+    const successful = distinctBy((await api.getOrderPayments(order.orderId)).filter((p) => p.paymentStatus === "SUCCESS"), (p) => p.cfPaymentId);
+    if (successful.length === 0) return { ...base, note: "the order has no successful payment" };
+    if (successful.length > 1) return { ...base, note: `${successful.length} different successful payments on the order; not unique` };
+    return { ...base, cfPaymentId: successful[0]!.cfPaymentId, bankReference: successful[0]!.bankReference };
+  } catch (error) {
+    return { ...none, note: error instanceof ProviderHttpError ? `lookup failed (HTTP ${error.status ?? "no response"})` : "lookup failed" };
+  }
 }
 
 export interface PaymentLinkResult {
@@ -51,6 +100,7 @@ export interface ServiceDeps {
   /** Test seam for the provider-aware send (fake Meta/template senders). */
   notifyDeps?: import("../whatsapp/whatsapp.order-notify.service.js").OrderNotifyDeps;
   now?: () => Date;
+  getShopifyClient?: () => import("../shopify/shopify.client.js").ShopifyClient;
 }
 
 const BLOCKED_ORDER_STATUSES = new Set<OrderStatus>([OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.RETURNED]);
@@ -358,6 +408,22 @@ class CashfreePaymentsService {
   async refreshPaymentLink(user: AuthUser, paymentId: string): Promise<PaymentLinkResult> {
     const config = this.config();
     const payment = await this.runner.$transaction((tx) => this.loadPayment(tx, user, paymentId));
+    await this.reconcileFromCashfree(config, payment, { source: ActivitySource.USER, actor: user });
+    return this.runner.$transaction(async (tx) => this.toResult(await tx.payment.findUniqueOrThrow({ where: { id: paymentId }, select: PAYMENT_SELECT }), false, config));
+  }
+
+  /** Scheduled catch-up for one still-open payment whose webhook never came. Same reconciliation as Refresh and the webhook; read-only towards Cashfree. */
+  async reconcileOpenPayment(paymentId: string): Promise<"updated" | "unchanged" | "not_found"> {
+    const config = this.config();
+    const payment = await this.runner.$transaction((tx) => tx.payment.findFirst({ where: { id: paymentId, externalSource: "CASHFREE" }, select: PAYMENT_SELECT }));
+    if (!payment) return "not_found";
+    if (!OPEN.has(payment.status)) return "unchanged";
+    const result = await this.reconcileFromCashfree(config, payment, { source: ActivitySource.SYSTEM });
+    return result.outcome === "updated" ? "updated" : result.outcome === "not_found" ? "not_found" : "unchanged";
+  }
+
+  private async reconcileFromCashfree(config: CashfreeConfig, payment: PaymentRow, ctx: { source: ActivitySource; actor?: { id: string; role: import("../../../generated/prisma/enums.js").Role } | null }) {
+    const paymentId = payment.id;
     const linkId = payment.externalId ?? linkIdFor(payment.id);
 
     let link: CashfreeLink;
@@ -367,10 +433,25 @@ class CashfreePaymentsService {
       throw new ApiError(error instanceof ProviderHttpError ? `Cashfree did not return the link: ${error.message}` : "Cashfree returned an unexpected answer", BAD_GATEWAY);
     }
 
-    return this.runner.$transaction(async (tx) => {
-      await applyPaymentUpdate(tx, paymentId, linkToUpdate(link), { source: ActivitySource.USER, actor: user, now: this.now() });
-      return this.toResult(await tx.payment.findUniqueOrThrow({ where: { id: paymentId }, select: PAYMENT_SELECT }), false, config);
-    });
+    // A paid link: also record WHICH Cashfree order / payment settled it (webhooks normally do this; without a reachable webhook this is the only way).
+    const update = linkToUpdate(link);
+    if (link.linkStatus === "PAID") {
+      const ids = await resolveCashfreeIds(this.api(config), linkId);
+      if (ids.cashfreeOrderId) update.meta = { ...update.meta, cashfreeOrderId: ids.cashfreeOrderId, ...(ids.cfOrderId ? { cfOrderId: ids.cfOrderId } : {}) };
+      if (ids.cfPaymentId) {
+        update.cfPaymentId = ids.cfPaymentId;
+        if (ids.bankReference) update.bankReference = ids.bankReference;
+        update.meta = { ...update.meta, cfPaymentId: ids.cfPaymentId };
+      }
+      update.meta = { ...update.meta, idLookupNote: ids.note };
+    }
+
+    // A paid link must be for the amount the CRM expects; anything else is not applied as paid.
+    if (update.status === "SUCCESS" && toCents(link.linkAmountPaid) !== toCents(payment.amount.toString())) {
+      update.status = null;
+      update.meta = { ...update.meta, amountMismatch: { expected: payment.amount.toString(), paid: link.linkAmountPaid } };
+    }
+    return reconcileCashfreePayment({ runner: this.runner, now: () => this.now(), getShopifyClient: this.deps.getShopifyClient, notifyDeps: this.deps.notifyDeps }, paymentId, update, ctx);
   }
 
   // ---------------------------------------------------------------- WhatsApp
