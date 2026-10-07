@@ -15,6 +15,15 @@ import { asRecord, asString, headerOf, sha256Hex } from "../integrations/integra
 // The raw payload is always recorded on the WebhookEvent row regardless of whether it parses (see
 // shiprocket.abandonment.webhook.handler.ts), so a future shape change can still be inspected there.
 
+/** One cart line with the stable identifiers Fastrr sent (any may be null - nothing is invented). */
+export interface ParsedCartItem {
+  productId: string | null;
+  variantId: string | null;
+  sku: string | null;
+  name: string;
+  quantity: number | null;
+}
+
 export interface ParsedAbandonment {
   /** Cart id - used both to dedupe repeat deliveries for the same cart and as the lead's externalId. */
   externalId: string | null;
@@ -28,6 +37,8 @@ export interface ParsedAbandonment {
   itemCount: number | null;
   /** Up to 3 product names, for a quick "was checking out X, Y" cue on the call. */
   itemNames: string[];
+  /** Every cart line with its product/variant id and SKU where Fastrr gave them (what the Items filter matches on). */
+  items: ParsedCartItem[];
   /** Free-text checkout stage if the payload names one (e.g. PAYMENT_INITIATED, ORDER_SCREEN). Never invented. */
   stage: string | null;
   abandonedAt: Date | null;
@@ -86,13 +97,24 @@ function parseTimestamp(value: unknown): Date | null {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function parseItems(body: Record<string, unknown>): { itemCount: number | null; itemNames: string[] } {
+function parseItems(body: Record<string, unknown>): { itemCount: number | null; itemNames: string[]; items: ParsedCartItem[] } {
   const raw = pick(body, ["items", "cart_items", "line_items", "products"]);
-  if (!Array.isArray(raw)) return { itemCount: null, itemNames: [] };
-  const names = raw
-    .map((item) => asString(asRecord(item).name) ?? asString(asRecord(item).title) ?? asString(asRecord(item).product_name))
-    .filter((n): n is string => !!n);
-  return { itemCount: raw.length, itemNames: names };
+  if (!Array.isArray(raw)) return { itemCount: null, itemNames: [], items: [] };
+  const items: ParsedCartItem[] = [];
+  for (const entry of raw) {
+    const r = asRecord(entry);
+    const name = asString(r.name) ?? asString(r.title) ?? asString(r.product_name);
+    if (!name) continue;
+    const qty = Number(r.quantity);
+    items.push({
+      productId: asString(r.product_id) ?? asString(r.productId),
+      variantId: asString(r.variant_id) ?? asString(r.variantId),
+      sku: asString(r.sku),
+      name,
+      quantity: Number.isFinite(qty) && qty > 0 ? qty : null,
+    });
+  }
+  return { itemCount: raw.length, itemNames: items.map((i) => i.name), items };
 }
 
 /** shipping_address is what the customer will actually receive the order at; billing_address is the fallback. */
@@ -112,7 +134,7 @@ export function parseAbandonmentEvent(payload: unknown): ParsedAbandonment | nul
   if (!phone && !email) return null;
 
   const { firstName, lastName } = fullNameParts(body);
-  const { itemCount, itemNames } = parseItems(body);
+  const { itemCount, itemNames, items } = parseItems(body);
 
   return {
     externalId: asString(pick(body, ["cart_id", "checkout_id", "session_id", "id", "cart_token", "token"])),
@@ -124,6 +146,7 @@ export function parseAbandonmentEvent(payload: unknown): ParsedAbandonment | nul
     currency: asString(pick(body, ["currency", "currency_code"])) ?? "INR",
     itemCount,
     itemNames,
+    items,
     stage: asString(pick(body, ["latest_stage", "stage", "status", "checkout_stage", "cart_status"])),
     abandonedAt: parseTimestamp(pick(body, ["updated_at", "created_at", "abandoned_at", "timestamp"])),
     checkoutUrl: asString(pick(body, ["checkout_url", "cart_url", "resume_url"])),

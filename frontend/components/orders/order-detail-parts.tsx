@@ -104,11 +104,12 @@ export function addressFromRecord(record: Record<string, string | null> | null |
   if (!record) return null;
   return {
     name: record.name ?? null,
-    address1: record.address1 ?? null,
-    address2: record.address2 ?? null,
+    // CRM-created orders store line1/line2/state/pincode; Shopify-synced ones address1/address2/province/zip.
+    address1: record.address1 ?? record.line1 ?? null,
+    address2: record.address2 ?? record.line2 ?? null,
     city: record.city ?? null,
-    province: record.province ?? null,
-    zip: record.zip ?? null,
+    province: record.province ?? record.state ?? null,
+    zip: record.zip ?? record.pincode ?? null,
     country: record.country ?? null,
     phone: record.phone ?? null,
   };

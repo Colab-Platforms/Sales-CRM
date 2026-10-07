@@ -6,6 +6,8 @@ import {
   LayoutDashboard,
   Users,
   ShoppingCart,
+  Scale,
+  Ticket,
   UsersRound,
   BarChart3,
   UserCog,
@@ -22,6 +24,7 @@ import {
   Phone,
   Settings,
   AlertTriangle,
+  RotateCcw,
   ChevronRight,
 } from "lucide-react";
 import {
@@ -41,6 +44,7 @@ import {
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/nav-user";
+import { PendingRefundBadge } from "@/components/refunds/pending-refund-badge";
 import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
@@ -194,6 +198,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+        { title: "Offers", href: "/dashboard/offers", icon: Ticket },
       ],
     },
     {
@@ -259,10 +264,17 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+        { title: "Offers", href: "/dashboard/offers", icon: Ticket },
+        { title: "Product Weights", href: "/dashboard/products", icon: Scale },
         {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
           icon: Wallet,
+        },
+        {
+          title: "Refund Approvals",
+          href: "/dashboard/refunds",
+          icon: RotateCcw,
         },
         {
           title: "Shiprocket",
@@ -337,10 +349,17 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+        { title: "Offers", href: "/dashboard/offers", icon: Ticket },
+        { title: "Product Weights", href: "/dashboard/products", icon: Scale },
         {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
           icon: Wallet,
+        },
+        {
+          title: "Refund Approvals",
+          href: "/dashboard/refunds",
+          icon: RotateCcw,
         },
         {
           title: "Shiprocket",
@@ -493,14 +512,17 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
                   ) : (
                     <SidebarMenuItem key={item.title}>
                       {item.href ? (
-                        <SidebarMenuButton
-                          render={<Link href={item.href} />}
-                          isActive={pathname === item.href}
-                          tooltip={item.title}
-                        >
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </SidebarMenuButton>
+                        <>
+                          <SidebarMenuButton
+                            render={<Link href={item.href} />}
+                            isActive={pathname === item.href}
+                            tooltip={item.title}
+                          >
+                            <item.icon />
+                            <span>{item.title}</span>
+                          </SidebarMenuButton>
+                          {item.href === "/dashboard/refunds" ? <PendingRefundBadge /> : null}
+                        </>
                       ) : (
                         <>
                           <SidebarMenuButton

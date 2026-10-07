@@ -15,7 +15,10 @@ import integrationsRoutes from "@modules/integrations/integrations.routes.js";
 import callingRoutes from "@modules/calling/calling.routes.js";
 import tasksRoutes from "@modules/tasks/tasks.routes.js";
 import deliveryRoutes from "@modules/delivery/delivery.routes.js";
+import offersRoutes from "@modules/offers/offers.routes.js";
+import discountRoutes from "@modules/discounts/discounts.routes.js";
 import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
+import refundRoutes from "@modules/refunds/refunds.routes.js";
 
 const router = Router();
 
@@ -28,6 +31,8 @@ router.use("/dashboard", dashboardRoutes);
 router.use("/admin", adminRoutes);
 router.use("/manager", managerRoutes);
 router.use("/orders", ordersRoutes);
+router.use("/discounts", discountRoutes);
+router.use("/offers", offersRoutes);
 router.use("/products", productsRoutes);
 router.use("/customers", customersRoutes);
 router.use("/audit", auditRoutes);
@@ -40,5 +45,6 @@ router.use("/calling", callingRoutes);
 router.use("/tasks", tasksRoutes);
 router.use("/delivery", deliveryRoutes);
 router.use("/abandonments", abandonmentRoutes);
+router.use("/refund-requests", refundRoutes);
 
 export default router;

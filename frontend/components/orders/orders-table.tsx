@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
@@ -7,6 +8,7 @@ import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } fro
 import { OrderStatusBadge } from "./order-status-badge";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import { OrderRowActions } from "./order-row-actions";
+import { OrderTagChips } from "./order-tag-chips";
 import type { LiveOrderListItem, OrderListItem } from "@/lib/api-client/types/orders.types";
 
 // Accepts either the CRM-DB-backed list item or the live-Shopify one. The live one's customer link is
@@ -27,7 +29,7 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-const COLUMN_COUNT = 10;
+const COLUMN_COUNT = 11;
 
 const HEADERS = [
   "Order",
@@ -38,6 +40,7 @@ const HEADERS = [
   "Total",
   "Payment",
   "Status",
+  "Tags",
   "Date",
   "Actions",
 ];
@@ -50,13 +53,17 @@ export function customerDetailHref(leadId: string) {
   return `/dashboard/customers/${leadId}`;
 }
 
-function OrdersTableHeader() {
+// `filters` maps a header title to its column-filter funnel (see orders-header-filters.tsx); headers without one stay plain.
+function OrdersTableHeader({ filters }: { filters?: Record<string, ReactNode> }) {
   return (
     <TableHeader>
       <TableRow>
         {HEADERS.map((header) => (
           <TableHead key={header} className={header === "Total" || header === "Actions" ? "text-right" : undefined}>
-            {header}
+            <span className="inline-flex items-center whitespace-nowrap">
+              {header}
+              {filters?.[header] ?? null}
+            </span>
           </TableHead>
         ))}
       </TableRow>
@@ -87,12 +94,14 @@ interface OrdersTableProps {
   items: TableOrderItem[];
   isFetching: boolean;
   onOpen: (id: string) => void;
+  /** Column-filter funnels by header title. */
+  headerFilters?: Record<string, ReactNode>;
 }
 
-export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
+export function OrdersTable({ items, isFetching, onOpen, headerFilters }: OrdersTableProps) {
   return (
     <Table className={cn("transition-opacity", isFetching && "opacity-60")}>
-      <OrdersTableHeader />
+      <OrdersTableHeader filters={headerFilters} />
       <TableBody>
         {items.map((order) => (
           <TableRow key={order.id} className="cursor-pointer" onClick={() => onOpen(order.id)}>
@@ -152,6 +161,9 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
               {hasShopifyDisplayFields(order) && !order.linkedInCrm ? (
                 <div className="mt-0.5 text-xs text-muted-foreground">Not synced to CRM</div>
               ) : null}
+            </TableCell>
+            <TableCell>
+              <OrderTagChips tags={order.tags} />
             </TableCell>
             <TableCell className="text-muted-foreground">{formatDate(order.createdAt)}</TableCell>
             {/* stopPropagation: the row itself navigates on click, and React bubbles events from the dialogs

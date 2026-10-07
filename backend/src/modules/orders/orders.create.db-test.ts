@@ -53,8 +53,12 @@ async function makeVariant(tx: Prisma.TransactionClient, productId: string, over
 
 const DEFAULT_ORDER_CREATE_RESPONSE = { orderCreate: { order: { id: "gid://shopify/Order/1", name: "#TST1" }, userErrors: [] as { field: string[] | null; message: string }[] } };
 
+// `queryImpl` stands in for the orderCreate mutation only (what these tests count and script). Since a confirmed COD order now also gets its
+// "CRM Confirmed by <name>" tag after it is linked, the tag read/add/remove calls are answered with a harmless empty result here and are NOT
+// counted - they are covered by orders.confirmation.db-test.ts.
 function fakeShopifyClient(queryImpl?: (document: string, variables: Record<string, unknown>) => Promise<unknown>): ShopifyClient {
-  return { query: queryImpl ?? (async () => DEFAULT_ORDER_CREATE_RESPONSE) } as unknown as ShopifyClient;
+  const impl = queryImpl ?? (async () => DEFAULT_ORDER_CREATE_RESPONSE);
+  return { query: async (document: string, variables: Record<string, unknown>) => (/orderCreate/.test(document) ? impl(document, variables) : { order: { id: "gid://shopify/Order/1", tags: [] }, tagsAdd: { userErrors: [] }, tagsRemove: { userErrors: [] } }) } as unknown as ShopifyClient;
 }
 
 describe("createManualOrder - idempotencyKey guards a double submit", () => {
@@ -453,7 +457,23 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
       assert.equal((await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id)).address?.line1, "1 Old Rd", "Shopify shape (address1/province/zip)");
       await tx.order.create({ data: { orderNumber: `O-${uid()}`, leadId: lead.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "10.00", createdAt: new Date(Date.now() + 60_000), shippingAddress: { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123" } } });
       const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
-      assert.deepEqual(latest.address, { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123" });
+      // A legacy free-text address comes back unchanged, with the new structured fields empty (never invented).
+      assert.deepEqual(latest.address, { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123", houseNumber: "", building: "", area: "", street: "", landmark: "", addressType: "" });
+    });
+  });
+
+  it("a structured address round-trips through a created order and comes back for the next prefill", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const product = await makeProduct(tx);
+      const svc = new OrdersService(tx, () => fakeShopifyClient());
+      const addr = { name: "Asha", line1: "Flat 4B, Sunrise Apartments", line2: "MG Road, Andheri West, Near City Mall", houseNumber: "Flat 4B", building: "Sunrise Apartments", area: "Andheri West", street: "MG Road", landmark: "Near City Mall", city: "Mumbai", state: "Maharashtra", pincode: "400053", addressType: "WORK" as const, phone: "9000000123" };
+      const created = await svc.createManualOrder(as(admin, Role.ADMIN), { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "100.00" }], paymentMethod: "COD", shippingAddress: addr, shippingPincode: "400053" });
+      assert.equal(created.order.shippingAddress?.houseNumber, "Flat 4B");
+      assert.equal(created.order.shippingAddress?.line1, "Flat 4B, Sunrise Apartments", "the composed line integrations read is intact");
+      const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
+      assert.deepEqual(latest.address, { ...addr, phone: "9000000123" });
     });
   });
 
@@ -466,5 +486,34 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
       assert.equal((await svc.getLastShippingAddress(as(owner, Role.SALESPERSON), lead.id)).address, null);
       await assert.rejects(() => svc.getLastShippingAddress(as(stranger, Role.SALESPERSON), lead.id), (e: any) => e.statusCode === 404);
     });
+  });
+});
+
+describe("createManualOrder - parcel weight (entered, never assumed)", () => {
+  it("records the entered parcel weight as a number on the order and shows it on the order; no weight entered -> null (nothing is invented)", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const product = await makeProduct(tx);
+      let n = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => { n += 1; return { orderCreate: { order: { id: `gid://shopify/Order/${n}`, name: `#TST${n}` }, userErrors: [] } }; }));
+      const base = { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "349.00" as const }], paymentMethod: "COD" as const };
+      const withWeight = await svc.createManualOrder(as(admin, Role.ADMIN), { ...base, parcelWeightKg: 0.5 });
+      const without = await svc.createManualOrder(as(admin, Role.ADMIN), base);
+      assert.equal(withWeight.order.parcelWeightKg, "0.5");
+      assert.equal(without.order.parcelWeightKg, null);
+      const row = await tx.order.findUniqueOrThrow({ where: { id: withWeight.order.id }, select: { parcelWeightKg: true } });
+      assert.equal(row.parcelWeightKg?.toString(), "0.5");
+    });
+  });
+
+  it("the request validator rejects 0, a negative or a non-numeric parcel weight and accepts a real one", async () => {
+    const { validateCreateManualOrder } = await import("./orders.validators.js");
+    const base = { leadId: uid(), items: [{ productId: uid(), quantity: 1, unitPrice: "100.00" }], paymentMethod: "COD" };
+    assert.match(validateCreateManualOrder({ ...base, parcelWeightKg: 0 }).error?.message ?? "", /greater than 0/);
+    assert.ok(validateCreateManualOrder({ ...base, parcelWeightKg: -1 }).error);
+    assert.ok(validateCreateManualOrder({ ...base, parcelWeightKg: "abc" }).error);
+    assert.equal(validateCreateManualOrder({ ...base, parcelWeightKg: "0.5" }).value?.parcelWeightKg, 0.5);
+    assert.equal(validateCreateManualOrder(base).value?.parcelWeightKg, undefined);
   });
 });

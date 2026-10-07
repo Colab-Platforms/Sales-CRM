@@ -1,5 +1,6 @@
 import type { ExternalSource, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
 import type { ReconciliationStatus } from "../reconciliation/reconciliation.types.js";
+import type { OrderRefundInfo } from "../refunds/refunds.types.js";
 import type { OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 import type { NormalizedOrder } from "../shopify/shopify.orders.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
@@ -41,12 +42,30 @@ export interface CreateManualOrderInput {
     state?: string;
     pincode?: string;
     phone?: string;
+    // Structured fields (the composed line1/line2 above remain what integrations read).
+    houseNumber?: string;
+    building?: string;
+    area?: string;
+    street?: string;
+    landmark?: string;
+    addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
   shippingAmount?: Money;
   discountAmount?: Money;
   /** Order-level Custom Discount, percent of (subtotal - line discounts). Mutually exclusive with discountAmount. */
   discountPercent?: string;
+  /** Discount selection (Fastrr coupon / custom / none). See DiscountsService.resolve. */
+  /** Packed parcel weight in kg, as entered. Recorded on the order; undefined = not recorded (nothing is assumed). */
+  parcelWeightKg?: number;
+  /** WhatsApp payment link: undefined = original behaviour; false = do not send; true = send via the chosen approved Meta template. */
+  sendPaymentLinkViaWhatsApp?: boolean;
+  whatsappTemplateId?: string;
+  /** "Customer has agreed to receive WhatsApp updates" - recorded as CommunicationPreference OPTED_IN with the order. */
+  whatsappConsent?: boolean;
+  discount?: { none?: boolean; couponCode?: string; type?: "FIXED" | "PERCENT"; value?: string };
+  /** What the user saw as the total; refused if the server computes something different. Never used as the total. */
+  expectedTotal?: string;
   discountReason?: string;
 }
 
@@ -116,6 +135,13 @@ export interface LastShippingAddress {
   state: string;
   pincode: string;
   phone: string;
+  // Present only when the saved order used the structured form; older free-text addresses leave these empty.
+  houseNumber: string;
+  building: string;
+  area: string;
+  street: string;
+  landmark: string;
+  addressType: string;
 }
 
 export interface CancelOrderInput {
@@ -199,12 +225,20 @@ export interface OrderDetail {
   externalNumber: string | null;
   shippingAddress: Record<string, string | null> | null;
   shippingPincode: string | null;
+  /** Packed parcel weight (kg) as entered by a person; null when none was recorded. */
+  parcelWeightKg: string | null;
   cancelReason: string | null;
   shopifyCancellation: ShopifyCancelResult | null;
   // Last Cashfree-link cancellation outcome (Order.metadata); the live state is derivable from `payments`.
   paymentLinkCancellation: PaymentLinkCancelResult | null;
   // Last Shopify payment-reconciliation outcome (Order.metadata) - set once a Cashfree payment on this order settles.
   shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // Who confirmed the order in the CRM (current confirmer; earlier ones are in the audit history). Null = not confirmed from the CRM.
+  confirmedBy: { id: string; name: string } | null;
+  // "CRM Confirmed by <name>" - derived from confirmedBy, shown as a tag in the CRM and written to the linked Shopify order.
+  confirmationTag: string | null;
+  // Outcome of the last Shopify tag sync (Order.metadata); null when none was attempted (not linked / not confirmed).
+  shopifyConfirmationTag: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // Null when nothing was ever sent/attempted. Only a safe reason is stored (never a URL or credential).
   whatsappNotification: OrderWhatsAppNotification | null;
   createdAt: Date;
@@ -217,6 +251,8 @@ export interface OrderDetail {
   paidAmount: Money;
   refundedAmount: Money;
   outstandingAmount: Money;
+  /** Refund approval workflow: per-payment eligibility/balance and the order's refund requests. Display only. */
+  refunds: OrderRefundInfo;
   reconciliationStatus: ReconciliationStatus;
   customer: {
     leadId: string;
@@ -253,6 +289,10 @@ export interface OrderItemDetail {
   discountAmount: Money;
   taxAmount: Money;
   totalPrice: Money;
+  /** Recorded catalog weight of one unit (kg); null = not recorded. Never the parcel weight. */
+  unitWeightKg: string | null;
+  /** Recorded per-unit product dimensions (cm), or null. Product dimensions only - never the packed parcel size. */
+  unitDimensionsCm: { lengthCm: string; widthCm: string; heightCm: string } | null;
 }
 
 export interface PaymentDetail {
@@ -304,6 +344,8 @@ export interface OrderShipmentDetail extends ShipmentDetail {
   labelUrl: string | null;
   pickupScheduledAt: Date | null;
   shiprocketOrderId: string | null;
+  /** Parcel weight (kg) this shipment was created with; null when not recorded. */
+  weightKg: string | null;
   // On a Shopify-derived shipment: the direct Shiprocket shipment carrying the same AWB, i.e. the same parcel. Derived
   // when read, never stored, so it can not drift out of date.
   linkedShipmentId: string | null;
@@ -331,4 +373,6 @@ export interface OrderStatusHistory {
 
 export interface OrderFilterOptions {
   salespeople: { id: string; name: string }[];
+  /** The CRM's own lead sources (the same list leads use) - not a second list. */
+  leadSources: { id: string; name: string }[];
 }

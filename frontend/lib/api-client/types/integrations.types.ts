@@ -35,6 +35,8 @@ export interface ShipmentActionResult {
   pickupScheduledAt: string | null;
   expectedDeliveryAt: string | null;
   shiprocketOrderId: string | null;
+  /** Parcel weight (kg) the shipment was created with. */
+  weightKg?: string | null;
   // Only on creation: how Shiprocket was told to collect payment, and how much the courier collects.
   paymentMethod?: "Prepaid" | "COD";
   collectOnDelivery?: string;

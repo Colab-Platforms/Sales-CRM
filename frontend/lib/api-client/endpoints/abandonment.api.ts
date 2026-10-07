@@ -1,4 +1,5 @@
 import { apiClient } from "../client";
+import { encodeItemKeys, type ItemOption } from "../../abandonment-items";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
   AbandonmentDetail,
@@ -10,10 +11,25 @@ import type {
   ListAbandonmentsResult,
 } from "../types/abandonment.types";
 
+// `items` travels as one comma list of URL-encoded keys (a product name may itself contain commas); axios drops undefined params,
+// so unset filters never reach the URL.
+const wireParams = ({ items, ...rest }: ListAbandonmentsParams) => ({ ...rest, items: items && items.length > 0 ? encodeItemKeys(items) : undefined });
+
 export const abandonmentApi = {
   async list(params: ListAbandonmentsParams): Promise<ListAbandonmentsResult> {
-    // axios drops undefined params, so unset filters never reach the URL.
-    const res = await apiClient.get<ApiEnvelope<ListAbandonmentsResult>>("/abandonments", { params });
+    const res = await apiClient.get<ApiEnvelope<ListAbandonmentsResult>>("/abandonments", { params: wireParams(params) });
+    return res.data.data;
+  },
+
+  /** The products found in the viewer's abandoned carts (real data), for the Items filter. */
+  async listItems(): Promise<{ items: ItemOption[] }> {
+    const res = await apiClient.get<ApiEnvelope<{ items: ItemOption[] }>>("/abandonments/items");
+    return res.data.data;
+  },
+
+  /** Ids of EVERY abandonment the filters match (not just this page), for "Select all". */
+  async listMatchingIds(params: Omit<ListAbandonmentsParams, "page" | "pageSize">): Promise<{ ids: string[]; total: number; capped: boolean }> {
+    const res = await apiClient.get<ApiEnvelope<{ ids: string[]; total: number; capped: boolean }>>("/abandonments/ids", { params: wireParams({ page: 1, pageSize: 25, ...params }) });
     return res.data.data;
   },
 

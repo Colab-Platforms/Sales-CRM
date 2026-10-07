@@ -21,6 +21,8 @@ import { cancelShopifyOrder, ShopifyOrderCancelError } from "../shopify/shopify.
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import { mapListOrderStatusAndPayments } from "../shopify/shopify.mapper.js";
 import { derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
+import { matchesAnyTag, mergeOrderTags, tagSearchClause } from "./orders.tags.js";
+import { confirmationTagFor } from "./orders.confirmation.js";
 import {
   LIVE_ORDER_ID_PREFIX,
   type LiveOrderCancelResult,
@@ -31,6 +33,7 @@ import {
   type LiveOrderListItem,
   type LiveOrderListResult,
   type LiveOrdersQuery,
+  type LiveOrderTagOptionsResult,
 } from "./orders.live.types.js";
 
 // ---- A small in-process TTL cache (same idiom as OrdersService's own static idempotency Map) - no
@@ -71,6 +74,58 @@ async function resolveShopTimeZone(client: ShopifyClient): Promise<string> {
   return timeZone;
 }
 
+const FILTER_EXTRA_PAGES = 3;
+
+// Shopify's own list of the shop's most-used order tags (up to 250) - the source of the Tags filter's options. Cached briefly.
+const SHOP_ORDER_TAGS_QUERY = `query crmOrderTagOptions { shop { orderTags(first: 250, sort: POPULAR) { edges { node } } } }`;
+const TAG_OPTIONS_TTL_MS = 5 * 60_000;
+let tagOptionsCache: { value: string[]; expiresAt: number } | null = null;
+
+type OverlayFilters = Pick<LiveOrdersQuery, "status" | "paymentStatus" | "paymentMode" | "source" | "salespersonId" | "leadSourceId" | "fulfillment" | "totalMin" | "totalMax" | "tags">;
+
+const toList = <T,>(value: T | T[] | undefined): T[] => (value === undefined ? [] : Array.isArray(value) ? value : [value]);
+
+export function hasOverlayFilters(f: OverlayFilters): boolean {
+  return Boolean(toList(f.status).length || toList(f.paymentStatus).length || toList(f.paymentMode).length || toList(f.source).length || toList(f.salespersonId).length || toList(f.leadSourceId).length || toList(f.fulfillment).length || f.totalMin !== undefined || f.totalMax !== undefined);
+}
+
+/**
+ * The single place column filters are evaluated. Different filters are AND-ed; values inside one filter are OR-ed.
+ * Everything is compared against what the row actually shows (CRM status/payment where linked, Shopify-derived where not),
+ * so a row can never match a filter it doesn't display. Total is compared as a number, never as formatted text.
+ */
+export function applyOrderFilters(items: LiveOrderListItem[], filters: OverlayFilters): LiveOrderListItem[] {
+  // Tags: Shopify has already narrowed the page by `tag:` (the search below); this makes the row match exactly what it DISPLAYS
+  // (the CRM confirmer is authoritative over a stale Shopify confirmation tag). Tags are not a CRM-overlay filter, so they do
+  // not trigger the extra-page loop.
+  const wantedTags = toList(filters.tags);
+  if (wantedTags.length) items = items.filter((item) => matchesAnyTag(item.tags, wantedTags));
+  if (!hasOverlayFilters(filters)) return items;
+  const status = toList(filters.status);
+  const paymentStatus = toList(filters.paymentStatus);
+  const paymentMode = toList(filters.paymentMode);
+  const source = toList(filters.source);
+  const salespersonId = toList(filters.salespersonId);
+  const leadSourceId = toList(filters.leadSourceId);
+  const fulfillment = toList(filters.fulfillment);
+  return items.filter((item) => {
+    if (status.length && !(item.status !== null && status.includes(item.status))) return false;
+    if (paymentStatus.length && !paymentStatus.some((p) => (p === "NONE" ? item.paymentStatus === null : item.paymentStatus === p))) return false;
+    if (paymentMode.length && !(item.paymentMode !== null && paymentMode.includes(item.paymentMode))) return false;
+    if (source.length && !source.includes(item.source)) return false;
+    if (salespersonId.length && !(item.salesperson && salespersonId.includes(item.salesperson.id))) return false;
+    if (leadSourceId.length && !(item.leadSource && leadSourceId.includes(item.leadSource.id))) return false;
+    if (fulfillment.length && !(item.fulfillmentStatus && fulfillment.includes(item.fulfillmentStatus))) return false;
+    if (filters.totalMin !== undefined || filters.totalMax !== undefined) {
+      const total = Number(item.totalAmount);
+      if (!Number.isFinite(total)) return false;
+      if (filters.totalMin !== undefined && total < filters.totalMin) return false;
+      if (filters.totalMax !== undefined && total > filters.totalMax) return false;
+    }
+    return true;
+  });
+}
+
 class OrdersLiveService {
   // getShopifyClient is injectable so tests never construct a real client (same pattern OrdersService
   // itself already uses for pushOrderToShopify/cancelOrder).
@@ -88,10 +143,16 @@ class OrdersLiveService {
       search: query.search ?? null,
       dateFrom: query.dateFrom?.toISOString() ?? null,
       dateTo: query.dateTo?.toISOString() ?? null,
-      status: query.status ?? null,
-      paymentStatus: query.paymentStatus ?? null,
-      source: query.source ?? null,
-      salespersonId: query.salespersonId ?? null,
+      status: toList(query.status),
+      paymentStatus: toList(query.paymentStatus),
+      paymentMode: toList(query.paymentMode),
+      source: toList(query.source),
+      salespersonId: toList(query.salespersonId),
+      leadSourceId: toList(query.leadSourceId),
+      fulfillment: toList(query.fulfillment),
+      totalMin: query.totalMin ?? null,
+      totalMax: query.totalMax ?? null,
+      tags: toList(query.tags),
     });
     const cached = listCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
@@ -102,6 +163,20 @@ class OrdersLiveService {
     } catch (error) {
       return { items: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, endCursor: null }, error: error instanceof ShopifyConfigError ? error.message : "Shopify is not configured." };
     }
+
+    const overlayFilters = {
+      status: query.status,
+      paymentStatus: query.paymentStatus,
+      paymentMode: query.paymentMode,
+      source: query.source,
+      salespersonId: query.salespersonId,
+      leadSourceId: query.leadSourceId,
+      fulfillment: query.fulfillment,
+      totalMin: query.totalMin,
+      totalMax: query.totalMax,
+      tags: query.tags,
+    };
+    const filtering = hasOverlayFilters(overlayFilters);
 
     let page;
     try {
@@ -116,19 +191,31 @@ class OrdersLiveService {
       // already covers order name/customer name/email/phone - so the free-text term is simply
       // appended to the date-window terms rather than the CRM's own 5-field search being reimplemented
       // against a system that has no idea what a "lead number" is.
-      const search = [windowSearch(window), query.search?.trim()].filter(Boolean).join(" ");
+      // Tags are matched by Shopify itself (exact tag, OR across the chosen tags), so pagination follows the filtered set.
+      const search = [windowSearch(window), tagSearchClause(toList(query.tags)), query.search?.trim()].filter(Boolean).join(" ");
       page = await listOrdersForDisplay(client, { first: query.first, after: query.after ?? null, search });
+
+      // Column filters are applied to rows AFTER the CRM overlay, so a sparse filter could leave a Shopify page nearly empty.
+      // To keep the page useful without ever loading the whole history, keep reading further Shopify pages (a small, fixed
+      // number) until `first` matching rows are found or Shopify has no more - the returned cursor always continues from
+      // the last page actually read, so Next carries on exactly where this stopped.
+      if (filtering) {
+        const collected = [...(await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, overlayFilters)).items];
+        let last = page;
+        for (let extra = 0; extra < FILTER_EXTRA_PAGES && collected.length < query.first && last.hasNextPage && last.endCursor; extra++) {
+          last = await listOrdersForDisplay(client, { first: query.first, after: last.endCursor, search });
+          collected.push(...(await this.attachCrmOverlay(user, last.items, last.hasNextPage, last.hasPreviousPage, last.endCursor, overlayFilters)).items);
+        }
+        const result: LiveOrderListResult = { items: collected, pageInfo: { hasNextPage: last.hasNextPage, hasPreviousPage: page.hasPreviousPage, endCursor: last.endCursor } };
+        listCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
+        return result;
+      }
     } catch (error) {
       const message = error instanceof ShopifyApiError ? error.message : "Could not reach Shopify - please try again.";
       return { items: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, endCursor: null }, error: message };
     }
 
-    const result = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, {
-      status: query.status,
-      paymentStatus: query.paymentStatus,
-      source: query.source,
-      salespersonId: query.salespersonId,
-    });
+    const result = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, overlayFilters);
     listCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
   }
@@ -149,7 +236,7 @@ class OrdersLiveService {
     hasNextPage: boolean,
     hasPreviousPage: boolean,
     endCursor: string | null,
-    overlayFilters: Pick<LiveOrdersQuery, "status" | "paymentStatus" | "source" | "salespersonId">,
+    overlayFilters: OverlayFilters,
   ): Promise<LiveOrderListResult> {
     if (shopifyItems.length === 0) {
       return { items: [], pageInfo: { hasNextPage, hasPreviousPage, endCursor } };
@@ -207,16 +294,8 @@ class OrdersLiveService {
   // run. An unlinked order never matches any of them (it has no CRM status/salesperson to compare
   // against) and is always excluded once one of these filters is active - see the LiveOrdersQuery
   // comment for why a filtered page can legitimately come back with fewer than `first` rows.
-  private applyOverlayFilters(items: LiveOrderListItem[], filters: Pick<LiveOrdersQuery, "status" | "paymentStatus" | "source" | "salespersonId">): LiveOrderListItem[] {
-    const { status, paymentStatus, source, salespersonId } = filters;
-    if (!status && !paymentStatus && !source && !salespersonId) return items;
-    return items.filter((item) => {
-      if (status && item.status !== status) return false;
-      if (paymentStatus && (paymentStatus === "NONE" ? item.paymentStatus !== null : item.paymentStatus !== paymentStatus)) return false;
-      if (source && item.source !== source) return false;
-      if (salespersonId && item.salesperson?.id !== salespersonId) return false;
-      return true;
-    });
+  private applyOverlayFilters(items: LiveOrderListItem[], filters: OverlayFilters): LiveOrderListItem[] {
+    return applyOrderFilters(items, filters);
   }
 
   private fetchCrmRows(externalIds: string[]) {
@@ -228,6 +307,7 @@ class OrdersLiveService {
         status: true,
         source: true,
         payments: { select: { status: true, method: true } },
+        confirmedByName: true,
         createdBy: { select: { id: true, name: true } },
         _count: { select: { items: true } },
         lead: {
@@ -270,6 +350,7 @@ class OrdersLiveService {
       fulfillmentStatus: shopifyOrder.fulfillmentStatus,
       hasTracking: shopifyOrder.hasTracking,
       shippingMethod: shopifyOrder.shippingMethod,
+      tags: mergeOrderTags(shopifyOrder.tags, crm.confirmedByName),
     };
   }
 
@@ -327,7 +408,44 @@ class OrdersLiveService {
       fulfillmentStatus: shopifyOrder.fulfillmentStatus,
       hasTracking: shopifyOrder.hasTracking,
       shippingMethod: shopifyOrder.shippingMethod,
+      tags: mergeOrderTags(shopifyOrder.tags, null),
     };
+  }
+
+  /**
+   * The tags the Orders Tags filter offers: Shopify's most-used order tags (its own list, cached) plus every
+   * "CRM Confirmed by <name>" tag the CRM has recorded. Shopify unreachable -> the CRM tags still come back, with an error note.
+   */
+  async listTagOptions(): Promise<LiveOrderTagOptionsResult> {
+    const crmNames = await this.db.order.findMany({ where: { confirmedByName: { not: null } }, distinct: ["confirmedByName"], select: { confirmedByName: true } });
+    const crm = crmNames.map((r) => confirmationTagFor(r.confirmedByName!)).sort((a, b) => a.localeCompare(b));
+    let shopify: string[] = [];
+    let error: string | undefined;
+    try {
+      shopify = await this.shopifyOrderTags();
+    } catch {
+      error = "Shopify tags could not be loaded.";
+    }
+    const seen = new Set<string>();
+    const tags: LiveOrderTagOptionsResult["tags"] = [];
+    for (const [names, source] of [[crm, "CRM"], [shopify, "SHOPIFY"]] as const) {
+      for (const name of names) {
+        const k = name.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        tags.push({ name, source });
+      }
+    }
+    return { tags, ...(error ? { error } : {}) };
+  }
+
+  private async shopifyOrderTags(): Promise<string[]> {
+    if (tagOptionsCache && tagOptionsCache.expiresAt > Date.now()) return tagOptionsCache.value;
+    const client = this.getShopifyClient();
+    const data = await client.query<{ shop: { orderTags: { edges: { node: string }[] } } }>(SHOP_ORDER_TAGS_QUERY, {});
+    const value = data.shop.orderTags.edges.map((e) => e.node).filter(Boolean);
+    tagOptionsCache = { value, expiresAt: Date.now() + TAG_OPTIONS_TTL_MS };
+    return value;
   }
 
   // Order Detail for a Shopify order the CRM has not synced yet (the "Not synced to CRM" row from the

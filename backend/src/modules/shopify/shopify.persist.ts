@@ -283,8 +283,10 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
       id: true,
       status: true,
       leadId: true,
+      confirmedByUserId: true,
       externalUpdatedAt: true,
       discountAmount: true,
+      metadata: true,
       payments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true, status: true } },
       shipments: {
         where: { externalSource: SOURCE },
@@ -306,23 +308,31 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
       });
   result.lead = lead;
 
+  // CRM-owned state kept on Order.metadata (Prepaid Upgrade, cancellation/Shopify-sync outcomes, notifications) is not
+  // Shopify data, so a re-sync must not erase it. And once a Prepaid Upgrade has converted the order, the CRM's total,
+  // discount and payment records are the truth (Shopify still shows the original COD figures), so those are kept too.
+  const crmMeta = existing ? (existing.metadata as Record<string, unknown> | null) ?? {} : {};
+  const upgraded = (crmMeta.prepaidUpgrade as { status?: string } | undefined)?.status === "UPGRADED";
+  const KEEP = ["prepaidUpgrade", "prepaidUpgradeHistory", "shopifyPaymentSync", "shopifyCancellation", "paymentLinkCancellation", "preCancelStatus", "cancellationReverted", "whatsappNotification", "paymentSuccessNotifiedAt", "paymentSuccessNotification", "customDiscount", "discount", "shopifyConfirmationTag"];
+  const keptMeta = Object.fromEntries(KEEP.filter((k) => k in crmMeta).map((k) => [k, crmMeta[k]]));
+
   const fields = {
     status: mapped.status,
     currency: mapped.currency,
     subtotal: mapped.subtotal,
-    discountAmount: mapped.discountAmount,
+    ...(upgraded ? {} : { discountAmount: mapped.discountAmount, totalAmount: mapped.totalAmount }),
     taxAmount: mapped.taxAmount,
     shippingAmount: mapped.shippingAmount,
-    totalAmount: mapped.totalAmount,
     discountReason: mapped.discountReason,
     placedAt: mapped.placedAt,
-    confirmedAt: mapped.confirmedAt,
+    // A CRM-confirmed order keeps the CRM's confirmation time; Shopify's own placed-time must not overwrite it.
+    ...(existing?.confirmedByUserId ? {} : { confirmedAt: mapped.confirmedAt }),
     cancelledAt: mapped.cancelledAt,
     cancelReason: mapped.cancelReason,
     externalNumber: mapped.externalNumber,
     externalUpdatedAt: mapped.externalUpdatedAt,
     shippingPincode: mapped.shippingPincode,
-    metadata: mapped.metadata as Prisma.InputJsonValue,
+    metadata: { ...mapped.metadata, ...keptMeta, ...(upgraded ? { paymentMode: "PREPAID" } : {}) } as Prisma.InputJsonValue,
     ...(mapped.shippingAddress ? { shippingAddress: mapped.shippingAddress as Prisma.InputJsonValue } : {}),
   };
 
@@ -346,7 +356,9 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
   result.status = mapped.status;
 
   await replaceItems(tx, order.id, mapped, result);
-  const paymentEvents = await syncPayments(tx, order.id, mapped, existing?.payments ?? [], result);
+  // An upgraded order keeps its CRM payment records (the Cashfree payment + the retired COD row): Shopify's own record of the
+  // same money (marked paid for the full original total) must not be mirrored on top and double-count it.
+  const paymentEvents = upgraded ? [] : await syncPayments(tx, order.id, mapped, existing?.payments ?? [], result);
   const shipmentEvents = await syncShipments(tx, order.id, mapped, existing?.shipments ?? [], result);
   await recordActivity(tx, {
     orderId: order.id,

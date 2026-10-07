@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   orderDetailQueryOptions,
   orderFilterOptionsQueryOptions,
+  orderTagOptionsQueryOptions,
   orderLiveDetailQueryOptions,
   orderLiveHistoryQueryOptions,
   orderStatusHistoryQueryOptions,
@@ -118,6 +119,17 @@ export function useOrderStatusHistory(id: string) {
   };
 }
 
+/** The Tags filter's options: tags that exist on real orders (Shopify + the CRM confirmation tags). */
+export function useOrderTagOptions(enabled = true) {
+  const token = useAuthStore((s) => s.token);
+  const query = useQuery({ ...orderTagOptionsQueryOptions(), enabled: Boolean(token) && enabled });
+  return {
+    tags: query.data?.tags ?? [],
+    isLoading: query.isPending && query.fetchStatus !== "idle",
+    error: query.error ? "Could not load tags." : (query.data?.error ?? null),
+  };
+}
+
 export function useOrderFilterOptions(enabled = true) {
   const token = useAuthStore((s) => s.token);
 
@@ -126,5 +138,5 @@ export function useOrderFilterOptions(enabled = true) {
     enabled: Boolean(token) && enabled,
   });
 
-  return { salespeople: query.data?.salespeople ?? [] };
+  return { salespeople: query.data?.salespeople ?? [], leadSources: query.data?.leadSources ?? [] };
 }

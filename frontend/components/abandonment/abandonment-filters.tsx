@@ -9,10 +9,13 @@ import { Label } from "@/components/ui/label";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
+import { itemKeyLabel } from "@/lib/abandonment-items";
 
 export interface AbandonmentFilterState {
   search?: string;
   workingStatus?: LeadWorkingStatus;
+  /** Item keys chosen in the table's Items column filter (any of them). */
+  items?: string[];
 }
 
 export function AbandonmentFilters({
@@ -26,7 +29,7 @@ export function AbandonmentFilters({
 }) {
   const [search, setSearch] = useState(value.search ?? "");
 
-  const hasFilters = Boolean(value.search || value.workingStatus);
+  const hasFilters = Boolean(value.search || value.workingStatus || (value.items && value.items.length > 0));
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -81,6 +84,27 @@ export function AbandonmentFilters({
           ))}
         </NativeSelect>
       </div>
+
+      {value.items && value.items.length > 0 ? (
+        <div className="flex w-full flex-wrap items-center gap-1.5" aria-label="Selected products">
+          <span className="text-xs text-muted-foreground">Items:</span>
+          {value.items.map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => {
+                const next = value.items!.filter((k) => k !== key);
+                onChange({ ...value, items: next.length > 0 ? next : undefined });
+              }}
+              className="inline-flex items-center gap-1 rounded-full border bg-background px-2.5 py-0.5 text-xs font-medium hover:bg-muted"
+              aria-label={`Remove ${itemKeyLabel(key)}`}
+            >
+              {itemKeyLabel(key)}
+              <X className="size-3" aria-hidden />
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {hasFilters ? (
         <Button variant="ghost" onClick={clearAll} type="button" className="text-muted-foreground">

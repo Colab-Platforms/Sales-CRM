@@ -21,6 +21,8 @@ import type {
 // (whatsapp.meta.factory.ts), decrypted just before use - never from env vars, unlike
 // AiSensyProvider/GupshupProvider above.
 
+import { redactDeep, redactSecrets } from "./whatsapp.redact.js";
+
 export interface MetaCloudApiCredentials {
   readonly phoneNumberId: string;
   readonly businessAccountId: string;
@@ -100,6 +102,11 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
+  /** Provider text made safe to store, return or log: this adapter's own credentials and any credential-shaped text are redacted. */
+  private safe(text: string): string {
+    return redactSecrets(text, [this.config.accessToken, this.config.appSecret, this.config.verifyToken]);
+  }
+
   private messagesUrl(): string {
     return `https://graph.facebook.com/${this.config.graphApiVersion}/${this.config.phoneNumberId}/messages`;
   }
@@ -125,7 +132,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
         });
       } catch (error) {
         lastError = error;
-        logger.error(`Meta Cloud API ${label} send failed to reach Graph API`, error instanceof Error ? error.message : error);
+        logger.error(`Meta Cloud API ${label} send failed to reach Graph API`, this.safe(error instanceof Error ? error.message : String(error)));
         continue; // network failure - retry once
       }
 
@@ -138,10 +145,10 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
       }
       // Sanitized diagnostic log (no token, masked recipient) - Meta's own error body is never a secret,
       // it's what actually explains a rejected send (wrong parameter format, unapproved template, etc.).
-      logger.error(`Meta Cloud API rejected the ${label} message (HTTP ${response.status})`, { request: this.sanitizedForLog(body), metaError: isObject(parsed) ? parsed.error : parsed });
-      throw new WhatsAppSendError(`Meta Cloud API rejected the ${label} message (HTTP ${response.status}): ${describeMetaError(parsed)}`, parsed);
+      logger.error(`Meta Cloud API rejected the ${label} message (HTTP ${response.status})`, { request: this.sanitizedForLog(body), metaError: redactDeep(isObject(parsed) ? parsed.error : parsed, [this.config.accessToken, this.config.appSecret, this.config.verifyToken]) });
+      throw new WhatsAppSendError(this.safe(`Meta Cloud API rejected the ${label} message (HTTP ${response.status}): ${describeMetaError(parsed)}`), redactDeep(parsed, [this.config.accessToken, this.config.appSecret, this.config.verifyToken]));
     }
-    throw new WhatsAppSendError(`Could not reach Meta Cloud API for ${label}: ${lastError instanceof Error ? lastError.message : String(lastError)}`, lastError);
+    throw new WhatsAppSendError(this.safe(`Could not reach Meta Cloud API for ${label}: ${lastError instanceof Error ? lastError.message : String(lastError)}`), redactDeep(lastError instanceof Error ? lastError.message : lastError, [this.config.accessToken, this.config.appSecret, this.config.verifyToken]));
   }
 
   async sendTemplateMessage(input: SendTemplateMessageInput): Promise<SendTemplateMessageResult> {
@@ -243,12 +250,12 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (error) {
-      throw new WhatsAppSendError(`Could not reach Meta Cloud API to create the template: ${error instanceof Error ? error.message : String(error)}`);
+      throw new WhatsAppSendError(this.safe(`Could not reach Meta Cloud API to create the template: ${error instanceof Error ? error.message : String(error)}`));
     }
     const body = await response.json().catch(() => null);
     if (!response.ok || !isObject(body) || typeof body.id !== "string") {
       const reason = isObject(body) && isObject(body.error) && typeof body.error.error_user_msg === "string" ? body.error.error_user_msg : isObject(body) && isObject(body.error) && typeof body.error.message === "string" ? body.error.message : `HTTP ${response.status}`;
-      throw new WhatsAppSendError(`Meta rejected the template submission: ${reason}`, body);
+      throw new WhatsAppSendError(this.safe(`Meta rejected the template submission: ${reason}`), redactDeep(body, [this.config.accessToken, this.config.appSecret, this.config.verifyToken]));
     }
     const rawStatus = typeof body.status === "string" ? body.status.toLowerCase() : "";
     return {
@@ -271,11 +278,11 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
       try {
         response = await this.fetchImpl(url, { headers: { Authorization: `Bearer ${this.config.accessToken}` }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
       } catch (error) {
-        throw new WhatsAppSendError(`Could not reach Meta Cloud API to list templates: ${error instanceof Error ? error.message : String(error)}`);
+        throw new WhatsAppSendError(this.safe(`Could not reach Meta Cloud API to list templates: ${error instanceof Error ? error.message : String(error)}`));
       }
       const body: unknown = await response.json().catch(() => null);
       if (!response.ok || !isObject(body) || !Array.isArray(body.data)) {
-        throw new WhatsAppSendError(`Meta Cloud API rejected the template list request (HTTP ${response.status})`, body);
+        throw new WhatsAppSendError(`Meta Cloud API rejected the template list request (HTTP ${response.status})`, redactDeep(body, [this.config.accessToken, this.config.appSecret, this.config.verifyToken]));
       }
       data.push(...body.data);
       const next: unknown = isObject(body.paging) ? body.paging.next : null;
@@ -357,7 +364,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
             status,
             timestamp: Number.isFinite(timestampSec) ? new Date(timestampSec * 1000) : new Date(),
             errorCode: firstError && typeof firstError.code !== "undefined" ? String(firstError.code) : undefined,
-            errorMessage: firstError ? describeStatusError(firstError) : undefined,
+            errorMessage: firstError ? this.safe(describeStatusError(firstError)) : undefined,
           });
         }
       }

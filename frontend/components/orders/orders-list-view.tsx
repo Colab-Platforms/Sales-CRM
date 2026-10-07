@@ -1,68 +1,28 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useLiveOrders, useOrderFilterOptions } from "@/hooks/useOrders";
+import { useLiveOrders, useOrderFilterOptions, useOrderTagOptions } from "@/hooks/useOrders";
 import { useAuthStore } from "@/stores/auth-store";
-import {
-  ORDER_SOURCE_ORDER,
-  ORDER_STATUS_ORDER,
-  PAYMENT_STATUS_ORDER,
-} from "@/lib/order-status";
-import type {
-  LiveOrdersListParams,
-  OrderSource,
-  OrderStatus,
-  PaymentStatusFilter,
-} from "@/lib/api-client/types/orders.types";
-import { OrdersFiltersBar, type OrdersFilters } from "./orders-filters";
+import type { LiveOrdersListParams } from "@/lib/api-client/types/orders.types";
+import { OrdersFiltersBar } from "./orders-filters";
 import { OrdersCursorPagination } from "./orders-cursor-pagination";
 import { OrdersTable, OrdersTableSkeleton, orderDetailHref } from "./orders-table";
+import { FILTER_COLUMNS, filtersToApi, filtersToParams, hasActiveColumnFilters, isColumnActive, parseColumnFilters, type ColumnFilters } from "./orders-column-filters";
+import { headerFilterNodes } from "./orders-header-filters";
 
 // This page reads live from Shopify (GET /orders/live), not the CRM DB - see orders.live.service.ts.
 // 25 is within the 25-50 initial-page-size range the live endpoint is meant to be used at.
 const PAGE_SIZE = 25;
 const SEARCH_DEBOUNCE_MS = 350;
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const PAYMENT_FILTER_VALUES: readonly string[] = [...PAYMENT_STATUS_ORDER, "NONE"];
 
-interface ParsedState extends OrdersFilters {
-  search: string;
-}
-
-// Filters live in the URL so a refresh, or Back from an order, returns to the same view. The
-// cursor position itself is deliberately NOT persisted to the URL - Shopify's cursors are opaque
-// and not meant to be bookmarked; a refresh goes back to the first page, same as opening the
-// page fresh. Anything unrecognised in the URL is ignored rather than sent to the API.
-//
-// status/paymentStatus/source/salespersonId are CRM-overlay filters (see orders.live.service.ts) -
-// restored here from the original DB-backed Orders page, reusing the exact same OrdersFiltersBar
-// component rather than a second, Shopify-only filter bar.
-function parseState(params: URLSearchParams): ParsedState {
-  const oneOf = <T extends string>(key: string, allowed: readonly string[]): T | undefined => {
-    const value = params.get(key);
-    return value && allowed.includes(value) ? (value as T) : undefined;
-  };
-  const date = (key: string) => {
-    const value = params.get(key);
-    return value && DATE_PATTERN.test(value) ? value : undefined;
-  };
-  const salespersonId = params.get("salespersonId");
-
-  return {
-    search: (params.get("search") ?? "").slice(0, 100),
-    status: oneOf<OrderStatus>("status", ORDER_STATUS_ORDER),
-    paymentStatus: oneOf<PaymentStatusFilter>("paymentStatus", PAYMENT_FILTER_VALUES),
-    source: oneOf<OrderSource>("source", ORDER_SOURCE_ORDER),
-    salespersonId: salespersonId && UUID_PATTERN.test(salespersonId) ? salespersonId : undefined,
-    dateFrom: date("dateFrom"),
-    dateTo: date("dateTo"),
-  };
-}
+// Search + every column filter live in the URL so a refresh, Back from an order, or a shared link returns to the same
+// filtered view (see orders-column-filters.ts for the format). The cursor position itself is deliberately NOT persisted -
+// Shopify's cursors are opaque; a refresh goes back to the first page. Filtering itself happens on the SERVER (the same
+// GET /orders/live call), never by loading every order into the browser.
 
 // The API takes full date-times, so a chosen day covers the viewer's whole local day.
 function dayBoundary(day: string | undefined, time: string): string | undefined {
@@ -77,8 +37,10 @@ export function OrdersListView() {
   const searchParams = useSearchParams();
   const role = useAuthStore((s) => s.user?.role);
 
-  const state = parseState(new URLSearchParams(searchParams.toString()));
-  const [searchText, setSearchText] = useState(state.search);
+  const queryString = searchParams.toString();
+  const filters: ColumnFilters = useMemo(() => parseColumnFilters(new URLSearchParams(queryString)), [queryString]);
+  const search = (new URLSearchParams(queryString).get("search") ?? "").slice(0, 100);
+  const [searchText, setSearchText] = useState(search);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimer.current), []);
 
@@ -116,30 +78,20 @@ export function OrdersListView() {
   };
 
   const showSalesperson = role !== undefined && role !== "SALESPERSON";
-  const { salespeople } = useOrderFilterOptions(showSalesperson);
+  const { salespeople, leadSources } = useOrderFilterOptions(true);
+  const tagOptions = useOrderTagOptions(true);
 
-  const dateRangeInvalid = Boolean(state.dateFrom && state.dateTo && state.dateFrom > state.dateTo);
-  const hasActiveFilters = Boolean(
-    state.search ||
-      searchText.trim() ||
-      state.status ||
-      state.paymentStatus ||
-      state.source ||
-      state.salespersonId ||
-      state.dateFrom ||
-      state.dateTo,
-  );
+  const dateRangeInvalid = Boolean(filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo);
+  const activeFilterCount = FILTER_COLUMNS.filter((c) => isColumnActive(filters, c)).length;
+  const hasActiveFilters = Boolean(search || searchText.trim() || hasActiveColumnFilters(filters));
 
   const params: LiveOrdersListParams = {
     after: currentAfter,
     first: PAGE_SIZE,
-    search: state.search || undefined,
-    status: state.status,
-    paymentStatus: state.paymentStatus,
-    source: state.source,
-    salespersonId: state.salespersonId,
-    dateFrom: dayBoundary(state.dateFrom, "00:00:00"),
-    dateTo: dayBoundary(state.dateTo, "23:59:59.999"),
+    search: search || undefined,
+    ...(filtersToApi(filters) as Partial<LiveOrdersListParams>),
+    dateFrom: dayBoundary(filters.dateFrom, "00:00:00"),
+    dateTo: dayBoundary(filters.dateTo, "23:59:59.999"),
   };
   const { data, isLoading, isFetching, error, refetch } = useLiveOrders(params, { enabled: !dateRangeInvalid });
 
@@ -147,6 +99,8 @@ export function OrdersListView() {
     if (data?.pageInfo.endCursor) setAfterStack((stack) => [...stack, data.pageInfo.endCursor!]);
   };
   const handlePrevious = () => setAfterStack((stack) => stack.slice(0, -1));
+
+  const headerFilters = headerFilterNodes({ filters, onChange: (patch) => updateUrl(filtersToParams(patch)), salespeople, leadSources, showSalesperson, tagOptions: { tags: tagOptions.tags, loading: tagOptions.isLoading, error: tagOptions.error } });
 
   // Shopify being unreachable is reported inside a successful response body (data.error), not a
   // thrown error - see orders.live.service.ts. Treat it the same as a hard fetch failure here.
@@ -167,26 +121,30 @@ export function OrdersListView() {
       </div>
     );
   } else if (data && data.items.length === 0) {
+    // The table (with its header funnels) stays visible above the message, so a filter can be changed without clearing first.
     content = (
-      <div className="flex flex-col items-center gap-3 py-12 text-center">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          <ShoppingCart className="size-5" />
+      <>
+        {hasActiveFilters ? <OrdersTable items={[]} isFetching={isFetching} onOpen={() => undefined} headerFilters={headerFilters} /> : null}
+        <div className="flex flex-col items-center gap-3 py-12 text-center">
+          <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+            <ShoppingCart className="size-5" />
+          </div>
+          {hasActiveFilters ? (
+            <>
+              <p className="text-sm font-medium">No orders match your filters.</p>
+              <p className="text-sm text-muted-foreground">Try a different search or clear the filters.</p>
+              <Button variant="outline" size="sm" onClick={handleClear}>
+                Clear filters
+              </Button>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium">No orders yet</p>
+              <p className="text-sm text-muted-foreground">Orders will appear here once they are created.</p>
+            </>
+          )}
         </div>
-        {hasActiveFilters ? (
-          <>
-            <p className="text-sm font-medium">No orders match your filters</p>
-            <p className="text-sm text-muted-foreground">Try a different search or clear the filters.</p>
-            <Button variant="outline" size="sm" onClick={handleClear}>
-              Clear filters
-            </Button>
-          </>
-        ) : (
-          <>
-            <p className="text-sm font-medium">No orders yet</p>
-            <p className="text-sm text-muted-foreground">Orders will appear here once they are created.</p>
-          </>
-        )}
-      </div>
+      </>
     );
   } else if (data) {
     content = (
@@ -196,7 +154,7 @@ export function OrdersListView() {
             {data.partialError}
           </p>
         ) : null}
-        <OrdersTable items={data.items} isFetching={isFetching} onOpen={(id) => router.push(orderDetailHref(id))} />
+        <OrdersTable items={data.items} isFetching={isFetching} onOpen={(id) => router.push(orderDetailHref(id))} headerFilters={headerFilters} />
         <OrdersCursorPagination
           hasNextPage={data.pageInfo.hasNextPage}
           hasPreviousPage={afterStack.length > 0}
@@ -218,19 +176,9 @@ export function OrdersListView() {
       <OrdersFiltersBar
         searchText={searchText}
         onSearchChange={handleSearchChange}
-        filters={state}
-        onFilterChange={(patch) =>
-          updateUrl(
-            Object.fromEntries(Object.entries(patch).map(([key, value]) => [key, value || undefined])) as Record<
-              string,
-              string | undefined
-            >,
-          )
-        }
         onClear={handleClear}
         hasActiveFilters={hasActiveFilters}
-        salespeople={salespeople}
-        showSalesperson={showSalesperson}
+        activeFilterCount={activeFilterCount}
         dateRangeInvalid={dateRangeInvalid}
       />
 

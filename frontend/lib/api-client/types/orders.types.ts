@@ -1,3 +1,4 @@
+import type { OrderRefundInfo } from "./refunds.types";
 import type { ReconciliationStatus } from "./reconciliation.types";
 
 export type OrderStatus =
@@ -87,6 +88,8 @@ export interface ShipmentDetail {
   providerStatus?: string | null;
   labelUrl?: string | null;
   pickupScheduledAt?: string | null;
+  /** Parcel weight (kg) the shipment was created with; null/absent when none was recorded. */
+  weightKg?: string | null;
   shiprocketOrderId?: string | null;
   // On a Shopify-derived shipment: the direct Shiprocket shipment carrying the same AWB (the same parcel).
   linkedShipmentId?: string | null;
@@ -115,12 +118,30 @@ export interface CreateManualOrderInput {
     state?: string;
     pincode?: string;
     phone?: string;
+    // Structured fields; line1/line2 above are the composed lines integrations read.
+    houseNumber?: string;
+    building?: string;
+    area?: string;
+    street?: string;
+    landmark?: string;
+    addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
   shippingAmount?: string;
   discountAmount?: string;
   /** Custom Discount percentage - the backend validates it and computes the amount itself. */
   discountPercent?: string;
+  /** Coupon / custom / none. Only the choice is sent; the server computes the amount. */
+  discount?: { none?: boolean; couponCode?: string; type?: "FIXED" | "PERCENT"; value?: string };
+  /** Consistency check only: the order is refused (409) if the server's total differs. */
+  expectedTotal?: string;
+  /** Packed parcel weight in kg as entered by the telecaller (never a product weight, never defaulted). */
+  parcelWeightKg?: number;
+  /** Prepaid orders: true = send the Cashfree link on WhatsApp with `whatsappTemplateId`; false = don't send; omitted = original behaviour. */
+  sendPaymentLinkViaWhatsApp?: boolean;
+  whatsappTemplateId?: string;
+  /** "Customer has agreed to receive WhatsApp updates" - recorded as an opt-in with the order. */
+  whatsappConsent?: boolean;
   discountReason?: string;
 }
 
@@ -159,6 +180,8 @@ export interface OrderNotifyResult {
   via: OrderNotifyVia | null;
   provider: WhatsAppProviderName | null;
   reason?: string;
+  /** The approved template that was sent (its name, never the provider id). Present for a template send. */
+  templateName?: string;
 }
 
 export interface CreateManualOrderResult {
@@ -226,6 +249,8 @@ export interface OrderListItem {
   customer: { leadId: string; leadNumber: string; name: string };
   salesperson: { id: string; name: string } | null;
   leadSource: { id: string; name: string } | null;
+  /** Shopify tags merged with the CRM confirmation tag (the live Orders list supplies it). */
+  tags?: string[];
 }
 
 export interface Pagination {
@@ -254,10 +279,25 @@ export interface LiveOrdersListParams {
   dateTo?: string;
   // CRM-overlay filters - see backend LiveOrdersQuery: applied after the Shopify page is fetched, so
   // an active filter can return fewer than `first` rows (an unsynced order never matches any of them).
-  status?: OrderStatus;
-  paymentStatus?: PaymentStatusFilter;
-  source?: OrderSource;
-  salespersonId?: string;
+  // Column filters: each a list (values inside one filter are OR-ed, different filters are AND-ed by the server).
+  status?: OrderStatus[];
+  paymentStatus?: PaymentStatusFilter[];
+  paymentMode?: ("COD" | "PREPAID")[];
+  source?: OrderSource[];
+  salespersonId?: string[];
+  leadSourceId?: string[];
+  fulfillment?: string[];
+  /** Order total range in rupees, as typed (decimal strings). */
+  totalMin?: string;
+  totalMax?: string;
+  /** Exact tags, any of them (OR). */
+  tags?: string[];
+}
+
+export interface LiveOrderTagOptions {
+  tags: { name: string; source: "SHOPIFY" | "CRM" }[];
+  /** Set when Shopify's tag list could not be loaded (the CRM tags are still returned). */
+  error?: string;
 }
 
 export interface LiveOrderListItem {
@@ -284,6 +324,8 @@ export interface LiveOrderListItem {
   hasTracking: boolean;
   /** Shopify's own shipping rate name (e.g. "Standard"), null when the order has no shipping line. */
   shippingMethod: string | null;
+  /** Shopify tags merged with the CRM confirmation tag (one de-duplicated list). */
+  tags: string[];
 }
 
 export interface LiveOrderPageInfo {
@@ -313,6 +355,10 @@ export interface OrderItemDetail {
   discountAmount: string;
   taxAmount: string;
   totalPrice: string;
+  /** Recorded catalog weight of one unit (kg); null/absent = not recorded. Never the parcel weight. */
+  unitWeightKg?: string | null;
+  /** Recorded per-unit product dimensions (cm), or null. Product dimensions only - never the packed parcel size. */
+  unitDimensionsCm?: { lengthCm: string; widthCm: string; heightCm: string } | null;
 }
 
 export interface PaymentDetail {
@@ -351,6 +397,8 @@ export interface OrderDetail {
   externalNumber: string | null;
   shippingAddress: Record<string, string | null> | null;
   shippingPincode: string | null;
+  /** Packed parcel weight (kg) as entered by a person; null when none was recorded. */
+  parcelWeightKg?: string | null;
   cancelReason: string | null;
   // Last Shopify-cancellation outcome the backend recorded (null if never cancelled / never attempted).
   shopifyCancellation: ShopifyCancelResult | null;
@@ -358,6 +406,11 @@ export interface OrderDetail {
   paymentLinkCancellation: PaymentLinkCancelResult | null;
   // Last Shopify payment-reconciliation outcome (set once a Cashfree payment on this order settles).
   shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // Who confirmed the order in the CRM (current confirmer), the tag derived from it ("CRM Confirmed by <name>"), and the outcome of
+  // writing that tag to the linked Shopify order. confirmedAt (below) is when.
+  confirmedBy?: { id: string; name: string } | null;
+  confirmationTag?: string | null;
+  shopifyConfirmationTag?: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // The last customer WhatsApp notification about this order as remembered by the backend (null = never attempted).
   whatsappNotification: (OrderNotifyResult & { at: string }) | null;
   createdAt: string;
@@ -371,6 +424,8 @@ export interface OrderDetail {
   refundedAmount: string;
   outstandingAmount: string;
   reconciliationStatus: ReconciliationStatus;
+  /** Refund APPROVAL workflow: per-payment eligibility/balance and this order's refund requests. Display only. */
+  refunds?: OrderRefundInfo;
   customer: {
     leadId: string;
     leadNumber: string;
@@ -542,4 +597,6 @@ export interface OrderStatusHistory {
 
 export interface OrderFilterOptions {
   salespeople: { id: string; name: string }[];
+  /** The CRM's own lead sources. */
+  leadSources: { id: string; name: string }[];
 }

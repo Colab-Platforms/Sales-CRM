@@ -19,9 +19,12 @@ import {
   formatMoney,
 } from "@/lib/order-status";
 import { DetailField, DetailGrid } from "./detail-field";
+import { OrderConfirmationTags } from "./order-confirmation-tags";
 import { OrderAuditHistory } from "./order-audit-history";
 import { customerDetailHref } from "./orders-table";
 import { OrderShipmentSection } from "./order-shipment-section";
+import { OrderRefundSection } from "@/components/refunds/order-refund-section";
+import { goodsValue } from "@/lib/package-dimensions";
 import { ShipmentStatusBadge } from "./shipment-status-badge";
 import { CrmBadge, PaymentModeBadge, ShopifyStatusBadge, SourceBadge, ToneBadge } from "./shopify-status-badge";
 import { AccentCard, EmptyState, ItemsCard, LinkButton, MilestoneList, MonoId, NOT_AVAILABLE, OrderSummaryCard, SectionTitle, ShippingBillingCard, StatTile, addressFromRecord, type ItemRow, type Milestone } from "./order-detail-parts";
@@ -29,6 +32,8 @@ import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { CancelOrderButton, OrderPaymentSummary } from "./cancel-order-button";
 import { CreatePaymentLinkButton, PaymentLinkPanel, ShopifyPaymentSyncStatus } from "./payment-link-panel";
+import { PrepaidUpgradeAction } from "./prepaid-upgrade-action";
+import { PrepaidUpgradeCard } from "./prepaid-upgrade-card";
 import { PaymentStatusBadge } from "./payment-status-badge";
 import { ReconciliationStatusBadge } from "./reconciliation-status-badge";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
@@ -125,6 +130,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
   const salesperson = order.bookedBy ?? order.leadOwner;
   const ownerDiffers = order.leadOwner && order.bookedBy && order.leadOwner.id !== order.bookedBy.id;
   const [sendOpen, setSendOpen] = useState(false);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
   const money = (v: string) => formatMoney(v, order.currency);
 
   // Reuses the exact same Customer 360 data/endpoint this customer's own profile page already
@@ -165,9 +171,13 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
     <div className="space-y-6">
       {/* ---- Header ---- */}
       <div className="space-y-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <BackLink />
-          <CancelOrderButton order={order} />
+          {/* The order's action area: Prepaid Upgrade (eligible COD orders only - decided by the backend) sits right next to Cancel Order. */}
+          <div className="flex flex-wrap items-start justify-end gap-2">
+            <PrepaidUpgradeAction target={{ kind: "crm", orderId: order.id }} onOpen={() => setUpgradeOpen(true)} />
+            <CancelOrderButton order={order} />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-3xl font-bold tracking-tight">{order.orderNumber}</h1>
@@ -227,6 +237,9 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
               {order.shippingPincode ? <DetailField label="Shipping pincode">{order.shippingPincode}</DetailField> : null}
               {order.cancelReason ? <DetailField label="Cancel reason">{order.cancelReason}</DetailField> : null}
             </DetailGrid>
+            <div className="mt-4 border-t pt-3">
+              <OrderConfirmationTags id={order.id} confirmedBy={order.confirmedBy} confirmationTag={order.confirmationTag} shopifyConfirmationTag={order.shopifyConfirmationTag} confirmedAt={order.confirmedAt} externalNumber={order.externalNumber} />
+            </div>
           </CardContent>
         </AccentCard>
       </div>
@@ -294,8 +307,14 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
         <PaymentReconciliationCard order={order} />
       </div>
 
+      {/* ---- Refund approval workflow (request / status only; no refund is executed here) ---- */}
+      <OrderRefundSection orderId={order.id} orderNumber={order.orderNumber} info={order.refunds} />
+
+      {/* ---- Prepaid Upgrade (eligible COD orders only; renders nothing otherwise) ---- */}
+      <PrepaidUpgradeCard target={{ kind: "crm", orderId: order.id }} open={upgradeOpen} onOpenChange={setUpgradeOpen} />
+
       {/* ---- Fulfilment & Shipment ---- */}
-      <OrderShipmentSection shipments={order.shipments} orderId={order.id} orderNumber={order.orderNumber} orderStatus={order.status} currency={order.currency} />
+      <OrderShipmentSection shipments={order.shipments} orderId={order.id} orderNumber={order.orderNumber} orderStatus={order.status} currency={order.currency} parcelWeightKg={order.parcelWeightKg ?? null} items={order.items} orderValue={goodsValue(order)} pincode={order.shippingPincode} cod={order.paymentMode === "COD"} />
 
       {/* ---- Status + Timeline ---- */}
       <div className="grid gap-6 lg:grid-cols-2">

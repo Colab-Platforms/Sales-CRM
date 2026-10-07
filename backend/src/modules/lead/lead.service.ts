@@ -823,6 +823,20 @@ class LeadService {
     await tx.salespersonAssignmentRoundRobin.update({ where: { id: cursor.id }, data: { lastAssignedSalespersonId: salesperson.id } });
   }
 
+  /** Assigns a lead to a specific salesperson chosen by a routing rule (not round-robin, not a manual click) - same bookkeeping
+   *  as every other assignment (LeadAssignment row, current-owner flip, Activity), group inherited from that salesperson's manager.
+   *  A no-op when the lead already has an owner: a rule never takes a lead away from someone. */
+  async assignToSalespersonByRule(tx: TxClient, lead: Lead, salesperson: User, ruleDescription: string): Promise<boolean> {
+    if (lead.ownerId) return false;
+    const managerId = salesperson.reportingManagerId;
+    const membership = managerId
+      ? await tx.groupMember.findFirst({ where: { userId: salesperson.id, isActive: true, group: { managerId, status: "ACTIVE" } }, select: { groupId: true } })
+      : null;
+    await this.bulkAssignLeadsToSalesperson(tx, [{ lead, salesperson, groupId: membership?.groupId ?? null }], null, AssignmentType.MANUAL);
+    await tx.activity.create({ data: { leadId: lead.id, type: ActivityType.ASSIGNMENT, referenceType: "Lead", referenceId: lead.id, title: `Routed to ${salesperson.name} by product routing`, description: ruleDescription } });
+    return true;
+  }
+
   /** Entry point for a newly-created abandoned lead: tries the manager stage, then (whether a
    *  manager was just assigned or already present) the salesperson stage. Each stage's own toggle
    *  decides whether anything actually happens - safe to call unconditionally. */

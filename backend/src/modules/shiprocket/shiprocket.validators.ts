@@ -24,9 +24,9 @@ const listQuerySchema = z
 
 export const validateListQuery = (query: unknown) => validateSchema<ListShipmentsQuery>(listQuerySchema, query);
 
-// Parcel size and weight are not stored on a CRM order, so the person creating the shipment supplies them.
+// The parcel size and weight are entered by the person creating the shipment (the weight is the packed parcel weight, never a product weight).
 const createBody = z.object({
-  weight: z.number({ error: "Weight (kg) is required" }).min(0.01, "Weight must be at least 0.01 kg").max(100, "Weight must be at most 100 kg"),
+  weight: z.number({ error: "Parcel weight is required before checking courier availability." }).min(0.01, "Parcel weight must be greater than 0").max(100, "Weight must be at most 100 kg"),
   length: z.number({ error: "Length (cm) is required" }).min(0.5, "Length must be at least 0.5 cm").max(300, "Length must be at most 300 cm"),
   breadth: z.number({ error: "Breadth (cm) is required" }).min(0.5, "Breadth must be at least 0.5 cm").max(300, "Breadth must be at most 300 cm"),
   height: z.number({ error: "Height (cm) is required" }).min(0.5, "Height must be at least 0.5 cm").max(300, "Height must be at most 300 cm"),

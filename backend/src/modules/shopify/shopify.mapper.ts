@@ -21,6 +21,10 @@ const CLOSED_FULFILLMENT = new Set(["CANCELLED", "ERROR", "FAILURE"]);
 
 // This store's shipping integration (Shiprocket) tags an order when the parcel has come back to the seller.
 const RTO_DELIVERED_TAG = /\brto delivered\b/i;
+// "CRM Confirmed by <name>" is the CRM's own tag. It is never evidence about payment or returns: a telecaller called "Cod" must not
+// make an order look cash-on-delivery, so these tags are ignored by every tag-based rule below.
+const CRM_CONFIRMED_TAG = /^CRM Confirmed by\b/i;
+const businessTags = (tags: string[]): string[] => tags.filter((t) => !CRM_CONFIRMED_TAG.test(t.trim()));
 const COD_TAG = /\bcash on delivery\b|\bcod\b/i;
 const PREPAID_TAG = /\bprepaid\b/i;
 const COD_GATEWAY = /\bcash on delivery\b|\bcod\b/i;
@@ -58,7 +62,7 @@ export function mapOrderStatus(input: StatusInput): StatusResult {
 
   const shipments = input.fulfillments.filter((f) => !CLOSED_FULFILLMENT.has(f.status));
   if (fulfillment === "FULFILLED") {
-    if (input.tags.some((t) => RTO_DELIVERED_TAG.test(t))) return done(OrderStatus.RETURNED);
+    if (businessTags(input.tags).some((t) => RTO_DELIVERED_TAG.test(t))) return done(OrderStatus.RETURNED);
     if (shipments.length > 0 && shipments.every((f) => DELIVERED.has(f.displayStatus ?? ""))) return done(OrderStatus.DELIVERED);
     if (shipments.length > 0 && shipments.every((f) => DELIVERED.has(f.displayStatus ?? "") || OUT_FOR_DELIVERY.has(f.displayStatus ?? ""))) {
       return done(OrderStatus.OUT_FOR_DELIVERY);
@@ -101,7 +105,7 @@ export function mapFulfillments(order: Pick<NormalizedOrder, "fulfillments" | "r
       let status: ShipmentStatus;
       if (DELIVERED.has(display)) status = ShipmentStatus.DELIVERED;
       else if (OUT_FOR_DELIVERY.has(display)) status = ShipmentStatus.OUT_FOR_DELIVERY;
-      else if (RETURNED_DISPLAY.has(display) || order.tags.some((t) => RTO_DELIVERED_TAG.test(t))) status = ShipmentStatus.RETURNED;
+      else if (RETURNED_DISPLAY.has(display) || businessTags(order.tags).some((t) => RTO_DELIVERED_TAG.test(t))) status = ShipmentStatus.RETURNED;
       else if (IN_TRANSIT.has(display)) status = ShipmentStatus.IN_TRANSIT;
       else status = ShipmentStatus.SHIPPED; // Unlisted values count as shipped, same rule mapOrderStatus uses.
 
@@ -143,7 +147,7 @@ export function isCodOrder(order: Pick<NormalizedOrder, "paymentGateways" | "tra
   return (
     order.paymentGateways.some(isCodGateway) ||
     order.transactions.some((t) => isCodGateway(t.gateway)) ||
-    order.tags.some((t) => COD_TAG.test(t))
+    businessTags(order.tags).some((t) => COD_TAG.test(t))
   );
 }
 
@@ -153,7 +157,7 @@ const date = (iso: string | null | undefined) => (iso ? new Date(iso) : null);
 /** COD, or "some other method" when the order clearly was paid up front, or unknown (null). */
 function methodFor(gateway: string | null, order: Pick<NormalizedOrder, "tags" | "paymentGateways">, cod: boolean): PaymentMethod | null {
   if (cod || isCodGateway(gateway)) return PaymentMethod.COD;
-  if (gateway || order.paymentGateways.length > 0 || order.tags.some((t) => PREPAID_TAG.test(t))) return PaymentMethod.OTHER;
+  if (gateway || order.paymentGateways.length > 0 || businessTags(order.tags).some((t) => PREPAID_TAG.test(t))) return PaymentMethod.OTHER;
   return null;
 }
 

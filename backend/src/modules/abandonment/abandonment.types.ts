@@ -20,6 +20,8 @@ export interface ListAbandonmentsQuery {
   salespersonId?: string;
   /** Filters on the underlying Lead's own pipeline status, same field the Leads page filters on. */
   workingStatus?: LeadWorkingStatus;
+  /** Item keys from GET /abandonments/items (see abandonment.items.ts). Several keys mean "any of these" (OR). */
+  items?: string[];
 }
 
 // Structured cart detail written by the ingesting processor (e.g. shiprocket.abandonment.processor.ts)
@@ -30,8 +32,18 @@ export interface CartSnapshot {
   currency: string | null;
   itemCount: number | null;
   itemNames: string[];
+  /** Per-line product/variant id, SKU, name and quantity. Absent on carts captured before this was stored. */
+  items: CartSnapshotItem[];
   stage: string | null;
   checkoutUrl: string | null;
+}
+
+export interface CartSnapshotItem {
+  productId: string | null;
+  variantId: string | null;
+  sku: string | null;
+  name: string;
+  quantity: number | null;
 }
 
 // Same shape frontend's Call type (calling.types.ts) expects - lets the abandoned-leads queue and lead

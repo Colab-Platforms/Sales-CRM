@@ -15,7 +15,8 @@ import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
 import { PROVIDER_DISPLAY_NAMES } from "./whatsapp.freetext.service.js";
 import { renderTemplateBody } from "./whatsapp.template.variables.js";
 import type { OrderConfirmationTestResult, PreviewTemplateInput, SendOrderConfirmationTestInput, SendTemplateInput, TemplatePreviewResult } from "./whatsapp.messaging.types.js";
-import { resolveTemplateVariables, type TemplateVariableField, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
+import { redactSecrets } from "./whatsapp.redact.js";
+import { resolveTemplateVariables, withoutRepeatedCurrencySign, type TemplateVariableField, type VariableResolutionContext } from "./whatsapp.variable-resolver.js";
 import type { WhatsAppMessageSummary } from "./whatsapp.types.js";
 
 const MESSAGE_SELECT = {
@@ -277,7 +278,12 @@ class WhatsAppMessagingService {
 
   private async send(actor: SendActor, input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
     const { lead, order, template, resolution, provider } = await this.loadAndResolve(actor, input, { requireProviderMatch: true });
-    if (resolution.errors.length > 0) throw new ApiError(resolution.errors[0], STATUS_CODES.BAD_REQUEST);
+    if (resolution.errors.length > 0) {
+      // A variable this CRM fills automatically but has no value for on this order: say exactly what is missing. Nothing is sent to the
+      // provider and no message row is written.
+      const missing = resolution.fields.find((f) => f.value === null && f.source === "crm");
+      throw new ApiError(missing ? `Cannot send WhatsApp template: ${missing.name} is required but no ${missing.name.replace(/_/g, " ")} is available for this order.` : resolution.errors[0], STATUS_CODES.BAD_REQUEST);
+    }
     if (!lead.normalizedMobile) throw new ApiError("This customer has no valid WhatsApp/mobile number on file", STATUS_CODES.BAD_REQUEST);
     if (input.mediaUrl) assertValidMediaUrl(input.mediaUrl); // fail fast, before any provider call or DB write
 
@@ -292,6 +298,8 @@ class WhatsAppMessagingService {
         templateId: template.id,
         orderId: order?.id ?? null,
         direction: "OUTBOUND",
+        // A FAILED attempt was never delivered, so it must not block the retry (e.g. "Send payment link" pressed again right after a failure).
+        status: { not: "FAILED" },
         createdAt: { gte: new Date(Date.now() - DUPLICATE_GUARD_MS) },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -356,7 +364,8 @@ class WhatsAppMessagingService {
           sentById: actor.kind === "user" ? actor.user.id : null,
           sentAt: sendError ? null : now,
           failedAt: sendError ? now : null,
-          errorMessage: sendError ? sendError.message : null,
+          // Defense in depth: every provider adapter redacts its own errors, and whatever reaches storage is checked once more.
+          errorMessage: sendError ? redactSecrets(sendError.message) : null,
         },
       ],
       skipDuplicates: true,
@@ -385,7 +394,7 @@ class WhatsAppMessagingService {
         referenceId: row.id,
         source: actor.kind === "user" ? ActivitySource.USER : ActivitySource.SYSTEM,
         title: sendError ? "WhatsApp message failed to send" : "WhatsApp template sent",
-        description: sendError ? sendError.message : template.name,
+        description: sendError ? redactSecrets(sendError.message) : template.name,
       },
     });
 
@@ -454,7 +463,11 @@ class WhatsAppMessagingService {
         : null,
     };
 
-    const resolution = resolveTemplateVariables(variableNames, ctx, input.manualValues);
+    const resolved = resolveTemplateVariables(variableNames, ctx, input.manualValues);
+    // Where the template prints the currency sign itself ("₹{{amount}}"), the value must not repeat it. Applied here so the preview,
+    // the stored message body and the provider payload all agree.
+    const values = withoutRepeatedCurrencySign(template.body, resolved.values);
+    const resolution = { ...resolved, values, fields: resolved.fields.map((f) => (f.name in values ? { ...f, value: values[f.name]! } : f)) };
     return { lead, order, template, resolution, provider };
   }
 }

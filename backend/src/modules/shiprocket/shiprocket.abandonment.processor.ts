@@ -46,6 +46,7 @@ function buildCartSnapshot(event: ParsedAbandonment) {
     currency: event.currency,
     itemCount: event.itemCount,
     itemNames: event.itemNames,
+    items: event.items.map((i) => ({ productId: i.productId, variantId: i.variantId, sku: i.sku, name: i.name, quantity: i.quantity })),
     stage: event.stage,
     checkoutUrl: event.checkoutUrl,
   };

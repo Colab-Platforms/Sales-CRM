@@ -7,6 +7,8 @@ import {
   createRecoveryAction,
   getAbandonment,
   getAbandonmentByLead,
+  listAbandonmentIds,
+  listAbandonmentItems,
   listAbandonments,
   updateAbandonmentStatus,
 } from "./abandonment.controller.js";
@@ -25,6 +27,9 @@ const router = Router();
 const allRoles = requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON);
 
 router.get("/", requireAuth, allRoles, listAbandonments);
+// Items filter: the products found in the viewer's abandoned carts, and the ids of everything a filter matches ("Select all").
+router.get("/items", requireAuth, allRoles, listAbandonmentItems);
+router.get("/ids", requireAuth, allRoles, listAbandonmentIds);
 // Backs the "Abandoned Checkout" panel embedded on the normal lead-detail page - looked up by leadId.
 router.get("/by-lead/:leadId", requireAuth, allRoles, getAbandonmentByLead);
 

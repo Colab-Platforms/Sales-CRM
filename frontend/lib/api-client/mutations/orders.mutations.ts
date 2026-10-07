@@ -77,6 +77,16 @@ export function usePushOrderToShopifyMutation() {
   });
 }
 
+export function useRetryConfirmationTagSyncMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<{ status: "synced" | "unchanged" | "not_linked" | "not_confirmed" | "failed"; tag?: string; reason?: string }, unknown, string>({
+    mutationFn: (orderId) => ordersApi.retryConfirmationTagSync(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}
+
 export function useRetryShopifyPaymentSyncMutation() {
   const queryClient = useQueryClient();
   return useMutation<{ status: "synced" | "not_linked" | "failed"; reason?: string }, unknown, string>({

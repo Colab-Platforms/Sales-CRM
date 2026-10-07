@@ -51,7 +51,7 @@ export const sendPaymentLinkWhatsApp = async (req: AuthRequest, res: Response): 
     if (body.error) return void sendResponse(res, false, null, body.error.message, STATUS_CODES.BAD_REQUEST);
 
     if (body.value.templateId) {
-      sendResponse(res, true, await service.sendPaymentLinkWhatsApp(req.user!, params.value.paymentId, body.value.templateId), "Payment link sent", STATUS_CODES.CREATED);
+      sendResponse(res, true, await service.sendPaymentLinkWhatsApp(req.user!, params.value.paymentId, body.value.templateId, { consent: body.value.whatsappConsent }), "Payment link sent", STATUS_CODES.CREATED);
       return;
     }
     const result = await service.sendPaymentLinkAuto(req.user!, params.value.paymentId);
