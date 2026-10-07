@@ -71,7 +71,7 @@ export function ManagerDashboardView({ data }: { data: ManagerDashboard }) {
                   <TableRow key={member.id}>
                     <TableCell className="pl-5">
                       <div className="font-semibold">{member.name}</div>
-                      <div className="text-xs text-muted-foreground">{member.email}</div>
+                      <div className="text-xs text-muted-foreground">{member.username}</div>
                     </TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">
                       {member.totalLeads}

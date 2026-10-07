@@ -17,7 +17,7 @@ import type { StoredWhatsAppCredentials } from "./whatsapp.cloud-config.types.js
 
 const KEY = Buffer.alloc(32, 11).toString("base64");
 const OTHER_KEY = Buffer.alloc(32, 12).toString("base64");
-const ADMIN: AuthUser = { id: "admin-1", role: Role.ADMIN, email: "admin@example.com" };
+const ADMIN: AuthUser = { id: "admin-1", role: Role.ADMIN, username: "test-user" };
 const SECRETS = { accessToken: "EAA-meta-access-token-XYZ", appSecret: "meta-app-secret-XYZ", verifyToken: "verify-token-XYZ" };
 const GEMINI_KEY = "AIza-gemini-secret-key-XYZ";
 const ALL_SECRETS = [...Object.values(SECRETS), GEMINI_KEY];

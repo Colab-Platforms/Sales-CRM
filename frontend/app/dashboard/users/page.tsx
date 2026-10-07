@@ -37,24 +37,24 @@ import type { ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.
 
 interface AccountFieldErrors {
   name?: string;
-  email?: string;
+  username?: string;
   password?: string;
   reportingManagerId?: string;
 }
 
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,50}$/i;
 
 // Client-side mirror of the backend's zod rules, so obvious mistakes (short
-// password, malformed email) show up instantly under the offending field
+// password, malformed username) show up instantly under the offending field
 // instead of round-tripping to the server and landing in a generic banner
 // that gives no clue which field was wrong.
 function validateAccountFields(
-  fields: { name: string; email: string; password: string; reportingManagerId?: string },
+  fields: { name: string; username: string; password: string; reportingManagerId?: string },
   opts: { requireReportingManager: boolean },
 ): AccountFieldErrors {
   const errors: AccountFieldErrors = {};
   if (fields.name.trim().length < 2) errors.name = "Name must be at least 2 characters.";
-  if (!EMAIL_PATTERN.test(fields.email.trim())) errors.email = "Enter a valid email address.";
+  if (!USERNAME_PATTERN.test(fields.username.trim())) errors.username = "Use 3-50 letters, numbers, dots, underscores or hyphens.";
   if (fields.password.length < 6) errors.password = "Password must be at least 6 characters.";
   if (opts.requireReportingManager && !fields.reportingManagerId) {
     errors.reportingManagerId = "Select a reporting manager.";
@@ -65,19 +65,19 @@ function validateAccountFields(
 function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
   const createManager = useCreateManagerMutation();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({});
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    const errors = validateAccountFields({ name, email, password }, { requireReportingManager: false });
+    const errors = validateAccountFields({ name, username, password }, { requireReportingManager: false });
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
     createManager.mutate(
-      { name, email, password, phone: phone || undefined },
+      { name, username, password, phone },
       {
         onSuccess: () => {
           toast.success("Manager added successfully.");
@@ -114,19 +114,19 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-email">Email Address</Label>
+          <Label htmlFor="create-username">Username</Label>
           <Input
-            id="create-email"
-            type="email"
-            placeholder="sarah.connor@company.com"
-            value={email}
+            id="create-username"
+            type="text"
+            placeholder="sarah.connor_avatar"
+            value={username}
             onChange={(e) => {
-              setEmail(e.target.value);
-              setFieldErrors((prev) => ({ ...prev, email: undefined }));
+              setUsername(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, username: undefined }));
             }}
             required
           />
-          {fieldErrors.email ? <p className="text-xs text-destructive">{fieldErrors.email}</p> : null}
+          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
         </div>
 
         <div className="space-y-1.5">
@@ -148,11 +148,11 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label htmlFor="create-phone">Phone Number</Label>
-            <span className="text-xs text-muted-foreground">Optional</span>
           </div>
           <Input
             id="create-phone"
             type="tel"
+            required
             placeholder="+1 (555) 000-0000"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -186,7 +186,7 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
 function CreateSalespersonModalContent({ managers, onDone }: { managers: ManagerUser[]; onDone: () => void }) {
   const createSalesperson = useCreateSalespersonMutation();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [reportingManagerId, setReportingManagerId] = useState("");
@@ -197,14 +197,14 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const errors = validateAccountFields(
-      { name, email, password, reportingManagerId },
+      { name, username, password, reportingManagerId },
       { requireReportingManager: true },
     );
     setFieldErrors(errors);
     if (Object.keys(errors).length > 0) return;
 
     createSalesperson.mutate(
-      { name, email, password, phone: phone || undefined, reportingManagerId },
+      { name, username, password, phone, reportingManagerId },
       {
         onSuccess: () => {
           toast.success("Salesperson added successfully.");
@@ -242,19 +242,19 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-sp-email">Email Address</Label>
+          <Label htmlFor="create-sp-username">Username</Label>
           <Input
-            id="create-sp-email"
-            type="email"
+            id="create-sp-username"
+            type="text"
             placeholder="john.doe@company.com"
-            value={email}
+            value={username}
             onChange={(e) => {
-              setEmail(e.target.value);
-              setFieldErrors((prev) => ({ ...prev, email: undefined }));
+              setUsername(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, username: undefined }));
             }}
             required
           />
-          {fieldErrors.email ? <p className="text-xs text-destructive">{fieldErrors.email}</p> : null}
+          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
         </div>
 
         <div className="space-y-1.5">
@@ -280,11 +280,11 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label htmlFor="create-sp-phone">Phone Number</Label>
-            <span className="text-xs text-muted-foreground">Optional</span>
           </div>
           <Input
             id="create-sp-phone"
             type="tel"
+            required
             placeholder="+1 (555) 000-0000"
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
@@ -307,7 +307,7 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
             </option>
             {activeManagers.map((manager) => (
               <option key={manager.id} value={manager.id}>
-                {manager.name} ({manager.email})
+                {manager.name} ({manager.username})
               </option>
             ))}
           </NativeSelect>
@@ -501,14 +501,14 @@ function EditSalespersonModalContent({
           {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-sp-email-${salesperson.id}`}>Email</Label>
+          <Label htmlFor={`edit-sp-username-${salesperson.id}`}>Username</Label>
           <Input
-            id={`edit-sp-email-${salesperson.id}`}
-            value={salesperson.email}
+            id={`edit-sp-username-${salesperson.id}`}
+            value={salesperson.username}
             disabled
             className="bg-muted/50 text-muted-foreground cursor-not-allowed"
           />
-          <p className="text-xs text-muted-foreground">Email address cannot be changed.</p>
+          <p className="text-xs text-muted-foreground">Username cannot be changed.</p>
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
@@ -535,7 +535,7 @@ function EditSalespersonModalContent({
             </option>
             {activeManagers.map((manager) => (
               <option key={manager.id} value={manager.id}>
-                {manager.name} ({manager.email})
+                {manager.name} ({manager.username})
               </option>
             ))}
           </NativeSelect>
@@ -574,7 +574,7 @@ function SalespersonRow({ salesperson, managers }: { salesperson: SalespersonUse
     <>
       <TableRow>
         <TableCell className="pl-5 font-semibold">{salesperson.name}</TableCell>
-        <TableCell className="text-muted-foreground">{salesperson.email}</TableCell>
+        <TableCell className="text-muted-foreground">{salesperson.username}</TableCell>
         <TableCell>{salesperson.phone ?? "—"}</TableCell>
         <TableCell>{salesperson.reportingManager?.name ?? "—"}</TableCell>
         <TableCell>
@@ -702,14 +702,14 @@ function EditManagerModalContent({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-email-${manager.id}`}>Email</Label>
+          <Label htmlFor={`edit-username-${manager.id}`}>Username</Label>
           <Input
-            id={`edit-email-${manager.id}`}
-            value={manager.email}
+            id={`edit-username-${manager.id}`}
+            value={manager.username}
             disabled
             className="bg-muted/50 text-muted-foreground cursor-not-allowed"
           />
-          <p className="text-xs text-muted-foreground">Email address cannot be changed.</p>
+          <p className="text-xs text-muted-foreground">Username cannot be changed.</p>
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
@@ -759,7 +759,7 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
     <>
       <TableRow>
         <TableCell className="pl-5 font-semibold">{manager.name}</TableCell>
-        <TableCell className="text-muted-foreground">{manager.email}</TableCell>
+        <TableCell className="text-muted-foreground">{manager.username}</TableCell>
         <TableCell>{manager.phone ?? "—"}</TableCell>
         <TableCell>
           <Badge variant={isActive ? "default" : "secondary"}>
@@ -911,7 +911,7 @@ export default function UsersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-5">Name</TableHead>
-                  <TableHead>Email</TableHead>
+                  <TableHead>Username</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="pr-5 text-right">Actions</TableHead>
@@ -969,7 +969,7 @@ export default function UsersPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="pl-5">Name</TableHead>
-                  <TableHead>Email</TableHead>
+                  <TableHead>Username</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Reporting Manager</TableHead>
                   <TableHead>Status</TableHead>

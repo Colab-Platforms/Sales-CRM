@@ -5,7 +5,7 @@ import type { OrderStatus } from "@/lib/api-client/types/orders.types";
 
 export function OrderStatusBadge({ status }: { status: OrderStatus }) {
   return (
-    <Badge variant="outline" className={cn("border-transparent", ORDER_STATUS_COLORS[status])}>
+    <Badge variant="outline" className={cn("border-current/20", ORDER_STATUS_COLORS[status])}>
       {ORDER_STATUS_LABELS[status]}
     </Badge>
   );

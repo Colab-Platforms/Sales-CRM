@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
+import { usernameSchema } from "@/lib/username.js";
 import type {
   CreateGroupBody,
   AddSalespersonBody,
@@ -17,16 +18,16 @@ const createGroupSchema = z.object({
 
 const addSalespersonSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
-  email: z.string().email("Enter a valid email address"),
+  username: usernameSchema,
   password: z.string().min(6, "Password must be at least 6 characters"),
-  phone: z.string().max(20, "Phone number is too long").optional(),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
 });
 
 const createSalespersonSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
-  email: z.string().email("Enter a valid email address"),
+  username: usernameSchema,
   password: z.string().min(6, "Password must be at least 6 characters"),
-  phone: z.string().max(20, "Phone number is too long").optional(),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
   // .guid() (not .uuid()) — .uuid() enforces RFC 9562 version/variant bits,
   // but Postgres's uuid column (and thus ids already in the database, e.g.
   // seeded groups) accepts any 32-hex-digit UUID regardless of those bits.

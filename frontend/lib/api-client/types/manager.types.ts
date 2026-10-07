@@ -1,7 +1,7 @@
 export interface GroupMemberUser {
   id: string;
   name: string;
-  email: string;
+  username: string;
   phone: string | null;
   status: string;
 }
@@ -32,9 +32,9 @@ export interface CreateGroupPayload {
 
 export interface AddSalespersonPayload {
   name: string;
-  email: string;
+  username: string;
   password: string;
-  phone?: string;
+  phone: string;
 }
 
 export interface CreateSalespersonPayload extends AddSalespersonPayload {
@@ -44,7 +44,7 @@ export interface CreateSalespersonPayload extends AddSalespersonPayload {
 export interface SalespersonUser {
   id: string;
   name: string;
-  email: string;
+  username: string;
   phone: string | null;
   role: "SALESPERSON";
   status: string;
@@ -77,7 +77,7 @@ export interface SalespersonWithGroup extends SalespersonUser {
 export interface MySalesperson {
   id: string;
   name: string;
-  email: string;
+  username: string;
   phone: string | null;
   status: string;
   groupId: string | null;

@@ -33,3 +33,12 @@ const listConversationsQuerySchema = z.object({
 export const validateListMessagesQuery = (query: unknown) => validateSchema<ListMessagesQuery>(listMessagesQuerySchema, query);
 export const validateMessageIdParams = (params: unknown) => validateSchema<{ id: string }>(messageIdParamsSchema, params);
 export const validateListConversationsQuery = (query: unknown) => validateSchema<ListConversationsQuery>(listConversationsQuerySchema, query);
+
+const starredQuerySchema = z.object({ leadId: optional(z.uuid({ error: "Invalid customer id" })) });
+export const validateStarredQuery = (query: unknown) => validateSchema<{ leadId?: string }>(starredQuerySchema, query);
+
+const bulkDeleteForMeSchema = z.object({ ids: z.array(z.uuid({ error: "Invalid message id" })).min(1, "At least one message id is required").max(200, "At most 200 messages at a time") });
+export const validateBulkDeleteForMeBody = (body: unknown) => validateSchema<{ ids: string[] }>(bulkDeleteForMeSchema, body);
+
+const forwardMessageSchema = z.object({ targetLeadId: z.uuid({ error: "Invalid destination customer id" }) });
+export const validateForwardMessageBody = (body: unknown) => validateSchema<{ targetLeadId: string }>(forwardMessageSchema, body);

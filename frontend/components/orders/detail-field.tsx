@@ -1,10 +1,13 @@
 import type { ReactNode } from "react";
 
-export function DetailField({ label, children }: { label: string; children: ReactNode }) {
+export function DetailField({ label, icon, children }: { label: string; icon?: ReactNode; children: ReactNode }) {
   return (
-    <div className="space-y-0.5">
-      <dt className="text-xs text-muted-foreground">{label}</dt>
-      <dd className="text-sm">{children ?? "—"}</dd>
+    <div className="space-y-1">
+      <dt className="flex items-center gap-1.5 text-xs text-muted-foreground [&_svg]:size-3.5">
+        {icon}
+        {label}
+      </dt>
+      <dd className="text-sm font-medium">{children ?? "—"}</dd>
     </div>
   );
 }

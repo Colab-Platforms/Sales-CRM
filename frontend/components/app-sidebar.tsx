@@ -6,6 +6,8 @@ import {
   LayoutDashboard,
   Users,
   ShoppingCart,
+  Scale,
+  Ticket,
   UsersRound,
   BarChart3,
   UserCog,
@@ -22,6 +24,10 @@ import {
   Phone,
   Settings,
   AlertTriangle,
+  RotateCcw,
+  ChevronRight,
+  MessagesSquare,
+  PhoneIncoming,
 } from "lucide-react";
 import {
   Sidebar,
@@ -39,9 +45,10 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar";
-import { ChevronRight, MessagesSquare, PhoneIncoming } from "lucide-react";
 import { NavUser } from "@/components/nav-user";
+import { PendingRefundBadge } from "@/components/refunds/pending-refund-badge";
 import { BrandMark } from "@/components/brand-mark";
+import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
 
 interface NavItem {
@@ -49,15 +56,14 @@ interface NavItem {
   href?: string;
   icon: ComponentType<{ className?: string }>;
   // Only-ever-exact match: for a route that is itself a literal path-prefix of a sibling nav
-  // item's href (WhatsApp Status vs. WhatsApp Templates), so viewing Templates doesn't also light
-  // up Status. Every other item keeps the default prefix match, which is what lets e.g. viewing an
-  // order's detail page still highlight "Orders".
+  // item's href (WhatsApp vs. its own children like WhatsApp Templates, all under
+  // /dashboard/whatsapp/...), so viewing Templates doesn't also light up the WhatsApp Inbox link.
+  // Every other item keeps the default prefix match, which is what lets e.g. viewing an order's
+  // detail page still highlight "Orders".
   exact?: boolean;
-  // Leads is the only nav item with real sub-pages rather than one page per item - everything
-  // else in this sidebar stays flat on purpose. "Inbound IVR" is one of its children, not a
-  // separate module or its own nested submenu: IVR is part of the Leads feature. The type stays
-  // recursive (NavItem[], not a fixed one-level shape) only so a future nested case doesn't need
-  // a second rendering path - today nothing actually nests more than one level deep.
+  // A collapsible parent group (e.g. "WhatsApp", or Leads with its "Inbound IVR" child) instead of
+  // a direct link - has no href of its own, only children. Only one level deep; nothing here needs
+  // more than that today.
   children?: NavItem[];
 }
 
@@ -202,7 +208,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "Customers", href: "/dashboard/customers", icon: Contact },
+        { title: "Offers", href: "/dashboard/offers", icon: Ticket },
       ],
     },
     {
@@ -210,14 +216,20 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         {
           title: "WhatsApp",
-          href: "/dashboard/whatsapp",
           icon: MessageCircle,
-          exact: true,
-        },
-        {
-          title: "WhatsApp Templates",
-          href: "/dashboard/whatsapp/templates",
-          icon: FileText,
+          children: [
+            {
+              title: "WhatsApp",
+              href: "/dashboard/whatsapp",
+              icon: MessageCircle,
+              exact: true,
+            },
+            {
+              title: "WhatsApp Templates",
+              href: "/dashboard/whatsapp/templates",
+              icon: FileText,
+            },
+          ],
         },
         {
           title: "Website Chat",
@@ -274,11 +286,17 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           ],
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "Customers", href: "/dashboard/customers", icon: Contact },
+        { title: "Offers", href: "/dashboard/offers", icon: Ticket },
+        { title: "Product Weights", href: "/dashboard/products", icon: Scale },
         {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
           icon: Wallet,
+        },
+        {
+          title: "Refund Approvals",
+          href: "/dashboard/refunds",
+          icon: RotateCcw,
         },
         {
           title: "Shiprocket",
@@ -298,29 +316,30 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         {
           title: "WhatsApp",
-          href: "/dashboard/whatsapp",
           icon: MessageCircle,
-          exact: true,
-        },
-        {
-          title: "WhatsApp Status",
-          href: "/dashboard/whatsapp/status",
-          icon: MessageCircle,
-        },
-        {
-          title: "WhatsApp Templates",
-          href: "/dashboard/whatsapp/templates",
-          icon: FileText,
+          children: [
+            {
+              title: "WhatsApp",
+              href: "/dashboard/whatsapp",
+              icon: MessageCircle,
+              exact: true,
+            },
+            {
+              title: "WhatsApp Templates",
+              href: "/dashboard/whatsapp/templates",
+              icon: FileText,
+            },
+            {
+              title: "WhatsApp Campaigns",
+              href: "/dashboard/whatsapp/campaigns",
+              icon: Send,
+            },
+          ],
         },
         {
           title: "Website Chat",
           href: "/dashboard/webchat",
           icon: MessagesSquare,
-        },
-        {
-          title: "WhatsApp Campaigns",
-          href: "/dashboard/whatsapp/campaigns",
-          icon: Send,
         },
       ],
     },
@@ -364,11 +383,17 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           ],
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "Customers", href: "/dashboard/customers", icon: Contact },
+        { title: "Offers", href: "/dashboard/offers", icon: Ticket },
+        { title: "Product Weights", href: "/dashboard/products", icon: Scale },
         {
           title: "Reconciliation",
           href: "/dashboard/reconciliation",
           icon: Wallet,
+        },
+        {
+          title: "Refund Approvals",
+          href: "/dashboard/refunds",
+          icon: RotateCcw,
         },
         {
           title: "Shiprocket",
@@ -388,39 +413,40 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         {
           title: "WhatsApp",
-          href: "/dashboard/whatsapp",
           icon: MessageCircle,
-          exact: true,
-        },
-        {
-          title: "WhatsApp Status",
-          href: "/dashboard/whatsapp/status",
-          icon: MessageCircle,
-        },
-        {
-          title: "WhatsApp Config",
-          href: "/dashboard/whatsapp/cloud-config",
-          icon: Settings,
-        },
-        {
-          title: "WhatsApp Templates",
-          href: "/dashboard/whatsapp/templates",
-          icon: FileText,
+          children: [
+            {
+              title: "WhatsApp",
+              href: "/dashboard/whatsapp",
+              icon: MessageCircle,
+              exact: true,
+            },
+            {
+              title: "WhatsApp Config",
+              href: "/dashboard/whatsapp/cloud-config",
+              icon: Settings,
+            },
+            {
+              title: "WhatsApp Templates",
+              href: "/dashboard/whatsapp/templates",
+              icon: FileText,
+            },
+            {
+              title: "WhatsApp Automations",
+              href: "/dashboard/whatsapp/automations",
+              icon: Workflow,
+            },
+            {
+              title: "WhatsApp Campaigns",
+              href: "/dashboard/whatsapp/campaigns",
+              icon: Send,
+            },
+          ],
         },
         {
           title: "Website Chat",
           href: "/dashboard/webchat",
           icon: MessagesSquare,
-        },
-        {
-          title: "WhatsApp Automations",
-          href: "/dashboard/whatsapp/automations",
-          icon: Workflow,
-        },
-        {
-          title: "WhatsApp Campaigns",
-          href: "/dashboard/whatsapp/campaigns",
-          icon: Send,
         },
       ],
     },
@@ -439,109 +465,55 @@ function isActivePath(pathname: string, href: string, exact = false) {
     : pathname === href || pathname.startsWith(`${href}/`);
 }
 
-function itemHasActiveDescendant(item: NavItem, pathname: string): boolean {
-  if (item.href && isActivePath(pathname, item.href, item.exact)) return true;
-  return item.children?.some((child) => itemHasActiveDescendant(child, pathname)) ?? false;
-}
+/** A collapsible parent nav item (e.g. "WhatsApp"), holding its own open/closed state - expanded
+ *  automatically whenever the current route is one of its children (covers both a fresh page load/
+ *  refresh on a child route, and a client-side navigation into one while the sidebar stays mounted),
+ *  and otherwise freely toggled by clicking the parent row. */
+function CollapsibleNavItem({ item, pathname }: { item: NavItem; pathname: string }) {
+  const children = item.children ?? [];
+  const hasActiveChild = children.some((child) => child.href && isActivePath(pathname, child.href, child.exact));
+  const [open, setOpen] = useState(hasActiveChild);
 
-/** Every item with children (e.g. "Leads") that must start expanded so the active route's parents
- * are already open on first paint/direct navigation - a plain prefix match on href, same rule
- * isActivePath already uses for non-exact items. */
-function collectAutoExpandedIds(items: NavItem[], pathname: string, parentId = ""): string[] {
-  const ids: string[] = [];
-  for (const item of items) {
-    if (!item.children) continue;
-    const id = parentId ? `${parentId}/${item.title}` : item.title;
-    if (itemHasActiveDescendant(item, pathname)) {
-      ids.push(id, ...collectAutoExpandedIds(item.children, pathname, id));
-    }
-  }
-  return ids;
-}
-
-/** Renders one child inside a SidebarMenuSub. Recurses if that child itself ever has children
- * (none do today - "All Leads" and "Inbound IVR" are both leaves), nesting another SidebarMenuSub
- * inside the SidebarMenuSubItem's <li>, which the primitive supports structurally. A parent with
- * children is a click-to-expand toggle, not a link - only leaves navigate. */
-function SidebarSubNavItem({
-  item,
-  parentId,
-  pathname,
-  openIds,
-  onToggle,
-}: {
-  item: NavItem;
-  parentId: string;
-  pathname: string;
-  openIds: Set<string>;
-  onToggle: (id: string) => void;
-}) {
-  const id = `${parentId}/${item.title}`;
-
-  if (item.children) {
-    const isOpen = openIds.has(id);
-    return (
-      <SidebarMenuSubItem>
-        <SidebarMenuSubButton
-          onClick={() => onToggle(id)}
-          aria-expanded={isOpen}
-          isActive={itemHasActiveDescendant(item, pathname)}
-        >
-          <item.icon />
-          <span>{item.title}</span>
-          <ChevronRight className={`ml-auto size-3.5 shrink-0 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-        </SidebarMenuSubButton>
-        {isOpen ? (
-          <SidebarMenuSub>
-            {item.children.map((child) => (
-              <SidebarSubNavItem key={child.title} item={child} parentId={id} pathname={pathname} openIds={openIds} onToggle={onToggle} />
-            ))}
-          </SidebarMenuSub>
-        ) : null}
-      </SidebarMenuSubItem>
-    );
-  }
+  useEffect(() => {
+    if (hasActiveChild) setOpen(true);
+    // Only route changes should force this open - a manual collapse must never be immediately
+    // undone by this same effect re-running for an unrelated reason.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname]);
 
   return (
-    <SidebarMenuSubItem>
-      <SidebarMenuSubButton
-        render={<Link href={item.href!} />}
-        isActive={Boolean(item.href) && isActivePath(pathname, item.href!, item.exact)}
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        onClick={() => setOpen((prev) => !prev)}
+        isActive={hasActiveChild}
+        aria-expanded={open}
+        tooltip={item.title}
       >
         <item.icon />
         <span>{item.title}</span>
-      </SidebarMenuSubButton>
-    </SidebarMenuSubItem>
+        <ChevronRight className={cn("ml-auto transition-transform duration-200", open && "rotate-90")} />
+      </SidebarMenuButton>
+      {open ? (
+        <SidebarMenuSub>
+          {children.map((child) =>
+            child.href ? (
+              <SidebarMenuSubItem key={child.title}>
+                <SidebarMenuSubButton render={<Link href={child.href} />} isActive={isActivePath(pathname, child.href, child.exact)}>
+                  <child.icon />
+                  <span>{child.title}</span>
+                </SidebarMenuSubButton>
+              </SidebarMenuSubItem>
+            ) : null,
+          )}
+        </SidebarMenuSub>
+      ) : null}
+    </SidebarMenuItem>
   );
 }
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
   const sections = NAV_BY_ROLE[user.role];
-
-  const [openIds, setOpenIds] = useState<Set<string>>(
-    () => new Set(sections.flatMap((section) => collectAutoExpandedIds(section.items, pathname))),
-  );
-
-  // Direct navigation to a nested route (e.g. pasting /dashboard/leads/ivr/outbound) must reveal
-  // it even if nothing was manually expanded yet - this only ever adds ids, it never collapses
-  // something the user already toggled open or closed themselves.
-  useEffect(() => {
-    const needed = sections.flatMap((section) => collectAutoExpandedIds(section.items, pathname));
-    setOpenIds((prev) => {
-      if (needed.every((id) => prev.has(id))) return prev;
-      return new Set([...prev, ...needed]);
-    });
-  }, [pathname, sections]);
-
-  function toggle(id: string) {
-    setOpenIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
 
   return (
     <Sidebar collapsible="icon">
@@ -575,46 +547,21 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
               <SidebarMenu>
                 {section.items.map((item) =>
                   item.children ? (
-                    <SidebarMenuItem key={item.title}>
-                      <SidebarMenuButton
-                        type="button"
-                        onClick={() => toggle(item.title)}
-                        aria-expanded={openIds.has(item.title)}
-                        isActive={itemHasActiveDescendant(item, pathname)}
-                        tooltip={item.title}
-                      >
-                        <item.icon />
-                        <span>{item.title}</span>
-                        <ChevronRight
-                          className={`ml-auto size-3.5 shrink-0 transition-transform ${openIds.has(item.title) ? "rotate-90" : ""}`}
-                        />
-                      </SidebarMenuButton>
-                      {openIds.has(item.title) ? (
-                        <SidebarMenuSub>
-                          {item.children.map((child) => (
-                            <SidebarSubNavItem
-                              key={child.title}
-                              item={child}
-                              parentId={item.title}
-                              pathname={pathname}
-                              openIds={openIds}
-                              onToggle={toggle}
-                            />
-                          ))}
-                        </SidebarMenuSub>
-                      ) : null}
-                    </SidebarMenuItem>
+                    <CollapsibleNavItem key={item.title} item={item} pathname={pathname} />
                   ) : (
                     <SidebarMenuItem key={item.title}>
                       {item.href ? (
-                        <SidebarMenuButton
-                          render={<Link href={item.href} />}
-                          isActive={pathname === item.href}
-                          tooltip={item.title}
-                        >
-                          <item.icon />
-                          <span>{item.title}</span>
-                        </SidebarMenuButton>
+                        <>
+                          <SidebarMenuButton
+                            render={<Link href={item.href} />}
+                            isActive={pathname === item.href}
+                            tooltip={item.title}
+                          >
+                            <item.icon />
+                            <span>{item.title}</span>
+                          </SidebarMenuButton>
+                          {item.href === "/dashboard/refunds" ? <PendingRefundBadge /> : null}
+                        </>
                       ) : (
                         <>
                           <SidebarMenuButton

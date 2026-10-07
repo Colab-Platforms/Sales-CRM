@@ -2,8 +2,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ordersApi } from "../endpoints/orders.api";
 import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
+import { auditKeys } from "../queries/audit.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { CancelOrderInput, CancelOrderResult, CreateManualOrderInput, CreateManualOrderResult, ShopifyPushResult } from "../types/orders.types";
+import type { CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -28,7 +29,39 @@ export function useCancelOrderMutation() {
     onSuccess: (result, { orderId }) => {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
       queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+      // The Orders page reads the live list, which embeds the CRM status - refresh it so the row updates.
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.statusHistory(orderId) });
+      queryClient.invalidateQueries({ queryKey: auditKeys.all });
       queryClient.invalidateQueries({ queryKey: customersKeys.detail(result.order.customer.leadId) });
+    },
+  });
+}
+
+export function useRevertCancellationMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<RevertCancellationResult, unknown, { orderId: string }>({
+    mutationFn: ({ orderId }) => ordersApi.revertCancellation(orderId),
+    onSuccess: (result, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+      // The Orders page reads the live list, which embeds the CRM status - refresh it so the row updates.
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.statusHistory(orderId) });
+      queryClient.invalidateQueries({ queryKey: auditKeys.all });
+      queryClient.invalidateQueries({ queryKey: customersKeys.detail(result.order.customer.leadId) });
+    },
+  });
+}
+
+/** Cancels a Shopify order not yet synced into the CRM - the only destructive action Shopify supports. */
+export function useCancelLiveOrderMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<LiveOrderCancelResult, unknown, string>({
+    mutationFn: (externalId) => ordersApi.cancelLive(externalId),
+    onSuccess: (_, externalId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveDetail(externalId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
     },
   });
 }
@@ -40,6 +73,16 @@ export function usePushOrderToShopifyMutation() {
     onSuccess: (_, orderId) => {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
       queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+    },
+  });
+}
+
+export function useRetryConfirmationTagSyncMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<{ status: "synced" | "unchanged" | "not_linked" | "not_confirmed" | "failed"; tag?: string; reason?: string }, unknown, string>({
+    mutationFn: (orderId) => ordersApi.retryConfirmationTagSync(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
     },
   });
 }

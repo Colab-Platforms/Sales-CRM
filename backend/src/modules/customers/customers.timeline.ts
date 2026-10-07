@@ -314,6 +314,10 @@ const ORDER_ACTIVITY_EVENT: Partial<Record<ActivityType, { type: TimelineEntry["
   [ActivityType.PAYMENT_CREATED]: { type: "PAYMENT", fallbackTitle: "Payment recorded" },
   [ActivityType.PAYMENT_STATUS_CHANGED]: { type: "PAYMENT", fallbackTitle: "Payment status changed" },
   [ActivityType.PAYMENT_REFUNDED]: { type: "PAYMENT", fallbackTitle: "Payment refunded" },
+  // Refund APPROVAL decisions. None of these means money was returned; "Payment refunded" above is reserved for an actual refund.
+  [ActivityType.REFUND_REQUESTED]: { type: "PAYMENT", fallbackTitle: "Refund requested" },
+  [ActivityType.REFUND_APPROVED]: { type: "PAYMENT", fallbackTitle: "Refund approved (not refunded yet)" },
+  [ActivityType.REFUND_REJECTED]: { type: "PAYMENT", fallbackTitle: "Refund rejected" },
 };
 
 export function buildOrderEntries(orders: OrderRow[], activities: ActivityRow[]): TimelineEntry[] {

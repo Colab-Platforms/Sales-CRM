@@ -11,10 +11,15 @@ const CHANNEL_LABELS: Record<string, string> = { CALL: "Call", EMAIL: "Email", W
 
 export function NextBestActionCard({ nba, compact }: { nba: NextBestActionInfo; compact?: boolean }) {
   return (
-    <Card size={compact ? "sm" : "default"}>
+    // shrink-0: a flex item's automatic min-size (which normally stops it shrinking below its own
+    // content) is disabled whenever its overflow isn't "visible" - Card sets overflow-hidden, so
+    // inside a height-bounded flex-col (the WhatsApp Inbox sidebar) this card would otherwise get
+    // silently squeezed shorter than its content and have that excess invisibly clipped. shrink-0
+    // forces it to always render at full natural height; the scrollable ancestor handles overflow.
+    <Card className="shrink-0">
       <CardHeader>
         <div className="flex flex-wrap items-center gap-2">
-          <CardTitle className={compact ? "flex items-center gap-2 text-sm" : "flex items-center gap-2"}>
+          <CardTitle className="flex items-center gap-2">
             {compact ? <Target className="size-3.5" /> : null}
             Next Best Action
           </CardTitle>

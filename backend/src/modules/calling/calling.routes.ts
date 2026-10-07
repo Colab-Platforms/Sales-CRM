@@ -10,6 +10,7 @@ import {
   receiveCallWebhook,
   listCallOutcomes,
   submitCallOutcome,
+  streamCallTranscript,
 } from "./calling.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
@@ -26,6 +27,9 @@ router.post("/leads/:leadId/click-to-call", initiateCall);
 router.get("/leads/:leadId/calls", listLeadCalls);
 router.get("/call-outcomes", listCallOutcomes);
 router.patch("/calls/:id/outcome", submitCallOutcome);
+// Manager/admin-only, same gate as the recording/transcript fields on the call itself - the service
+// method enforces it too, this is just the fast path (SALESPERSON never opens the connection).
+router.get("/calls/:id/transcript-stream", requireRole(Role.ADMIN, Role.MANAGER), streamCallTranscript);
 
 router.use("/virtual-numbers", requireRole(Role.ADMIN, Role.MANAGER));
 

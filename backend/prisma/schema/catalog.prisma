@@ -11,6 +11,17 @@ model Product {
 
   sku String? @unique @map("sku") @db.VarChar(100)
 
+  // Weight of one sellable unit, in kilograms, as entered by a person. NULL = not recorded (never guessed or defaulted). A product that
+  // has variants carries its weight on each variant; this one is for a product sold without variants. Informational only: the parcel
+  // weight used for courier serviceability and shipment creation is entered separately for the packed parcel.
+  weightKg Decimal? @map("weight_kg") @db.Decimal(8, 3)
+
+  // Packed dimensions of ONE unit (cm), as recorded in the Shiprocket catalog or by a person. NULL = not recorded. Product dimensions only:
+  // the final packed PARCEL dimensions are entered per shipment and are never derived by adding these up.
+  lengthCm Decimal? @map("length_cm") @db.Decimal(8, 2)
+  widthCm  Decimal? @map("width_cm") @db.Decimal(8, 2)
+  heightCm Decimal? @map("height_cm") @db.Decimal(8, 2)
+
   // Identity in an external system (Shopify). Null for records created inside the CRM.
   externalSource    ExternalSource? @map("external_source")
   externalId        String?         @map("external_id") @db.VarChar(100)
@@ -39,6 +50,15 @@ model ProductVariant {
   sku  String? @map("sku") @db.VarChar(100)
 
   price Decimal? @map("price") @db.Decimal(12, 2)
+
+  // Weight of one unit of THIS sellable variant (pack sizes differ), in kilograms, as entered by a person. NULL = not recorded.
+  weightKg Decimal? @map("weight_kg") @db.Decimal(8, 3)
+
+  // Packed dimensions of ONE unit (cm), as recorded in the Shiprocket catalog or by a person. NULL = not recorded. Product dimensions only:
+  // the final packed PARCEL dimensions are entered per shipment and are never derived by adding these up.
+  lengthCm Decimal? @map("length_cm") @db.Decimal(8, 2)
+  widthCm  Decimal? @map("width_cm") @db.Decimal(8, 2)
+  heightCm Decimal? @map("height_cm") @db.Decimal(8, 2)
 
   status ProductStatus @default(ACTIVE) @map("status")
 

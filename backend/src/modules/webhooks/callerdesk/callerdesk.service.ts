@@ -1,6 +1,13 @@
 import { CallDirection, CallStatus, WebhookStatus } from "@root/generated/prisma/enums.js";
 import { logger } from "@/utils/logger.js";
 import { buildMobileLookupCandidates, normalizePhone } from "@/utils/phone.js";
+// Lead matching reuses the exact same canonical-identity + legacy-shape tolerance every other
+// inbound-identity match in this CRM already agrees on (see whatsapp.matching.ts's own header
+// comment and the real production bug it documents) - NOT buildMobileLookupCandidates above, which
+// predates @/lib/leadIdentity.js's "+"-prefixed canonical format and would never match it. That
+// helper is still correct and unrelated here: virtualNumberCandidates (below) matches a DID against
+// VirtualNumber.number, a completely different column with no such canonical format.
+import { legacyMatchCandidates } from "@modules/whatsapp/whatsapp.matching.js";
 import { providerDbValue, type NormalizedCallEvent } from "@modules/telephony/provider.types.js";
 import { normalizeCallerDeskPayload } from "./callerdesk.payload.js";
 import { callStatusRank, isTerminalCallStatus } from "./callerdesk.status.js";
@@ -151,7 +158,10 @@ async function correlate(tx: CallEventTx, event: NormalizedCallEvent, provider: 
 
   if (!event.customerNumber) return { kind: "UNMATCHED", reason: "NO_CUSTOMER_NUMBER" };
 
-  const leads = await tx.findLeadsByNormalizedMobile(buildMobileLookupCandidates(event.customerNumber));
+  // event.customerNumber is already normalizeMobile's canonical "+"-prefixed form (see
+  // callerdesk.payload.ts's toDigits) - legacyMatchCandidates only needs to add the legacy shapes
+  // real leads may still be stored under, not rebuild the canonical form itself.
+  const leads = await tx.findLeadsByNormalizedMobile(legacyMatchCandidates(event.customerNumber));
   if (leads.length > 1) return { kind: "UNMATCHED", reason: "AMBIGUOUS_LEAD_MATCH" };
 
   // "IVR caller = Lead": a first-time caller becomes a new, unassigned Lead (source "IVR Inquiry"),

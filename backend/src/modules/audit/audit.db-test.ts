@@ -30,12 +30,12 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 describe("Audit Trail", () => {
   it("records who/what caused a manual lead action, and never invents an actor for a Shopify-driven one", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const source = await tx.source.create({ data: { name: "Instagram", code: `ig-${uid()}` } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", sourceId: source.id } });
 
@@ -55,7 +55,7 @@ describe("Audit Trail", () => {
 
   it("records an order created via Shopify sync as SHOPIFY_SYNC with no actor, then a later status change and a payment event on re-sync", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const orderId = uid();
       const customerId = uid();
       const transactionId = `gid://shopify/OrderTransaction/${orderId}1`;
@@ -113,7 +113,7 @@ describe("Audit Trail", () => {
 
   it("records a shipment created, then a status change and a tracking update as separate, specific events", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const orderId = uid();
       const customerId = uid();
 
@@ -149,7 +149,7 @@ describe("Audit Trail", () => {
 
   it("resolves the order link for a legacy-style row that predates the orderId column (referenceType=Order, orderId null)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Legacy" } });
       const order = await tx.order.create({
         data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: "WEBSITE", status: "CONFIRMED", totalAmount: "500.00" },
@@ -169,8 +169,8 @@ describe("Audit Trail", () => {
 
   it("respects lead-based role scoping: a salesperson only sees audit events for leads they own", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id } });
       const otherLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id } });
 
@@ -189,7 +189,7 @@ describe("Audit Trail", () => {
 
   it("paginates and supports filtering by actor, entity type and date range", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Multi" } });
 
       for (let i = 0; i < 5; i++) {

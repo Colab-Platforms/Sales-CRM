@@ -11,8 +11,8 @@ import type {
   UpdateSalespersonBody,
 } from "./manager.types.js";
 
-function toPublicUser(user: { id: string; name: string; email: string; phone: string | null; role: string; status: string }) {
-  return { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, status: user.status };
+function toPublicUser(user: { id: string; name: string; username: string; phone: string | null; role: string; status: string }) {
+  return { id: user.id, name: user.name, username: user.username, phone: user.phone, role: user.role, status: user.status };
 }
 
 class ManagerService {
@@ -42,7 +42,7 @@ class ManagerService {
       include: {
         members: {
           where: { isActive: true },
-          include: { user: { select: { id: true, name: true, email: true, phone: true, status: true } } },
+          include: { user: { select: { id: true, name: true, username: true, phone: true, status: true } } },
         },
       },
       orderBy: { createdAt: "desc" },
@@ -57,7 +57,7 @@ class ManagerService {
       include: {
         members: {
           where: { isActive: true },
-          include: { user: { select: { id: true, name: true, email: true, phone: true, status: true } } },
+          include: { user: { select: { id: true, name: true, username: true, phone: true, status: true } } },
         },
       },
     });
@@ -88,9 +88,9 @@ class ManagerService {
   async addNewSalesperson(managerId: string, groupId: string, data: AddSalespersonBody) {
     const group = await this.getOwnedGroup(managerId, groupId);
 
-    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    const existing = await prisma.user.findUnique({ where: { username: data.username } });
     if (existing) {
-      throw new ApiError("Email already in use", STATUS_CODES.CONFLICT);
+      throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
     }
 
     const passwordHash = await hashPassword(data.password);
@@ -98,7 +98,7 @@ class ManagerService {
     const salesperson = await prisma.user.create({
       data: {
         name: data.name,
-        email: data.email,
+        username: data.username,
         phone: data.phone,
         passwordHash,
         role: Role.SALESPERSON,
@@ -126,7 +126,7 @@ class ManagerService {
   async listMySalespersons(managerId: string) {
     const salespersons = await prisma.user.findMany({
       where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE, reportingManagerId: managerId },
-      select: { id: true, name: true, email: true, phone: true, status: true, role: true },
+      select: { id: true, name: true, username: true, phone: true, status: true, role: true },
       orderBy: { name: "asc" },
     });
 

@@ -7,7 +7,9 @@ import { useAuthStore } from "@/stores/auth-store";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { abandonmentListQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import { abandonmentItemOptionsQueryOptions, abandonmentListQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import { abandonmentApi } from "@/lib/api-client/endpoints/abandonment.api";
+import { Button } from "@/components/ui/button";
 import { AbandonmentFilters, type AbandonmentFilterState } from "@/components/abandonment/abandonment-filters";
 import { AbandonmentTable, AbandonmentTableSkeleton } from "@/components/abandonment/abandonment-table";
 import { OrdersPagination } from "@/components/orders/orders-pagination";
@@ -28,19 +30,40 @@ export default function AbandonedLeadsPage() {
 
   const params = useMemo(() => ({ page, pageSize: PAGE_SIZE, ...filters }), [page, filters]);
   const { data, isPending, isFetching, error } = useQuery(abandonmentListQueryOptions(params));
+  const itemOptions = useQuery(abandonmentItemOptionsQueryOptions());
+  const [selectingAll, setSelectingAll] = useState(false);
+  const [selectAllError, setSelectAllError] = useState<string | null>(null);
 
   if (!user) return null;
 
+  const hasActiveFilters = Boolean(filters.search || filters.workingStatus || (filters.items && filters.items.length > 0));
   const isAdmin = user.role === "ADMIN";
   const isManager = user.role === "MANAGER";
 
   function clearSelection() {
     setSelectedIds(new Set());
+    setSelectAllError(null);
   }
 
   function toggleAll(checked: boolean) {
     if (!data) return;
     setSelectedIds(checked ? new Set(data.items.map((item) => item.id)) : new Set());
+  }
+
+  // "Select all N": every abandonment the CURRENT filters match, not just this page - so a TL can pick all of one product's carts
+  // and hand them to one telecaller in a single bulk-assign.
+  async function selectAllMatching() {
+    setSelectingAll(true);
+    setSelectAllError(null);
+    try {
+      const result = await abandonmentApi.listMatchingIds(filters);
+      setSelectedIds(new Set(result.ids));
+      if (result.capped) setSelectAllError(`Only the first ${result.ids.length} of ${result.total} matches were selected. Narrow the filters to assign the rest.`);
+    } catch (e) {
+      setSelectAllError(getErrorMessage(e, "Could not select all matching leads."));
+    } finally {
+      setSelectingAll(false);
+    }
   }
 
   function toggleOne(id: string, checked: boolean) {
@@ -78,6 +101,16 @@ export default function AbandonedLeadsPage() {
         role={user.role}
       />
 
+      {(isAdmin || isManager) && data && data.pagination.totalItems > data.items.length && selectedIds.size < data.pagination.totalItems ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+          <span>{data.pagination.totalItems} abandoned leads match.</span>
+          <Button type="button" size="sm" variant="outline" onClick={selectAllMatching} disabled={selectingAll}>
+            {selectingAll ? "Selecting…" : `Select all ${data.pagination.totalItems}`}
+          </Button>
+        </div>
+      ) : null}
+      {selectAllError ? <p role="alert" className="text-sm text-destructive">{selectAllError}</p> : null}
+
       {selectedIds.size > 0 ? (
         <LeadSelectionToolbar
           count={selectedIds.size}
@@ -101,15 +134,31 @@ export default function AbandonedLeadsPage() {
                 <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                   <ShoppingCart className="size-5" />
                 </div>
-                <p className="text-sm font-medium">No abandoned carts right now.</p>
+                <p className="text-sm font-medium">{hasActiveFilters ? "No abandoned carts match these filters." : "No abandoned carts right now."}</p>
                 <p className="text-sm text-muted-foreground">
-                  New entries appear here automatically as shoppers leave checkout without paying.
+                  {hasActiveFilters ? "Try removing a product or another filter." : "New entries appear here automatically as shoppers leave checkout without paying."}
                 </p>
+                {hasActiveFilters ? (
+                  <Button type="button" size="sm" variant="outline" onClick={() => { setFilters({}); setPage(1); clearSelection(); }}>
+                    Clear filters
+                  </Button>
+                ) : null}
               </div>
             ) : (
               <>
                 <AbandonmentTable
                   items={data?.items ?? []}
+                  itemsFilter={{
+                    options: itemOptions.data?.items ?? [],
+                    loading: itemOptions.isPending,
+                    failed: Boolean(itemOptions.error),
+                    selected: filters.items ?? [],
+                    onChange: (next) => {
+                      setFilters({ ...filters, items: next.length > 0 ? next : undefined });
+                      setPage(1);
+                      clearSelection();
+                    },
+                  }}
                   isFetching={isFetching}
                   selectedIds={isAdmin || isManager ? selectedIds : undefined}
                   onToggleOne={isAdmin || isManager ? toggleOne : undefined}

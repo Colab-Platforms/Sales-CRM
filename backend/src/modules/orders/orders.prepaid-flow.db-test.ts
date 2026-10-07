@@ -29,7 +29,7 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 const HOUR = 3_600_000;
 // Deliberately distinctive: if either ever shows up in an output, a test below fails.
@@ -57,10 +57,13 @@ function shopify(): ShopifyClient {
 interface Setup { provider: WhatsAppProviderName; windowOpen?: boolean; templates?: { provider: WhatsAppProviderName; variables: string[]; status?: "APPROVED" | "PENDING" }[]; metaThrows?: boolean }
 
 async function setup(tx: Db, runner: TxRunner, s: Setup, apiOver: Partial<CashfreeApi> = {}) {
-  const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+  const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", lastName: "Shah", mobile: "9000000123", normalizedMobile: "+919000000123", email: "priya@zz.invalid" }, select: { id: true } });
   await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: s.provider } });
   await tx.whatsAppMessage.create({ data: { provider: s.provider, providerMessageId: `in-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId: lead.id, fromNumber: "919000000123", normalizedContact: "+919000000123", body: "hi", createdAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR), receivedAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR) } });
+  // Isolation: the dev DB now holds the real, synced Meta template `prepaid_template` (APPROVED, carries {{payment_link}}). These tests
+  // choose among the templates THEY create, so any real approved template is switched off - inside this rolled-back transaction only.
+  await tx.whatsAppTemplate.updateMany({ where: { status: "APPROVED" }, data: { status: "DISABLED" } });
   const templateIds: string[] = [];
   for (const t of s.templates ?? []) {
     // A real APPROVED META/GUPSHUP template only ever exists because a sync set a providerTemplateId (see
@@ -313,6 +316,100 @@ describe("COD stays unchanged, cancellation and secrets", () => {
       assert.equal(dump.includes("SUPERSECRET"), false);
       assert.equal(dump.includes(CLIENT_ID), false, "nor the client id");
       assert.equal(bad.paymentLink?.status, "failed");
+    });
+  });
+});
+
+describe("Custom Discount (percentage) on order creation", () => {
+  const createWith = async (t: Awaited<ReturnType<typeof setup>>, tx: Db, extra: { paymentMethod: "COD" | "PAYMENT_LINK"; discountPercent?: string; discountAmount?: string; shippingAmount?: string }) => {
+    const product = await tx.product.findFirstOrThrow({ select: { id: true }, orderBy: { createdAt: "desc" } });
+    return t.orders.createManualOrder(as(t.admin, Role.ADMIN), { leadId: t.lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "699.00" }], ...extra });
+  };
+
+  it("prepaid 7%: CRM total, Cashfree link, payment record and WhatsApp text all carry 650.07, never 699", async () => {
+    await inRollback(async (tx, runner) => {
+      const t = await setup(tx, runner, { provider: "META" });
+      const r = await createWith(t, tx, { paymentMethod: "PAYMENT_LINK", discountPercent: "7" });
+
+      assert.equal(Number(r.order.subtotal), 699.00);
+      assert.equal(Number(r.order.discountAmount), 48.93);
+      assert.equal(Number(r.order.totalAmount), 650.07);
+      assert.equal(t.cf.calls.create.length, 1);
+      assert.equal(t.cf.calls.create[0]!.request.link_amount, 650.07, "Cashfree receives the discounted amount");
+      const payments = await tx.payment.findMany({ where: { orderId: r.order.id } });
+      assert.equal(payments.length, 1);
+      assert.equal(Number(payments[0]!.amount.toString()), 650.07);
+      const text = t.sentTexts.at(-1)!;
+      assert.ok(text.includes("650.07"), `WhatsApp amount: ${text}`);
+      assert.ok(!text.includes("699"), "no pre-discount amount in the message");
+      const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } });
+      assert.deepEqual((row.metadata as any).customDiscount, { percent: "7.00", amount: "48.93", appliedById: t.admin.id });
+    });
+  });
+
+  it("COD 15% total is 594.15; 0% and no discount behave identically (no customDiscount recorded)", async () => {
+    await inRollback(async (tx, runner) => {
+      const t = await setup(tx, runner, { provider: "META" });
+      const cod = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "15" });
+      assert.equal(Number(cod.order.totalAmount), 594.15);
+      const zero = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "0" });
+      const none = await createWith(t, tx, { paymentMethod: "COD" });
+      for (const o of [zero.order, none.order]) {
+        assert.equal(Number(o.totalAmount), 699.00);
+        assert.equal(Number(o.discountAmount), 0.00);
+      }
+      const row = await tx.order.findUniqueOrThrow({ where: { id: zero.order.id }, select: { metadata: true } });
+      assert.equal((row.metadata as any).customDiscount, undefined);
+    });
+  });
+
+  it("shipping is not discounted, and a hand-crafted request cannot slip an invalid or double discount through", async () => {
+    await inRollback(async (tx, runner) => {
+      const t = await setup(tx, runner, { provider: "META" });
+      const withShip = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "10", shippingAmount: "50.00" });
+      assert.equal(Number(withShip.order.totalAmount), 679.10); // 699 - 69.90 + 50
+      const before = await tx.order.count();
+      for (const bad of [{ discountPercent: "-5" }, { discountPercent: "100.5" }, { discountPercent: "abc" }, { discountPercent: "5", discountAmount: "10.00" }]) {
+        await assert.rejects(() => createWith(t, tx, { paymentMethod: "COD", ...bad }), (e: any) => e.statusCode === 400, JSON.stringify(bad));
+      }
+      assert.equal(await tx.order.count(), before, "a rejected discount never leaves a partial order behind");
+    });
+  });
+
+  it("regression (Dia Shield Tablets / Pack Of 3, unitPrice 1249): exactly the payload the form sends, with no discount, stores discount 0 and total 1249 - for COD and prepaid", async () => {
+    await inRollback(async (tx, runner) => {
+      const t = await setup(tx, runner, { provider: "META" });
+      const product = await tx.product.create({ data: { name: "Dia Shield Tablets", type: ProductType.PRODUCT, sku: `AW-DS-TB-60-${uid()}`, basePrice: "1249.00" }, select: { id: true } });
+      // The form's submit payload: items carry only productId/variantId/quantity/unitPrice - never a line discountAmount.
+      const payload = { leadId: t.lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "1249.00" }] };
+      const cod = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "COD" });
+      assert.equal(Number(cod.order.subtotal), 1249);
+      assert.equal(Number(cod.order.discountAmount), 0);
+      assert.equal(Number(cod.order.totalAmount), 1249);
+      assert.equal(Number(cod.order.items[0]!.totalPrice), 1249, "line total");
+      assert.equal(Number(cod.order.items[0]!.discountAmount), 0, "no line discount");
+      const prepaid = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "PAYMENT_LINK" });
+      assert.equal(Number(prepaid.order.totalAmount), 1249);
+      assert.equal(t.cf.calls.create.at(-1)!.request.link_amount, 1249, "Cashfree gets the full, undiscounted amount");
+      const seven = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "PAYMENT_LINK", discountPercent: "7" });
+      assert.equal(Number(seven.order.discountAmount), 87.43);
+      assert.equal(Number(seven.order.totalAmount), 1161.57);
+      assert.equal(t.cf.calls.create.at(-1)!.request.link_amount, 1161.57);
+    });
+  });
+});
+
+describe("Create Order with the default custom discount on a prepaid order", () => {
+  it("the Cashfree link and the WhatsApp text carry the discounted amount (1199 - 50 = 1149), and the discount reason is stored", async () => {
+    await inRollback(async (tx, runner) => {
+      const t = await setup(tx, runner, { provider: "META" });
+      const product = await tx.product.findFirstOrThrow({ select: { id: true }, orderBy: { createdAt: "desc" } });
+      const r = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { leadId: t.lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "1199.00" }], paymentMethod: "PAYMENT_LINK", discount: { type: "FIXED", value: "50" }, expectedTotal: "1149.00" });
+      assert.deepEqual([Number(r.order.subtotal), Number(r.order.discountAmount), Number(r.order.totalAmount)], [1199, 50, 1149]);
+      assert.equal(t.cf.calls.create[0]!.request.link_amount, 1149, "Cashfree receives the final discounted amount");
+      assert.ok(t.sentTexts.at(-1)!.includes("1,149"), "the customer message states the payable amount");
+      const meta = (await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata as any;
+      assert.deepEqual([meta.discount.source, meta.discount.couponCode, meta.discount.originalSubtotal, meta.discount.finalTotal], ["CUSTOM", null, "1199.00", "1149.00"]);
     });
   });
 });

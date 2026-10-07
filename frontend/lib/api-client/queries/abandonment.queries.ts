@@ -6,6 +6,7 @@ export const abandonmentKeys = {
   all: ["abandonments"] as const,
   lists: () => [...abandonmentKeys.all, "list"] as const,
   list: (params: ListAbandonmentsParams) => [...abandonmentKeys.lists(), params] as const,
+  items: () => [...abandonmentKeys.all, "items"] as const,
   detail: (id: string) => [...abandonmentKeys.all, "detail", id] as const,
   byLead: (leadId: string) => [...abandonmentKeys.all, "byLead", leadId] as const,
   managerAutoAssignConfig: () => [...abandonmentKeys.all, "autoAssign", "manager"] as const,
@@ -22,6 +23,10 @@ export function abandonmentListQueryOptions(params: ListAbandonmentsParams) {
     // Keep the current rows on screen while the next page/filter loads.
     placeholderData: keepPreviousData,
   });
+}
+
+export function abandonmentItemOptionsQueryOptions() {
+  return queryOptions({ queryKey: abandonmentKeys.items(), queryFn: () => abandonmentApi.listItems(), staleTime: 60 * 1000 });
 }
 
 export function abandonmentDetailQueryOptions(id: string) {

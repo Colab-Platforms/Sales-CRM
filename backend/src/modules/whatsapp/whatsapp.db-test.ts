@@ -39,7 +39,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 const LEAD_SELECT = { id: true, normalizedMobile: true } as const;
 
@@ -73,7 +73,7 @@ function fakeProvider(overrides: Partial<WhatsAppProvider> = {}): WhatsAppProvid
 describe("sending a WhatsApp template message", () => {
   it("persists an OUTBOUND message and a WHATSAPP_MESSAGE_SENT activity attributed to the sender", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new WhatsAppService(tx, () => fakeProvider());
 
@@ -100,7 +100,7 @@ describe("sending a WhatsApp template message", () => {
 
   it("is QUEUED, not SENT, when the provider accepts without returning a message id", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new WhatsAppService(tx, () => fakeProvider({ sendTemplateMessage: async () => ({ providerMessageId: null, raw: {} }) }));
       const result = await svc.sendTemplateMessage(as(admin, Role.ADMIN), { leadId: lead.id, templateName: "t", params: [] });
@@ -110,8 +110,8 @@ describe("sending a WhatsApp template message", () => {
 
   it("404s for a customer outside the caller's lead scope - a salesperson cannot message another rep's customer", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep2.id });
       const svc = new WhatsAppService(tx, () => fakeProvider());
 
@@ -124,7 +124,7 @@ describe("sending a WhatsApp template message", () => {
 
   it("refuses to send to a customer with no valid mobile number, without calling the provider", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { mobile: null, normalizedMobile: null });
       let called = false;
       const svc = new WhatsAppService(tx, () => fakeProvider({ sendTemplateMessage: async () => { called = true; return { providerMessageId: "x", raw: {} }; } }));
@@ -136,7 +136,7 @@ describe("sending a WhatsApp template message", () => {
 
   it("reports 503 when WhatsApp is not configured, and sends nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new WhatsAppService(tx, () => null);
       await assert.rejects(() => svc.sendTemplateMessage(as(admin, Role.ADMIN), { leadId: lead.id, templateName: "t", params: [] }), (e: any) => e.statusCode === 503);
@@ -145,7 +145,7 @@ describe("sending a WhatsApp template message", () => {
 
   it("turns a provider rejection into a 400 and persists nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const { WhatsAppSendError } = await import("./whatsapp.provider.js");
       const svc = new WhatsAppService(tx, () => fakeProvider({ sendTemplateMessage: async () => { throw new WhatsAppSendError("template not approved"); } }));
@@ -159,7 +159,7 @@ describe("sending a WhatsApp template message", () => {
 describe("customer WhatsApp status", () => {
   it("reports the total and most recent message for a customer", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new WhatsAppService(tx, () => fakeProvider());
       await svc.sendTemplateMessage(as(admin, Role.ADMIN), { leadId: lead.id, templateName: "first", params: [] });
@@ -173,8 +173,8 @@ describe("customer WhatsApp status", () => {
 
   it("404s for an out-of-scope customer", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep2.id });
       const svc = new WhatsAppService(tx);
       await assert.rejects(() => svc.getCustomerWhatsAppStatus(as(rep1, Role.SALESPERSON), lead.id), (e: any) => e.statusCode === 404);
@@ -331,7 +331,7 @@ describe("delivery status updates", () => {
 describe("WhatsApp events reach Customer 360 and the Audit Trail without duplicating each other", () => {
   it("shows send/delivered milestones on the timeline, and the same events on the audit log, exactly once each", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const whatsapp = new WhatsAppService(tx, () => fakeProvider());
       const sent = await whatsapp.sendTemplateMessage(as(admin, Role.ADMIN), { leadId: lead.id, templateName: "order_update", params: [] });

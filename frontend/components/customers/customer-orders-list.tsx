@@ -6,6 +6,7 @@ import { orderDetailHref } from "@/components/orders/orders-table";
 import { OrderStatusBadge } from "@/components/orders/order-status-badge";
 import { PaymentStatusBadge } from "@/components/orders/payment-status-badge";
 import { ShipmentStatusBadge } from "@/components/orders/shipment-status-badge";
+import { SourceBadge } from "@/components/orders/shopify-status-badge";
 import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import type { CustomerOrderSummary } from "@/lib/api-client/types/customers.types";
 
@@ -33,18 +34,32 @@ function CompactOrderRow({ order }: { order: CustomerOrderSummary }) {
   );
 }
 
-export function CustomerOrdersList({ orders, compact }: { orders: CustomerOrderSummary[]; compact?: boolean }) {
+export function CustomerOrdersList({
+  orders,
+  compact,
+  title = "Orders",
+  emptyMessage = "This customer has no orders yet.",
+}: {
+  orders: CustomerOrderSummary[];
+  compact?: boolean;
+  title?: string;
+  emptyMessage?: string;
+}) {
   return (
-    <Card size={compact ? "sm" : "default"}>
+    // shrink-0: see the identical comment in next-best-action-card.tsx - without it, a flex-col
+    // sidebar with more content than fits would silently squeeze this whole card (with potentially
+    // several stacked order rows) shorter than its content and clip the excess via Card's own
+    // overflow-hidden, instead of the intended outer scrollbar taking over.
+    <Card className={compact ? "shrink-0" : "shrink-0 border-l-4 border-l-zinc-400/60"}>
       <CardHeader>
-        <CardTitle className={compact ? "flex items-center gap-2 text-sm" : "flex items-center gap-2"}>
+        <CardTitle className="flex items-center gap-2">
           {compact ? <ShoppingBag className="size-3.5" /> : null}
-          Orders{orders.length > 0 ? ` (${orders.length})` : ""}
+          {title}{orders.length > 0 ? ` (${orders.length})` : ""}
         </CardTitle>
       </CardHeader>
       <CardContent>
         {orders.length === 0 ? (
-          <p className="text-sm text-muted-foreground">This customer has no orders yet.</p>
+          <p className="text-sm text-muted-foreground">{emptyMessage}</p>
         ) : compact ? (
           <div className="space-y-2">
             {orders.map((order) => (
@@ -68,15 +83,17 @@ export function CustomerOrdersList({ orders, compact }: { orders: CustomerOrderS
               {orders.map((order) => (
                 <TableRow key={order.id}>
                   <TableCell>
-                    <Link href={orderDetailHref(order.id)} className="font-medium hover:underline">
+                    <Link href={orderDetailHref(order.id)} className="font-semibold text-blue-600 hover:underline dark:text-blue-400">
                       {order.orderNumber}
                     </Link>
                     {order.externalNumber ? (
                       <div className="text-xs text-muted-foreground">{order.externalNumber}</div>
                     ) : null}
                   </TableCell>
-                  <TableCell>{ORDER_SOURCE_LABELS[order.source]}</TableCell>
-                  <TableCell className="text-right tabular-nums">{formatMoney(order.totalAmount, order.currency)}</TableCell>
+                  <TableCell>
+                    <SourceBadge>{ORDER_SOURCE_LABELS[order.source]}</SourceBadge>
+                  </TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums">{formatMoney(order.totalAmount, order.currency)}</TableCell>
                   <TableCell>
                     <PaymentStatusBadge status={order.paymentStatus} />
                     {order.paymentMode ? (

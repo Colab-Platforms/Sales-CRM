@@ -37,7 +37,7 @@ const fakeService: CallService = {
   },
 };
 
-const token = (role: Role, id = "user-1") => signToken({ sub: id, role, email: "user@example.test" });
+const token = (role: Role, id = "user-1") => signToken({ sub: id, role, username: "user1" });
 
 beforeEach(async () => {
   behaviour = async () => SUCCESS;

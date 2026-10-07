@@ -8,7 +8,7 @@ import WhatsAppCloudConfigService from "./whatsapp.cloud-config.service.js";
 import { validateCreateWhatsAppCloudConfigSchema } from "./whatsapp.cloud-config.validators.js";
 
 const KEY = Buffer.alloc(32, 5).toString("base64");
-const ADMIN: AuthUser = { id: "user-1", role: Role.ADMIN, email: "admin@example.com" };
+const ADMIN: AuthUser = { id: "user-1", role: Role.ADMIN, username: "test-user" };
 
 // A minimal in-memory stand-in for the two Prisma delegates this service actually touches
 // (whatsAppConfig, activity) - enough to exercise create/get/reset/test without a real database.

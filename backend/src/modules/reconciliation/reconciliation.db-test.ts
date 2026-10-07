@@ -27,7 +27,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 describe("Reconciliation", () => {
   it("computes summary totals and per-order reconciliation status from real orders and payments", async () => {
@@ -35,7 +35,7 @@ describe("Reconciliation", () => {
       // Scoped to a single salesperson's own lead rather than ADMIN (unrestricted), so the assertions
       // below are exact regardless of how many real orders already exist in the shared dev database
       // (the Shopify backfill can be inserting thousands of unrelated orders at the same time).
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const source = await tx.source.create({ data: { name: "Website", code: `web-${uid()}` } });
       const lead = await tx.lead.create({
         data: { leadNumber: `L-${uid()}`, firstName: "Priya", lastName: "Shah", sourceId: source.id, ownerId: rep.id },
@@ -98,7 +98,7 @@ describe("Reconciliation", () => {
     await inRollback(async (tx) => {
       // Scoped to one salesperson's lead again, for the same reason as above - exact counts that
       // don't depend on however many real orders already exist in the shared database.
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Rohit", ownerId: rep.id } });
 
       for (let i = 0; i < 3; i++) {
@@ -127,8 +127,8 @@ describe("Reconciliation", () => {
 
   it("respects lead-based role scoping: a salesperson only sees their own orders in the reconciliation view", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id } });
       const otherLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id } });
 

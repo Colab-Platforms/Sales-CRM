@@ -457,7 +457,7 @@ describe("AiSensy message.created - TEST J: unsupported message type / chatbot r
 // provider below returns a wamid-shaped id to prove the CRM's OWN wiring is correct; it does not and
 // cannot prove what AiSensy's real Campaign API response actually contains.
 describe("Outbound round trip: CRM send -> AiSensy status webhook updates the SAME WhatsAppMessage", () => {
-  const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+  const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
   function fakeSendingProvider(providerMessageId: string): WhatsAppProvider {
     return {
@@ -472,7 +472,7 @@ describe("Outbound round trip: CRM send -> AiSensy status webhook updates the SA
 
   it("SENT (from the send itself) -> DELIVERED -> READ, all on the message the CRM actually sent", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const sentWamid = `wamid.roundtrip-${uid()}`;
 
@@ -508,7 +508,7 @@ describe("Outbound round trip: CRM send -> AiSensy status webhook updates the SA
 
   it("an out-of-order SENT delivered after READ never reverts the CRM-sent message", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const sentWamid = `wamid.roundtrip-${uid()}`;
 
@@ -531,7 +531,7 @@ describe("Outbound round trip: CRM send -> AiSensy status webhook updates the SA
 
   it("a duplicate DELIVERED delivery for a CRM-sent message never double-writes or double-audits", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const sentWamid = `wamid.roundtrip-${uid()}`;
 
@@ -560,7 +560,7 @@ describe("Outbound round trip: CRM send -> AiSensy status webhook updates the SA
   // webhook-side fix work together, end to end, exactly as they did in production.
   it("REAL SHAPE: a send response with only submitted_message_id still correlates correctly, even though message.status.updated reports a totally different messageId", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
 
       const config = (() => {

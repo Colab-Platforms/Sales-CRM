@@ -1,14 +1,35 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { ORDER_SOURCE_LABELS, PAYMENT_MODE_LABELS, formatDate, formatMoney } from "@/lib/order-status";
 import { OrderStatusBadge } from "./order-status-badge";
 import { PaymentStatusBadge } from "./payment-status-badge";
-import type { OrderListItem } from "@/lib/api-client/types/orders.types";
+import { OrderRowActions } from "./order-row-actions";
+import { OrderTagChips } from "./order-tag-chips";
+import type { LiveOrderListItem, OrderListItem } from "@/lib/api-client/types/orders.types";
 
-const COLUMN_COUNT = 9;
+// Accepts either the CRM-DB-backed list item or the live-Shopify one. The live one's customer link is
+// nullable for a Shopify order the CRM hasn't synced yet (ADMIN-only, see orders.live.service.ts) -
+// "Not synced to CRM" is shown as an ADDITIONAL caption below the real status/payment badges (which
+// now always reflect Shopify's own data, synced or not), never as a stand-in for missing status.
+type TableOrderItem = OrderListItem | LiveOrderListItem;
+
+function hasShopifyDisplayFields(order: TableOrderItem): order is LiveOrderListItem {
+  return "fulfillmentStatus" in order;
+}
+
+function titleCase(value: string): string {
+  return value
+    .toLowerCase()
+    .split("_")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+const COLUMN_COUNT = 11;
 
 const HEADERS = [
   "Order",
@@ -19,7 +40,9 @@ const HEADERS = [
   "Total",
   "Payment",
   "Status",
+  "Tags",
   "Date",
+  "Actions",
 ];
 
 export function orderDetailHref(id: string) {
@@ -30,13 +53,17 @@ export function customerDetailHref(leadId: string) {
   return `/dashboard/customers/${leadId}`;
 }
 
-function OrdersTableHeader() {
+// `filters` maps a header title to its column-filter funnel (see orders-header-filters.tsx); headers without one stay plain.
+function OrdersTableHeader({ filters }: { filters?: Record<string, ReactNode> }) {
   return (
     <TableHeader>
       <TableRow>
         {HEADERS.map((header) => (
-          <TableHead key={header} className={header === "Total" ? "text-right" : undefined}>
-            {header}
+          <TableHead key={header} className={header === "Total" || header === "Actions" ? "text-right" : undefined}>
+            <span className="inline-flex items-center whitespace-nowrap">
+              {header}
+              {filters?.[header] ?? null}
+            </span>
           </TableHead>
         ))}
       </TableRow>
@@ -64,15 +91,17 @@ export function OrdersTableSkeleton({ rows = 6 }: { rows?: number }) {
 }
 
 interface OrdersTableProps {
-  items: OrderListItem[];
+  items: TableOrderItem[];
   isFetching: boolean;
   onOpen: (id: string) => void;
+  /** Column-filter funnels by header title. */
+  headerFilters?: Record<string, ReactNode>;
 }
 
-export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
+export function OrdersTable({ items, isFetching, onOpen, headerFilters }: OrdersTableProps) {
   return (
     <Table className={cn("transition-opacity", isFetching && "opacity-60")}>
-      <OrdersTableHeader />
+      <OrdersTableHeader filters={headerFilters} />
       <TableBody>
         {items.map((order) => (
           <TableRow key={order.id} className="cursor-pointer" onClick={() => onOpen(order.id)}>
@@ -89,14 +118,20 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
               </div>
             </TableCell>
             <TableCell>
-              <Link
-                href={customerDetailHref(order.customer.leadId)}
-                onClick={(e) => e.stopPropagation()}
-                className="font-medium hover:underline"
-              >
-                {order.customer.name}
-              </Link>
-              <div className="text-xs text-muted-foreground">{order.customer.leadNumber}</div>
+              {order.customer.leadId ? (
+                <>
+                  <Link
+                    href={customerDetailHref(order.customer.leadId)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="font-medium hover:underline"
+                  >
+                    {order.customer.name}
+                  </Link>
+                  <div className="text-xs text-muted-foreground">{order.customer.leadNumber}</div>
+                </>
+              ) : (
+                <span className="font-medium">{order.customer.name}</span>
+              )}
             </TableCell>
             <TableCell>{order.salesperson?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell>{order.leadSource?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
@@ -105,13 +140,37 @@ export function OrdersTable({ items, isFetching, onOpen }: OrdersTableProps) {
             <TableCell>
               <PaymentStatusBadge status={order.paymentStatus} />
               {order.paymentMode ? (
-                <div className="mt-0.5 text-xs text-muted-foreground">{PAYMENT_MODE_LABELS[order.paymentMode]}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {/* e.g. "Standard (Prepaid)" - Shopify's own shipping method plus the payment mode
+                      derived from Shopify's own gateway/COD data (see shopify.mapper.ts's isCodOrder),
+                      shown together compactly rather than as separate columns. */}
+                  {hasShopifyDisplayFields(order) && order.shippingMethod
+                    ? `${order.shippingMethod} (${PAYMENT_MODE_LABELS[order.paymentMode]})`
+                    : PAYMENT_MODE_LABELS[order.paymentMode]}
+                </div>
               ) : null}
             </TableCell>
             <TableCell>
-              <OrderStatusBadge status={order.status} />
+              {order.status ? <OrderStatusBadge status={order.status} /> : <span className="text-xs text-muted-foreground">Unknown</span>}
+              {hasShopifyDisplayFields(order) && order.fulfillmentStatus ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {titleCase(order.fulfillmentStatus)}
+                  {order.fulfillmentStatus.includes("FULFILLED") && order.fulfillmentStatus !== "UNFULFILLED" ? (order.hasTracking ? " · Tracking added" : " · No tracking") : ""}
+                </div>
+              ) : null}
+              {hasShopifyDisplayFields(order) && !order.linkedInCrm ? (
+                <div className="mt-0.5 text-xs text-muted-foreground">Not synced to CRM</div>
+              ) : null}
+            </TableCell>
+            <TableCell>
+              <OrderTagChips tags={order.tags} />
             </TableCell>
             <TableCell className="text-muted-foreground">{formatDate(order.createdAt)}</TableCell>
+            {/* stopPropagation: the row itself navigates on click, and React bubbles events from the dialogs
+                (portalled, but still inside this cell's React tree) up through here too. */}
+            <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+              <OrderRowActions order={order} />
+            </TableCell>
           </TableRow>
         ))}
       </TableBody>

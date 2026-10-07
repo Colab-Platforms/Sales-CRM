@@ -21,9 +21,12 @@ describe("CallerDesk payload normalisation", () => {
     assert.equal(event.externalCallId, "1672649960.960001");
     assert.equal(event.dedupeKey, "1672649960.960001");
     assert.equal(event.direction, "INBOUND");
-    assert.equal(event.customerNumber, "9876543210");
+    // customerNumber/agentNumber go through toDigits -> @/lib/leadIdentity.js's normalizeMobile,
+    // whose canonical form is "+<country><number>", not bare digits - see that function's own
+    // comment and lead.service.ts's "root-cause fix" note for why this is the one true format now.
+    assert.equal(event.customerNumber, "+919876543210");
     assert.equal(event.businessNumber, "01204567890");
-    assert.equal(event.agentNumber, "9123456789");
+    assert.equal(event.agentNumber, "+919123456789");
     assert.equal(event.status, CallStatus.COMPLETED);
     assert.equal(event.durationSeconds, 18);
     assert.equal(event.talkDurationSeconds, 9);

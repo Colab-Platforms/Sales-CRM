@@ -7,9 +7,9 @@ import { buildWebChatScope, canAssignConversationTo } from "./webchat.scope.js";
 import { WebChatService } from "./webchat.service.js";
 import { validateAssignBody, validateListWebChatQuery, validateSendMessageBody } from "./webchat.validators.js";
 
-const admin: AuthUser = { id: "admin-1", role: Role.ADMIN, email: "a@x.test" };
-const manager: AuthUser = { id: "mgr-1", role: Role.MANAGER, email: "m@x.test" };
-const salesperson: AuthUser = { id: "sp-1", role: Role.SALESPERSON, email: "s@x.test" };
+const admin: AuthUser = { id: "admin-1", role: Role.ADMIN, username: "a" };
+const manager: AuthUser = { id: "mgr-1", role: Role.MANAGER, username: "m" };
+const salesperson: AuthUser = { id: "sp-1", role: Role.SALESPERSON, username: "sp1" };
 
 const UUID_A = "0b8f4c1e-6a52-4c53-9d0a-3f1b2c4d5e6f";
 const UUID_B = "1c9f4c1e-6a52-4c53-9d0a-3f1b2c4d5e6f";

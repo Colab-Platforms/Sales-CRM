@@ -1,4 +1,4 @@
-import { Mail, Phone, CalendarClock, Clock3 } from "lucide-react";
+import { AtSign, Phone, CalendarClock, Clock3 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { formatDate, formatDateTime } from "@/lib/order-status";
@@ -38,16 +38,16 @@ export function ProfileHeaderCard({ profile }: { profile: UserProfile }) {
               <Badge variant="secondary">{ROLE_LABELS[profile.role]}</Badge>
               <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
             </div>
-            <p className="text-sm text-muted-foreground">{profile.email}</p>
+            <p className="text-sm text-muted-foreground">{profile.username}</p>
           </div>
         </div>
 
         <div className="grid gap-4 border-t border-dashed border-ink-line/30 pt-5 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex items-start gap-2.5">
-            <Mail className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+            <AtSign className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
             <div className="min-w-0 space-y-0.5">
-              <p className="text-xs text-muted-foreground">Email</p>
-              <p className="truncate text-sm font-medium">{profile.email}</p>
+              <p className="text-xs text-muted-foreground">Username</p>
+              <p className="truncate text-sm font-medium">{profile.username}</p>
             </div>
           </div>
           <div className="flex items-start gap-2.5">

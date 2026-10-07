@@ -38,6 +38,13 @@ export interface Call {
   endedAt: string | null;
   durationSeconds: number | null;
   recording: { recordingUrl: string | null } | null;
+  /** Manager/admin-only, same gate as `recording` - null for a SALESPERSON regardless of whether one exists. */
+  transcript: {
+    transcriptText: string | null;
+    /** Speaker-labeled ("Agent: ...\nCustomer: ...") when Deepgram found 2 distinct voices; null for a single-voice recording - fall back to `transcriptText` then. */
+    diarizedText: string | null;
+    status: string | null;
+  } | null;
   agent?: { id: string; name: string };
   notes: string | null;
   outcome: { id: string; name: string; code: string } | null;

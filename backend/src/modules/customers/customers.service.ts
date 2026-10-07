@@ -6,6 +6,10 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
+import { ShopifyClient } from "../shopify/shopify.client.js";
+import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
+import { findCustomerByContact, type NormalizedCustomerListItem } from "../shopify/shopify.customers.js";
+import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import {
   buildCustomerListWhere,
   buildNbaInfo,
@@ -37,6 +41,40 @@ import type {
   ListCustomersQuery,
   NextBestActionInfo,
 } from "./customers.types.js";
+
+// Live Shopify customer overlay for Customer 360 - additive only, never replaces CRM-owned fields.
+// Same in-process TTL Map idiom as orders.live.service.ts/orders.service.ts. Keyed by mobile+email
+// together (not per-user - a Shopify customer match isn't RBAC-sensitive on its own; the caller
+// already passed the CRM's own lead-scope check to load the lead in the first place).
+interface ShopifyCustomerOverlayResult {
+  customer: NormalizedCustomerListItem | null;
+  error?: string;
+}
+const SHOPIFY_CUSTOMER_OVERLAY_TTL_MS = 60_000;
+const shopifyCustomerOverlayCache = new Map<string, { value: ShopifyCustomerOverlayResult; expiresAt: number }>();
+
+async function fetchShopifyCustomerOverlay(mobile: string | null, email: string | null): Promise<ShopifyCustomerOverlayResult> {
+  if (!mobile && !email) return { customer: null };
+  const cacheKey = `${mobile ?? ""}|${email ?? ""}`;
+
+  const cached = shopifyCustomerOverlayCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  let result: ShopifyCustomerOverlayResult;
+  try {
+    const client = new ShopifyClient(loadShopifyConfig());
+    const customer = await findCustomerByContact(client, { mobile, email });
+    result = { customer };
+  } catch (error) {
+    result = {
+      customer: null,
+      error: error instanceof ShopifyConfigError ? "Shopify is not configured" : "Could not reach Shopify for live customer details",
+    };
+  }
+
+  shopifyCustomerOverlayCache.set(cacheKey, { value: result, expiresAt: Date.now() + SHOPIFY_CUSTOMER_OVERLAY_TTL_MS });
+  return result;
+}
 
 // Active-interest is only ever needed as a boolean, so only enough rows to know "any?" are fetched.
 const ACTIVE_INTERESTED_SELECT = {
@@ -225,6 +263,18 @@ class CustomersService {
     const paymentSummary = buildPaymentSummary(orders);
     const segment = buildSegmentInfo(lead, lead.interestedPeriods.length > 0, orders, paymentSummary);
 
+    // Independent of each other and of everything above (the CRM's own data is already assembled) -
+    // fetch in parallel rather than sequentially, and let either fail on its own.
+    const awbsToTrack = [...new Set(orderSummaries.map((o) => o.latestShipment?.trackingNumber).filter((awb): awb is string => Boolean(awb)))];
+    const [shopifyOverlay, liveTrackingByAwb] = await Promise.all([
+      fetchShopifyCustomerOverlay(lead.mobile, lead.email),
+      awbsToTrack.length > 0 ? getLiveTrackingBatch(awbsToTrack) : Promise.resolve(new Map()),
+    ]);
+    for (const summary of orderSummaries) {
+      const awb = summary.latestShipment?.trackingNumber;
+      if (awb && summary.latestShipment) summary.latestShipment.liveTracking = liveTrackingByAwb.get(awb);
+    }
+
     return {
       // A salesperson never sees ASSIGNED (shown as NEW).
       profile: { ...mapProfile(lead), workingStatus: statusForRole(lead.workingStatus, user.role) },
@@ -234,6 +284,8 @@ class CustomersService {
       latestOrder: orderSummaries[0] ?? null,
       currentOrderStatus: orderSummaries[0]?.status ?? null,
       orders: orderSummaries,
+      shopifyCustomer: shopifyOverlay.customer,
+      shopifyError: shopifyOverlay.error,
     };
   }
 

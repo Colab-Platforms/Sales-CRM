@@ -35,10 +35,14 @@ import { useCustomerAudit } from "@/hooks/useAudit";
 import { CustomerTimeline } from "@/components/customers/customer-timeline";
 import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { orderDetailHref } from "@/components/orders/orders-table";
+import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
+import { CreateOrderDialog } from "@/components/whatsapp/inbox/create-order-dialog";
+import { CallHistoryEntry } from "./calling";
 import { AssignmentHistoryCard } from "./assignment-history-card";
 import { EditLeadDialog } from "./edit-lead-dialog";
 import { DeleteLeadDialog } from "./delete-lead-dialog";
 import { leadDetailQueryOptions } from "@/lib/api-client/queries/lead.queries";
+import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { abandonmentByLeadQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { AbandonmentPanel } from "@/components/abandonment/abandonment-panel";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -108,53 +112,6 @@ function ErrorState({ message, onRetry }: { message: string; onRetry: () => void
           Try again
         </button>
       </div>
-    </div>
-  );
-}
-
-// One call, rendered the same way everywhere it shows up on this page. Mirrors the popup version in
-// lead-table.tsx's CallHistoryDialogContent (same Lock-for-others'-calls rule, same currentFollowUp
-// wiring into CallOutcomeForm) so a salesperson logging an outcome here also gets prompted for a
-// follow-up/callback time exactly as they would from the leads table.
-function CallHistoryCard({ lead, call }: { lead: Lead; call: Call }) {
-  const currentUser = useAuthStore((s) => s.user);
-  const isOthersCall =
-    currentUser?.role === "SALESPERSON" && Boolean(call.agent?.id && call.agent.id !== currentUser.id);
-
-  return (
-    <div
-      className={cn(
-        "sketch-outline space-y-2.5 p-3 text-sm",
-        isOthersCall ? "bg-muted/30" : "bg-card/60",
-      )}
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-foreground">
-            {call.startedAt ? new Date(call.startedAt).toLocaleString() : "Not started"}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {call.agent?.name ?? "Unknown agent"}
-            {call.durationSeconds ? ` · ${call.durationSeconds}s` : ""}
-          </p>
-        </div>
-        <Badge variant={CALL_STATUS_VARIANT[call.status]}>{call.status.replaceAll("_", " ")}</Badge>
-      </div>
-
-      {call.recording?.recordingUrl ? (
-        <audio controls className="h-8 w-full min-w-0" src={call.recording.recordingUrl} />
-      ) : null}
-
-      {call.outcome || call.notes ? (
-        <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-xs">
-          {call.outcome ? <p className="font-semibold text-foreground">Outcome: {call.outcome.name}</p> : null}
-          {call.notes ? <p className="mt-1 text-muted-foreground leading-relaxed">{call.notes}</p> : null}
-        </div>
-      ) : null}
-
-      {TERMINAL_CALL_STATUSES.has(call.status) && !isOthersCall ? (
-        <CallOutcomeForm leadId={lead.id} currentFollowUp={lead.tasks[0]} call={call} />
-      ) : null}
     </div>
   );
 }
@@ -322,9 +279,15 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const call = useCallCustomer(leadId);
   const { data: lead, isPending, error, refetch } = useQuery(leadDetailQueryOptions(leadId));
   const { data: abandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  // Dedicated calls query, not `lead.calls` - it's the endpoint that already selects `transcript` and
+  // polls while one is still transcribing (leadCallsQueryOptions), same one the table's call-history
+  // popup uses. `lead.calls` (from the Lead fetch above) never carried transcript data at all.
+  const { data: calls = [] } = useQuery({ ...leadCallsQueryOptions(leadId), enabled: Boolean(lead) });
   const [editOpen, setEditOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<"calls" | "timeline" | "assignments" | "audit" | "abandonment">("calls");
+  const [sendWhatsAppOpen, setSendWhatsAppOpen] = useState(false);
+  const [createOrderOpen, setCreateOrderOpen] = useState(false);
 
   if (isPending) return <DetailSkeleton />;
 
@@ -357,18 +320,35 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <span>Call Customer</span>
           </button>
 
-          {/* WhatsApp stays presentational, per this step's scope — only Call Customer is wired to a
-              real backend call. Neither button ever talks to a telephony provider directly; the
-              frontend only ever calls our own POST /api/calls. */}
+          {/* Reuses the exact same Send WhatsApp dialog/provider-agnostic template send flow Customer
+              360 and the WhatsApp Inbox already use - never a second messaging path. Only shown when
+              there's a real number to send to. */}
+          {lead.mobile ? (
+            <button
+              type="button"
+              onClick={() => setSendWhatsAppOpen(true)}
+              className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            >
+              <MessageCircle className="size-3.5" />
+              <span>Send WhatsApp</span>
+            </button>
+          ) : null}
+
+          {/* Reuses the exact same Create Order dialog/flow (product+variant selection, address
+              prefill via the customer's last order, COD/prepaid, Cashfree payment-link generation,
+              Shopify push) the WhatsApp Inbox's "Create Order" action already uses - never a second
+              order-creation implementation. leadId/customerName/customerMobile are the same generic
+              props that dialog already takes; only the entry point differs. */}
           <button
             type="button"
-            onClick={() => toast.info("WhatsApp messaging is coming soon.")}
+            onClick={() => setCreateOrderOpen(true)}
             className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
           >
-            <MessageCircle className="size-3.5" />
-            <span>WhatsApp</span>
+            <ShoppingCart className="size-3.5 text-primary" />
+            <span>Create Order</span>
           </button>
 
+          {/* Tactile Doodle Edit Button */}
           <button
             type="button"
             onClick={() => setEditOpen(true)}
@@ -544,7 +524,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <Phone className="size-3.5" />
               <span>Calls &amp; Feedback</span>
               <span className="rounded-full bg-primary/15 px-1.5 py-0.2 font-mono text-[10px] font-bold text-primary">
-                {lead.calls.length}
+                {calls.length}
               </span>
             </button>
 
@@ -612,7 +592,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                   </div>
                 </div>
 
-                {lead.calls.length === 0 ? (
+                {calls.length === 0 ? (
                   <div className="sketch-dashed flex flex-col items-center justify-center p-8 text-center">
                     <Phone className="size-8 text-muted-foreground/50" />
                     <p className="mt-2 text-sm font-bold text-foreground">No calls logged yet</p>
@@ -622,8 +602,8 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                   </div>
                 ) : (
                   <div className="max-h-[520px] space-y-3 overflow-y-auto pr-1">
-                    {lead.calls.map((call) => (
-                      <CallHistoryCard key={call.id} lead={lead} call={call} />
+                    {calls.map((call) => (
+                      <CallHistoryEntry key={call.id} leadId={lead.id} call={call} currentFollowUp={lead.tasks[0]} />
                     ))}
                   </div>
                 )}
@@ -703,6 +683,11 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         onOpenChange={setDeleteOpen}
         onDeleted={() => router.push(LEADS_HREF)}
       />
+      {/* No order list loaded on this page - the dialog's own order-selection step is already
+          optional and stays hidden whenever there are none, exactly as it does for a customer with
+          no orders yet on Customer 360. */}
+      <SendWhatsAppDialog open={sendWhatsAppOpen} onOpenChange={setSendWhatsAppOpen} leadId={lead.id} customerName={name} orders={[]} />
+      <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={lead.id} customerName={name} customerMobile={lead.mobile} />
     </div>
   );
 }

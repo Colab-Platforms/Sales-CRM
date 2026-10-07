@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { CircleAlert, CircleCheck, Copy, ExternalLink, Loader2, Plus, Store, Trash2, TriangleAlert, User, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -8,10 +8,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { ProductCombobox } from "@/components/orders/product-combobox";
+import { SendPaymentLinkDialog } from "@/components/orders/send-payment-link-dialog";
 import { cn } from "@/lib/utils";
 import { formatMoney } from "@/lib/order-status";
 import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
+import { formatKg, lineProductWeightKg, unitWeightKg } from "@/lib/parcel-weight";
+import type { ShippingChargeState } from "@/lib/shipping-charge";
+import { formatDimensions, type DimensionDraft } from "@/lib/package-dimensions";
+import type { UnitDimensionsCm } from "@/lib/api-client/types/products.types";
+import { ADDRESS_TYPES, formatAddress, validateAddress, type AddressErrors, type StructuredAddress } from "./create-order-address";
 import type { PincodeLookup, ServiceabilityResult } from "@/lib/api-client/types/delivery.types";
+
+export { CourierTable, ServiceabilityLine } from "./courier-rates";
 import type { CreateManualOrderResult, PaymentMethod } from "@/lib/api-client/types/orders.types";
 import type { ProductListItem } from "@/lib/api-client/types/products.types";
 
@@ -26,20 +34,14 @@ export interface DraftItem {
   variantId: string;
   quantity: string;
   unitPrice: string;
-  discountAmount: string;
 }
 
-export interface AddressDraft {
+export interface AddressDraft extends StructuredAddress {
   name: string;
   phone: string;
-  line1: string;
-  line2: string;
-  city: string;
-  state: string;
-  pincode: string;
 }
 
-export const emptyItem = (): DraftItem => ({ key: crypto.randomUUID(), productId: "", variantId: "", quantity: "1", unitPrice: "", discountAmount: "" });
+export const emptyItem = (): DraftItem => ({ key: crypto.randomUUID(), productId: "", variantId: "", quantity: "1", unitPrice: "" });
 
 export const cents = (value: string): number => {
   const n = Number(value);
@@ -47,7 +49,7 @@ export const cents = (value: string): number => {
 };
 export const fromCents = (c: number): string => (c / 100).toFixed(2);
 
-export const lineTotalCents = (i: Pick<DraftItem, "unitPrice" | "quantity" | "discountAmount">) => Math.max(cents(i.unitPrice) * (Number(i.quantity) || 0) - cents(i.discountAmount || "0"), 0);
+export const lineTotalCents = (i: Pick<DraftItem, "unitPrice" | "quantity">) => Math.max(cents(i.unitPrice) * (Number(i.quantity) || 0), 0);
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 /** True when what was typed and what the pincode resolves to plausibly name the same place (either contains the other). */
@@ -75,14 +77,25 @@ export function SectionCard({ title, description, children, className }: { title
   );
 }
 
-export function Field({ label, htmlFor, hint, children, className }: { label: string; htmlFor: string; hint?: ReactNode; children: ReactNode; className?: string }) {
+export function Field({ label, htmlFor, hint, children, className, required, error }: { label: string; htmlFor: string; hint?: ReactNode; children: ReactNode; className?: string; required?: boolean; error?: string }) {
   return (
     <div className={cn("grid gap-1.5", className)}>
       <Label htmlFor={htmlFor} className="text-xs">
         {label}
+        {required ? (
+          <span className="text-destructive" aria-hidden>
+            {" "}*
+          </span>
+        ) : null}
       </Label>
       {children}
-      {hint ? <div className="text-xs text-muted-foreground">{hint}</div> : null}
+      {error ? (
+        <p id={`${htmlFor}-error`} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : hint ? (
+        <div className="text-xs text-muted-foreground">{hint}</div>
+      ) : null}
     </div>
   );
 }
@@ -130,6 +143,10 @@ export function ItemCard({
   const variant = product?.variants.find((v) => v.id === item.variantId);
   const needsVariant = Boolean(product && product.variants.length > 0);
   const sku = variant?.sku ?? product?.sku ?? null;
+  // Shown only when a person actually recorded it - never guessed. Informational: the parcel weight is entered separately below.
+  const unitWeight = unitWeightKg(product, variant);
+  const productWeight = lineProductWeightKg(unitWeight, Number(item.quantity));
+  const unitDimensions: UnitDimensionsCm | null = variant?.dimensionsCm ?? product?.dimensionsCm ?? null;
   const line = fromCents(lineTotalCents(item));
 
   return (
@@ -153,6 +170,17 @@ export function ItemCard({
             SKU {sku ?? "—"}
             {variant?.price ?? product.basePrice ? ` · ${formatMoney((variant?.price ?? product.basePrice)!)}` : ""}
           </p>
+          {unitWeight !== null ? (
+            <p className="mt-0.5 text-xs text-muted-foreground" data-testid="product-weight">
+              Weight: {formatKg(unitWeight)}
+              {productWeight !== null && Number(item.quantity) > 1 ? ` · Product weight: ${formatKg(productWeight)} (estimate - not the parcel weight)` : ""}
+            </p>
+          ) : null}
+          {unitDimensions ? (
+            <p className="mt-0.5 text-xs text-muted-foreground" data-testid="product-dimensions-line">
+              Product dimensions: {formatDimensions(unitDimensions)} (per unit)
+            </p>
+          ) : null}
         </div>
       ) : null}
 
@@ -170,15 +198,12 @@ export function ItemCard({
         </Field>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         <Field label="Quantity" htmlFor={`qty-${item.key}`}>
           <Input id={`qty-${item.key}`} type="number" min="1" inputMode="numeric" value={item.quantity} onChange={(e) => onChange({ quantity: e.target.value })} />
         </Field>
         <Field label="Unit price (₹)" htmlFor={`price-${item.key}`}>
           <Input id={`price-${item.key}`} inputMode="decimal" value={item.unitPrice} onChange={(e) => onChange({ unitPrice: e.target.value })} placeholder="0.00" />
-        </Field>
-        <Field label="Discount (₹)" htmlFor={`disc-${item.key}`}>
-          <Input id={`disc-${item.key}`} inputMode="decimal" value={item.discountAmount} onChange={(e) => onChange({ discountAmount: e.target.value })} placeholder="0" />
         </Field>
         <div className="grid gap-1.5">
           <span className="text-xs font-medium">Line total</span>
@@ -306,55 +331,23 @@ export function PincodeStatusLines({
   );
 }
 
-export function ServiceabilityLine({
-  pincodeState,
-  weightProvided,
-  loading,
-  result,
-}: {
-  pincodeState: PincodeUiState;
-  weightProvided: boolean;
-  loading: boolean;
-  result: ServiceabilityResult | undefined;
-}) {
-  if (pincodeState !== "valid") return null;
-  if (!weightProvided) return <StatusLine tone="muted">Courier serviceability requires shipment weight — enter the parcel weight below.</StatusLine>;
-  if (loading || !result) return <StatusLine tone="busy">Checking delivery…</StatusLine>;
-  if (result.status === "serviceable") {
-    const eta = result.minDays !== null ? ` · ${result.minDays === result.maxDays || result.maxDays === null ? `${result.minDays}` : `${result.minDays}–${result.maxDays}`} days` : "";
-    const rate = result.cheapestRate !== null ? ` · from ${formatMoney(String(result.cheapestRate))}` : "";
-    return (
-      <div data-testid="serviceability">
-        <StatusLine tone="ok">
-          Delivery serviceable — {result.couriers} courier{result.couriers === 1 ? "" : "s"} available{eta}
-          {rate}
-        </StatusLine>
-      </div>
-    );
-  }
-  if (result.status === "not_serviceable") {
-    return (
-      <div data-testid="serviceability">
-        <StatusLine tone={result.blocksOrder ? "bad" : "warn"}>
-          {result.message ?? "This pincode is currently not serviceable for delivery."}
-          {result.blocksOrder ? "" : " The order can still be created."}
-        </StatusLine>
-      </div>
-    );
-  }
-  return (
-    <div data-testid="serviceability">
-      <StatusLine tone="warn">{result.message ?? "Could not check delivery right now."} You can still continue.</StatusLine>
-    </div>
-  );
-}
-
 export function ShippingSection({
   address,
   onChange,
   weight,
+  weightError,
+  weightHint,
+  productWeightNote,
+  onUseSuggested,
   onWeightChange,
+  dimensions,
+  dimensionsError,
+  dimensionsHint,
+  productDimensionsNote,
+  onUseSuggestedDimensions,
+  onDimensionsChange,
   shippingAmount,
+  shippingStatus,
   onShippingAmountChange,
   prefilledFromLastOrder,
   pincodeState,
@@ -366,8 +359,27 @@ export function ShippingSection({
   address: AddressDraft;
   onChange: (patch: Partial<AddressDraft>) => void;
   weight: string;
+  /** Why the typed parcel weight is not valid (0, negative, not a number); undefined when empty or fine. */
+  weightError?: string;
+  /** Where the current value comes from: suggested from product weights / typed by hand / not available. */
+  weightHint?: string;
+  /** "Product weight: 0.6 kg (estimate - not the parcel weight)" when every product has a recorded weight. */
+  productWeightNote?: string;
+  /** Present when the operator has typed a value and a complete suggestion exists: restores the suggestion. */
+  onUseSuggested?: () => void;
   onWeightChange: (v: string) => void;
+  /** The FINAL PACKED PARCEL dimensions (cm) as typed / suggested - what is sent to Shiprocket. Not the product dimensions. */
+  dimensions?: DimensionDraft;
+  dimensionsError?: string;
+  dimensionsHint?: string;
+  /** Recorded product dimensions of the selected items ("20 × 15 × 2 cm"), shown separately from the packed parcel. */
+  productDimensionsNote?: string;
+  /** Present when the operator typed dimensions and a safe suggestion exists. */
+  onUseSuggestedDimensions?: () => void;
+  onDimensionsChange?: (patch: Partial<DimensionDraft>) => void;
   shippingAmount: string;
+  /** Where the shipping charge comes from: the selected courier's Shiprocket rate, still calculating, not available, or not requested yet. */
+  shippingStatus?: ShippingChargeState;
   onShippingAmountChange: (v: string) => void;
   prefilledFromLastOrder: boolean;
   pincodeState: PincodeUiState;
@@ -376,45 +388,131 @@ export function ShippingSection({
   onUseResolved: () => void;
   serviceability: ReactNode;
 }) {
+  // Errors appear next to a field once it has been visited (blurred), never on a pristine form.
+  const [touched, setTouched] = useState<Partial<Record<keyof AddressErrors, boolean>>>({});
+  const touch = (field: keyof AddressErrors) => setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
+  const errors = validateAddress(address);
+  const show = (field: keyof AddressErrors) => Boolean(touched[field]);
   return (
-    <SectionCard title="Shipping address" description={prefilledFromLastOrder ? "Prefilled from this customer's last order. Editing it here changes this order only — the customer record is not touched." : "Where this order will be delivered."}>
+    <SectionCard title="Delivery Address" description={prefilledFromLastOrder ? "Prefilled from this customer's last order. Editing it here changes this order only — the customer record is not touched." : "Where this order will be delivered."}>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Field label="Full name" htmlFor="ship-name">
+        <Field label="Pincode" htmlFor="ship-pincode" required className="sm:col-span-2" error={show("pincode") && pincodeState !== "invalid" && pincodeState !== "malformed" ? errors.pincode : undefined} hint={<PincodeStatusLines state={pincodeState} lookup={lookup} cityMismatch={cityMismatch} onUseResolved={onUseResolved} />}>
+          <Input
+            id="ship-pincode"
+            inputMode="numeric"
+            autoComplete="postal-code"
+            maxLength={6}
+            placeholder="e.g. 400001"
+            value={address.pincode}
+            onChange={(e) => onChange({ pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })}
+            onBlur={() => touch("pincode")}
+            aria-invalid={pincodeState === "invalid" || pincodeState === "malformed" || Boolean(show("pincode") && errors.pincode)}
+            className="max-w-[12rem]"
+          />
+        </Field>
+        <Field label="House / Flat / Building No." htmlFor="ship-house" required error={show("houseNumber") ? errors.houseNumber : undefined}>
+          <Input id="ship-house" autoComplete="off" placeholder="e.g. Flat 4B / 12-3" value={address.houseNumber} onChange={(e) => onChange({ houseNumber: e.target.value })} onBlur={() => touch("houseNumber")} aria-invalid={Boolean(show("houseNumber") && errors.houseNumber)} />
+        </Field>
+        <Field label="Building / Apartment / Society Name" htmlFor="ship-building">
+          <Input id="ship-building" autoComplete="off" placeholder="e.g. Sunrise Apartments" value={address.building} onChange={(e) => onChange({ building: e.target.value })} />
+        </Field>
+        <Field label="Area / Locality" htmlFor="ship-area" required error={show("area") ? errors.area : undefined}>
+          <Input id="ship-area" autoComplete="off" placeholder="e.g. Andheri West" value={address.area} onChange={(e) => onChange({ area: e.target.value })} onBlur={() => touch("area")} aria-invalid={Boolean(show("area") && errors.area)} />
+        </Field>
+        <Field label="Street / Road" htmlFor="ship-street">
+          <Input id="ship-street" autoComplete="off" placeholder="e.g. MG Road" value={address.street} onChange={(e) => onChange({ street: e.target.value })} />
+        </Field>
+        <Field label="Landmark" htmlFor="ship-landmark" className="sm:col-span-2">
+          <Input id="ship-landmark" autoComplete="off" placeholder="e.g. Near City Mall" value={address.landmark} onChange={(e) => onChange({ landmark: e.target.value })} />
+        </Field>
+        <Field label="City" htmlFor="ship-city" required error={show("city") ? errors.city : undefined}>
+          <Input id="ship-city" autoComplete="off" value={address.city} onChange={(e) => onChange({ city: e.target.value })} onBlur={() => touch("city")} aria-invalid={Boolean(show("city") && errors.city)} />
+        </Field>
+        <Field label="State" htmlFor="ship-state" required error={show("state") ? errors.state : undefined}>
+          <Input id="ship-state" autoComplete="off" value={address.state} onChange={(e) => onChange({ state: e.target.value })} onBlur={() => touch("state")} aria-invalid={Boolean(show("state") && errors.state)} />
+        </Field>
+        <div className="grid gap-1.5 sm:col-span-2">
+          <span className="text-xs font-medium">Address Type</span>
+          <div role="radiogroup" aria-label="Address type" className="flex flex-wrap gap-2">
+            {ADDRESS_TYPES.map((t) => (
+              <button
+                key={t.value}
+                type="button"
+                role="radio"
+                aria-checked={address.addressType === t.value}
+                onClick={() => onChange({ addressType: t.value })}
+                className={cn("rounded-full border px-4 py-1.5 text-sm font-medium transition-colors", address.addressType === t.value ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:bg-muted")}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <Field label="Contact name" htmlFor="ship-name">
           <Input id="ship-name" autoComplete="off" value={address.name} onChange={(e) => onChange({ name: e.target.value })} />
         </Field>
         <Field label="Mobile number" htmlFor="ship-phone">
           <Input id="ship-phone" inputMode="tel" autoComplete="off" value={address.phone} onChange={(e) => onChange({ phone: e.target.value })} />
         </Field>
-        <Field label="Address line 1" htmlFor="ship-line1" className="sm:col-span-2" hint={address.line1.trim() ? <StatusLine tone="ok">Address entered</StatusLine> : undefined}>
-          <Input id="ship-line1" autoComplete="off" placeholder="Flat / house no., building, street" value={address.line1} onChange={(e) => onChange({ line1: e.target.value })} />
+        <Field label="Parcel weight (kg)" htmlFor="ship-weight" hint={weightHint ?? "Estimated — used only to check courier availability."} error={weightError}>
+          <Input id="ship-weight" inputMode="decimal" placeholder="e.g. 0.5" value={weight} onChange={(e) => onWeightChange(e.target.value)} aria-invalid={Boolean(weightError)} />
+          {productWeightNote ? <p className="mt-1 text-xs text-muted-foreground" data-testid="estimated-product-weight">{productWeightNote}</p> : null}
+          {onUseSuggested ? (
+            <button type="button" onClick={onUseSuggested} className="mt-1 w-fit text-xs font-medium text-primary hover:underline">
+              Use suggested weight
+            </button>
+          ) : null}
         </Field>
-        <Field label="Address line 2 / Landmark" htmlFor="ship-line2" className="sm:col-span-2">
-          <Input id="ship-line2" autoComplete="off" placeholder="Area, landmark (optional)" value={address.line2} onChange={(e) => onChange({ line2: e.target.value })} />
-        </Field>
-        <Field label="Pincode" htmlFor="ship-pincode" className="sm:col-span-2" hint={<PincodeStatusLines state={pincodeState} lookup={lookup} cityMismatch={cityMismatch} onUseResolved={onUseResolved} />}>
+        {dimensions && onDimensionsChange ? (
+          <Field label="Final packed parcel dimensions (cm)" htmlFor="ship-length" hint={dimensionsHint} error={dimensionsError}>
+            <div className="grid grid-cols-3 gap-2">
+              {(["length", "breadth", "height"] as const).map((side) => (
+                <Input
+                  key={side}
+                  id={side === "length" ? "ship-length" : `ship-${side}`}
+                  aria-label={`Parcel ${side} (cm)`}
+                  inputMode="decimal"
+                  placeholder={side === "length" ? "L" : side === "breadth" ? "B" : "H"}
+                  value={dimensions[side]}
+                  onChange={(e) => onDimensionsChange({ [side]: e.target.value })}
+                  aria-invalid={Boolean(dimensionsError)}
+                />
+              ))}
+            </div>
+            {productDimensionsNote ? (
+              <p className="mt-1 text-xs text-muted-foreground" data-testid="product-dimensions">
+                Product dimensions: {productDimensionsNote} (per unit - not the packed parcel)
+              </p>
+            ) : null}
+            {onUseSuggestedDimensions ? (
+              <button type="button" onClick={onUseSuggestedDimensions} className="mt-1 w-fit text-xs font-medium text-primary hover:underline">
+                Use suggested dimensions
+              </button>
+            ) : null}
+          </Field>
+        ) : null}
+        <Field
+          label="Shipping charge (₹)"
+          htmlFor="ship-amount"
+          hint={
+            shippingStatus?.kind === "rate"
+              ? `Shiprocket's charge${shippingStatus.courier ? ` for ${shippingStatus.courier}` : ""}. Choose another courier below to change it.`
+              : shippingStatus?.kind === "calculating"
+                ? "Calculating shipping rates..."
+                : shippingStatus?.kind === "unavailable"
+                  ? "Shiprocket returned no usable rate. Enter the charge by hand, or leave it blank."
+                  : undefined
+          }
+        >
           <Input
-            id="ship-pincode"
-            inputMode="numeric"
-            autoComplete="off"
-            maxLength={6}
-            placeholder="6-digit pincode"
-            value={address.pincode}
-            onChange={(e) => onChange({ pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })}
-            aria-invalid={pincodeState === "invalid" || pincodeState === "malformed"}
-            className="max-w-[12rem]"
+            id="ship-amount"
+            inputMode="decimal"
+            placeholder={shippingStatus?.kind === "calculating" ? "Calculating…" : shippingStatus?.kind === "unavailable" ? "Not available" : "Not calculated"}
+            value={shippingAmount}
+            readOnly={shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
+            data-source={shippingStatus?.kind ?? "idle"}
+            onChange={(e) => onShippingAmountChange(e.target.value)}
           />
-        </Field>
-        <Field label="City" htmlFor="ship-city">
-          <Input id="ship-city" autoComplete="off" value={address.city} onChange={(e) => onChange({ city: e.target.value })} />
-        </Field>
-        <Field label="State" htmlFor="ship-state">
-          <Input id="ship-state" autoComplete="off" value={address.state} onChange={(e) => onChange({ state: e.target.value })} />
-        </Field>
-        <Field label="Parcel weight (kg)" htmlFor="ship-weight" hint="Estimated — used only to check courier availability.">
-          <Input id="ship-weight" inputMode="decimal" placeholder="e.g. 0.5" value={weight} onChange={(e) => onWeightChange(e.target.value)} />
-        </Field>
-        <Field label="Shipping charge (₹)" htmlFor="ship-amount">
-          <Input id="ship-amount" inputMode="decimal" placeholder="0" value={shippingAmount} onChange={(e) => onShippingAmountChange(e.target.value)} />
         </Field>
         <div className="sm:col-span-2">{serviceability}</div>
       </div>
@@ -451,7 +549,7 @@ export interface SummaryData {
 
 export function SummaryCard({ data, action, className }: { data: SummaryData; action?: ReactNode; className?: string }) {
   const type = ORDER_TYPES.find((t) => t.value === data.orderType)!;
-  const hasAddress = Boolean(data.address.line1.trim() || data.address.city.trim() || data.address.pincode);
+  const hasAddress = Boolean(data.address.houseNumber.trim() || data.address.city.trim() || data.address.pincode);
   return (
     <aside className={cn("grid gap-4 rounded-xl border-[1.5px] border-border bg-card p-4 sm:p-5", className)} aria-label="Order summary" data-testid="order-summary">
       <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Order summary</h3>
@@ -500,7 +598,7 @@ export function SummaryCard({ data, action, className }: { data: SummaryData; ac
         <p className="text-xs text-muted-foreground">Shipping to</p>
         {hasAddress ? (
           <p className="text-sm break-words">
-            {[data.address.line1, data.address.line2].filter((s) => s.trim()).join(", ") || "—"}
+            {formatAddress(data.address) || "—"}
             <br />
             {[data.address.city, data.address.state].filter((s) => s.trim()).join(", ")}
             {data.address.pincode ? ` - ${data.address.pincode}` : ""}
@@ -590,7 +688,8 @@ export function friendlyCashfree(reason: string | undefined): string {
 }
 
 export function friendlyWhatsApp(reason: string | undefined): string {
-  const r = reason ?? "";
+  // The server may already lead with "Payment link not sent - "; the result row adds that itself, so it is not repeated.
+  const r = (reason ?? "").replace(/^Payment link not sent\s*—\s*/i, "");
   if (!r) return "The message couldn't be sent.";
   if (/HTTP \d{3}|BLOCKED|ECONN|fetch|prisma|invalid .* invocation|undefined|stack/i.test(r)) return "WhatsApp couldn't deliver the message right now. You can send it again from the order page.";
   return r;
@@ -612,6 +711,7 @@ export function ResultView({
   onDone: () => void;
 }) {
   const { order, shopify, paymentLink, whatsapp } = result;
+  const [sendOpen, setSendOpen] = useState(false);
   const isCod = order.paymentMode === "COD";
   const providerLabel = whatsapp.provider ? (PROVIDER_LABELS[whatsapp.provider] ?? whatsapp.provider) : null;
   const what = isCod ? "Order confirmation" : "Payment link";
@@ -689,6 +789,18 @@ export function ResultView({
           {whatsapp.sent
             ? `${what} sent to ${customerMobile ?? "the customer"}${providerLabel ? ` via ${providerLabel}` : ""}`
             : `${what} not sent — ${friendlyWhatsApp(whatsapp.reason)}`}
+          {!whatsapp.sent && !isCod && paymentLink?.paymentId && paymentLink.paymentUrl ? (
+            <span className="mt-2 block">
+              <Button type="button" variant="outline" size="sm" onClick={() => setSendOpen(true)}>
+                Send Payment Link
+              </Button>
+            </span>
+          ) : null}
+          {whatsapp.sent && whatsapp.templateName ? (
+            <span className="mt-1 block text-xs">
+              Template: <code className="font-mono text-foreground">{whatsapp.templateName}</code>
+            </span>
+          ) : null}
         </ResultRow>
 
         <ResultRow label="Shiprocket" state="info">
@@ -704,6 +816,8 @@ export function ResultView({
       <div className="flex justify-end">
         <Button onClick={onDone}>Done</Button>
       </div>
+
+      {paymentLink?.paymentId ? <SendPaymentLinkDialog open={sendOpen} onOpenChange={setSendOpen} paymentId={paymentLink.paymentId} orderId={order.id} leadId={order.customer.leadId} customerName={order.customer.name} /> : null}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { normalizeMobile } from "@/utils/normalize.js";
+import { normalizeMobile } from "@/lib/leadIdentity.js";
 import type { NormalizeWebhookResult, NormalizedCallDirection, NormalizedCallEvent } from "@modules/telephony/provider.types.js";
 import { mapCallerDeskStatus, normalizeStatusKey, type CallerDeskEventKind } from "./callerdesk.status.js";
 

@@ -388,6 +388,12 @@ enum ActivityType {
   CONVERSATION_AI_HANDOFF
   CONVERSATION_HUMAN_HANDBACK
 
+  // Refund approval workflow (request -> approve/reject). These record DECISIONS only: no money has moved. PAYMENT_REFUNDED stays reserved
+  // for an actual refund that a payment provider (or Shopify) reports.
+  REFUND_REQUESTED
+  REFUND_APPROVED
+  REFUND_REJECTED
+
   @@map("activity_type")
 }
 
@@ -581,4 +587,14 @@ enum ExternalSource {
   SHIPROCKET
 
   @@map("external_source")
+}
+
+// A telecaller's request to refund (part of) a payment, and the manager/admin decision on it. Approval AUTHORIZES a future provider refund; it
+// is not a refund. There is deliberately no COMPLETED/FAILED here: nothing in this workflow executes a refund.
+enum RefundRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("refund_request_status")
 }

@@ -18,6 +18,25 @@ const service = new AbandonmentService();
 const fail = (res: Response, error: any) => sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
 const bad = (res: Response, message: string) => sendResponse(res, false, null, message, STATUS_CODES.BAD_REQUEST);
 
+export const listAbandonmentItems = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : undefined;
+    sendResponse(res, true, await service.listItemOptions(req.user!, search || undefined), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const listAbandonmentIds = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateListAbandonmentsQuery(req.query);
+    if (error) return void bad(res, error.message);
+    sendResponse(res, true, await service.listMatchingIds(req.user!, value), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
 export const listAbandonments = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateListAbandonmentsQuery(req.query);

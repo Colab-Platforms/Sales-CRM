@@ -1,14 +1,14 @@
 "use client";
 
-import { useRef, useState } from "react";
-import { Ban, CircleAlert, CircleCheck } from "lucide-react";
+import { useId, useRef, useState } from "react";
+import { Ban, CircleAlert, CircleCheck, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { useCancelOrderMutation } from "@/lib/api-client/mutations/orders.mutations";
+import { useCancelOrderMutation, useRevertCancellationMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { PROVIDER_LABELS } from "@/lib/whatsapp-template-status";
 import type { CancelOrderResult, OrderDetail, PaymentLinkCancelResult, ShopifyCancelResult } from "@/lib/api-client/types/orders.types";
 
@@ -131,9 +131,136 @@ export function OrderPaymentSummary({ order }: { order: OrderDetail }) {
   );
 }
 
+/** Restores a cancelled CRM order to the status recorded when it was cancelled. Confirms first; nothing changes on "Keep Cancelled". */
+export function RevertCancellationButton({ order }: { order: Pick<OrderDetail, "id" | "orderNumber" | "externalNumber"> }) {
+  const [open, setOpen] = useState(false);
+  const revert = useRevertCancellationMutation();
+  // Synchronous re-entry guard, same reason as CancelOrderButton: a fast double click fires before isPending re-renders.
+  const inFlight = useRef(false);
+
+  function run() {
+    if (inFlight.current || revert.isPending) return;
+    inFlight.current = true;
+    revert.mutate(
+      { orderId: order.id },
+      {
+        onSuccess: (result) => {
+          setOpen(false);
+          if (result.alreadyActive) toast.info(`Order ${order.orderNumber} is not cancelled.`);
+          else toast.success(`Order ${order.orderNumber} cancellation reverted successfully.`);
+        },
+        onError: (error) => toast.error(getErrorMessage(error, "Could not revert the cancellation.")),
+        onSettled: () => {
+          inFlight.current = false;
+        },
+      },
+    );
+  }
+
+  return (
+    <>
+      <Button type="button" variant="outline" size="sm" onClick={() => setOpen(true)} disabled={revert.isPending}>
+        <Undo2 data-icon="inline-start" />
+        Revert Cancellation
+      </Button>
+      <ConfirmActionDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Revert Cancellation?"
+        description={
+          <>
+            <span className="mb-2 block text-base font-semibold text-foreground">{order.orderNumber}</span>
+            This will restore the order from Cancelled status. Do you want to continue?
+          </>
+        }
+        confirmLabel="Revert Order"
+        dismissLabel="Keep Cancelled"
+        pendingLabel="Reverting…"
+        pending={revert.isPending}
+        onConfirm={run}
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+          <li>The order returns to the status it had before it was cancelled. Payments, shipments, amounts and customer details are not changed.</li>
+          {order.externalNumber ? <li>A linked Shopify order that was cancelled stays cancelled in Shopify.</li> : null}
+        </ul>
+      </ConfirmActionDialog>
+    </>
+  );
+}
+
+type CancelTarget = Pick<OrderDetail, "id" | "orderNumber" | "externalNumber">;
+
+function toastCancelResult(result: CancelOrderResult, orderNumber: string) {
+  if (result.paymentLink.status === "failed") toast.warning("Order cancelled, but the Cashfree payment link could not be cancelled.");
+  else if (result.shopify.status === "failed") toast.warning("Order cancelled in the CRM, but the Shopify cancellation failed.");
+  else if (result.alreadyCancelled) toast.info("This order was already cancelled.");
+  else toast.success(`Order ${orderNumber} cancelled successfully.`);
+}
+
+/** The "Cancel Order?" confirmation + cancel request, shared by Order Detail and the Orders list rows. Nothing is sent until "Cancel Order" is confirmed. */
+export function CancelOrderDialog({ open, onOpenChange, order, hasPaid, hasOpenLink, onDone }: { open: boolean; onOpenChange: (open: boolean) => void; order: CancelTarget; hasPaid: boolean; hasOpenLink: boolean; onDone?: (result: CancelOrderResult) => void }) {
+  const [reason, setReason] = useState("");
+  const reasonId = useId();
+  const cancel = useCancelOrderMutation();
+  // Synchronous re-entry guard: a fast double click fires twice before `isPending` re-renders (this produced two
+  // concurrent cancels - two Shopify attempts - when tried in a real browser).
+  const inFlight = useRef(false);
+  const shopifyLinked = Boolean(order.externalNumber);
+
+  function run() {
+    if (inFlight.current || cancel.isPending) return;
+    inFlight.current = true;
+    cancel.mutate(
+      { orderId: order.id, reason: reason.trim() || undefined },
+      {
+        onSuccess: (result) => {
+          onOpenChange(false);
+          setReason("");
+          onDone?.(result);
+          toastCancelResult(result, order.orderNumber);
+        },
+        onError: (error) => toast.error(getErrorMessage(error, "Could not cancel the order.")),
+        onSettled: () => {
+          inFlight.current = false;
+        },
+      },
+    );
+  }
+
+  return (
+    <ConfirmActionDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Cancel Order?"
+      description={
+        <>
+          <span className="mb-2 block text-base font-semibold text-foreground">{order.orderNumber}</span>
+          Are you sure you want to cancel this order? You can revert this action later.
+        </>
+      }
+      confirmLabel="Cancel Order"
+      dismissLabel="Keep Order"
+      pendingLabel="Cancelling…"
+      pending={cancel.isPending}
+      destructive
+      onConfirm={run}
+    >
+      <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+        <li>The CRM order is only marked Cancelled - it is never deleted, and its previous status is remembered so it can be restored.</li>
+        <li>{shopifyLinked ? "The linked Shopify order will also be cancelled. Shopify cannot un-cancel an order, so reverting restores the CRM order only." : "This order is not linked to Shopify, so only the CRM order changes."}</li>
+        {hasOpenLink ? <li>Any unpaid Cashfree payment link on this order will be cancelled so the customer can&apos;t pay for a cancelled order. Reverting does not reopen it.</li> : null}
+        <li>{hasPaid ? "Payment received. Cancelling this order does not automatically issue a refund - refund it separately if needed." : "Successful payments are never refunded automatically by cancelling."}</li>
+      </ul>
+      <div className="grid gap-1.5">
+        <Label htmlFor={reasonId}>Reason (optional)</Label>
+        <Input id={reasonId} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} placeholder="e.g. Created by mistake" />
+      </div>
+    </ConfirmActionDialog>
+  );
+}
+
 export function CancelOrderButton({ order }: { order: OrderDetail }) {
   const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState("");
   const [last, setLast] = useState<CancelOrderResult | null>(null);
   const cancel = useCancelOrderMutation();
   // Synchronous re-entry guard: a fast double click fires twice before `isPending` re-renders (this produced two
@@ -141,7 +268,6 @@ export function CancelOrderButton({ order }: { order: OrderDetail }) {
   const inFlight = useRef(false);
 
   const isCancelled = order.status === "CANCELLED";
-  const shopifyLinked = Boolean(order.externalNumber);
   // After a CRM-side cancel, the only thing left to do is retry a Shopify cancellation that failed.
   // The persisted outcome (survives a reload) is the source of truth; `last` only makes it instant right after a click.
   const shopifyState = last?.shopify ?? order.shopifyCancellation;
@@ -156,27 +282,25 @@ export function CancelOrderButton({ order }: { order: OrderDetail }) {
 
   if (isCancelled && !canRetry) {
     return (
-      <div className="flex flex-col items-end gap-1">
+      <div className="flex flex-col items-end gap-2">
         {shopifyState ? <ShopifyCancelNote shopify={shopifyState} /> : null}
         <PaymentLinkCancelNote link={linkState} />
+        <RevertCancellationButton order={order} />
       </div>
     );
   }
 
+  // Retry of a failed Shopify/Cashfree half on an already-cancelled order (no confirmation needed - it re-attempts what the
+  // user already confirmed). The first-time cancel goes through CancelOrderDialog.
   function run() {
     if (inFlight.current || cancel.isPending) return;
     inFlight.current = true;
     cancel.mutate(
-      { orderId: order.id, reason: reason.trim() || undefined },
+      { orderId: order.id },
       {
         onSuccess: (result) => {
           setLast(result);
-          setOpen(false);
-          setReason("");
-          if (result.paymentLink.status === "failed") toast.warning("Order cancelled, but the Cashfree payment link could not be cancelled.");
-          else if (result.shopify.status === "failed") toast.warning("Order cancelled in the CRM, but the Shopify cancellation failed.");
-          else if (result.alreadyCancelled) toast.info("This order was already cancelled.");
-          else toast.success("Order cancelled.");
+          toastCancelResult(result, order.orderNumber);
         },
         onError: (error) => toast.error(getErrorMessage(error, "Could not cancel the order.")),
         onSettled: () => {
@@ -190,33 +314,13 @@ export function CancelOrderButton({ order }: { order: OrderDetail }) {
     <div className="flex flex-col items-end gap-2">
       {shopifyState ? <ShopifyCancelNote shopify={shopifyState} /> : null}
       {isCancelled ? <PaymentLinkCancelNote link={linkState} /> : null}
+      {isCancelled ? <RevertCancellationButton order={order} /> : null}
       <Button type="button" variant={canRetry ? "outline" : "destructive"} size="sm" onClick={() => (canRetry ? run() : setOpen(true))} disabled={cancel.isPending}>
         <Ban data-icon="inline-start" />
-        {canRetry ? (cancel.isPending ? "Retrying…" : retryLabel) : "Cancel order"}
+        {canRetry ? (cancel.isPending ? "Retrying…" : retryLabel) : "Cancel Order"}
       </Button>
 
-      <ConfirmActionDialog
-        open={open}
-        onOpenChange={setOpen}
-        title="Cancel this order?"
-        description={`Order ${order.orderNumber} for ${order.customer.name}.`}
-        confirmLabel="Cancel order"
-        pendingLabel="Cancelling…"
-        pending={cancel.isPending}
-        destructive
-        onConfirm={run}
-      >
-        <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
-          <li>The CRM order will be cancelled. It is never deleted - the record, items and payments stay.</li>
-          <li>{shopifyLinked ? "Cancelling the linked Shopify order will be attempted. If it fails you can retry it." : "This order is not linked to Shopify, so only the CRM order changes."}</li>
-          {hasOpenLink ? <li>The unpaid Cashfree payment link will be cancelled so the customer can&apos;t pay for a cancelled order.</li> : null}
-          <li>{hasPaid ? "Payment received. Cancelling this order does not automatically issue a refund - refund it separately if needed." : "Successful payments are never refunded automatically by cancelling."}</li>
-        </ul>
-        <div className="grid gap-1.5">
-          <Label htmlFor="cancel-reason">Reason (optional)</Label>
-          <Input id="cancel-reason" value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} placeholder="e.g. Created by mistake" />
-        </div>
-      </ConfirmActionDialog>
+      <CancelOrderDialog open={open} onOpenChange={setOpen} order={order} hasPaid={hasPaid} hasOpenLink={hasOpenLink} onDone={setLast} />
     </div>
   );
 }

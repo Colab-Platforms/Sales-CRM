@@ -4,9 +4,11 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ActivitySource, ActivityType, AbandonmentStatus, RecoveryActionStatus, Role, TaskStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
+import type { DbClient } from "@/lib/leadScope.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
 import { FOLLOW_UP_TASK_TYPES } from "../tasks/tasks.followup.js";
 import LeadService from "../lead/lead.service.js";
+import { aggregateItemOptions, type ItemOption } from "./abandonment.items.js";
 import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow } from "./abandonment.filters.js";
 import type {
   AbandonmentDetail,
@@ -74,9 +76,16 @@ const LIST_SELECT = {
   recoveryActions: { select: { type: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" as const }, take: 1 },
 } satisfies Prisma.AbandonmentSelect;
 
+const ITEM_OPTIONS_SCAN_LIMIT = 5000;
+/** The most abandoned leads one "Select all" can pick (a bulk assign of more than this is split by narrowing the filter). */
+export const MAX_SELECT_ALL = 1000;
+
 class AbandonmentService {
-  private readonly db = prisma;
-  private readonly leadService = new LeadService();
+  // `db` and `leadService` default to the real ones; tests pass a rolled-back transaction and a recording stub.
+  constructor(
+    private readonly db: DbClient = prisma,
+    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons"> = new LeadService(),
+  ) {}
 
   // Same assignment-based scoping lead.service.ts's buildScopeWhere uses - a manager sees abandoned
   // leads assigned to them, a salesperson sees the ones assigned to them, so "assign to manager/
@@ -135,6 +144,32 @@ class AbandonmentService {
       summary: buildAbandonmentSummary(counts),
       pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) || 1 },
     };
+  }
+
+  /**
+   * The products the Items filter offers: distinct products found in the abandoned carts the viewer may see (same lead scope as
+   * the list), so a manager only gets their own queue's products. Real cart data only - nothing hardcoded. Bounded to the most
+   * recent carts so the call stays cheap on a large queue.
+   */
+  async listItemOptions(user: AuthUser, search?: string): Promise<{ items: ItemOption[] }> {
+    const leadScope = this.scopeWhere(user);
+    const rows = await this.db.abandonment.findMany({
+      where: Object.keys(leadScope).length > 0 ? { lead: leadScope } : {},
+      select: { id: true, cartSnapshot: true },
+      orderBy: { detectedAt: "desc" },
+      take: ITEM_OPTIONS_SCAN_LIMIT,
+    });
+    return { items: aggregateItemOptions(rows, search) };
+  }
+
+  /** Ids of EVERY abandonment matching the filters (not just the current page), so "Select all N" can feed the existing bulk-assign. */
+  async listMatchingIds(user: AuthUser, query: ListAbandonmentsQuery): Promise<{ ids: string[]; total: number; capped: boolean }> {
+    const where = buildAbandonmentListWhere(query, this.scopeWhere(user), user.role);
+    const [rows, total] = await Promise.all([
+      this.db.abandonment.findMany({ where, select: { id: true }, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], take: MAX_SELECT_ALL }),
+      this.db.abandonment.count({ where }),
+    ]);
+    return { ids: rows.map((r) => r.id), total, capped: total > rows.length };
   }
 
   private readonly DETAIL_SELECT = {

@@ -240,7 +240,18 @@ export function parseOrdersPage(json: unknown): OrdersPage {
   };
 }
 
-export interface ServiceabilityCourier { rate: number | null; days: number | null }
+/** One courier exactly as Shiprocket's rate calculator returned it. Nothing here is computed by the CRM; a field Shiprocket did not return is null. */
+export interface ServiceabilityCourier {
+  name?: string | null;
+  /** Shiprocket's total charge for this parcel (its `rate`). */
+  rate: number | null;
+  days: number | null;
+  /** Breakdown parts, only when Shiprocket returned them. */
+  freightCharge?: number | null;
+  codCharge?: number | null;
+  tax?: number | null;
+  etd?: string | null;
+}
 
 /** Shiprocket answers "no courier serves this lane" either with HTTP 404 or with status 404 inside a 200 body. */
 export function parseServiceabilityResponse(json: unknown): { couriers: ServiceabilityCourier[] } {
@@ -252,7 +263,17 @@ export function parseServiceabilityResponse(json: unknown): { couriers: Servicea
     const n = Number(v);
     return v !== null && v !== undefined && v !== "" && Number.isFinite(n) ? n : null;
   };
-  return { couriers: items.map((c) => ({ rate: num(c.rate ?? c.freight_charge), days: num(c.estimated_delivery_days) })) };
+  return {
+    couriers: items.map((c) => ({
+      name: typeof c.courier_name === "string" && c.courier_name.trim() ? c.courier_name.trim() : null,
+      rate: num(c.rate ?? c.freight_charge),
+      days: num(c.estimated_delivery_days),
+      freightCharge: num(c.freight_charge),
+      codCharge: num(c.cod_charges),
+      tax: num(c.tax ?? c.gst_charges ?? c.gst),
+      etd: typeof c.etd === "string" && c.etd.trim() ? c.etd.trim() : null,
+    })),
+  };
 }
 
 export class ShiprocketClient {
@@ -295,8 +316,15 @@ export class ShiprocketClient {
   }
 
   /** Which couriers can carry a parcel of this weight from the pickup postcode to the delivery postcode (read-only). */
-  async checkServiceability(input: { pickupPostcode: string; deliveryPostcode: string; cod: boolean; weightKg: number }): Promise<{ couriers: ServiceabilityCourier[] }> {
+  async checkServiceability(input: { pickupPostcode: string; deliveryPostcode: string; cod: boolean; weightKg: number; dimensionsCm?: { length: number; breadth: number; height: number }; declaredValue?: number }): Promise<{ couriers: ServiceabilityCourier[] }> {
     const query = new URLSearchParams({ pickup_postcode: input.pickupPostcode, delivery_postcode: input.deliveryPostcode, cod: input.cod ? "1" : "0", weight: String(input.weightKg) });
+    // Exactly what the person entered for the packed parcel - Shiprocket works out volumetric weight and the charge from these.
+    if (input.dimensionsCm) {
+      query.set("length", String(input.dimensionsCm.length));
+      query.set("breadth", String(input.dimensionsCm.breadth));
+      query.set("height", String(input.dimensionsCm.height));
+    }
+    if (input.declaredValue !== undefined) query.set("declared_value", String(input.declaredValue));
     return parseServiceabilityResponse(await this.call("GET", `/courier/serviceability/?${query.toString()}`));
   }
 

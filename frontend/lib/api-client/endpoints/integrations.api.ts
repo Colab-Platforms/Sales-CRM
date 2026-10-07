@@ -27,8 +27,8 @@ export const integrationsApi = {
   },
 
   // Goes through the existing WhatsApp template messaging on the backend; the template must contain {{payment_link}}.
-  async sendPaymentLinkWhatsApp(paymentId: string, templateId: string): Promise<WhatsAppMessageResult> {
-    const res = await apiClient.post<ApiEnvelope<WhatsAppMessageResult>>(`/payments/${paymentId}/send-whatsapp`, { templateId });
+  async sendPaymentLinkWhatsApp(paymentId: string, templateId: string, whatsappConsent?: boolean): Promise<WhatsAppMessageResult> {
+    const res = await apiClient.post<ApiEnvelope<WhatsAppMessageResult>>(`/payments/${paymentId}/send-whatsapp`, { templateId, ...(whatsappConsent ? { whatsappConsent: true } : {}) });
     return res.data.data;
   },
 

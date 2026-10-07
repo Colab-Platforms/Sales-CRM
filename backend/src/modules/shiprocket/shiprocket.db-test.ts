@@ -38,13 +38,13 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const CONFIG = loadShiprocketConfig({ SHIPROCKET_ENABLED: "true", SHIPROCKET_EMAIL: "api@example.com", SHIPROCKET_PASSWORD: "not-real", SHIPROCKET_PICKUP_LOCATION: "Primary" });
 const DIMS = { weight: 0.5, length: 10, breadth: 10, height: 5 };
 const ADDRESS = { name: "Priya Shah", address1: "12 MG Road", city: "Pune", province: "Maharashtra", zip: "411001", country: "India", phone: "9876500000" };
 
 async function makeUser(tx: Db, role: Role = Role.MANAGER) {
-  return tx.user.create({ data: { name: "User", email: `u-${uid()}@example.invalid`, role }, select: { id: true, email: true } });
+  return tx.user.create({ data: { name: "User", username: `u-${uid()}`, role }, select: { id: true, username: true } });
 }
 
 async function makeLead(tx: Db, ownerId: string, groupId?: string) {
@@ -599,6 +599,43 @@ describe("centralized shipment listing", () => {
       assert.ok(detail.channelOrderId); // the order id the CRM sent Shiprocket when creating the shipment
       // No weight/length/breadth/height field exists on the result at all - never fabricated.
       assert.ok(!("weight" in detail) && !("length" in detail) && !("breadth" in detail) && !("height" in detail));
+    });
+  });
+});
+
+describe("parcel weight: entered once, used for serviceability and for the shipment, persisted", () => {
+  it("the weight sent to Shiprocket when creating the shipment is the entered one (0.5), and it is stored on the shipment and the order as a number", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, svc, fake } = await setup(tx, runner);
+      const before = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { parcelWeightKg: true } });
+      assert.equal(before.parcelWeightKg, null, "an order with no recorded weight is not given a fake one");
+      const result = await svc.createShipment(user, order.id, { weight: 0.5, length: 10, breadth: 10, height: 5 });
+      assert.equal(fake.calls.create[0].weight, 0.5, "Shiprocket receives exactly the entered parcel weight");
+      assert.equal(result.weightKg, "0.5");
+      const [row] = await direct(tx, order.id);
+      assert.equal(row.weightKg?.toString(), "0.5");
+      const after = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { parcelWeightKg: true } });
+      assert.equal(after.parcelWeightKg?.toString(), "0.5");
+      assert.equal(typeof row.weightKg === "string", false, "stored as a decimal number, never a formatted string");
+    });
+  });
+
+  it("a zero, negative or missing weight is rejected before anything is created or sent", async () => {
+    const { validateCreateBody } = await import("./shiprocket.validators.js");
+    const body = { length: 10, breadth: 10, height: 5 };
+    assert.match(validateCreateBody({ ...body, weight: 0 }).error?.message ?? "", /greater than 0/);
+    assert.ok(validateCreateBody({ ...body, weight: -1 }).error);
+    assert.match(validateCreateBody(body).error?.message ?? "", /Parcel weight is required/);
+    assert.ok(!validateCreateBody({ ...body, weight: 0.5 }).error);
+  });
+
+  it("the weight is persisted per shipment: a second shipment with another weight does not rewrite the first one's", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, svc } = await setup(tx, runner);
+      const first = await svc.createShipment(user, order.id, { weight: 0.75, length: 10, breadth: 10, height: 5 });
+      assert.equal(first.weightKg, "0.75");
+      const [row] = await direct(tx, order.id);
+      assert.equal(row.weightKg?.toString(), "0.75");
     });
   });
 });

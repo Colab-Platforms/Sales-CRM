@@ -35,7 +35,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -76,7 +76,7 @@ function automationWith(tx: Prisma.TransactionClient, providerOverrides: Partial
   return new LifecycleAutomationService(tx, messaging);
 }
 
-async function enableAutomation(tx: Prisma.TransactionClient, admin: { id: string; email: string }, type: string, templateId: string) {
+async function enableAutomation(tx: Prisma.TransactionClient, admin: { id: string; username: string }, type: string, templateId: string) {
   const automation = automationWith(tx);
   await automation.updateConfig(as(admin, Role.ADMIN), type as any, { enabled: true, templateId });
 }
@@ -85,7 +85,7 @@ describe("order-level automations (ORDER_CONFIRMED/SHIPPED/OUT_FOR_DELIVERY/DELI
   for (const type of ["ORDER_CONFIRMED", "ORDER_SHIPPED", "ORDER_OUT_FOR_DELIVERY", "ORDER_DELIVERED"] as const) {
     it(`${type} sends the configured APPROVED template`, async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const lead = await makeLead(tx);
         const order = await makeOrder(tx, lead.id);
         const template = await makeTemplate(tx);
@@ -106,7 +106,7 @@ describe("order-level automations (ORDER_CONFIRMED/SHIPPED/OUT_FOR_DELIVERY/DELI
 
   it("does not trigger repeatedly for unrelated updates to the same confirmed order - dispatchOrderLifecycleAutomation only fires on a real status transition", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id, { status: OrderStatus.CONFIRMED });
       const template = await makeTemplate(tx);
@@ -127,7 +127,7 @@ describe("order-level automations (ORDER_CONFIRMED/SHIPPED/OUT_FOR_DELIVERY/DELI
 describe("idempotency", () => {
   it("a duplicate order-confirmed event never sends a second message", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -146,7 +146,7 @@ describe("idempotency", () => {
 
   it("a duplicate shipped/out-for-delivery/delivered event never sends a second message (same eventKey mechanism)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -166,7 +166,7 @@ describe("idempotency", () => {
 
   it("a payment-pending scheduler run twice the same day never sends a second reminder", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id, { status: OrderStatus.CONFIRMED, totalAmount: "1000.00" });
       await tx.payment.create({ data: { orderId: order.id, amount: "400.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
@@ -186,8 +186,8 @@ describe("idempotency", () => {
 
   it("a follow-up-due scheduler run twice never sends a second follow-up", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep.id });
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}, checking in!", variables: ["customer_name"] });
       await enableAutomation(tx, admin, "FOLLOW_UP_DUE", template.id);
@@ -207,7 +207,7 @@ describe("idempotency", () => {
 describe("payment pending automation", () => {
   it("sends a reminder for an order with a genuinely outstanding balance (existing reconciliation definition)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id, { status: OrderStatus.CONFIRMED, totalAmount: "1000.00" });
       await tx.payment.create({ data: { orderId: order.id, amount: "1000.00", method: PaymentMethod.COD, status: PaymentStatus.PENDING } });
@@ -222,7 +222,7 @@ describe("payment pending automation", () => {
 
   it("never reminds a fully paid order", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id, { status: OrderStatus.CONFIRMED, totalAmount: "1000.00" });
       await tx.payment.create({ data: { orderId: order.id, amount: "1000.00", method: PaymentMethod.UPI, status: PaymentStatus.SUCCESS } });
@@ -237,7 +237,7 @@ describe("payment pending automation", () => {
 
   it("never reminds a cancelled or refunded order", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await makeTemplate(tx);
       await enableAutomation(tx, admin, "PAYMENT_PENDING", template.id);
 
@@ -256,8 +256,8 @@ describe("payment pending automation", () => {
 describe("follow-up due automation", () => {
   it("sends WhatsApp follow-up for a due, pending follow-up task", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep.id });
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}!", variables: ["customer_name"] });
       await enableAutomation(tx, admin, "FOLLOW_UP_DUE", template.id);
@@ -273,8 +273,8 @@ describe("follow-up due automation", () => {
 
   it("does not send for a follow-up task that is not yet due", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep.id });
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}!", variables: ["customer_name"] });
       await enableAutomation(tx, admin, "FOLLOW_UP_DUE", template.id);
@@ -287,8 +287,8 @@ describe("follow-up due automation", () => {
 
   it("ignores a completed/cancelled task and a non-follow-up task type", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}!", variables: ["customer_name"] });
       await enableAutomation(tx, admin, "FOLLOW_UP_DUE", template.id);
 
@@ -306,7 +306,7 @@ describe("follow-up due automation", () => {
 describe("configuration gating", () => {
   it("a disabled automation does not send", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -339,7 +339,7 @@ describe("configuration gating", () => {
 
   it("a template that is not (or no longer) APPROVED is never sent, even if configured", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx, { status: WhatsAppTemplateStatus.APPROVED });
@@ -359,7 +359,7 @@ describe("configuration gating", () => {
 
   it("refuses to assign a non-APPROVED template to an automation in the first place", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await makeTemplate(tx, { status: WhatsAppTemplateStatus.PENDING });
       const automation = automationWith(tx);
       await assert.rejects(() => automation.updateConfig(as(admin, Role.ADMIN), "ORDER_CONFIRMED" as any, { enabled: true, templateId: template.id }), (e: any) => e.statusCode === 400);
@@ -370,8 +370,8 @@ describe("configuration gating", () => {
 describe("variable resolution safety", () => {
   it("safely skips when a required variable cannot be resolved, instead of sending a broken message", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep.id });
       // A follow-up automation has no order context; a template needing order_number cannot resolve.
       const template = await makeTemplate(tx, { body: "Your order {{order_number}} needs attention.", variables: ["order_number"] });
@@ -390,7 +390,7 @@ describe("variable resolution safety", () => {
 describe("provider and failure behaviour", () => {
   it("WhatsApp not configured skips the automation and never breaks the caller", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -407,7 +407,7 @@ describe("provider and failure behaviour", () => {
 
   it("a provider rejection still produces a FAILED WhatsAppMessage, and the run is recorded as an attempted send", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -427,7 +427,7 @@ describe("provider and failure behaviour", () => {
 
   it("an unexpected error during the automation's own execution is recorded as FAILED, safely, without throwing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -445,7 +445,7 @@ describe("provider and failure behaviour", () => {
 
   it("dispatchOrderLifecycleAutomation (the shopify.sync.ts integration point) never throws even when the automation fails unexpectedly", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -462,7 +462,7 @@ describe("provider and failure behaviour", () => {
 describe("Customer 360, Audit Trail, E7.4 history and E7.5 status tracking all still work for an automated message", () => {
   it("the automated send appears exactly once on the timeline/audit, in E7.4's history API, and its status can still be advanced by E7.5", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -500,7 +500,7 @@ describe("Customer 360, Audit Trail, E7.4 history and E7.5 status tracking all s
 describe("automation configuration API", () => {
   it("lists all six required automations even with nothing configured yet, and reflects an update", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const automation = automationWith(tx);
 
       const before = await automation.listConfigs();

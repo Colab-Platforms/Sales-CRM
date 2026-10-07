@@ -21,6 +21,10 @@ const CLOSED_FULFILLMENT = new Set(["CANCELLED", "ERROR", "FAILURE"]);
 
 // This store's shipping integration (Shiprocket) tags an order when the parcel has come back to the seller.
 const RTO_DELIVERED_TAG = /\brto delivered\b/i;
+// "CRM Confirmed by <name>" is the CRM's own tag. It is never evidence about payment or returns: a telecaller called "Cod" must not
+// make an order look cash-on-delivery, so these tags are ignored by every tag-based rule below.
+const CRM_CONFIRMED_TAG = /^CRM Confirmed by\b/i;
+const businessTags = (tags: string[]): string[] => tags.filter((t) => !CRM_CONFIRMED_TAG.test(t.trim()));
 const COD_TAG = /\bcash on delivery\b|\bcod\b/i;
 const PREPAID_TAG = /\bprepaid\b/i;
 const COD_GATEWAY = /\bcash on delivery\b|\bcod\b/i;
@@ -58,7 +62,7 @@ export function mapOrderStatus(input: StatusInput): StatusResult {
 
   const shipments = input.fulfillments.filter((f) => !CLOSED_FULFILLMENT.has(f.status));
   if (fulfillment === "FULFILLED") {
-    if (input.tags.some((t) => RTO_DELIVERED_TAG.test(t))) return done(OrderStatus.RETURNED);
+    if (businessTags(input.tags).some((t) => RTO_DELIVERED_TAG.test(t))) return done(OrderStatus.RETURNED);
     if (shipments.length > 0 && shipments.every((f) => DELIVERED.has(f.displayStatus ?? ""))) return done(OrderStatus.DELIVERED);
     if (shipments.length > 0 && shipments.every((f) => DELIVERED.has(f.displayStatus ?? "") || OUT_FOR_DELIVERY.has(f.displayStatus ?? ""))) {
       return done(OrderStatus.OUT_FOR_DELIVERY);
@@ -101,7 +105,7 @@ export function mapFulfillments(order: Pick<NormalizedOrder, "fulfillments" | "r
       let status: ShipmentStatus;
       if (DELIVERED.has(display)) status = ShipmentStatus.DELIVERED;
       else if (OUT_FOR_DELIVERY.has(display)) status = ShipmentStatus.OUT_FOR_DELIVERY;
-      else if (RETURNED_DISPLAY.has(display) || order.tags.some((t) => RTO_DELIVERED_TAG.test(t))) status = ShipmentStatus.RETURNED;
+      else if (RETURNED_DISPLAY.has(display) || businessTags(order.tags).some((t) => RTO_DELIVERED_TAG.test(t))) status = ShipmentStatus.RETURNED;
       else if (IN_TRANSIT.has(display)) status = ShipmentStatus.IN_TRANSIT;
       else status = ShipmentStatus.SHIPPED; // Unlisted values count as shipped, same rule mapOrderStatus uses.
 
@@ -143,7 +147,7 @@ export function isCodOrder(order: Pick<NormalizedOrder, "paymentGateways" | "tra
   return (
     order.paymentGateways.some(isCodGateway) ||
     order.transactions.some((t) => isCodGateway(t.gateway)) ||
-    order.tags.some((t) => COD_TAG.test(t))
+    businessTags(order.tags).some((t) => COD_TAG.test(t))
   );
 }
 
@@ -153,7 +157,7 @@ const date = (iso: string | null | undefined) => (iso ? new Date(iso) : null);
 /** COD, or "some other method" when the order clearly was paid up front, or unknown (null). */
 function methodFor(gateway: string | null, order: Pick<NormalizedOrder, "tags" | "paymentGateways">, cod: boolean): PaymentMethod | null {
   if (cod || isCodGateway(gateway)) return PaymentMethod.COD;
-  if (gateway || order.paymentGateways.length > 0 || order.tags.some((t) => PREPAID_TAG.test(t))) return PaymentMethod.OTHER;
+  if (gateway || order.paymentGateways.length > 0 || businessTags(order.tags).some((t) => PREPAID_TAG.test(t))) return PaymentMethod.OTHER;
   return null;
 }
 
@@ -167,7 +171,16 @@ function rootStatus(tx: NormalizedTransaction, captured: boolean, voided: boolea
   return PaymentStatus.PENDING;
 }
 
-export function mapPayments(order: NormalizedOrder): MappedPayment[] {
+// Narrowed to only the fields this function actually reads (never the full item/address data) so it
+// can also be called from the Orders LIST (shopify.orders.ts's lighter NormalizedOrderListItem, via
+// mapListOrderStatusAndPayments below) without fabricating a full NormalizedOrder - every existing
+// caller already passes a full NormalizedOrder, which trivially satisfies this Pick.
+type PaymentMappingInput = Pick<
+  NormalizedOrder,
+  "id" | "currency" | "transactions" | "financialStatus" | "amounts" | "processedAt" | "updatedAt" | "paymentGateways" | "tags"
+>;
+
+export function mapPayments(order: PaymentMappingInput): MappedPayment[] {
   const cod = isCodOrder(order);
   const orderId = gidToId(order.id);
   const currency = order.currency;
@@ -218,13 +231,38 @@ export function mapPayments(order: NormalizedOrder): MappedPayment[] {
   });
 }
 
+/** Everything the Orders LIST needs to derive the exact same OrderStatus/PaymentStatus/PaymentMethod a
+ *  real sync (mapOrder, used by shopify.persist.ts) would produce for this Shopify order - reused so a
+ *  not-yet-synced order's list row can never disagree with what it would show once actually synced.
+ *  Needs only the lighter set of fields the Orders list's own GraphQL query fetches (see
+ *  shopify.orders.ts's NormalizedOrderListItem) - never the full per-item/address data mapOrder()
+ *  itself needs (which the list deliberately does not fetch, to keep one list page one cheap call). */
+export function mapListOrderStatusAndPayments(
+  order: Pick<
+    NormalizedOrder,
+    "id" | "currency" | "cancelledAt" | "financialStatus" | "fulfillmentStatus" | "returnStatus" | "fulfillments" | "tags" | "paymentGateways" | "transactions" | "amounts" | "processedAt" | "updatedAt"
+  >,
+): { status: OrderStatus; payments: MappedPayment[] } {
+  const cod = isCodOrder(order);
+  const { status } = mapOrderStatus({
+    cancelledAt: order.cancelledAt,
+    financialStatus: order.financialStatus,
+    fulfillmentStatus: order.fulfillmentStatus,
+    returnStatus: order.returnStatus,
+    fulfillments: order.fulfillments,
+    tags: order.tags,
+    isCod: cod,
+  });
+  return { status, payments: mapPayments(order) };
+}
+
 /** The successful transaction that settled this payment (a capture, or a follow-up sale marking it paid), if any. */
-const settlementOf = (order: NormalizedOrder, rootId: string): NormalizedTransaction | undefined =>
+const settlementOf = (order: Pick<NormalizedOrder, "transactions">, rootId: string): NormalizedTransaction | undefined =>
   order.transactions.find((t) => (t.kind === "CAPTURE" || t.kind === "SALE") && t.status === "SUCCESS" && t.parentId === rootId);
 
 // Orders with no gateway transaction (typical for cash on delivery, or a payment not yet started) still need a
 // payment record so payment status and COD/prepaid are visible. It is replaced once a real transaction appears.
-function synthesizePayment(order: NormalizedOrder, cod: boolean, orderId: string): MappedPayment[] {
+function synthesizePayment(order: PaymentMappingInput, cod: boolean, orderId: string): MappedPayment[] {
   const financial = order.financialStatus ?? "";
   const total = order.amounts.total ?? "0";
   if (toCents(total) <= 0) return [];

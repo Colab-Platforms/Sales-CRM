@@ -108,8 +108,10 @@ describe("CallerDesk webhook service - Call Report", () => {
     assert.equal(kit.createdCallInputs.length, 1);
     const created = kit.createdCallInputs[0]!;
     assert.equal(created.virtualNumberId, world.virtualNumberId);
-    assert.equal(created.customerNumber, "9876543210");
-    assert.equal(created.agentNumber, "9123456789");
+    // Canonical "+"-prefixed form (@/lib/leadIdentity.js's normalizeMobile), applied at the payload
+    // layer (toDigits) before this ever reaches Call creation.
+    assert.equal(created.customerNumber, "+919876543210");
+    assert.equal(created.agentNumber, "+919123456789");
 
     const { kit: kit2, service: service2 } = setup();
     kit2.addLead({ normalizedMobile: "9876543210", ownerId: kit2.addUser({ phone: "9000000001" }) });
@@ -284,7 +286,11 @@ describe("CallerDesk webhook service - correlation", () => {
     const result = await service.processWebhook(inboundCallReport({ SourceNumber: "123" }));
 
     assert.equal(result.outcome, "UNMATCHED");
-    assert.equal(result.outcome === "UNMATCHED" && result.reason, "NO_LEAD_MATCH");
+    // @/lib/leadIdentity.js's normalizeMobile rejects "123" (too short to be a real number) at the
+    // payload-parsing layer itself (callerdesk.payload.ts's toDigits), so event.customerNumber is
+    // already null by the time correlate() runs - NO_CUSTOMER_NUMBER, not NO_LEAD_MATCH. Same
+    // outcome (no Lead, no Call), just caught one step earlier than the old normalizer caught it.
+    assert.equal(result.outcome === "UNMATCHED" && result.reason, "NO_CUSTOMER_NUMBER");
     assert.equal(kit.state.leads.length, 0);
     assert.equal(kit.state.calls.length, 0);
     assert.equal(kit.state.activities.length, 0);
@@ -359,8 +365,10 @@ describe("CallerDesk webhook service - correlation", () => {
     const { SourceNumber: _omitted, ...noCaller } = inboundCallReport();
 
     assert.equal((await service.processWebhook(noCaller)).outcome === "UNMATCHED" && "NO_CUSTOMER_NUMBER", "NO_CUSTOMER_NUMBER");
+    // "12345" (5 digits) is also below leadIdentity.ts's normalizeMobile minimum (8-15 digits, or
+    // exactly 10 for a bare local number) - rejected at the payload layer, same as the empty case.
     const short = await service.processWebhook(inboundCallReport({ CallSid: "short", SourceNumber: "12345" }));
-    assert.equal(short.outcome === "UNMATCHED" && short.reason, "NO_LEAD_MATCH");
+    assert.equal(short.outcome === "UNMATCHED" && short.reason, "NO_CUSTOMER_NUMBER");
     assert.equal(kit.state.calls.length, 0);
   });
 

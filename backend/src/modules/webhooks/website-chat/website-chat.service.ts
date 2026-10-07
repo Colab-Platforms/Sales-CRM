@@ -1,7 +1,11 @@
 import { z } from "zod";
 import { ConversationMode, WebChatSender } from "@root/generated/prisma/enums.js";
 import { logger } from "@/utils/logger.js";
-import { buildMobileLookupCandidates } from "@/utils/phone.js";
+import { normalizeMobile } from "@/lib/leadIdentity.js";
+// Same canonical-identity + legacy-shape matching every other inbound-identity match in this CRM
+// already agrees on (see whatsapp.matching.ts's header comment and the real production bug it
+// documents) - never a second, competing phone-matching convention.
+import { legacyMatchCandidates } from "@modules/whatsapp/whatsapp.matching.js";
 import type { WebChatEventStore, WebChatEventTx } from "./website-chat.store.js";
 
 /**
@@ -104,7 +108,8 @@ export function createWebsiteChatWebhookService(store: WebChatEventStore) {
     let leadCreated = false;
 
     if (!leadId && (event.customer?.mobile || event.customer?.email)) {
-      const candidates = event.customer.mobile ? buildMobileLookupCandidates(event.customer.mobile) : [];
+      const normalizedMobile = event.customer.mobile ? normalizeMobile(event.customer.mobile) : null;
+      const candidates = normalizedMobile ? legacyMatchCandidates(normalizedMobile) : [];
       const matches = candidates.length > 0 ? await tx.findLeadsByNormalizedMobile(candidates) : [];
 
       if (matches.length === 1) {

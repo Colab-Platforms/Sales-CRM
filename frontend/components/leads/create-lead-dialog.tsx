@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import type { Lead } from "@/lib/api-client/types/lead.types";
 
 export function CreateLeadDialog({
   open,
@@ -16,7 +17,9 @@ export function CreateLeadDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onDone: () => void;
+  /** The just-created lead, so a caller (e.g. the WhatsApp page) can immediately act on it - open
+   *  Send WhatsApp for it, for instance - without a second lookup or a page navigation. */
+  onDone: (lead: Lead) => void;
 }) {
   const createLead = useCreateLeadMutation();
   const [firstName, setFirstName] = useState("");
@@ -44,10 +47,10 @@ export function CreateLeadDialog({
         requirement: requirement || undefined,
       },
       {
-        onSuccess: () => {
+        onSuccess: (lead) => {
           toast.success("Lead created successfully.");
           reset();
-          onDone();
+          onDone(lead);
         },
       },
     );

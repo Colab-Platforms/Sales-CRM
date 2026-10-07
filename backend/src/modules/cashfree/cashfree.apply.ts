@@ -4,6 +4,7 @@ import { computePaymentBreakdown } from "../orders/orders.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { advisoryLock, asRecord, type Db } from "../integrations/integrations.common.js";
+import { onPrepaidUpgradePayment } from "../orders/orders.prepaid-upgrade.hooks.js";
 
 // The single place a Cashfree result is applied to a CRM Payment row. Both the webhook processor and the manual
 // "refresh" action go through it, so they can never disagree about what a status change means.
@@ -190,5 +191,20 @@ export async function applyPaymentUpdate(tx: Db, paymentId: string, update: Paym
   }
 
   await tx.activity.createMany({ data: rows });
+  // Prepaid Upgrade: a verified SUCCESS converts the COD order; a FAILED/expired/cancelled link only reopens the offer.
+  // Runs inside this same transaction and advisory lock, so a duplicate callback can never upgrade twice.
+  if (finalStatus === PaymentStatus.SUCCESS || finalStatus === PaymentStatus.FAILED) {
+    await onPrepaidUpgradePayment(tx, {
+      orderId: payment.orderId,
+      paymentId: payment.id,
+      status: finalStatus,
+      paidCents: toCents(((data.amount as string | undefined) ?? payment.amount.toString())),
+      failureReason: (data.failureReason as string | undefined) ?? null,
+      actorId: ctx.actor?.id ?? null,
+      actorRole: ctx.actor?.role ?? null,
+      source: ctx.source,
+      now,
+    });
+  }
   return { outcome: "updated", orderId: payment.orderId, leadId, from, to: finalStatus };
 }

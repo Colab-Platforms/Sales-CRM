@@ -32,8 +32,15 @@ export interface WhatsAppMessageHistoryItem {
   messageType: WhatsAppMessageType;
   status: WhatsAppMessageStatus;
   providerMessageId: string | null;
+  /** Real provider-reported reply reference (Meta's context.id) - the providerMessageId of the
+   *  message this one is actually a reply to, when the provider said so. Null for the great majority
+   *  of inbound messages and always null for outbound ones. */
+  replyToProviderMessageId: string | null;
   body: string | null;
   errorMessage: string | null;
+  /** Meta's numeric error code (e.g. "131042") when this message failed - null for a synchronous
+   *  send-time rejection, whose code is already folded into errorMessage's text (describeMetaError). */
+  errorCode: string | null;
   createdAt: Date;
   sentAt: Date | null;
   deliveredAt: Date | null;
@@ -44,6 +51,9 @@ export interface WhatsAppMessageHistoryItem {
   template: { id: string; name: string } | null;
   order: { id: string; orderNumber: string; externalNumber: string | null } | null;
   sentBy: { id: string; name: string } | null;
+  /** Whether the CURRENT caller has starred this message - per-user state (WhatsAppMessageUserState),
+   *  never a property of the message itself. */
+  starred: boolean;
 }
 
 export interface WhatsAppMessageListResult {

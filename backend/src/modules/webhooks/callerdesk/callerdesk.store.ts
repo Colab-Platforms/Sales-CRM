@@ -1,7 +1,7 @@
 import type { Prisma } from "@root/generated/prisma/client.js";
 import { ActivityType, Role, SourceStatus, SourceType, UserStatus, WebhookStatus, type CallDirection, type CallStatus } from "@root/generated/prisma/enums.js";
 import type { prisma as PrismaSingleton } from "@/lib/prisma.js";
-import { normalizeMobile } from "@/utils/normalize.js";
+import { normalizeMobile } from "@/lib/leadIdentity.js";
 import LeadService from "../../lead/lead.service.js";
 
 /**

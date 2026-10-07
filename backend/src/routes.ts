@@ -20,7 +20,10 @@ import webChatRoutes from "@modules/webchat/webchat.routes.js";
 import callRoutes from "@modules/call/call.routes.js";
 import tasksRoutes from "@modules/tasks/tasks.routes.js";
 import deliveryRoutes from "@modules/delivery/delivery.routes.js";
+import offersRoutes from "@modules/offers/offers.routes.js";
+import discountRoutes from "@modules/discounts/discounts.routes.js";
 import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
+import refundRoutes from "@modules/refunds/refunds.routes.js";
 
 const router = Router();
 
@@ -38,6 +41,8 @@ router.use("/dashboard", dashboardRoutes);
 router.use("/admin", adminRoutes);
 router.use("/manager", managerRoutes);
 router.use("/orders", ordersRoutes);
+router.use("/discounts", discountRoutes);
+router.use("/offers", offersRoutes);
 router.use("/products", productsRoutes);
 router.use("/customers", customersRoutes);
 router.use("/audit", auditRoutes);
@@ -52,5 +57,6 @@ router.use("/webchat", webChatRoutes);
 router.use("/tasks", tasksRoutes);
 router.use("/delivery", deliveryRoutes);
 router.use("/abandonments", abandonmentRoutes);
+router.use("/refund-requests", refundRoutes);
 
 export default router;

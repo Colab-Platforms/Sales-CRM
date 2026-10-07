@@ -13,7 +13,7 @@ export interface LeadSource {
 export interface LeadUserRef {
   id: string;
   name: string;
-  email: string;
+  username: string;
 }
 
 export interface LeadGroupRef {

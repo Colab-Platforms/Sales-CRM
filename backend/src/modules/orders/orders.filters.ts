@@ -169,3 +169,26 @@ export function computePaymentBreakdown(payments: BreakdownPayment[]): PaymentBr
 
   return breakdown;
 }
+
+export interface RefundablePaymentAmount {
+  /** The payment's own amount. */
+  originalCents: number;
+  /** Already refunded (Payment.refundedAmount, null = 0). */
+  refundedCents: number;
+  /** Held by refund requests that are still PENDING or APPROVED for this payment. */
+  reservedCents: number;
+  /** originalCents - refundedCents - reservedCents, never below 0: what a NEW request may still ask for. */
+  refundableCents: number;
+}
+
+/**
+ * The single place a payment's refundable balance is worked out (integer cents): amount - already refunded - amounts reserved by active
+ * (PENDING / APPROVED) refund requests. Request creation, the order detail and the approval queue all use it. `activeRequests` must contain
+ * only the requests that still reserve money - the caller filters by status.
+ */
+export function getRefundablePaymentAmount(payment: { amount: { toString(): string }; refundedAmount: { toString(): string } | null }, activeRequests: { amount: { toString(): string } }[]): RefundablePaymentAmount {
+  const originalCents = toCents(payment.amount.toString());
+  const refundedCents = payment.refundedAmount ? toCents(payment.refundedAmount.toString()) : 0;
+  const reservedCents = activeRequests.reduce((sum, r) => sum + toCents(r.amount.toString()), 0);
+  return { originalCents, refundedCents, reservedCents, refundableCents: Math.max(originalCents - refundedCents - reservedCents, 0) };
+}

@@ -54,8 +54,8 @@ export function useSendPaymentLinkAutoMutation() {
 export function useSendPaymentLinkMutation() {
   const queryClient = useQueryClient();
   const refresh = useRefreshOrderData();
-  return useMutation<WhatsAppMessageResult, unknown, { paymentId: string; templateId: string }>({
-    mutationFn: ({ paymentId, templateId }) => integrationsApi.sendPaymentLinkWhatsApp(paymentId, templateId),
+  return useMutation<WhatsAppMessageResult, unknown, { paymentId: string; templateId: string; whatsappConsent?: boolean }>({
+    mutationFn: ({ paymentId, templateId, whatsappConsent }) => integrationsApi.sendPaymentLinkWhatsApp(paymentId, templateId, whatsappConsent),
     onSuccess: () => {
       refresh();
       queryClient.invalidateQueries({ queryKey: whatsappKeys.all });

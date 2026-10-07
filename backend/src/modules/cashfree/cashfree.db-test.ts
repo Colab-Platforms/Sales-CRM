@@ -43,11 +43,11 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_CLIENT_ID: "TEST_APP", CASHFREE_CLIENT_SECRET: "test-secret", PUBLIC_BACKEND_URL: "https://crm.example.com" });
 
 async function makeRep(tx: Db, role: Role = Role.SALESPERSON) {
-  return tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role }, select: { id: true, email: true } });
+  return tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role }, select: { id: true, username: true } });
 }
 
 async function makeLead(tx: Db, ownerId: string, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
@@ -505,8 +505,10 @@ describe("Shopify sync alongside a payment link", () => {
 });
 
 describe("sending the payment link through WhatsApp", () => {
+  // A signed-in user's template send always goes through Meta Cloud API (AiSensy is not used for user sends), so the fixture is a Meta
+  // provider and a Meta template with a real (synced) template id - the production rule is not weakened.
   const provider = (sent: { params: string[]; to: string }[]): WhatsAppProvider => ({
-    id: "AISENSY",
+    id: "META",
     sendTemplateMessage: async (input) => {
       sent.push({ params: input.params, to: input.to });
       return { providerMessageId: `wamid-${uid()}`, raw: {} };
@@ -517,16 +519,17 @@ describe("sending the payment link through WhatsApp", () => {
     listTemplates: async () => ({ supported: false, reason: "n/a" }),
   });
   const template = (tx: Db, variables: string[]) =>
-    tx.whatsAppTemplate.create({ data: { name: `t_${uid()}`, provider: "AISENSY", language: "en", body: variables.map((v) => `{{${v}}}`).join(" "), variables, status: WhatsAppTemplateStatus.APPROVED }, select: { id: true } });
+    tx.whatsAppTemplate.create({ data: { name: `t_${uid()}`, provider: "META", providerTemplateId: `114${Math.floor(Math.random() * 1e12)}`, language: "en", body: variables.map((v) => `{{${v}}}`).join(" "), variables, status: WhatsAppTemplateStatus.APPROVED }, select: { id: true } });
 
   it("delivers the customer's real link and amount through the existing E7.3 sender", async () => {
     await inRollback(async (tx, runner) => {
       const rep = await makeRep(tx);
       const lead = await makeLead(tx, rep.id, { normalizedMobile: "+919876543210" });
+      await (tx as any).whatsAppConversation.create({ data: { leadId: lead.id, provider: "META" } }); // a customer already in a Meta conversation
       const order = await makeOrder(tx, lead.id);
       const user = as(rep, Role.SALESPERSON);
       const sent: { params: string[]; to: string }[] = [];
-      const svc = service(runner, fakeApi().api, { messaging: () => new WhatsAppMessagingService(tx, () => provider(sent)) });
+      const svc = service(runner, fakeApi().api, { messaging: () => new WhatsAppMessagingService(tx, () => null, async () => provider(sent)) });
 
       const link = await svc.createPaymentLink(user, order.id);
       const t = await template(tx, ["customer_name", "payment_amount", "payment_link"]);
@@ -544,10 +547,11 @@ describe("sending the payment link through WhatsApp", () => {
       const rep = await makeRep(tx);
       const stranger = await makeRep(tx);
       const lead = await makeLead(tx, rep.id, { normalizedMobile: "+919876543210" });
+      await (tx as any).whatsAppConversation.create({ data: { leadId: lead.id, provider: "META" } }); // a customer already in a Meta conversation
       const order = await makeOrder(tx, lead.id);
       const user = as(rep, Role.SALESPERSON);
       const sent: { params: string[]; to: string }[] = [];
-      const svc = service(runner, fakeApi().api, { messaging: () => new WhatsAppMessagingService(tx, () => provider(sent)) });
+      const svc = service(runner, fakeApi().api, { messaging: () => new WhatsAppMessagingService(tx, () => null, async () => provider(sent)) });
       const link = await svc.createPaymentLink(user, order.id);
 
       const plain = await template(tx, ["customer_name"]);
@@ -667,6 +671,69 @@ describe("payment-success follow-ups (Shopify reconciliation + 'payment received
       const meta = row.metadata as Record<string, any>;
       assert.ok(meta.paymentSuccessNotifiedAt);
       assert.equal(meta.paymentSuccessNotification.sent, true);
+    });
+  });
+});
+
+describe("sending the payment link with a chosen Meta template (existing order)", () => {
+  const metaStub = (sent: { template: string; params: string[] }[]): WhatsAppProvider => ({
+    id: "META",
+    sendTemplateMessage: async (input) => { sent.push({ template: input.templateName, params: input.params }); return { providerMessageId: `wamid-${uid()}`, raw: {} }; },
+    verifyWebhook: () => true,
+    parseIncomingWebhook: () => [],
+    parseDeliveryStatusWebhook: () => [],
+    listTemplates: async () => ({ supported: false, reason: "n/a" }),
+  });
+  const metaTemplate = (tx: Db, over: Record<string, unknown> = {}) =>
+    tx.whatsAppTemplate.create({ data: { name: `meta_${uid().slice(0, 8)}`, provider: "META", providerTemplateId: `114${Math.floor(Math.random() * 1e12)}`, language: "en", body: "Hi {{customer_name}} {{payment_link}}", variables: ["customer_name", "payment_link"], status: WhatsAppTemplateStatus.APPROVED, ...over } as never, select: { id: true, name: true } });
+
+  async function setupMeta(tx: Db, runner: TxRunner, o: { conversation?: boolean; consent?: "OPTED_IN" | "OPTED_OUT" } = {}) {
+    const rep = await makeRep(tx);
+    const lead = await makeLead(tx, rep.id, { normalizedMobile: "+919876543210" });
+    if (o.conversation) await (tx as any).whatsAppConversation.create({ data: { leadId: lead.id, provider: "META" } });
+    if (o.consent) await (tx as any).communicationPreference.create({ data: { leadId: lead.id, channel: "WHATSAPP", status: o.consent, source: "earlier" } });
+    const order = await makeOrder(tx, lead.id);
+    const sent: { template: string; params: string[] }[] = [];
+    const svc = service(runner, fakeApi().api, { messaging: () => new WhatsAppMessagingService(tx, () => null, async () => metaStub(sent)) });
+    const user = as(rep, Role.SALESPERSON);
+    const link = await svc.createPaymentLink(user, order.id);
+    const prefs = () => (tx as any).communicationPreference.findMany({ where: { leadId: lead.id, channel: "WHATSAPP" } });
+    return { svc, user, link, sent, lead, prefs };
+  }
+
+  it("first contact without consent is refused and nothing is sent; with the ticked consent it is recorded as OPTED_IN and the chosen template (by name) is sent", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await setupMeta(tx, runner);
+      const t = await metaTemplate(tx);
+      await assert.rejects(w.svc.sendPaymentLinkWhatsApp(w.user, w.link.paymentId, t.id), /consent is required/);
+      assert.deepEqual([w.sent.length, (await w.prefs()).length], [0, 0]);
+      const message = await w.svc.sendPaymentLinkWhatsApp(w.user, w.link.paymentId, t.id, { consent: true });
+      assert.equal(message.templateName, t.name);
+      assert.equal(w.sent[0]!.template, t.name);
+      const prefs = await w.prefs();
+      assert.deepEqual([prefs.length, prefs[0].status, prefs[0].source], [1, "OPTED_IN", "CREATE_ORDER"]);
+    });
+  });
+
+  it("OPTED_OUT is never overwritten; an existing OPTED_IN needs no tick; an existing conversation keeps its existing rules", async () => {
+    await inRollback(async (tx, runner) => {
+      const out = await setupMeta(tx, runner, { consent: "OPTED_OUT" });
+      const t = await metaTemplate(tx);
+      await assert.rejects(out.svc.sendPaymentLinkWhatsApp(out.user, out.link.paymentId, t.id, { consent: true }), /opted out/);
+      assert.equal((await out.prefs())[0].status, "OPTED_OUT");
+      const inn = await setupMeta(tx, runner, { consent: "OPTED_IN" });
+      assert.equal((await inn.svc.sendPaymentLinkWhatsApp(inn.user, inn.link.paymentId, t.id)).status, "SENT");
+      const talking = await setupMeta(tx, runner, { conversation: true });
+      assert.equal((await talking.svc.sendPaymentLinkWhatsApp(talking.user, talking.link.paymentId, t.id)).status, "SENT");
+    });
+  });
+
+  it("a Meta template that is not really synced (no Meta template id) is refused", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await setupMeta(tx, runner, { conversation: true });
+      const t = await metaTemplate(tx, { providerTemplateId: null });
+      await assert.rejects(w.svc.sendPaymentLinkWhatsApp(w.user, w.link.paymentId, t.id), /not available or approved/);
+      assert.equal(w.sent.length, 0);
     });
   });
 });

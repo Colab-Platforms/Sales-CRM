@@ -26,8 +26,15 @@ export interface WhatsAppMessageHistoryItem {
   messageType: string;
   status: WhatsAppMessageStatus;
   providerMessageId: string | null;
+  /** Real provider-reported reply reference (Meta's context.id) - which earlier message (by its own
+   *  providerMessageId) the customer actually tapped "reply" on. Null for most inbound messages
+   *  (no reply gesture used) and always null for outbound ones - never inferred client-side. */
+  replyToProviderMessageId: string | null;
   body: string | null;
   errorMessage: string | null;
+  /** Meta's numeric error code (e.g. "131042"), when known - already folded into errorMessage's own
+   *  text too, so the existing errorMessage rendering stays the single source shown to the user. */
+  errorCode: string | null;
   createdAt: string;
   sentAt: string | null;
   deliveredAt: string | null;
@@ -38,6 +45,29 @@ export interface WhatsAppMessageHistoryItem {
   template: { id: string; name: string } | null;
   order: { id: string; orderNumber: string; externalNumber: string | null } | null;
   sentBy: { id: string; name: string } | null;
+  /** Whether the CURRENT CRM user has starred this message - per-viewer, not a property of the
+   *  message itself (see WhatsAppMessageUserState). */
+  starred: boolean;
+}
+
+// ---- WhatsApp-style per-message actions ----
+
+export interface StarMessageResult {
+  id: string;
+  starred: boolean;
+}
+
+export interface DeleteForMeResult {
+  id: string;
+  hidden: boolean;
+}
+
+export interface BulkDeleteForMeResult {
+  hidden: number;
+}
+
+export interface ForwardMessageResult {
+  id: string;
 }
 
 export interface Pagination {

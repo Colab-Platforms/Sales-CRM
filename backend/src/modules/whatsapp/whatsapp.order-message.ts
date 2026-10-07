@@ -28,7 +28,42 @@ export function summarizeItems(items: MessageItem[]): string {
 
 const firstName = (name: string | undefined) => (name ?? "").trim().split(/\s+/)[0] || "there";
 
-export function buildPaymentLinkMessage(input: { customerName?: string; orderNumber: string; items?: MessageItem[]; amount: string; currency: string; paymentUrl: string }): string {
+/** What a Prepaid Upgrade offered: the COD amount and the discount for paying online (amounts as plain decimal strings). */
+export interface UpgradeDiscount {
+  originalAmount: string;
+  discountAmount: string;
+}
+
+// Short customer-facing message for a Prepaid Upgrade link: the customer's name, the product(s), the original amount, the
+// online-payment discount, the amount to pay now, and the link. Every value is the real one - nothing is hardcoded but the wording.
+function buildPrepaidUpgradeMessage(input: { customerName?: string; items?: MessageItem[]; amount: string; currency: string; paymentUrl: string; discount: UpgradeDiscount }): string {
+  const name = (input.customerName ?? "").trim() || "there";
+  const items = input.items ?? [];
+  const lines = [`Hi ${name},`, ""];
+  if (items.length === 1) {
+    lines.push(`You can complete your payment online for your ${items[0]!.name} order.`);
+  } else if (items.length > 1) {
+    lines.push("You have received a special discount for your order:", "", ...items.map((i) => `• ${i.name}${i.variant ? ` (${i.variant})` : ""}`));
+  } else {
+    lines.push("You can complete your payment online for your order.");
+  }
+  lines.push(
+    "",
+    `Original amount: ${formatMoneyForMessage(input.discount.originalAmount, input.currency)}`,
+    `Special online payment discount: ${formatMoneyForMessage(input.discount.discountAmount, input.currency)}`,
+    `Amount to pay: ${formatMoneyForMessage(input.amount, input.currency)}`,
+    "",
+    "Pay securely here:",
+    input.paymentUrl,
+    "",
+    "Thank you,",
+    BRAND,
+  );
+  return lines.join("\n");
+}
+
+export function buildPaymentLinkMessage(input: { customerName?: string; orderNumber: string; items?: MessageItem[]; amount: string; currency: string; paymentUrl: string; discount?: UpgradeDiscount }): string {
+  if (input.discount) return buildPrepaidUpgradeMessage({ ...input, discount: input.discount });
   const lines = [
     "Payment Link for Your Order 💳",
     "",

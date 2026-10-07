@@ -100,6 +100,20 @@ export const retryShopifyPaymentSync = async (req: AuthRequest, res: Response): 
   }
 };
 
+// Manual retry of the "CRM Confirmed by <name>" Shopify tag sync. RBAC is server-side (getLeadScope inside the service method).
+export const retryConfirmationTagSync = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateOrderIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await ordersService.retryConfirmationTagSync(req.user!, value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 // Cancel/Revert. RBAC is server-side (getLeadScope inside cancelOrder), the same convention as every
 // other single-order action here - the route-level role gate is only the coarse "can this role ever
 // manage orders" check.
@@ -122,6 +136,21 @@ export const cancelOrder = async (req: AuthRequest, res: Response): Promise<void
   }
 };
 
+// Revert a CRM cancellation back to the status recorded at cancel time. Same RBAC as cancelOrder.
+export const revertCancellation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) {
+      sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await ordersService.revertCancellation(req.user!, params.value.id);
+    sendResponse(res, true, result, result.alreadyActive ? "This order is not cancelled" : "Order cancellation reverted", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getLastShippingAddress = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const leadId = typeof req.query.leadId === "string" ? req.query.leadId : "";
@@ -130,6 +159,19 @@ export const getLastShippingAddress = async (req: AuthRequest, res: Response): P
       return;
     }
     sendResponse(res, true, await ordersService.getLastShippingAddress(req.user!, leadId), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const getWhatsAppPaymentOptions = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const leadId = typeof req.query.leadId === "string" ? req.query.leadId : "";
+    if (!/^[0-9a-f-]{36}$/i.test(leadId)) {
+      sendResponse(res, false, null, "Invalid customer id", STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await ordersService.getWhatsAppPaymentOptions(req.user!, leadId), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

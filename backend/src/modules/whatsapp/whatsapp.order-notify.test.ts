@@ -9,14 +9,15 @@ import WhatsAppMessagingService from "./whatsapp.messaging.service.js";
 import type { MetaCloudApiProvider } from "./whatsapp.meta.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
 
-const USER: AuthUser = { id: "user-1", role: Role.ADMIN, email: "a@example.com" };
+const USER: AuthUser = { id: "user-1", role: Role.ADMIN, username: "test-user" };
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 const HOUR = 3_600_000;
 
-function fakeDb(seed: { conversations?: any[]; messages?: any[]; templates?: any[] } = {}) {
+function fakeDb(seed: { conversations?: any[]; messages?: any[]; templates?: any[]; preferences?: any[] } = {}) {
   const templates = seed.templates ?? [];
   const messages = seed.messages ?? [];
   return {
+    communicationPreference: { async findUnique({ where }: any) { return (seed.preferences ?? []).find((p) => p.leadId === where.leadId_channel.leadId && p.channel === where.leadId_channel.channel) ?? null; } },
     whatsAppConversation: { async findUnique({ where }: any) { return (seed.conversations ?? []).find((c) => c.leadId === where.leadId) ?? null; } },
     whatsAppMessage: {
       async findFirst({ where }: any) {
@@ -93,7 +94,9 @@ describe("notifyOrderConfirmation", () => {
   it("no conversation at all: reports cleanly, never throws", async () => {
     const db = fakeDb();
     const result = await notifyOrderConfirmation(db, USER, orderParams, {});
-    assert.deepEqual(result, { sent: false, via: null, provider: null, reason: "This customer has no WhatsApp conversation yet." });
+    assert.equal(result.sent, false);
+    assert.equal(result.provider, null);
+    assert.match(result.reason ?? "", /^This customer has no WhatsApp conversation yet, and no WhatsApp opt-in is recorded/);
   });
 
   it("never throws even when the db itself throws", async () => {
@@ -175,5 +178,17 @@ describe("send eligibility - an APPROVED row is only actually sendable when it c
       const result = await notifyPaymentLink(db, USER, linkParams, {});
       assert.equal(result.sent, false, status);
     }
+  });
+});
+
+describe("regression: a template that prints the rupee sign itself must not get it twice (approved prepaid_template: 'Order amount: ₹{{amount}}')", () => {
+  it("drops the sign from a value only when the body prints it right before that placeholder", async () => {
+    const { withoutRepeatedCurrencySign } = await import("./whatsapp.variable-resolver.js");
+    assert.deepEqual(withoutRepeatedCurrencySign("Order amount: ₹{{amount}}", { amount: "₹449" }), { amount: "449" });
+    assert.deepEqual(withoutRepeatedCurrencySign("Order amount: ₹{{amount}}", { amount: "₹1,199" }), { amount: "1,199" });
+    assert.deepEqual(withoutRepeatedCurrencySign("Order amount: ₹{{amount}}", { amount: "₹749.50" }), { amount: "749.50" });
+    assert.deepEqual(withoutRepeatedCurrencySign("Amount: {{amount}}", { amount: "₹449" }), { amount: "₹449" }, "templates without their own sign are unchanged");
+    assert.deepEqual(withoutRepeatedCurrencySign("Pay ₹{{amount}} here {{payment_link}}", { amount: "₹10", payment_link: "https://x/₹y" }), { amount: "10", payment_link: "https://x/₹y" });
+    assert.deepEqual(withoutRepeatedCurrencySign("Hi ₹{{customer_name}}", { customer_name: "Vishwa" }), { customer_name: "Vishwa" });
   });
 });

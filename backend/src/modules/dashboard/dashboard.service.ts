@@ -93,7 +93,7 @@ class DashboardService {
       include: {
         members: {
           where: { isActive: true },
-          include: { user: { select: { id: true, name: true, email: true } } },
+          include: { user: { select: { id: true, name: true, username: true } } },
         },
       },
     });

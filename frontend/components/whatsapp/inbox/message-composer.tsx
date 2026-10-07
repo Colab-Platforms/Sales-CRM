@@ -1,13 +1,14 @@
 "use client";
 
-import { useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { toast } from "sonner";
-import { FileText, Film, Music, Paperclip, Send, Smile, Image as ImageIcon, MessageSquareText } from "lucide-react";
+import { FileText, Film, Music, Paperclip, Send, Smile, Image as ImageIcon, MessageSquareText, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useSendConversationTextMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
+import type { WhatsAppMessageHistoryItem } from "@/lib/api-client/types/whatsapp-history.types";
 
 // Traced against the actual provider before writing any of this UI: AiSensy's Campaign API
 // (backend/src/modules/whatsapp/whatsapp.aisensy.provider.ts) and Gupshup's template endpoint both
@@ -17,6 +18,11 @@ import { useSendConversationTextMutation } from "@/lib/api-client/mutations/what
 // capability check (`canSendFreeText`) allows it; otherwise it stays honestly blocked with the backend's reason.
 const FREE_TEXT_BLOCKED_FALLBACK = "Free-text messages are not available for this conversation right now. Send an approved template instead.";
 const UNCONFIRMED_MEDIA_REASON = "Not confirmed supported by AiSensy's Campaign API - only image/document media is documented.";
+// A starting point only - the telecaller always reviews/edits/replaces this before sending (never
+// auto-sent). "Correct Message" is a real outbound reply (replyToMessageId -> Meta's
+// context.message_id where supported), never an edit/delete of the original - Meta's Cloud API has no
+// business-side edit/recall capability for an already-sent message.
+const CORRECTION_PREFILL = "Correction: Please ignore my previous message. ";
 
 const EMOJI = ["😀", "😂", "😊", "😍", "🙏", "👍", "👋", "🎉", "❤️", "🔥", "✅", "❌", "📦", "🚚", "💰", "📅", "⏰", "😢", "😮", "🤔"];
 
@@ -38,6 +44,9 @@ export function MessageComposer({
   blockedMessage,
   onOpenTemplateSend,
   disabled,
+  replyTarget,
+  isCorrection = false,
+  onCancelReply,
 }: {
   leadId: string;
   canSendFreeText: boolean;
@@ -45,11 +54,35 @@ export function MessageComposer({
   blockedMessage?: string | null;
   onOpenTemplateSend: () => void;
   disabled: boolean;
+  /** Set when the user picked "Reply" (or "Correct Message") on a message - quoted above the input,
+   *  and sent as Meta's real context.message_id (not a CRM-only visual approximation) when the reply
+   *  is actually sendable (free text + an open window; a template send has no reply-quoting concept to
+   *  use instead). */
+  replyTarget?: WhatsAppMessageHistoryItem | null;
+  /** True when replyTarget was set via "Correct Message" rather than plain "Reply" - same send
+   *  mechanism either way, only the composer's own visual framing and the prefilled text differ. */
+  isCorrection?: boolean;
+  onCancelReply?: () => void;
 }) {
   const [text, setText] = useState("");
   const [blocked, setBlocked] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const sendText = useSendConversationTextMutation();
+  // Guards against re-prefilling/re-focusing on every unrelated re-render: only reacts when the actual
+  // reply/correction target changes, not on every render that happens to pass the same one down again.
+  const prevReplyKey = useRef<string | null>(null);
+
+  useEffect(() => {
+    const key = replyTarget ? `${replyTarget.id}:${isCorrection ? "correction" : "reply"}` : null;
+    if (prevReplyKey.current !== key) {
+      prevReplyKey.current = key;
+      if (replyTarget) {
+        textareaRef.current?.focus();
+        // Only a starting point - the telecaller can edit or fully replace it before sending; never sent automatically.
+        if (isCorrection) setText(CORRECTION_PREFILL);
+      }
+    }
+  }, [replyTarget, isCorrection]);
 
   function autoResize() {
     const el = textareaRef.current;
@@ -66,9 +99,11 @@ export function MessageComposer({
       return;
     }
     const body = text;
+    const replyToMessageId = replyTarget?.id;
     setText("");
+    onCancelReply?.();
     sendText.mutate(
-      { leadId, variables: { text: body } },
+      { leadId, variables: { text: body, replyToMessageId } },
       { onError: (err) => { toast.error(getErrorMessage(err, "Could not send message.")); setText(body); } },
     );
   }
@@ -88,6 +123,24 @@ export function MessageComposer({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {replyTarget ? (
+        <div
+          className={cn(
+            "flex items-start justify-between gap-2 rounded-lg border-l-2 px-3 py-1.5 text-xs",
+            isCorrection ? "border-amber-500 bg-amber-500/10" : "border-primary bg-muted/60",
+          )}
+        >
+          <div className="min-w-0">
+            <p className={cn("font-medium", isCorrection ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
+              {isCorrection ? "Correcting message" : `Replying to ${replyTarget.direction === "OUTBOUND" ? "yourself" : "this message"}`}
+            </p>
+            <p className="line-clamp-1 break-words">{replyTarget.body || (replyTarget.template ? `Template: ${replyTarget.template.name}` : "(message)")}</p>
+          </div>
+          <button type="button" onClick={onCancelReply} aria-label={isCorrection ? "Cancel correction" : "Cancel reply"} className="shrink-0 rounded p-0.5 hover:bg-muted">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ) : null}
       {blocked ? (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
           <span>{blockedMessage ?? FREE_TEXT_BLOCKED_FALLBACK}</span>

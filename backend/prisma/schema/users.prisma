@@ -1,9 +1,11 @@
 model User {
   id String @id @default(uuid()) @db.Uuid
 
-  name  String  @map("name") @db.VarChar(150)
-  email String  @unique @map("email") @db.VarChar(255)
-  phone String? @map("phone") @db.VarChar(20)
+  name     String  @map("name") @db.VarChar(150)
+  // Login identifier. Email is now an optional contact field only.
+  username String  @unique @map("username") @db.VarChar(50)
+  email    String? @unique @map("email") @db.VarChar(255)
+  phone    String? @map("phone") @db.VarChar(20)
 
   passwordHash String? @map("password_hash") @db.VarChar(255)
 
@@ -29,6 +31,9 @@ model User {
   createdUsers User[] @relation("UserCreatedBy")
 
   groupsManaged Group[] @relation("GroupManager")
+
+  refundRequestsMade    RefundRequest[] @relation("RefundRequestedBy")
+  refundRequestsDecided RefundRequest[] @relation("RefundDecidedBy")
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
@@ -57,12 +62,14 @@ model User {
   interestedPeriodsQualified InterestedLeadPeriod[] @relation("InterestedLeadPeriodQualifiedBy")
 
   ordersCreated Order[] @relation("OrderCreatedBy")
+  ordersConfirmed Order[] @relation("OrderConfirmedBy")
 
   recoveryActionsPerformed RecoveryAction[] @relation("RecoveryActionPerformedBy")
 
   activitiesAsActor Activity[] @relation("ActivityActor")
 
   whatsAppMessagesSent WhatsAppMessage[] @relation("WhatsAppMessageSentBy")
+  whatsAppMessageStates WhatsAppMessageUserState[]
   whatsAppTemplatesCreated WhatsAppTemplate[] @relation("WhatsAppTemplateCreatedBy")
   whatsAppAutomationConfigsUpdated WhatsAppAutomationConfig[] @relation("WhatsAppAutomationConfigUpdatedBy")
   whatsAppCampaignsCreated WhatsAppCampaign[] @relation("WhatsAppCampaignCreatedBy")

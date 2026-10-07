@@ -237,12 +237,12 @@ class WhatsAppOrderConversationService {
     const claim = await this.db.whatsAppConversation.updateMany({ where: { leadId, orderState: { in: ["CUSTOMER_CONFIRMED", "ORDER_REVIEW"] } }, data: { orderState: "ORDER_CREATED" } });
     if (claim.count === 0) return null; // already created (or being created) by a concurrent trigger, or not actually confirmed
 
-    const assignedUser = await this.db.user.findUnique({ where: { id: conversation.assignedToId }, select: { id: true, role: true, email: true } });
+    const assignedUser = await this.db.user.findUnique({ where: { id: conversation.assignedToId }, select: { id: true, role: true, username: true } });
     if (!assignedUser) {
       await this.db.whatsAppConversation.update({ where: { leadId }, data: { orderState: "CUSTOMER_CONFIRMED" } });
       return null;
     }
-    const actor: AuthUser = { id: assignedUser.id, role: assignedUser.role as Role, email: assignedUser.email };
+    const actor: AuthUser = { id: assignedUser.id, role: assignedUser.role as Role, username: assignedUser.username };
 
     const input: CreateManualOrderInput = {
       leadId,

@@ -3,13 +3,13 @@ export type Role = "ADMIN" | "MANAGER" | "SALESPERSON";
 export interface CurrentUser {
   id: string;
   name: string;
-  email: string;
+  username: string;
   role: Role;
   status: string;
 }
 
 export interface LoginPayload {
-  email: string;
+  username: string;
   password: string;
 }
 
@@ -21,7 +21,7 @@ export interface LoginResult {
 export interface ProfileReportingManager {
   id: string;
   name: string;
-  email: string;
+  username: string;
   phone: string | null;
 }
 
@@ -42,7 +42,8 @@ export interface ProfileGroup {
 interface ProfileBase {
   id: string;
   name: string;
-  email: string;
+  username: string;
+  email: string | null;
   phone: string | null;
   status: string;
   createdAt: string;

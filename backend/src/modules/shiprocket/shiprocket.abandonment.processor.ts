@@ -1,6 +1,6 @@
 import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType } from "../../../generated/prisma/enums.js";
 import LeadService from "../lead/lead.service.js";
-import { normalizeEmail, normalizeMobile } from "@/utils/normalize.js";
+import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
 import { safeMessage, type TxRunner } from "../integrations/integrations.common.js";
 import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { parseAbandonmentEvent, summarize, type ParsedAbandonment } from "./shiprocket.abandonment.mapper.js";
@@ -46,6 +46,7 @@ function buildCartSnapshot(event: ParsedAbandonment) {
     currency: event.currency,
     itemCount: event.itemCount,
     itemNames: event.itemNames,
+    items: event.items.map((i) => ({ productId: i.productId, variantId: i.variantId, sku: i.sku, name: i.name, quantity: i.quantity })),
     stage: event.stage,
     checkoutUrl: event.checkoutUrl,
   };

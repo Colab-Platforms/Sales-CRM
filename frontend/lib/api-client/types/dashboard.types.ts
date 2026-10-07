@@ -34,7 +34,7 @@ export interface SalespersonDashboard {
 export interface TeamMember {
   id: string;
   name: string;
-  email: string;
+  username: string;
   totalLeads: number;
   statusCounts: StatusCounts;
 }

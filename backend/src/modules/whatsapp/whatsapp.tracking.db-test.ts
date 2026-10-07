@@ -42,7 +42,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const LEAD_SELECT = { id: true, normalizedMobile: true } as const;
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
@@ -370,7 +370,7 @@ describe("E7.5: safe handling of bad or unrecognised input", () => {
 describe("E7.5: Customer 360 timeline and E7.4 conversation history reflect the latest status", () => {
   it("shows DELIVERED then READ on both the timeline and the message-history API, exactly once each, with no provider call made", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const msg = await sentMessage(tx, "AISENSY", lead.id, "wamid-c360-1");
       const provider = aisensyProvider(); // fetchImpl throws if ever called - proves no provider network call happens here

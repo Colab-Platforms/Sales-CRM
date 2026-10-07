@@ -12,6 +12,8 @@ import { advisoryLock, asRecord, safeMessage, type Db } from "../integrations/in
 import { ShopifyClient } from "../shopify/shopify.client.js";
 import { ShopifyConfigError, loadShopifyConfig } from "../shopify/shopify.config.js";
 import { markShopifyOrderPaid, ShopifyOrderMarkAsPaidError } from "../shopify/shopify.orders.write.js";
+import { reconcilePrepaidUpgrade, ShopifyReconcileError } from "../shopify/shopify.orders.reconcile.js";
+import { readOffer } from "../orders/orders.prepaid-upgrade.hooks.js";
 import { notifyPaymentSuccess, type OrderNotifyDeps } from "../whatsapp/whatsapp.order-notify.service.js";
 import type { MessageItem } from "../whatsapp/whatsapp.order-message.js";
 
@@ -59,13 +61,27 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
     return { status: "failed", reason };
   }
 
+  // A converted Prepaid Upgrade is NOT "mark the whole order paid": Shopify would record the original COD total as received while
+  // the customer paid less. It gets the dedicated reconciliation (order edit for the discount, then a payment for exactly the
+  // amount collected), which is safe to repeat. Every other order keeps the original mark-as-paid behaviour untouched.
+  const offer = readOffer(meta);
+  const upgrade = offer && offer.status === "UPGRADED" ? offer : null;
+  // A Prepaid Upgrade that is still in flight (link pending) or that took money it could not convert (PAYMENT_RECEIVED) must
+  // never fall through to the whole-order mark-as-paid: that would record the full COD total as received for a smaller payment.
+  if (offer && (offer.status === "PAYMENT_PENDING" || offer.status === "PAYMENT_RECEIVED")) {
+    return { status: "failed", reason: "A prepaid upgrade is not completed for this order, so Shopify was left unchanged." };
+  }
+
   try {
-    const result = await markShopifyOrderPaid(client, order.externalId);
-    await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "synced", syncedAt: now.toISOString(), financialStatus: result.financialStatus } } as Prisma.InputJsonValue } });
-    await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment synced (order ${order.orderNumber})`, description: "Shopify order marked as paid", metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNCED", financialStatus: result.financialStatus } } });
+    const result = upgrade
+      ? await reconcilePrepaidUpgrade(client, order.externalId, { originalAmount: upgrade.originalAmount, discountAmount: upgrade.discountAmount, prepaidAmount: upgrade.prepaidAmount, currency: upgrade.currency, upgradeReference: order.orderNumber })
+      : await markShopifyOrderPaid(client, order.externalId);
+    const detail = upgrade ? { mode: "PREPAID_UPGRADE", upgradeId: upgrade.id, originalAmount: upgrade.originalAmount, discountAmount: upgrade.discountAmount, collectedAmount: upgrade.prepaidAmount, performed: (result as { performed?: string }).performed } : {};
+    await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "synced", syncedAt: now.toISOString(), financialStatus: result.financialStatus, ...detail } } as Prisma.InputJsonValue } });
+    await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment synced (order ${order.orderNumber})`, description: upgrade ? `Shopify order edited for the ${upgrade.discountAmount} prepaid discount and ${upgrade.prepaidAmount} recorded as paid` : "Shopify order marked as paid", metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNCED", financialStatus: result.financialStatus, ...detail } } });
     return { status: "synced" };
   } catch (error) {
-    const reason = error instanceof ShopifyOrderMarkAsPaidError ? safeMessage(error.message) : safeMessage(error instanceof Error ? error.message : String(error));
+    const reason = error instanceof ShopifyOrderMarkAsPaidError || error instanceof ShopifyReconcileError ? safeMessage(error.message) : safeMessage(error instanceof Error ? error.message : String(error));
     await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "failed", failedAt: now.toISOString(), reason } } as Prisma.InputJsonValue } });
     await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment sync failed (order ${order.orderNumber})`, description: reason, metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNC_FAILED" } } });
     logger.warn(`Shopify payment sync failed for order ${orderId}: ${reason}`);

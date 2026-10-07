@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
 import { AbandonmentStatus, AbandonmentType, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
+import { parseItemKeys } from "./abandonment.items.js";
 import type {
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
@@ -30,6 +31,15 @@ const listQuerySchema = z
     managerId: optional(z.uuid()),
     salespersonId: optional(z.uuid()),
     workingStatus: optional(z.enum(LeadWorkingStatus, { error: "Invalid lead status" })),
+    // Comma list of URL-encoded item keys ("s:SKU1,p:123%7CName"); decoded and validated by parseItemKeys.
+    items: optional(z.string().max(4000, "items filter is too long").transform((v, ctx) => {
+      const keys = parseItemKeys(v);
+      if (keys === null) {
+        ctx.addIssue({ code: "custom", message: "Invalid items filter" });
+        return z.NEVER;
+      }
+      return keys;
+    })),
   })
   .refine((q) => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, { error: "dateFrom must not be after dateTo" });
 
