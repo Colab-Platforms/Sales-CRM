@@ -10,4 +10,12 @@ const listProductsQuerySchema = z.object({
   search: optional(z.string().trim().max(100)),
 });
 
+// null clears the recorded weight. A weight is a real positive number of kilograms: 0 and negatives are rejected, never coerced.
+const weightBodySchema = z.object({
+  weightKg: z.union([z.null(), z.coerce.number({ error: "Weight must be a number" }).gt(0, "Weight must be greater than 0").max(100, "Weight must be 100 kg or less")]),
+});
+const idParamSchema = z.object({ id: z.uuid({ error: "Invalid id" }) });
+
+export const validateWeightBody = (body: unknown) => validateSchema<{ weightKg: number | null }>(weightBodySchema, body);
+export const validateIdParam = (params: unknown) => validateSchema<{ id: string }>(idParamSchema, params);
 export const validateListProductsQuery = (query: unknown) => validateSchema<ListProductsQuery>(listProductsQuerySchema, query);

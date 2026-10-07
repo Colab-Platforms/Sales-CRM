@@ -689,3 +689,56 @@ describe("OrdersLiveService.cancelLiveOrder", () => {
     });
   });
 });
+
+describe("OrdersLiveService.listLiveOrders - column filters", () => {
+  const cod = (n: number, ext: string) => ({ id: `gid://shopify/Order/${ext}${n}`, name: `#C${n}`, paymentGateways: ["Cash on Delivery (COD)"], financialStatus: "PENDING", fulfillmentStatus: "UNFULFILLED" });
+  const prepaid = (n: number, ext: string) => ({ id: `gid://shopify/Order/${ext}${n}`, name: `#P${n}`, paymentGateways: ["razorpay"], financialStatus: "PAID", fulfillmentStatus: "FULFILLED" });
+
+  it("a sparse filter keeps reading further Shopify pages until it has matches, and the cursor continues from the last page read", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const ext = `${Date.now()}`;
+      const { client } = fakeShopifyClient(
+        orderListBody([prepaid(1, ext), prepaid(2, ext), prepaid(3, ext)], { hasNextPage: true, endCursor: "c1" }),
+        orderListBody([prepaid(4, ext), cod(5, ext)], { hasNextPage: true, endCursor: "c2" }),
+        orderListBody([cod(6, ext)], { hasNextPage: false, endCursor: "c3" }),
+      );
+      const r = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, paymentMode: ["COD"] });
+      assert.deepEqual(r.items.map((i) => i.orderNumber).sort(), ["#C5", "#C6"], "COD rows from later pages are found, prepaid rows are not shown");
+      assert.equal(r.pageInfo.hasNextPage, false);
+      assert.equal(r.pageInfo.endCursor, "c3");
+    });
+  });
+
+  it("combines filters with AND (COD + Shopify + Unfulfilled) and ORs values inside one filter", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const ext = `${Date.now()}`;
+      const nodes = () => orderListBody([cod(1, ext), prepaid(2, ext), { ...cod(3, ext), fulfillmentStatus: "FULFILLED" }]);
+      const and = await new OrdersLiveService(tx, () => fakeShopifyClient(nodes()).client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, paymentMode: ["COD"], source: ["SHOPIFY"], fulfillment: ["UNFULFILLED"] });
+      assert.deepEqual(and.items.map((i) => i.orderNumber), ["#C1"]);
+      const or = await new OrdersLiveService(tx, () => fakeShopifyClient(nodes()).client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, paymentMode: ["COD", "PREPAID"], source: ["SHOPIFY"] });
+      assert.equal(or.items.length, 3);
+      const total = await new OrdersLiveService(tx, () => fakeShopifyClient(orderListBody([{ ...cod(1, ext), totalAmount: "300.00" }, { ...cod(2, ext), totalAmount: "1500.00" }])).client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, totalMin: 1000, totalMax: 2500 });
+      assert.deepEqual(total.items.map((i) => i.orderNumber), ["#C2"]);
+    });
+  });
+
+  it("RBAC is preserved: a salesperson filtering by another salesperson's id still sees nothing of theirs, and unsynced orders stay hidden", async () => {
+    await inRollback(async (tx) => {
+      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const leadA = await makeLead(tx, { ownerId: repA.id, normalizedMobile: "+913333300011", mobile: "3333300011" });
+      const leadB = await makeLead(tx, { ownerId: repB.id, normalizedMobile: "+913333300012", mobile: "3333300012" });
+      const extA = `${Date.now()}x`;
+      const extB = `${Date.now()}y`;
+      await makeShopifyOrder(tx, leadA.id, extA, { createdById: repA.id });
+      await makeShopifyOrder(tx, leadB.id, extB, { createdById: repB.id });
+      const page = () => orderListBody([{ id: `gid://shopify/Order/${extA}`, name: "#A1" }, { id: `gid://shopify/Order/${extB}`, name: "#B1" }, { id: `gid://shopify/Order/${extA}z`, name: "#U1" }]);
+      const own = await new OrdersLiveService(tx, () => fakeShopifyClient(page()).client).listLiveOrders(as(repA, Role.SALESPERSON), { first: 25, salespersonId: [repA.id] });
+      assert.deepEqual(own.items.map((i) => i.orderNumber), ["#A1"]);
+      const other = await new OrdersLiveService(tx, () => fakeShopifyClient(page()).client).listLiveOrders(as(repA, Role.SALESPERSON), { first: 25, salespersonId: [repB.id] });
+      assert.deepEqual(other.items, [], "filtering cannot widen a salesperson's scope");
+    });
+  });
+});

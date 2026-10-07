@@ -13,6 +13,8 @@ import { ClickToCallButton } from "@/components/leads/calling";
 import { RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
 import { parseAbandonmentCart } from "./abandonment-cart-utils";
 import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.types";
+import { cartLines, lineLabel, type ItemOption } from "@/lib/abandonment-items";
+import { ItemsFilter } from "./items-filter";
 
 const COLUMN_COUNT = 9;
 const HEADERS = [
@@ -28,7 +30,9 @@ const HEADERS = [
 
 function CartItems({ item }: { item: AbandonmentListItem }) {
   const cart = parseAbandonmentCart(item);
-  const names = cart.itemNames;
+  // "Herbal Paan Masala × 2" when the cart carried quantities; plain names for older carts.
+  const lines = cartLines(item.cartSnapshot, cart.itemNames).map(lineLabel);
+  const names = lines;
 
   if (names.length === 0) {
     if (cart.itemCount) {
@@ -91,15 +95,25 @@ function timeSince(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+export interface ItemsFilterConfig {
+  options: ItemOption[];
+  loading?: boolean;
+  failed?: boolean;
+  selected: string[];
+  onChange: (next: string[]) => void;
+}
+
 interface AbandonmentTableProps {
   items: AbandonmentListItem[];
+  /** When given, the Items column header gets the product filter. */
+  itemsFilter?: ItemsFilterConfig;
   isFetching: boolean;
   selectedIds?: Set<string>;
   onToggleOne?: (id: string, checked: boolean) => void;
   onToggleAll?: (checked: boolean) => void;
 }
 
-export function AbandonmentTable({ items, isFetching, selectedIds, onToggleOne, onToggleAll }: AbandonmentTableProps) {
+export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, onToggleOne, onToggleAll }: AbandonmentTableProps) {
   const router = useRouter();
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
@@ -124,6 +138,7 @@ export function AbandonmentTable({ items, isFetching, selectedIds, onToggleOne, 
           {HEADERS.map((header) => (
             <TableHead key={header.label} className={header.className}>
               {header.label}
+              {header.label === "Items" && itemsFilter ? <ItemsFilter {...itemsFilter} /> : null}
             </TableHead>
           ))}
           <TableHead className="w-[50px] sr-only">Actions</TableHead>

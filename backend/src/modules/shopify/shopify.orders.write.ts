@@ -256,3 +256,70 @@ export async function markShopifyOrderPaid(client: ShopifyClient, shopifyOrderId
 
   return { shopifyOrderId, financialStatus: data.orderMarkAsPaid.order?.displayFinancialStatus ?? null };
 }
+
+// --- Order tags ---------------------------------------------------------------------------------------------------
+// Additive tag edits on an EXISTING Shopify order (tagsAdd / tagsRemove touch only the tags named - they never replace
+// the order's tag list, so VIP / COD / campaign tags are untouched). Both are idempotent on Shopify's side (adding a tag
+// the order already has, or removing one it does not have, is a no-op). Same `write_orders` scope as the writes above
+// (tagsAdd/tagsRemove on an Order need write_orders); reading the current tags needs read_orders, which the sync already uses.
+export class ShopifyOrderTagError extends Error {
+  constructor(
+    message: string,
+    readonly raw?: unknown,
+  ) {
+    super(message);
+    this.name = "ShopifyOrderTagError";
+  }
+}
+
+const ORDER_TAGS_QUERY = `
+  query crmOrderTags($id: ID!) {
+    order(id: $id) { id tags }
+  }
+`;
+const TAGS_ADD_MUTATION = `
+  mutation crmTagsAdd($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) { node { id } userErrors { field message } }
+  }
+`;
+const TAGS_REMOVE_MUTATION = `
+  mutation crmTagsRemove($id: ID!, $tags: [String!]!) {
+    tagsRemove(id: $id, tags: $tags) { node { id } userErrors { field message } }
+  }
+`;
+
+function orderGid(id: string): string {
+  try {
+    return toShopifyOrderGid(id);
+  } catch (error) {
+    throw new ShopifyOrderTagError(error instanceof Error ? error.message : "Invalid Shopify order id");
+  }
+}
+
+async function runTagCall<T>(client: ShopifyClient, query: string, variables: Record<string, unknown>): Promise<T> {
+  try {
+    return await client.query<T>(query, variables);
+  } catch (error) {
+    if (error instanceof ShopifyGraphQLError) throw new ShopifyOrderTagError(error.message, error);
+    throw error;
+  }
+}
+
+/** The order's current tags exactly as Shopify holds them. Throws if the order is not found. */
+export async function getShopifyOrderTags(client: ShopifyClient, shopifyOrderId: string): Promise<string[]> {
+  const data = await runTagCall<{ order: { id: string; tags: string[] } | null }>(client, ORDER_TAGS_QUERY, { id: orderGid(shopifyOrderId) });
+  if (!data.order) throw new ShopifyOrderTagError("The Shopify order was not found.");
+  return data.order.tags ?? [];
+}
+
+export async function addShopifyOrderTags(client: ShopifyClient, shopifyOrderId: string, tags: string[]): Promise<void> {
+  if (tags.length === 0) return;
+  const data = await runTagCall<{ tagsAdd: { userErrors: { message: string }[] } }>(client, TAGS_ADD_MUTATION, { id: orderGid(shopifyOrderId), tags });
+  if (data.tagsAdd.userErrors.length > 0) throw new ShopifyOrderTagError(data.tagsAdd.userErrors.map((e) => e.message).join("; "), data.tagsAdd.userErrors);
+}
+
+export async function removeShopifyOrderTags(client: ShopifyClient, shopifyOrderId: string, tags: string[]): Promise<void> {
+  if (tags.length === 0) return;
+  const data = await runTagCall<{ tagsRemove: { userErrors: { message: string }[] } }>(client, TAGS_REMOVE_MUTATION, { id: orderGid(shopifyOrderId), tags });
+  if (data.tagsRemove.userErrors.length > 0) throw new ShopifyOrderTagError(data.tagsRemove.userErrors.map((e) => e.message).join("; "), data.tagsRemove.userErrors);
+}

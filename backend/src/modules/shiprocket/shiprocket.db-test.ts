@@ -602,3 +602,40 @@ describe("centralized shipment listing", () => {
     });
   });
 });
+
+describe("parcel weight: entered once, used for serviceability and for the shipment, persisted", () => {
+  it("the weight sent to Shiprocket when creating the shipment is the entered one (0.5), and it is stored on the shipment and the order as a number", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, svc, fake } = await setup(tx, runner);
+      const before = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { parcelWeightKg: true } });
+      assert.equal(before.parcelWeightKg, null, "an order with no recorded weight is not given a fake one");
+      const result = await svc.createShipment(user, order.id, { weight: 0.5, length: 10, breadth: 10, height: 5 });
+      assert.equal(fake.calls.create[0].weight, 0.5, "Shiprocket receives exactly the entered parcel weight");
+      assert.equal(result.weightKg, "0.5");
+      const [row] = await direct(tx, order.id);
+      assert.equal(row.weightKg?.toString(), "0.5");
+      const after = await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { parcelWeightKg: true } });
+      assert.equal(after.parcelWeightKg?.toString(), "0.5");
+      assert.equal(typeof row.weightKg === "string", false, "stored as a decimal number, never a formatted string");
+    });
+  });
+
+  it("a zero, negative or missing weight is rejected before anything is created or sent", async () => {
+    const { validateCreateBody } = await import("./shiprocket.validators.js");
+    const body = { length: 10, breadth: 10, height: 5 };
+    assert.match(validateCreateBody({ ...body, weight: 0 }).error?.message ?? "", /greater than 0/);
+    assert.ok(validateCreateBody({ ...body, weight: -1 }).error);
+    assert.match(validateCreateBody(body).error?.message ?? "", /Parcel weight is required/);
+    assert.ok(!validateCreateBody({ ...body, weight: 0.5 }).error);
+  });
+
+  it("the weight is persisted per shipment: a second shipment with another weight does not rewrite the first one's", async () => {
+    await inRollback(async (tx, runner) => {
+      const { user, order, svc } = await setup(tx, runner);
+      const first = await svc.createShipment(user, order.id, { weight: 0.75, length: 10, breadth: 10, height: 5 });
+      assert.equal(first.weightKg, "0.75");
+      const [row] = await direct(tx, order.id);
+      assert.equal(row.weightKg?.toString(), "0.75");
+    });
+  });
+});

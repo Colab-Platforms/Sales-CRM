@@ -5,6 +5,7 @@ import { DetailField, DetailGrid } from "./detail-field";
 import { CreateShipmentButton, ShipmentActions } from "./shipment-actions";
 import { ShipmentStatusBadge } from "./shipment-status-badge";
 import { formatDate, formatDateTime } from "@/lib/order-status";
+import { formatKg } from "@/lib/parcel-weight";
 import type { ShipmentDetail } from "@/lib/api-client/types/orders.types";
 
 const NOT_AVAILABLE = "Not available";
@@ -37,6 +38,7 @@ function ShipmentCard({ shipment }: { shipment: ShipmentDetail }) {
       ) : null}
       <DetailGrid>
         <DetailField label="Courier">{shipment.courier ?? NOT_AVAILABLE}</DetailField>
+        {formatKg(shipment.weightKg) ? <DetailField label="Parcel Weight">{formatKg(shipment.weightKg)}</DetailField> : null}
         <DetailField label="Tracking / AWB number">
           {shipment.trackingNumber ? <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{shipment.trackingNumber}</span> : NOT_AVAILABLE}
         </DetailField>
@@ -68,12 +70,17 @@ interface OrderShipmentSectionProps {
   orderNumber: string;
   orderStatus: string;
   currency: string;
+  parcelWeightKg?: string | null;
+  items?: { quantity: number; unitWeightKg?: string | null; unitDimensionsCm?: { lengthCm: string; widthCm: string; heightCm: string } | null }[];
+  orderValue?: number;
+  pincode?: string | null;
+  cod?: boolean;
 }
 
-export function OrderShipmentSection({ shipments, orderId, orderNumber, orderStatus, currency }: OrderShipmentSectionProps) {
+export function OrderShipmentSection({ shipments, orderId, orderNumber, orderStatus, currency, parcelWeightKg, items, orderValue, pincode, cod }: OrderShipmentSectionProps) {
   return (
     <AccentCard accent="blue">
-      <SectionTitle icon={<Truck />} accent="blue" aside={<CreateShipmentButton orderId={orderId} orderNumber={orderNumber} orderStatus={orderStatus} currency={currency} shipments={shipments} />}>
+      <SectionTitle icon={<Truck />} accent="blue" aside={<CreateShipmentButton orderId={orderId} orderNumber={orderNumber} orderStatus={orderStatus} currency={currency} shipments={shipments} parcelWeightKg={parcelWeightKg} items={items} orderValue={orderValue} pincode={pincode} cod={cod} />}>
         Fulfilment &amp; Shipment
       </SectionTitle>
       <CardContent className="space-y-3">

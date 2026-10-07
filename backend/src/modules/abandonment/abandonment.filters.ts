@@ -1,6 +1,8 @@
 import { AbandonmentStatus, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { fullName } from "../orders/orders.filters.js";import type { AbandonmentCallItem, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
+import { fullName } from "../orders/orders.filters.js";
+import { abandonmentItemsWhere, readSnapshotItems } from "./abandonment.items.js";
+import type { AbandonmentCallItem, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
 
 // Where-building, row-mapping and summary logic for the abandoned-leads queue. Kept separate from
 // abandonment.service.ts the same way orders.filters.ts / shiprocket.list.filters.ts are kept
@@ -38,6 +40,7 @@ export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScop
   else if (query.assignment === "ASSIGNED_TO_SALESPERSON") and.push({ lead: { ownerId: { not: null } } });
   if (query.managerId) and.push({ lead: { assignedManagerId: query.managerId } });
   if (query.salespersonId) and.push({ lead: { ownerId: query.salespersonId } });
+  if (query.items && query.items.length > 0) and.push(abandonmentItemsWhere(query.items));
   if (query.workingStatus) {
     // A salesperson's "NEW" filter includes leads that are ASSIGNED underneath (they never see ASSIGNED
     // itself) - same rule lead.service.ts's listLeads applies.
@@ -104,6 +107,7 @@ function asCartSnapshot(value: unknown): CartSnapshot | null {
     currency: typeof v.currency === "string" ? v.currency : null,
     itemCount: typeof v.itemCount === "number" ? v.itemCount : null,
     itemNames: Array.isArray(v.itemNames) ? v.itemNames.filter((n): n is string => typeof n === "string") : [],
+    items: readSnapshotItems(v.items),
     stage: typeof v.stage === "string" ? v.stage : null,
     checkoutUrl: typeof v.checkoutUrl === "string" ? v.checkoutUrl : null,
   };

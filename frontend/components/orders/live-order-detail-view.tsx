@@ -15,6 +15,8 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { DetailField, DetailGrid } from "./detail-field";
 import { customerDetailHref } from "./orders-table";
 import { AccentCard, EmptyState, ItemsCard, LinkButton, MilestoneList, MonoId, NOT_AVAILABLE, OrderSummaryCard, SectionTitle, ShippingBillingCard, StatTile, TimelineEvent, TimelineList, type ItemRow, type Milestone } from "./order-detail-parts";
+import { PrepaidUpgradeAction } from "./prepaid-upgrade-action";
+import { PrepaidUpgradeCard } from "./prepaid-upgrade-card";
 import { LiveOrderHistoryTable } from "./live-order-history-table";
 import { CrmBadge, ShopifyStatusBadge, SourceBadge, ToneBadge, titleCaseStatus as titleCase } from "./shopify-status-badge";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
@@ -112,6 +114,8 @@ function lineFigures(item: LiveItem, taxesIncluded: boolean | null) {
 // payments/audit exist for an order that was never synced). Every value is Shopify's own or "Not available".
 export function LiveOrderDetailView({ externalId }: { externalId: string }) {
   const { data, isLoading, error, refetch } = useLiveOrderDetail(externalId);
+  const [upgradeOpen, setUpgradeOpen] = useState(false);
+  const upgradeTarget = { kind: "live", externalId } as const;
 
   if (isLoading) {
     return (
@@ -192,7 +196,10 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
       <div className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <BackLink />
-          <CancelLiveOrderButton externalId={externalId} orderName={order.name} alreadyCancelled={isCancelled} />
+          <div className="flex flex-wrap items-start justify-end gap-2">
+            <PrepaidUpgradeAction target={upgradeTarget} onOpen={() => setUpgradeOpen(true)} />
+            <CancelLiveOrderButton externalId={externalId} orderName={order.name} alreadyCancelled={isCancelled} />
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-3xl font-bold tracking-tight">{order.name}</h1>
@@ -341,6 +348,9 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
           </CardContent>
         </AccentCard>
       </div>
+
+      {/* ---- Prepaid Upgrade: an order-level payment operation, available whether or not the CRM has synced this order ---- */}
+      <PrepaidUpgradeCard target={upgradeTarget} open={upgradeOpen} onOpenChange={setUpgradeOpen} />
 
       {/* ---- Fulfilment & Shipment ---- */}
       <AccentCard accent="blue">

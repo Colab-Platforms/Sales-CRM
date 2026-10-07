@@ -61,6 +61,9 @@ async function setup(tx: Db, runner: TxRunner, s: Setup, apiOver: Partial<Cashfr
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", lastName: "Shah", mobile: "9000000123", normalizedMobile: "+919000000123", email: "priya@zz.invalid" }, select: { id: true } });
   await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: s.provider } });
   await tx.whatsAppMessage.create({ data: { provider: s.provider, providerMessageId: `in-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId: lead.id, fromNumber: "919000000123", normalizedContact: "+919000000123", body: "hi", createdAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR), receivedAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR) } });
+  // Isolation: the dev DB now holds the real, synced Meta template `prepaid_template` (APPROVED, carries {{payment_link}}). These tests
+  // choose among the templates THEY create, so any real approved template is switched off - inside this rolled-back transaction only.
+  await tx.whatsAppTemplate.updateMany({ where: { status: "APPROVED" }, data: { status: "DISABLED" } });
   const templateIds: string[] = [];
   for (const t of s.templates ?? []) {
     // A real APPROVED META/GUPSHUP template only ever exists because a sync set a providerTemplateId (see
@@ -392,6 +395,21 @@ describe("Custom Discount (percentage) on order creation", () => {
       assert.equal(Number(seven.order.discountAmount), 87.43);
       assert.equal(Number(seven.order.totalAmount), 1161.57);
       assert.equal(t.cf.calls.create.at(-1)!.request.link_amount, 1161.57);
+    });
+  });
+});
+
+describe("Create Order with the default custom discount on a prepaid order", () => {
+  it("the Cashfree link and the WhatsApp text carry the discounted amount (1199 - 50 = 1149), and the discount reason is stored", async () => {
+    await inRollback(async (tx, runner) => {
+      const t = await setup(tx, runner, { provider: "META" });
+      const product = await tx.product.findFirstOrThrow({ select: { id: true }, orderBy: { createdAt: "desc" } });
+      const r = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { leadId: t.lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "1199.00" }], paymentMethod: "PAYMENT_LINK", discount: { type: "FIXED", value: "50" }, expectedTotal: "1149.00" });
+      assert.deepEqual([Number(r.order.subtotal), Number(r.order.discountAmount), Number(r.order.totalAmount)], [1199, 50, 1149]);
+      assert.equal(t.cf.calls.create[0]!.request.link_amount, 1149, "Cashfree receives the final discounted amount");
+      assert.ok(t.sentTexts.at(-1)!.includes("1,149"), "the customer message states the payable amount");
+      const meta = (await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata as any;
+      assert.deepEqual([meta.discount.source, meta.discount.couponCode, meta.discount.originalSubtotal, meta.discount.finalTotal], ["CUSTOM", null, "1199.00", "1149.00"]);
     });
   });
 });

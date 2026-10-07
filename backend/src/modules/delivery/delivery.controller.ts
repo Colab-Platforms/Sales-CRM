@@ -12,6 +12,11 @@ const serviceabilityQuery = z.object({
   pincode: z.string().regex(PINCODE_PATTERN, "Please enter a valid 6-digit Indian pincode."),
   cod: z.enum(["0", "1"], { error: "cod must be 0 or 1" }),
   weight: z.coerce.number({ error: "weight must be a number" }).positive("weight must be greater than 0").max(100, "weight must be 100 kg or less"),
+  // The packed parcel's dimensions (cm) and the order value, all optional; dimensions only count when all three are given.
+  length: z.coerce.number().positive("length must be greater than 0").max(300, "length must be 300 cm or less").optional(),
+  breadth: z.coerce.number().positive("breadth must be greater than 0").max(300, "breadth must be 300 cm or less").optional(),
+  height: z.coerce.number().positive("height must be greater than 0").max(300, "height must be 300 cm or less").optional(),
+  value: z.coerce.number().positive("value must be greater than 0").max(10_000_000).optional(),
 });
 
 // Open to every signed-in user who can create an order (the form runs these checks while a salesperson types). Both
@@ -25,5 +30,7 @@ export const getPincode = async (req: AuthRequest, res: Response): Promise<void>
 export const getServiceability = async (req: AuthRequest, res: Response): Promise<void> => {
   const { error, value } = validateSchema(serviceabilityQuery, req.query);
   if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
-  sendResponse(res, true, await checkServiceability({ pincode: value.pincode, cod: value.cod === "1", weightKg: value.weight }), "OK", STATUS_CODES.OK);
+  const { length, breadth, height } = value;
+  const dimensionsCm = length !== undefined && breadth !== undefined && height !== undefined ? { length, breadth, height } : undefined;
+  sendResponse(res, true, await checkServiceability({ pincode: value.pincode, cod: value.cod === "1", weightKg: value.weight, dimensionsCm, declaredValue: value.value }), "OK", STATUS_CODES.OK);
 };

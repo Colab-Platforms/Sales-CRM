@@ -33,6 +33,10 @@ model Order {
   shippingAddress Json?   @map("shipping_address")
   shippingPincode String? @map("shipping_pincode") @db.VarChar(12)
 
+  // The packed PARCEL weight in kg, as entered by the person (Create Order, then the shipment). Not a product weight and never calculated;
+  // NULL for orders where none was recorded.
+  parcelWeightKg Decimal? @map("parcel_weight_kg") @db.Decimal(8, 3)
+
   cancelReason String? @map("cancel_reason")
 
   // Raw external statuses and reconciliation notes, kept so nothing from the source is silently lost.
@@ -45,6 +49,13 @@ model Order {
 
   placedAt    DateTime? @map("placed_at")
   confirmedAt DateTime? @map("confirmed_at")
+
+  // The CURRENT confirming telecaller. The id is authoritative (always the authenticated CRM user, never a client-supplied name);
+  // the name is a snapshot taken at confirmation so the "CRM Confirmed by <name>" tag stays stable if the user is renamed.
+  // Earlier confirmers are kept in the Activity log (ORDER_CONFIRMED rows), not here.
+  confirmedByUserId String? @map("confirmed_by_user_id") @db.Uuid
+  confirmedBy       User?   @relation("OrderConfirmedBy", fields: [confirmedByUserId], references: [id])
+  confirmedByName   String? @map("confirmed_by_name") @db.VarChar(150)
   cancelledAt DateTime? @map("cancelled_at")
 
   createdAt DateTime @default(now()) @map("created_at")
@@ -54,6 +65,7 @@ model Order {
   payments         Payment[]
   shipments        Shipment[]
   activities       Activity[]
+  refundRequests   RefundRequest[]
   whatsAppMessages WhatsAppMessage[]
   whatsAppAutomationRuns WhatsAppAutomationRun[]
   whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
@@ -61,6 +73,7 @@ model Order {
   @@unique([externalSource, externalId])
   @@index([leadId])
   @@index([createdById])
+  @@index([confirmedByUserId])
   @@index([status])
   @@index([source])
   @@index([placedAt])
@@ -131,6 +144,8 @@ model Payment {
 
   refundedAmount Decimal? @map("refunded_amount") @db.Decimal(12, 2)
 
+  refundRequests RefundRequest[]
+
   // Identity in an external system: a Shopify transaction, or (CASHFREE) the payment link the CRM created, whose
   // link id is the externalId so the same link can never be recorded twice. Null for payments created inside the CRM.
   externalSource ExternalSource? @map("external_source")
@@ -185,6 +200,8 @@ model Shipment {
   providerOrderId  String?   @map("provider_order_id") @db.VarChar(100)
   channelOrderId   String?   @map("channel_order_id") @db.VarChar(100)
   courierCompanyId Int?      @map("courier_company_id")
+  // The parcel weight (kg) the shipment was created with - the same value used to check courier availability.
+  weightKg         Decimal?  @map("weight_kg") @db.Decimal(8, 3)
   labelUrl         String?   @map("label_url")
   pickupScheduledAt DateTime? @map("pickup_scheduled_at")
   // The provider's own status text exactly as reported, so a status the CRM does not map is still visible.
@@ -201,4 +218,53 @@ model Shipment {
   @@index([providerOrderId])
   @@index([channelOrderId])
   @@map("shipments")
+}
+
+// A request to refund part or all of ONE payment. Approving it authorizes a later provider refund; it never changes Order.status,
+// Payment.status or Payment.refundedAmount. PENDING and APPROVED requests both reserve their amount against the payment's refundable balance.
+model RefundRequest {
+  id String @id @default(uuid()) @db.Uuid
+
+  orderId String @map("order_id") @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id])
+
+  paymentId String  @map("payment_id") @db.Uuid
+  payment   Payment @relation(fields: [paymentId], references: [id])
+
+  requestedById String @map("requested_by_id") @db.Uuid
+  requestedBy   User   @relation("RefundRequestedBy", fields: [requestedById], references: [id])
+  // The requester's role at the time (a user's role can change later).
+  requestedByRole Role @map("requested_by_role")
+
+  amount   Decimal @map("amount") @db.Decimal(12, 2)
+  currency String  @default("INR") @map("currency") @db.VarChar(10)
+  reason   String  @map("reason")
+
+  status RefundRequestStatus @default(PENDING) @map("status")
+
+  // Whoever APPROVED or REJECTED it (the decision actor), with their role at the time.
+  decidedById   String? @map("decided_by_id") @db.Uuid
+  decidedBy     User?   @relation("RefundDecidedBy", fields: [decidedById], references: [id])
+  decidedByRole Role?   @map("decided_by_role")
+  decisionAt    DateTime? @map("decision_at")
+  decisionNote  String?   @map("decision_note")
+
+  // Reserved for the future execution phase; nothing in the approval workflow writes it.
+  failureReason String? @map("failure_reason")
+
+  // The browser's id for ONE submission, so a double click / retry returns the same request instead of creating a second.
+  // This is an internal submission key, NOT a provider refund id.
+  submissionKey String? @map("submission_key") @db.VarChar(100)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([requestedById, submissionKey])
+  @@index([orderId])
+  @@index([paymentId])
+  @@index([status])
+  @@index([requestedById])
+  @@index([decidedById])
+  @@index([createdAt])
+  @@map("refund_requests")
 }

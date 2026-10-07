@@ -51,6 +51,8 @@ export interface ShipmentResult {
   pickupScheduledAt: Date | null;
   expectedDeliveryAt: Date | null;
   shiprocketOrderId: string | null;
+  /** The parcel weight (kg) the shipment was created with - the same one used to check courier availability. Null on older shipments. */
+  weightKg: string | null;
   /** Only on creation: how Shiprocket was told to collect payment. */
   paymentMethod?: "Prepaid" | "COD";
   collectOnDelivery?: string;
@@ -79,6 +81,7 @@ const SHIPMENT_SELECT = {
   expectedDeliveryAt: true,
   providerOrderId: true,
   courierCompanyId: true,
+  weightKg: true,
   externalSource: true,
   externalId: true,
   metadata: true,
@@ -139,6 +142,7 @@ const toResult = (s: ShipmentRow): ShipmentResult => ({
   pickupScheduledAt: s.pickupScheduledAt,
   expectedDeliveryAt: s.expectedDeliveryAt,
   shiprocketOrderId: s.providerOrderId,
+  weightKg: s.weightKg ? s.weightKg.toString() : null,
 });
 
 /** A provider failure as the CRM reports it: a problem with what was sent is a 400 the user can act on; anything else is a bad gateway. */
@@ -399,9 +403,11 @@ class ShiprocketShipmentsService {
         externalSource: "SHIPROCKET",
         externalId: `pending:${shipmentId}`,
         channelOrderId,
+        weightKg: input.weight, // the parcel weight entered for this shipment, exactly as sent to Shiprocket
         metadata: { shiprocket: { creating: true } },
       },
     });
+    await tx.order.update({ where: { id: order.id }, data: { parcelWeightKg: input.weight } });
     return { shipmentId, request, collectCents, orderNumber: order.orderNumber, leadId: order.lead.id };
   }
 

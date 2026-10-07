@@ -9,6 +9,8 @@
 //     rules); otherwise an APPROVED local template for provider META is required (same
 //     ORDER_CONFIRMATION_TEMPLATE_NAME convention AiSensy already uses, and the existing
 //     {{payment_link}} variable convention for a payment link).
+//   - FIRST CONTACT (no conversation/history): an approved META template may start the conversation, only with a valid number and a
+//     recorded WhatsApp opt-in (see firstContactBlockReason); nothing is sent without consent.
 //   - AISENSY/GUPSHUP: template only (their existing, unchanged rule - see whatsapp.messaging.service.ts).
 // Every function here is best-effort BY DESIGN: it never throws. A failure (no conversation, no
 // template, provider down, Meta not configured) is reported in the return value so the caller (an
@@ -21,7 +23,7 @@ import type { WhatsAppProviderName } from "../../../generated/prisma/client.js";
 import { findConversationProvider } from "./whatsapp.conversation-provider.js";
 import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
 import WhatsAppMessagingService, { ORDER_CONFIRMATION_TEMPLATE_NAME } from "./whatsapp.messaging.service.js";
-import { buildOrderConfirmationMessage, buildPaymentLinkMessage, type MessageItem } from "./whatsapp.order-message.js";
+import { type UpgradeDiscount, buildOrderConfirmationMessage, buildPaymentLinkMessage, type MessageItem } from "./whatsapp.order-message.js";
 
 // The variables the payment-link message is built around. A provider template that carries more of them reads closer to
 // the free-text message; the only REQUIRED one is payment_link (a template without it would not deliver the link).
@@ -35,6 +37,8 @@ export interface OrderNotifyResult {
   provider: WhatsAppProviderName | null;
   /** Set only when sent is false - a safe, human-readable reason (never a credential/secret). */
   reason?: string;
+  /** The approved template that was actually sent (name, never the provider id). Set only for a template send. */
+  templateName?: string;
 }
 
 export interface OrderNotifyDeps {
@@ -73,15 +77,33 @@ async function findApprovedTemplate(db: DbClient, provider: WhatsAppProviderName
   return pool.find((t) => Array.isArray(t.variables) && mustInclude.every((v) => (t.variables as string[]).includes(v))) ?? null;
 }
 
+/** null = a business-initiated first message may be sent to this lead; otherwise the safe reason it may not. */
+export async function firstContactBlockReason(db: DbClient, leadId: string, normalizedMobile: string | null): Promise<string | null> {
+  const NO_CONVERSATION = "This customer has no WhatsApp conversation yet";
+  if (!normalizedMobile) return `${NO_CONVERSATION}, and has no valid WhatsApp/mobile number on file.`;
+  const preference = await db.communicationPreference.findUnique({ where: { leadId_channel: { leadId, channel: "WHATSAPP" } }, select: { status: true } });
+  if (preference?.status === "OPTED_IN") return null;
+  if (preference?.status === "OPTED_OUT") return `${NO_CONVERSATION}, and the customer has opted out of WhatsApp messages.`;
+  return `${NO_CONVERSATION}, and no WhatsApp opt-in is recorded for this customer, so a business-initiated template cannot be sent. Record their WhatsApp consent, or notify them another way.`;
+}
+
 async function sendViaFreeTextOrTemplate(
   db: DbClient,
   user: AuthUser,
-  params: { leadId: string; orderId: string; normalizedMobile: string | null; freeTextBody: string; templateVariables: string[]; preferVariables?: string[] },
+  params: { leadId: string; orderId: string; normalizedMobile: string | null; freeTextBody: string; templateVariables: string[]; preferVariables?: string[]; templateId?: string },
   deps: OrderNotifyDeps,
 ): Promise<OrderNotifyResult> {
   try {
-    const { provider } = await findConversationProvider(db, params.leadId);
-    if (!provider) return { sent: false, via: null, provider: null, reason: "This customer has no WhatsApp conversation yet." };
+    const found = (await findConversationProvider(db, params.leadId)).provider;
+    let provider = found;
+    if (!provider) {
+      // First contact: the customer has never messaged the business. An approved Meta template may start the conversation, but only
+      // with a valid WhatsApp number AND a recorded WhatsApp opt-in (CommunicationPreference WHATSAPP = OPTED_IN). No consent is
+      // assumed: no row, UNKNOWN or OPTED_OUT all refuse, with a reason that says what is missing.
+      const first = await firstContactBlockReason(db, params.leadId, params.normalizedMobile);
+      if (first) return { sent: false, via: null, provider: null, reason: first };
+      provider = "META";
+    }
 
     if (provider === "META") {
       const freeText = deps.freeText ?? new WhatsAppFreeTextService(db);
@@ -95,7 +117,17 @@ async function sendViaFreeTextOrTemplate(
       // as every other provider, using a template approved for META specifically.
     }
 
-    const template = await findApprovedTemplate(db, provider, params.templateVariables, params.preferVariables);
+    // A template the telecaller chose is used as-is (re-checked: META, APPROVED, really synced, carries every required variable); otherwise
+    // the existing automatic selection applies.
+    let template: { id: string } | null;
+    if (params.templateId) {
+      const chosen = await db.whatsAppTemplate.findUnique({ where: { id: params.templateId }, select: { id: true, provider: true, status: true, providerTemplateId: true, variables: true } });
+      const usable = chosen && chosen.provider === "META" && chosen.status === "APPROVED" && Boolean(chosen.providerTemplateId) && Array.isArray(chosen.variables) && params.templateVariables.every((v) => (chosen.variables as string[]).includes(v));
+      if (!usable) return { sent: false, via: null, provider, reason: "the selected WhatsApp template is not available or approved." };
+      template = { id: chosen.id };
+    } else {
+      template = await findApprovedTemplate(db, provider, params.templateVariables, params.preferVariables);
+    }
     if (!template) {
       return {
         sent: false,
@@ -111,7 +143,7 @@ async function sendViaFreeTextOrTemplate(
     const messaging = deps.messaging ?? new WhatsAppMessagingService(db);
     const result = await messaging.sendTemplate(user, { leadId: params.leadId, templateId: template.id, orderId: params.orderId });
     if (result.status === "FAILED") return { sent: false, via: "TEMPLATE", provider, reason: result.errorMessage ?? `${provider} rejected the message` };
-    return { sent: true, via: "TEMPLATE", provider };
+    return { sent: true, via: "TEMPLATE", provider, ...(result.templateName ? { templateName: result.templateName } : {}) };
   } catch (error) {
     // Never thrown further: the OMS/payment operation this is attached to has already succeeded and
     // must stay that way regardless of what happens here.
@@ -150,11 +182,11 @@ export async function notifyOrderConfirmation(
 export async function notifyPaymentLink(
   db: DbClient,
   user: AuthUser,
-  params: { leadId: string; orderId: string; normalizedMobile: string | null; orderNumber: string; paymentUrl: string; amount: string; currency: string; customerName?: string; items?: MessageItem[] },
+  params: { leadId: string; orderId: string; normalizedMobile: string | null; orderNumber: string; paymentUrl: string; amount: string; currency: string; customerName?: string; items?: MessageItem[]; discount?: UpgradeDiscount; templateId?: string },
   deps: OrderNotifyDeps = {},
 ): Promise<OrderNotifyResult> {
-  const freeTextBody = buildPaymentLinkMessage({ customerName: params.customerName, orderNumber: params.orderNumber, items: params.items, amount: params.amount, currency: params.currency, paymentUrl: params.paymentUrl });
-  return sendViaFreeTextOrTemplate(db, user, { ...params, freeTextBody, templateVariables: ["payment_link"], preferVariables: PAYMENT_LINK_PREFERRED_VARIABLES }, deps);
+  const freeTextBody = buildPaymentLinkMessage({ customerName: params.customerName, orderNumber: params.orderNumber, items: params.items, amount: params.amount, currency: params.currency, paymentUrl: params.paymentUrl, discount: params.discount });
+  return sendViaFreeTextOrTemplate(db, user, { ...params, freeTextBody, templateVariables: ["payment_link"], preferVariables: PAYMENT_LINK_PREFERRED_VARIABLES, templateId: params.templateId }, deps);
 }
 
 const PAYMENT_SUCCESS_PREFERRED_VARIABLES = ["customer_name", "order_number", "product_summary", "amount"];

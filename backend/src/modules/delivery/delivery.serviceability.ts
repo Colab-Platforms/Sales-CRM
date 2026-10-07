@@ -13,6 +13,16 @@ import { PINCODE_PATTERN } from "./delivery.pincode.js";
 
 export type ServiceabilityStatus = "serviceable" | "not_serviceable" | "unavailable";
 
+/** A courier as Shiprocket returned it: total `rate`, plus COD charge / tax / ETA only when Shiprocket gave them. */
+export interface CourierOption {
+  name: string | null;
+  rate: number | null;
+  days: number | null;
+  codCharge: number | null;
+  tax: number | null;
+  etd: string | null;
+}
+
 export interface ServiceabilityResult {
   status: ServiceabilityStatus;
   couriers: number;
@@ -21,6 +31,8 @@ export interface ServiceabilityResult {
   /** Fastest / slowest estimated delivery in days, when Shiprocket returned them. */
   minDays: number | null;
   maxDays: number | null;
+  /** Each available courier with the shipping charge Shiprocket returned for this parcel weight (cheapest first). The CRM never computes a charge. */
+  courierOptions: CourierOption[];
   /** true only when the destination is NOT serviceable AND the deployment says such orders must be blocked. */
   blocksOrder: boolean;
   message: string | null;
@@ -41,11 +53,11 @@ const PICKUP_TTL_MS = 10 * 60_000;
 const pickupCache = new Map<string, { at: number; postcode: string }>();
 export const clearPickupCache = () => pickupCache.clear();
 
-const unavailable = (message: string): ServiceabilityResult => ({ status: "unavailable", couriers: 0, cheapestRate: null, minDays: null, maxDays: null, blocksOrder: false, message });
+const unavailable = (message: string): ServiceabilityResult => ({ status: "unavailable", couriers: 0, cheapestRate: null, minDays: null, maxDays: null, courierOptions: [], blocksOrder: false, message });
 
-export async function checkServiceability(input: { pincode: string; cod: boolean; weightKg: number }, deps: ServiceabilityDeps = {}): Promise<ServiceabilityResult> {
+export async function checkServiceability(input: { pincode: string; cod: boolean; weightKg: number; dimensionsCm?: { length: number; breadth: number; height: number }; declaredValue?: number }, deps: ServiceabilityDeps = {}): Promise<ServiceabilityResult> {
   if (!PINCODE_PATTERN.test(input.pincode)) return unavailable("Enter a valid 6-digit pincode first.");
-  if (!(input.weightKg > 0)) return unavailable("Courier serviceability requires shipment weight.");
+  if (!(input.weightKg > 0)) return unavailable("Parcel weight is required before checking courier availability.");
   const env = deps.env ?? process.env;
 
   let client: Pick<ShiprocketClient, "getPickupPostcode" | "checkServiceability">;
@@ -67,9 +79,9 @@ export async function checkServiceability(input: { pincode: string; cod: boolean
       if (pickupPostcode) pickupCache.set(pickupName, { at: Date.now(), postcode: pickupPostcode });
     }
     if (!pickupPostcode) return unavailable("Delivery serviceability is not available: the pickup location has no postcode in Shiprocket.");
-    const result = await client.checkServiceability({ pickupPostcode, deliveryPostcode: input.pincode, cod: input.cod, weightKg: input.weightKg });
+    const result = await client.checkServiceability({ pickupPostcode, deliveryPostcode: input.pincode, cod: input.cod, weightKg: input.weightKg, dimensionsCm: input.dimensionsCm, declaredValue: input.declaredValue });
     if (result.couriers.length === 0) {
-      return { status: "not_serviceable", couriers: 0, cheapestRate: null, minDays: null, maxDays: null, blocksOrder: blocks(env), message: "This pincode is currently not serviceable for delivery." };
+      return { status: "not_serviceable", couriers: 0, cheapestRate: null, minDays: null, maxDays: null, courierOptions: [], blocksOrder: blocks(env), message: "This pincode is currently not serviceable for delivery." };
     }
     const rates = result.couriers.map((c) => c.rate).filter((n): n is number => n !== null);
     const days = result.couriers.map((c) => c.days).filter((n): n is number => n !== null);
@@ -79,13 +91,14 @@ export async function checkServiceability(input: { pincode: string; cod: boolean
       cheapestRate: rates.length ? Math.min(...rates) : null,
       minDays: days.length ? Math.min(...days) : null,
       maxDays: days.length ? Math.max(...days) : null,
+      courierOptions: result.couriers.map((c) => ({ name: c.name ?? null, rate: c.rate, days: c.days, codCharge: c.codCharge ?? null, tax: c.tax ?? null, etd: c.etd ?? null })).sort((a, b) => (a.rate ?? Infinity) - (b.rate ?? Infinity)),
       blocksOrder: false,
       message: null,
     };
   } catch (error) {
     // A 404 from the serviceability endpoint is Shiprocket's way of saying "no courier serves this lane".
     if (error instanceof ProviderHttpError && error.status === 404 && /serviceab|courier/i.test(error.message)) {
-      return { status: "not_serviceable", couriers: 0, cheapestRate: null, minDays: null, maxDays: null, blocksOrder: blocks(env), message: "This pincode is currently not serviceable for delivery." };
+      return { status: "not_serviceable", couriers: 0, cheapestRate: null, minDays: null, maxDays: null, courierOptions: [], blocksOrder: blocks(env), message: "This pincode is currently not serviceable for delivery." };
     }
     return unavailable("Could not check delivery right now. Try again in a moment.");
   }

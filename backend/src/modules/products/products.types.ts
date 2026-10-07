@@ -7,11 +7,27 @@ export interface ListProductsQuery {
   search?: string;
 }
 
+export interface UnitDimensionsCm {
+  lengthCm: string;
+  widthCm: string;
+  heightCm: string;
+}
+
+export interface UnitDimensionsCm {
+  lengthCm: string;
+  widthCm: string;
+  heightCm: string;
+}
+
 export interface ProductVariantOption {
   id: string;
   name: string;
   sku: string | null;
   price: string | null;
+  /** Weight of one unit (kg) as recorded by a person; null = not recorded. Informational - never the parcel weight. */
+  weightKg: string | null;
+  /** Per-unit product dimensions (cm) from the Shiprocket catalog; null unless all three sides are recorded. NOT the packed parcel dimensions. */
+  dimensionsCm: UnitDimensionsCm | null;
 }
 
 export interface ProductListItem {
@@ -19,6 +35,9 @@ export interface ProductListItem {
   name: string;
   sku: string | null;
   basePrice: string | null;
+  /** Weight of one unit (kg) for a product sold without variants; null = not recorded. */
+  weightKg: string | null;
+  dimensionsCm: UnitDimensionsCm | null;
   variants: ProductVariantOption[];
 }
 

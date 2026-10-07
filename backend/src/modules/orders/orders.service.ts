@@ -14,12 +14,16 @@ import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
 import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
+import DiscountsService, { type ResolvedDiscount } from "../discounts/discounts.service.js";
 import { clearLiveOrderCaches } from "./orders.live.service.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
+import { getWhatsAppPaymentOptions, recordWhatsAppConsent, validateWhatsAppPaymentSend, type WhatsAppPaymentOptions } from "./orders.whatsapp-payment.js";
+import { confirmationTagFor, recordConfirmation, syncConfirmationTag, type ConfirmationTagSyncResult } from "./orders.confirmation.js";
 import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
+import { loadOrderRefundInfo } from "../refunds/refunds.service.js";
 import {
   buildOrderWhere,
   computePaymentBreakdown,
@@ -132,12 +136,15 @@ const DETAIL_SELECT = {
   externalNumber: true,
   shippingAddress: true,
   shippingPincode: true,
+  parcelWeightKg: true,
   cancelReason: true,
   metadata: true,
   createdAt: true,
   placedAt: true,
   confirmedAt: true,
   cancelledAt: true,
+  confirmedByUserId: true,
+  confirmedByName: true,
   createdBy: { select: { id: true, name: true, email: true } },
   lead: {
     select: {
@@ -151,7 +158,8 @@ const DETAIL_SELECT = {
       owner: { select: { id: true, name: true } },
     },
   },
-  items: { orderBy: [{ createdAt: "asc" }, { id: "asc" }] },
+  // The catalog weights ride along only so the shipment dialog can SUGGEST a parcel weight for an order that has none recorded.
+  items: { orderBy: [{ createdAt: "asc" }, { id: "asc" }], include: { product: { select: { weightKg: true, lengthCm: true, widthCm: true, heightCm: true } }, variant: { select: { weightKg: true, lengthCm: true, widthCm: true, heightCm: true } } } },
   payments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
   shipments: { orderBy: [{ createdAt: "desc" }, { id: "desc" }] },
 } satisfies Prisma.OrderSelect;
@@ -193,6 +201,9 @@ function summarizePaymentLink(payments: { status: string; externalSource: string
   if (payments.some((p) => p.externalSource === "CASHFREE" && p.failureReason === "Payment link cancelled")) return { status: "cancelled" };
   return { status: "none" };
 }
+
+const unitDims = (r: { lengthCm: { toString(): string } | null; widthCm: { toString(): string } | null; heightCm: { toString(): string } | null }) =>
+  r.lengthCm && r.widthCm && r.heightCm ? { lengthCm: r.lengthCm.toString(), widthCm: r.widthCm.toString(), heightCm: r.heightCm.toString() } : null;
 
 class OrdersService {
   // getShopifyClient is injectable so tests never construct a real client (which would read real
@@ -295,6 +306,8 @@ class OrdersService {
       awbsToTrack.length > 0 ? getLiveTrackingBatch(awbsToTrack) : Promise.resolve(new Map<string, LiveTracking>()),
     ]);
 
+    const refunds = await loadOrderRefundInfo(this.db, order.id);
+
     return {
       id: order.id,
       orderNumber: order.orderNumber,
@@ -310,12 +323,16 @@ class OrdersService {
       externalNumber: order.externalNumber,
       shippingAddress: (order.shippingAddress as Record<string, string | null> | null) ?? null,
       shippingPincode: order.shippingPincode,
+      parcelWeightKg: order.parcelWeightKg ? order.parcelWeightKg.toString() : null,
       cancelReason: order.cancelReason,
       // Last Shopify-cancellation outcome recorded by cancelOrder (Order.metadata) - lets the UI offer a retry after a reload.
       shopifyCancellation: ((order.metadata as Record<string, unknown> | null)?.shopifyCancellation as ShopifyCancelResult | undefined) ?? null,
       paymentLinkCancellation: ((order.metadata as Record<string, unknown> | null)?.paymentLinkCancellation as PaymentLinkCancelResult | undefined) ?? null,
       shopifyPaymentSync: ((order.metadata as Record<string, unknown> | null)?.shopifyPaymentSync as OrderDetail["shopifyPaymentSync"] | undefined) ?? null,
       whatsappNotification: ((order.metadata as Record<string, unknown> | null)?.whatsappNotification as OrderWhatsAppNotification | undefined) ?? null,
+      confirmedBy: order.confirmedByUserId && order.confirmedByName ? { id: order.confirmedByUserId, name: order.confirmedByName } : null,
+      confirmationTag: order.confirmedByUserId && order.confirmedByName ? confirmationTagFor(order.confirmedByName) : null,
+      shopifyConfirmationTag: ((order.metadata as Record<string, unknown> | null)?.shopifyConfirmationTag as OrderDetail["shopifyConfirmationTag"] | undefined) ?? null,
       createdAt: order.createdAt,
       placedAt: order.placedAt,
       confirmedAt: order.confirmedAt,
@@ -326,6 +343,8 @@ class OrdersService {
       refundedAmount: fromCents(breakdown.refundedCents),
       outstandingAmount: fromCents(outstandingCents),
       reconciliationStatus: deriveReconciliationStatus(totalCents, breakdown, order.payments.length > 0),
+      // Refund APPROVAL workflow state (requests + each payment's eligibility/balance). Display only: nothing here moves money.
+      refunds,
       customer: {
         leadId: order.lead.id,
         leadNumber: order.lead.leadNumber,
@@ -348,6 +367,10 @@ class OrdersService {
         discountAmount: money(item.discountAmount),
         taxAmount: money(item.taxAmount),
         totalPrice: money(item.totalPrice),
+        // Weight of one unit as RECORDED in the catalog (variant first, else product); null when nobody recorded one. Informational only.
+        unitWeightKg: (item.variant?.weightKg ?? item.product?.weightKg)?.toString() ?? null,
+        // Same rule as the weight: the variant's recorded dimensions, else the product's; only when all three sides are recorded.
+        unitDimensionsCm: (item.variant ? unitDims(item.variant) : null) ?? (item.product ? unitDims(item.product) : null),
       })),
       payments: order.payments.map((payment) => ({
         id: payment.id,
@@ -384,6 +407,7 @@ class OrdersService {
         labelUrl: shipment.labelUrl,
         pickupScheduledAt: shipment.pickupScheduledAt,
         shiprocketOrderId: shipment.providerOrderId,
+        weightKg: shipment.weightKg ? shipment.weightKg.toString() : null,
         linkedShipmentId: shipment.externalSource === "SHOPIFY" && shipment.trackingNumber ? (directByAwb.get(normalizeAwb(shipment.trackingNumber)) ?? null) : null,
         liveTracking: shipment.trackingNumber ? liveTrackingByAwb.get(shipment.trackingNumber) : undefined,
       })),
@@ -434,6 +458,10 @@ class OrdersService {
     // Out-of-scope reads the same as missing, same convention as every other single-lead lookup.
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
 
+    // "Send via WhatsApp": number, consent and template are validated BEFORE anything is created, so a telecaller who can fix it is told
+    // at once and no order is left half-done. (A send that fails AFTER the order exists is handled below and never undoes it.)
+    const whatsappSend = input.sendPaymentLinkViaWhatsApp === true ? await validateWhatsAppPaymentSend(this.db, lead, input) : null;
+
     const productIds = [...new Set(input.items.map((i) => i.productId))];
     const products = await this.db.product.findMany({
       where: { id: { in: productIds } },
@@ -470,10 +498,18 @@ class OrdersService {
     if (input.discountPercent !== undefined && input.discountAmount !== undefined) {
       throw new ApiError("Send either discountPercent or discountAmount, not both", STATUS_CODES.BAD_REQUEST);
     }
+    if (input.discount !== undefined && (input.discountPercent !== undefined || input.discountAmount !== undefined)) {
+      throw new ApiError("Send either discount, discountPercent or discountAmount - one discount only", STATUS_CODES.BAD_REQUEST);
+    }
     const percentDiscount = input.discountPercent !== undefined ? computePercentDiscount(subtotalCents - itemDiscountCents, input.discountPercent) : null;
-    const orderDiscountCents = percentDiscount ? percentDiscount.discountCents : toCents(input.discountAmount);
+    // New selection model: resolved here against the live Fastrr offers and the real subtotal (items after line discounts).
+    const selected: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents) : null;
+    const orderDiscountCents = selected ? selected.amountCents : percentDiscount ? percentDiscount.discountCents : toCents(input.discountAmount);
     const shippingCents = toCents(input.shippingAmount);
     const totalCents = Math.max(subtotalCents - itemDiscountCents - orderDiscountCents + shippingCents, 0);
+    if (input.expectedTotal !== undefined && toCents(input.expectedTotal) !== totalCents) {
+      throw new ApiError("The order total changed. Please review the order again.", STATUS_CODES.CONFLICT);
+    }
 
     const isCod = input.paymentMethod === "COD";
     // Prepaid via a Cashfree payment link: no Payment row is created here (below) - CashfreePaymentsService.
@@ -502,14 +538,18 @@ class OrdersService {
               taxAmount: "0",
               shippingAmount: input.shippingAmount ?? "0",
               totalAmount: fromCents(totalCents),
-              discountReason: input.discountReason,
+              discountReason: input.discountReason ?? (selected && selected.source !== "NONE" ? (selected.couponCode ? `Fastrr coupon ${selected.couponCode}` : "Custom discount") : undefined),
               shippingAddress: input.shippingAddress ?? undefined,
               shippingPincode: input.shippingPincode ?? input.shippingAddress?.pincode,
+              ...(input.parcelWeightKg !== undefined ? { parcelWeightKg: input.parcelWeightKg } : {}),
               // Free-form, existing field (Order.metadata) - never a new column. paymentMode mirrors
               // the exact same derived value Shopify-synced orders already carry (shopify.mapper.ts).
               metadata: {
                 paymentMode: isCod ? "COD" : "PREPAID",
                 createdVia: "WHATSAPP_INBOX",
+                // The discount that was actually applied and why - kept on the order, so the reason for a reduced total never
+                // depends on a coupon row staying the same. originalSubtotal is the pre-discount item total.
+                ...(selected ? { discount: { originalSubtotal: fromCents(subtotalCents), discountType: selected.type, discountValue: selected.value, discountAmount: fromCents(itemDiscountCents + selected.amountCents), couponId: selected.couponId, couponCode: selected.couponCode, couponSource: selected.couponSource, source: selected.source, wasDefault: selected.wasDefault, finalTotal: fromCents(totalCents), appliedById: user.id } } : {}),
                 ...(percentDiscount && percentDiscount.discountCents > 0 ? { customDiscount: { percent: percentDiscount.percent, amount: fromCents(percentDiscount.discountCents), appliedById: user.id } } : {}),
               },
               placedAt: now,
@@ -518,6 +558,11 @@ class OrdersService {
               ...(isPaymentLink ? {} : { payments: { create: { amount: fromCents(totalCents), currency: "INR", method: input.paymentMethod, status: "PENDING" } } }),
             },
           });
+          // The COD order is confirmed right here (status CONFIRMED), by the authenticated telecaller - the name is read from their
+          // User row, never from the request.
+          if (isCod) await recordConfirmation(tx as never, orderId, { id: user.id, role: user.role }, now);
+          // The ticked WhatsApp consent is recorded with the order (an existing OPTED_IN is kept; an OPTED_OUT is never overwritten).
+          if (whatsappSend?.recordConsent) await recordWhatsAppConsent(tx as never, lead.id, now);
           await tx.lead.update({ where: { id: lead.id }, data: { lifecycleStage: "CUSTOMER" } });
           await tx.activity.create({
             data: {
@@ -557,9 +602,16 @@ class OrdersService {
       try {
         const link = await this.getCashfree().createPaymentLink(user, createdOrderId);
         paymentLink = { status: link.reused ? "reused" : "created", paymentId: link.paymentId, paymentUrl: link.paymentUrl, expiresAt: link.expiresAt };
-        whatsapp = link.paymentUrl
-          ? await this.notify.paymentLink(this.db, user, { leadId: lead.id, orderId: createdOrderId, normalizedMobile: lead.normalizedMobile, orderNumber: order.orderNumber, paymentUrl: link.paymentUrl, amount: link.amount, currency: link.currency, customerName: order.customer.name, items: messageItems(order) })
-          : { sent: false, via: null, provider: null, reason: "The payment link has no URL yet." };
+        // `Don't send` (sendPaymentLinkViaWhatsApp === false) skips the message; the link stays on the order for the existing send action.
+        if (input.sendPaymentLinkViaWhatsApp === false) {
+          whatsapp = { sent: false, via: null, provider: null, reason: "Not sent: WhatsApp sending was not selected. Use Send payment link on the order when ready." };
+        } else {
+          whatsapp = link.paymentUrl
+            ? await this.notify.paymentLink(this.db, user, { leadId: lead.id, orderId: createdOrderId, normalizedMobile: lead.normalizedMobile, orderNumber: order.orderNumber, paymentUrl: link.paymentUrl, amount: link.amount, currency: link.currency, customerName: order.customer.name, items: messageItems(order), ...(whatsappSend?.templateId ? { templateId: whatsappSend.templateId } : {}) })
+            : { sent: false, via: null, provider: null, reason: "The payment link has no URL yet." };
+          // A requested send that did not go through says so plainly; the order and its payment link are kept for the retry.
+          if (whatsappSend && !whatsapp.sent && whatsapp.reason && !whatsapp.reason.startsWith("Payment link not sent")) whatsapp = { ...whatsapp, reason: `Payment link not sent — ${whatsapp.reason}` };
+        }
       } catch (error) {
         paymentLink = { status: "failed", reason: error instanceof ApiError ? error.message : error instanceof Error ? error.message : "Could not create a Cashfree payment link" };
         whatsapp = { sent: false, via: null, provider: null, reason: "Payment link unavailable - no link was created, so nothing was sent." };
@@ -572,6 +624,15 @@ class OrdersService {
     if (isPaymentLink || isCod) await recordOrderNotification(this.db, createdOrderId, whatsapp);
 
     return { order: isPaymentLink || isCod ? await this.getOrder(user, createdOrderId) : order, shopify, paymentLink, whatsapp };
+  }
+
+  // What the Create Order screen needs for "Send via WhatsApp": the approved Meta payment templates, the customer's recorded WhatsApp consent
+  // and whether they have a number. Lead-scoped like every other single-lead lookup; no provider ids or secrets are returned.
+  async getWhatsAppPaymentOptions(user: AuthUser, leadId: string): Promise<WhatsAppPaymentOptions> {
+    const leadScope = await getLeadScope(user, this.db);
+    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true, normalizedMobile: true } });
+    if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+    return getWhatsAppPaymentOptions(this.db, lead);
   }
 
   // Prefill for the Create Order form: the shipping address of this customer's most recent order that has one. Leads carry
@@ -587,7 +648,7 @@ class OrdersService {
       const a = (o.shippingAddress ?? null) as Record<string, string | null | undefined> | null;
       if (!a) continue;
       const pick = (...keys: string[]) => keys.map((k) => (typeof a[k] === "string" ? a[k]!.trim() : "")).find(Boolean) ?? "";
-      const address = { name: pick("name"), line1: pick("line1", "address1"), line2: pick("line2", "address2"), city: pick("city"), state: pick("state", "province"), pincode: pick("pincode", "zip") || (o.shippingPincode ?? ""), phone: pick("phone") };
+      const address = { name: pick("name"), line1: pick("line1", "address1"), line2: pick("line2", "address2"), city: pick("city"), state: pick("state", "province"), pincode: pick("pincode", "zip") || (o.shippingPincode ?? ""), phone: pick("phone"), houseNumber: pick("houseNumber"), building: pick("building"), area: pick("area"), street: pick("street"), landmark: pick("landmark"), addressType: pick("addressType") };
       if (address.line1 || address.city || address.pincode) return { address };
     }
     return { address: null };
@@ -599,6 +660,36 @@ class OrdersService {
   // never calls Shopify again - the safe way to let a caller "retry" after a failure without ever
   // creating a second Shopify order for the same CRM order.
   async pushOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
+    const result = await this.linkOrderToShopify(user, orderId);
+    // Once the order is linked to Shopify, its "CRM Confirmed by <name>" tag is brought in line (best-effort, idempotent). This is
+    // also what delivers the tag for an order that was confirmed BEFORE it was linked, whenever the link finally succeeds.
+    if (result.status === "created" || result.status === "already_linked") await this.syncConfirmationTagSafely(orderId);
+    return result;
+  }
+
+  // Never throws and never touches the confirmation itself: a Shopify failure is remembered on the order (see syncConfirmationTag)
+  // and shown there, so it can be retried.
+  private async syncConfirmationTagSafely(orderId: string): Promise<ConfirmationTagSyncResult> {
+    try {
+      return await syncConfirmationTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient });
+    } catch (error) {
+      return { status: "failed", reason: error instanceof Error ? error.message : "Shopify tag sync failed" };
+    }
+  }
+
+  // Manual "Retry Shopify tag sync" for the order page. Re-checks Shopify even when the CRM believes the tag is in place.
+  async retryConfirmationTagSync(user: AuthUser, orderId: string): Promise<ConfirmationTagSyncResult> {
+    const leadScope = await getLeadScope(user, this.db);
+    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    try {
+      return await syncConfirmationTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
+    } catch (error) {
+      return { status: "failed", reason: error instanceof Error ? error.message : "Shopify tag sync failed" };
+    }
+  }
+
+  private async linkOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
     const leadScope = await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({
       where: scopedOrderWhere(orderId, leadScope),
@@ -606,6 +697,8 @@ class OrdersService {
         id: true,
         orderNumber: true,
         currency: true,
+        discountAmount: true,
+        totalAmount: true,
         externalSource: true,
         externalId: true,
         externalNumber: true,
@@ -983,8 +1076,14 @@ class OrdersService {
   // People the user may filter orders by. Salespeople only ever see their own orders,
   // so they get no list.
   async getFilterOptions(user: AuthUser): Promise<OrderFilterOptions> {
+    const leadSources = (await this.db.source.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } })).map((s) => ({ id: s.id, name: s.name }));
+    const people = await this.getSalespeopleOptions(user);
+    return { salespeople: people, leadSources };
+  }
+
+  private async getSalespeopleOptions(user: AuthUser): Promise<{ id: string; name: string }[]> {
     if (user.role === Role.SALESPERSON) {
-      return { salespeople: [] };
+      return [];
     }
 
     if (user.role === Role.ADMIN) {
@@ -993,12 +1092,10 @@ class OrdersService {
         select: { id: true, name: true, status: true },
         orderBy: { name: "asc" },
       });
-      return {
-        salespeople: users.map((u) => ({
-          id: u.id,
-          name: u.status === UserStatus.ACTIVE ? u.name : `${u.name} (inactive)`,
-        })),
-      };
+      return users.map((u) => ({
+        id: u.id,
+        name: u.status === UserStatus.ACTIVE ? u.name : `${u.name} (inactive)`,
+      }));
     }
 
     const team = await getManagerTeam(user.id, this.db);
@@ -1006,7 +1103,7 @@ class OrdersService {
     const people = new Map(team.members.map((m) => [m.id, m]));
     if (self) people.set(self.id, self);
 
-    return { salespeople: [...people.values()].sort((a, b) => a.name.localeCompare(b.name)) };
+    return [...people.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 }
 

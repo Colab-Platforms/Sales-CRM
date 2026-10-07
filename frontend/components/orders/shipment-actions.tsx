@@ -30,7 +30,7 @@ export function isLiveDirectShipment(shipment: ShipmentDetail): boolean {
 }
 
 /** "Create Shiprocket shipment" - only offered when Shiprocket is set up, the caller may ship, and the order has no live direct shipment. */
-export function CreateShipmentButton({ orderId, orderNumber, orderStatus, currency, shipments }: { orderId: string; orderNumber: string; orderStatus: string; currency: string; shipments: ShipmentDetail[] }) {
+export function CreateShipmentButton({ orderId, orderNumber, orderStatus, currency, shipments, parcelWeightKg, items, orderValue, pincode, cod }: { items?: { quantity: number; unitWeightKg?: string | null; unitDimensionsCm?: { lengthCm: string; widthCm: string; heightCm: string } | null }[]; orderValue?: number; orderId: string; orderNumber: string; orderStatus: string; currency: string; shipments: ShipmentDetail[]; parcelWeightKg?: string | null; pincode?: string | null; cod?: boolean }) {
   const { allowed, configured } = useCanShip();
   const [open, setOpen] = useState(false);
 
@@ -42,7 +42,7 @@ export function CreateShipmentButton({ orderId, orderNumber, orderStatus, curren
         <Package data-icon="inline-start" />
         Create Shiprocket shipment
       </Button>
-      <CreateShipmentDialog open={open} onOpenChange={setOpen} orderId={orderId} orderNumber={orderNumber} currency={currency} />
+      <CreateShipmentDialog open={open} onOpenChange={setOpen} orderId={orderId} orderNumber={orderNumber} currency={currency} parcelWeightKg={parcelWeightKg} items={items} orderValue={orderValue} pincode={pincode} cod={cod} />
     </>
   );
 }

@@ -91,6 +91,24 @@ export function orderStatusHistoryQueryOptions(id: string) {
   });
 }
 
+export function whatsAppPaymentOptionsQueryOptions(leadId: string) {
+  return queryOptions({
+    queryKey: [...ordersKeys.all, "whatsapp-payment-options", leadId] as const,
+    queryFn: () => ordersApi.getWhatsAppPaymentOptions(leadId),
+    staleTime: 0, // consent can change between orders - always re-read when the dialog opens
+    retry: retryUnlessClientError,
+  });
+}
+
+export function orderTagOptionsQueryOptions() {
+  return queryOptions({
+    queryKey: [...ordersKeys.all, "tag-options"] as const,
+    queryFn: ordersApi.getLiveTagOptions,
+    staleTime: 5 * 60 * 1000,
+    retry: retryUnlessClientError,
+  });
+}
+
 export function orderFilterOptionsQueryOptions() {
   return queryOptions({
     queryKey: ordersKeys.filterOptions(),

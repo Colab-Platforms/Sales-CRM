@@ -108,6 +108,16 @@ const REGISTRY: Record<string, Resolver> = {
   // these fails validation (rather than sending a dead link) when the order has no open link.
   payment_link: (ctx) => openPaymentLink(ctx)?.paymentUrl ?? null,
   // "Skin, Hair & Nail Gummies (1 Jar) × 1, Brain Fuel Capsules × 2" - real product names and quantities, never ids.
+  // The product name(s) on the order, in the order the lines were added ("Product A, Product B"); a repeated name is listed once. Never a
+  // default: an order with no product name resolves to nothing, and the send is refused.
+  product_name: (ctx) => {
+    const names: string[] = [];
+    for (const item of ctx.order?.items ?? []) {
+      const name = item.productName.trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+    return names.length > 0 ? names.join(", ") : null;
+  },
   product_summary: (ctx) => (ctx.order?.items?.length ? summarizeItems(ctx.order.items.map((i) => ({ name: i.productName, variant: i.variantName, quantity: i.quantity }))) : null),
   // What the customer is asked to pay: the open payment link's amount when there is one, else the order total.
   amount: (ctx) => {
@@ -129,10 +139,25 @@ const REGISTRY: Record<string, Resolver> = {
   expected_delivery_date: (ctx) => (ctx.order?.latestShipment?.expectedDeliveryAt ? formatDate(ctx.order.latestShipment.expectedDeliveryAt) : null),
 };
 
+/**
+ * A template may print the currency sign itself ("Order amount: ₹{{amount}}", as the approved prepaid_template does). The amount
+ * variables resolve to a formatted value WITH its sign ("₹449"), so the customer would read "₹₹449". For each value that starts with a
+ * currency sign that the template body ALREADY prints directly before that placeholder, the sign is dropped from the value only.
+ * Templates that do not print the sign themselves are untouched.
+ */
+export function withoutRepeatedCurrencySign(body: string, values: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(values)) {
+    const sign = Object.values(CURRENCY_SYMBOLS).find((s) => value.startsWith(s));
+    out[name] = sign && body.includes(`${sign}{{${name}}}`) ? value.slice(sign.length).trimStart() : value;
+  }
+  return out;
+}
+
 /** The variable names this CRM can currently resolve, for the frontend to explain what a template needs. */
 export const RESOLVABLE_VARIABLES = Object.keys(REGISTRY);
 /** Variables that only ever resolve from order data - used to decide whether order selection is required. */
-export const ORDER_ONLY_VARIABLES = new Set(["order_number", "order_status", "order_amount", "product_summary", "amount", "outstanding_amount", "payment_status", "payment_link", "payment_amount", "tracking_number", "tracking_url", "courier", "shipment_status", "shipped_date", "delivery_date", "expected_delivery_date"]);
+export const ORDER_ONLY_VARIABLES = new Set(["order_number", "product_name", "order_status", "order_amount", "product_summary", "amount", "outstanding_amount", "payment_status", "payment_link", "payment_amount", "tracking_number", "tracking_url", "courier", "shipment_status", "shipped_date", "delivery_date", "expected_delivery_date"]);
 
 export interface VariableResolutionResult {
   values: Record<string, string>;

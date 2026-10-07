@@ -7,11 +7,31 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useCreateOrderMutation, usePushOrderToShopifyMutation } from "@/lib/api-client/mutations/orders.mutations";
-import { lastAddressQueryOptions, pincodeQueryOptions, serviceabilityQueryOptions } from "@/lib/api-client/queries/delivery.queries";
+import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useCourierRates } from "@/hooks/useCourierRates";
+import { chargeText, shippingChargeState } from "@/lib/shipping-charge";
 import { formatMoney } from "@/lib/order-status";
-import { DiscountPricing, parseDiscountPercent, percentDiscountCents } from "./discount-section";
+import { composeLines, formatAddress, structuredFromSaved, validateAddress } from "./create-order-address";
+import { DiscountPricing } from "./discount-section";
+import { useDiscountOptions } from "@/hooks/useDiscountOptions";
+import { choiceCents, defaultChoice, toApiDiscount, type DiscountChoice } from "@/lib/discount";
+import {
+  dimensionsHint,
+  goodsValue,
+  isDimensionDraftEmpty,
+  parseParcelDimensions,
+  productDimensionsNote,
+  rateInputsOrMissing,
+  resolvePackedDimensions,
+  suggestPackedDimensions,
+  type DimensionDraft,
+} from "@/lib/package-dimensions";
+import { estimateProductWeight, formatKg, parseParcelWeight, resolveParcelWeight, unitWeightKg, weightHint } from "@/lib/parcel-weight";
+import { WhatsAppPaymentSection } from "./whatsapp-payment-section";
+import { NO_WHATSAPP, toApiWhatsApp, whatsappBlockReason, type WhatsAppPaymentChoice } from "@/lib/whatsapp-payment";
+import { whatsAppPaymentOptionsQueryOptions } from "@/lib/api-client/queries/orders.queries";
 import { CreateShipmentDialog } from "@/components/orders/create-shipment-dialog";
 import type { CreateManualOrderItemInput, CreateManualOrderResult } from "@/lib/api-client/types/orders.types";
 import {
@@ -45,25 +65,44 @@ interface CreateOrderDialogProps {
   leadId: string;
   customerName: string;
   customerMobile: string | null;
+  /** Test seams: render the same content inline (no portal) from a given order type / step. Not used by the app. */
+  inline?: boolean;
+  initialOrderType?: OrderType;
+  initialStep?: "form" | "review";
+  initialSendViaWhatsApp?: boolean;
+  initialWeight?: string;
+  initialItems?: Partial<DraftItem>[];
+  initialDimensions?: DimensionDraft;
 }
 
 type Step = "form" | "review" | "done";
 
-export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, customerMobile }: CreateOrderDialogProps) {
-  const [step, setStep] = useState<Step>("form");
-  const [items, setItems] = useState<DraftItem[]>([emptyItem()]);
-  const [orderType, setOrderType] = useState<OrderType>("COD");
+export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, customerMobile, inline, initialOrderType, initialStep, initialSendViaWhatsApp, initialWeight, initialItems, initialDimensions }: CreateOrderDialogProps) {
+  const [step, setStep] = useState<Step>(initialStep ?? "form");
+  const [items, setItems] = useState<DraftItem[]>(initialItems ? initialItems.map((i) => ({ ...emptyItem(), ...i })) : [emptyItem()]);
+  const [orderType, setOrderType] = useState<OrderType>(initialOrderType ?? "COD");
   const [edits, setEdits] = useState<Partial<AddressDraft>>({});
-  const [weight, setWeight] = useState("");
-  const [shippingAmount, setShippingAmount] = useState("");
+  // The parcel weight the operator TYPED (null = never touched, so the product-weight suggestion applies). A typed value is never overwritten.
+  const [manualWeight, setManualWeight] = useState<string | null>(initialWeight ?? null);
+  // The packed parcel dimensions the operator TYPED (null = never touched, so the safe single-unit suggestion applies). Never overwritten.
+  const [manualDims, setManualDims] = useState<DimensionDraft | null>(initialDimensions ?? null);
+  // Only used when Shiprocket has no rate to offer (unavailable / not requested): then the charge can be typed. Never used while a rate exists.
+  const [manualShipping, setManualShipping] = useState("");
+  // The courier the operator picked, valid only for the rate request it was picked from.
+  const [courierPick, setCourierPick] = useState<{ rateKey: string; courier: string } | null>(null);
   const [result, setResult] = useState<CreateManualOrderResult | null>(null);
   const [shipmentOpen, setShipmentOpen] = useState(false);
+  // Prepaid only: "Don't send" (default) or send the Cashfree link on WhatsApp with an approved template + the customer's consent.
+  const [whatsapp, setWhatsapp] = useState<WhatsAppPaymentChoice>(initialSendViaWhatsApp ? { ...NO_WHATSAPP, send: true } : NO_WHATSAPP);
 
   // One key per order ATTEMPT, reused by every submit of that attempt (so a double click / Enter / retry after a slow
   // response is collapsed into one order by the backend) and replaced only once that attempt has succeeded or the
   // dialog is closed. `submittingRef` closes the window before React re-renders with `isPending`.
-  // Custom Discount: only the percentage is sent; the server recomputes everything from it.
-  const [discountPercent, setDiscountPercent] = useState<string | null>(null);
+  // The discount CHOICE (coupon / custom / none). It starts as the configured default coupon (data-driven, from the server) and
+  // is replaced - never added to - when the user edits it. `null` = the user has not touched it yet.
+  const [discountEdit, setDiscountEdit] = useState<DiscountChoice | null>(null);
+  const { options: discountOptions, loaded: discountsLoaded } = useDiscountOptions("ORDER", open);
+  const discountChoice: DiscountChoice = discountEdit ?? defaultChoice(discountOptions);
   const idempotencyKey = useRef<string>(crypto.randomUUID());
   const submittingRef = useRef(false);
 
@@ -72,6 +111,11 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
   const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open });
   const last = lastAddressQuery.data ?? null;
+
+  const waOptionsQuery = useQuery({ ...whatsAppPaymentOptionsQueryOptions(leadId), enabled: open && orderType !== "COD" });
+  const waOptions = waOptionsQuery.data ?? null;
+  const sendingWhatsApp = orderType !== "COD" && whatsapp.send;
+  const whatsappBlocked = sendingWhatsApp ? whatsappBlockReason(waOptions, waOptionsQuery.isPending, whatsapp) : null;
 
   const createOrder = useCreateOrderMutation();
   const pushToShopify = usePushOrderToShopifyMutation();
@@ -97,11 +141,18 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const resolvedCity = lookup?.status === "valid" ? lookup.city : null;
   const resolvedState = lookup?.status === "valid" ? lookup.state : null;
 
+  const saved = structuredFromSaved(last);
   const address: AddressDraft = {
     name: edits.name ?? last?.name ?? customerName,
     phone: edits.phone ?? last?.phone ?? customerMobile ?? "",
-    line1: edits.line1 ?? last?.line1 ?? "",
-    line2: edits.line2 ?? last?.line2 ?? "",
+    // Structured fields: what was typed wins, then the previous order's address (a legacy free-text one is carried over
+    // line1 -> House/Flat, line2 -> Area, still editable), otherwise empty. Nothing the user typed is ever overwritten.
+    houseNumber: edits.houseNumber ?? saved.houseNumber,
+    building: edits.building ?? saved.building,
+    area: edits.area ?? saved.area,
+    street: edits.street ?? saved.street,
+    landmark: edits.landmark ?? saved.landmark,
+    addressType: edits.addressType ?? saved.addressType,
     pincode,
     city: edits.city ?? (sameAsLast ? last!.city : (resolvedCity ?? "")),
     state: edits.state ?? (sameAsLast ? last!.state : (resolvedState ?? "")),
@@ -109,15 +160,31 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const cityMismatch = lookup?.status === "valid" && (!placeMatches(address.city, resolvedCity) || !placeMatches(address.state, resolvedState));
 
   // ---- serviceability (COD and prepaid can differ; weight is an estimate typed in by the salesperson).
-  const weightKg = Number(weight);
-  const weightProvided = Number.isFinite(weightKg) && weightKg > 0;
-  const debouncedWeight = useDebouncedValue(weightKg, 400);
-  const serviceabilityQuery = useQuery({
-    ...serviceabilityQueryOptions(pincode, orderType === "COD", debouncedWeight),
-    enabled: open && pincodeState === "valid" && weightProvided && debouncedWeight > 0,
-  });
-  const serviceability = weightProvided && debouncedWeight === weightKg ? serviceabilityQuery.data : undefined;
-  const serviceabilityLoading = serviceabilityQuery.isFetching || debouncedWeight !== weightKg;
+  // The parcel weight is typed by the telecaller; 0, negative or non-numeric input is rejected and never replaced by a default.
+  const weightLines = items
+    .filter((i) => i.productId)
+    .map((i) => {
+      const p = products.find((x) => x.id === i.productId);
+      const v = p?.variants.find((x) => x.id === i.variantId);
+      return { unitKg: unitWeightKg(p, v), quantity: Number(i.quantity) };
+    });
+  const estimate = estimateProductWeight(weightLines);
+  const resolved = resolveParcelWeight(manualWeight, estimate);
+  const weight = resolved.text;
+  const parcel = parseParcelWeight(weight);
+  const weightError = !parcel.ok && parcel.error ? parcel.error : undefined;
+  // Dimensions: the catalog's per-unit PRODUCT dimensions are only suggested as the PACKED parcel for one unit of one product; otherwise the
+  // operator enters the packed size (dimensions are never added up or averaged across products).
+  const dimensionLines = items
+    .filter((i) => i.productId)
+    .map((i) => {
+      const p = products.find((x) => x.id === i.productId);
+      const v = p?.variants.find((x) => x.id === i.variantId);
+      return { unit: v?.dimensionsCm ?? p?.dimensionsCm ?? null, quantity: Number(i.quantity) };
+    });
+  const dimsResolved = resolvePackedDimensions(manualDims, suggestPackedDimensions(dimensionLines));
+  const parcelDims = parseParcelDimensions(dimsResolved.draft);
+  const dimensionsError = !parcelDims.ok && parcelDims.error ? parcelDims.error : undefined;
 
   function handleOpenChange(next: boolean) {
     if (!next) {
@@ -126,11 +193,14 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
       setItems([emptyItem()]);
       setOrderType("COD");
       setEdits({});
-      setWeight("");
-      setShippingAmount("");
-      setDiscountPercent(null);
+      setManualWeight(null);
+      setManualDims(null);
+      setManualShipping("");
+      setCourierPick(null);
+      setDiscountEdit(null);
       setResult(null);
       setShipmentOpen(false);
+      setWhatsapp(NO_WHATSAPP);
       setStepIndex(0);
       createOrder.reset();
       idempotencyKey.current = crypto.randomUUID();
@@ -169,23 +239,40 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
   // Display-only totals (the backend recomputes the authoritative ones). Tax is not charged on manual orders.
   const subtotalCents = validItems.reduce((sum, i) => sum + cents(i.unitPrice) * i.quantity, 0);
-  // No flat/line discount exists in this form any more: the only discount is the Custom Discount percentage below.
-  const itemDiscountCents = 0;
-  const parsedPercent = discountPercent ? parseDiscountPercent(discountPercent) : null;
-  const customDiscountCents = parsedPercent?.ok ? percentDiscountCents(Math.max(subtotalCents - itemDiscountCents, 0), parsedPercent.hundredths) : 0;
-  const discountCents = itemDiscountCents + customDiscountCents;
+  // One discount for the whole order, previewed with the server's rules (the server recomputes it from the real items and coupon).
+  const discountCents = choiceCents(subtotalCents, discountChoice);
+
+  // ---- Shiprocket rates, automatically, once pincode + parcel weight + packed dimensions + payment type + order value are all valid. The
+  // charges are Shiprocket's (the CRM computes nothing); any change to those inputs discards the shown rates and requests fresh ones.
+  const rateRequest = rateInputsOrMissing({ pincodeValid: pincodeState === "valid", pincode, cod: orderType === "COD", weight: parcel.ok ? { ok: true, kg: parcel.kg } : { ok: false }, dims: parcelDims, dimsEmpty: isDimensionDraftEmpty(dimsResolved.draft), value: (subtotalCents - discountCents) / 100 });
+  const rates = useCourierRates(rateRequest.ok ? rateRequest.inputs : null, open);
+  const serviceability = rates.result;
+  // The shipping charge is the selected courier's Shiprocket charge, verbatim. While rates are (re)calculated there is NO charge (never the previous
+  // one), and "not available" / "not calculated" are different from a genuine ₹0.
+  const pickKey = courierPick && courierPick.rateKey === rates.key ? courierPick.courier : null;
+  // Any change to the rate inputs ends the previous pick: the default (cheapest) applies again to the new rates.
+  if (courierPick && courierPick.rateKey !== rates.key) setCourierPick(null);
+  const shippingState = shippingChargeState({ requested: rateRequest.ok, calculating: rates.calculating, failed: rates.failed, result: serviceability, pickKey });
+  const shippingAmount = shippingState.kind === "rate" ? chargeText(shippingState) : shippingState.kind === "calculating" ? "" : manualShipping;
   const shippingCents = cents(shippingAmount);
   const totalCents = Math.max(subtotalCents - discountCents + shippingCents, 0);
+  const selectedKeyForTable = shippingState.kind === "rate" ? `${shippingState.courier ?? "courier"}|${shippingState.amount}` : null;
 
-  const addressComplete = address.line1.trim() !== "" && address.city.trim() !== "" && address.state.trim() !== "" && pincodeComplete;
+  const addressErrors = validateAddress(address);
+  const addressComplete = Object.keys(addressErrors).length === 0 && pincodeComplete;
   const pincodeBlocks = pincodeState === "invalid" || pincodeState === "malformed" || pincodeState === "checking" || pincodeState === "incomplete" || pincodeState === "empty";
   const serviceBlocks = serviceability?.status === "not_serviceable" && serviceability.blocksOrder;
-  const canReview = itemsValid && addressComplete && !pincodeBlocks && !serviceBlocks;
+  const ratesPending = shippingState.kind === "calculating";
+  const canReview = itemsValid && addressComplete && !pincodeBlocks && !serviceBlocks && !weightError && !ratesPending;
 
-  const blockedReason = !itemsValid
+  const blockedReason = weightError
+    ? weightError
+    : ratesPending
+    ? "Calculating shipping rates…"
+    : !itemsValid
     ? "Choose a product (and variant) for every item."
     : !addressComplete
-      ? "Fill in the delivery address and a valid 6-digit pincode."
+      ? (Object.values(addressErrors)[0] ?? "Fill in the delivery address and a valid 6-digit pincode.")
       : pincodeBlocks
         ? pincodeState === "checking"
           ? "Checking the pincode…"
@@ -227,16 +314,30 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         paymentMethod: orderType,
         shippingAddress: {
           name: address.name || customerName,
-          line1: address.line1,
-          line2: address.line2 || undefined,
-          city: address.city,
-          state: address.state,
+          ...composeLines(address),
+          line2: composeLines(address).line2 || undefined,
+          houseNumber: address.houseNumber.trim(),
+          building: address.building.trim() || undefined,
+          area: address.area.trim(),
+          street: address.street.trim() || undefined,
+          landmark: address.landmark.trim() || undefined,
+          addressType: address.addressType,
+          city: address.city.trim(),
+          state: address.state.trim(),
           pincode: address.pincode,
           phone: address.phone || customerMobile || undefined,
         },
         shippingPincode: address.pincode,
+        // Shiprocket's charge for the selected courier, or what was typed when Shiprocket has none; empty = not sent.
         shippingAmount: shippingAmount || undefined,
-        discountPercent: discountPercent ?? undefined,
+        // Only the CHOICE goes to the server - never a discount amount or a final total. `expectedTotal` is a consistency check:
+        // if the server computes a different total, the order is refused instead of being created at a surprising amount.
+        discount: toApiDiscount(discountChoice),
+        expectedTotal: fromCents(totalCents),
+        // The entered parcel weight is recorded on the order; nothing is sent when none was entered.
+        ...(parcel.ok ? { parcelWeightKg: parcel.kg } : {}),
+        // COD orders send nothing extra (unchanged). Prepaid: an explicit "Dont send", or the WhatsApp send with template + consent.
+        ...(orderType !== "COD" ? toApiWhatsApp(waOptions, whatsapp) : {}),
         idempotencyKey: idempotencyKey.current,
       },
       {
@@ -265,14 +366,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const title = step === "done" ? "Order created" : step === "review" ? "Review order" : "Create Order";
   const typeInfo = ORDER_TYPES.find((t) => t.value === orderType)!;
 
-  return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-h-[92vh] w-[calc(100vw-1.5rem)] overflow-y-auto sm:max-w-[min(1080px,calc(100vw-3rem))]">
-        <DialogHeader>
-          <DialogTitle className="text-lg">{title}</DialogTitle>
-          <DialogDescription>Order for the customer in this conversation.</DialogDescription>
-        </DialogHeader>
-
+  const content = (
+    <>
         <CustomerBar name={customerName} mobile={customerMobile} />
 
         {step === "done" && result ? (
@@ -298,25 +393,30 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
               </div>
               <DiscountPricing
                 subtotalCents={subtotalCents}
-                itemDiscountCents={itemDiscountCents}
                 shippingCents={shippingCents}
-                appliedPercent={discountPercent}
-                onApply={setDiscountPercent}
+                choice={discountChoice}
+                onChange={setDiscountEdit}
+                fastrr={discountOptions.fastrr}
                 isPrepaid={orderType !== "COD"}
-                disabled={createOrder.isPending}
+                disabled={createOrder.isPending || !discountsLoaded}
               />
               <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
                 <dl className="grid gap-1.5">
                   <SummaryRow label="Payment method" value={`${typeInfo.title} · ${typeInfo.subtitle}`} />
                   <SummaryRow label="Payment status" value={orderType === "COD" ? "Pending (collected on delivery)" : "Pending (until the customer pays)"} />
-                  <SummaryRow label="Ship to" value={<span className="break-words">{[address.line1, address.line2, address.city, address.state, address.pincode].filter((s) => s.trim()).join(", ")}</span>} />
+                  <SummaryRow label="Ship to" value={<span className="break-words">{formatAddress(address)}</span>} />
                 </dl>
               </div>
               <p className="rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
                 {orderType === "COD"
                   ? "The order is confirmed, sent to Shopify, and the customer gets a WhatsApp confirmation."
-                  : "A Cashfree payment link will be generated for this order and sent to the customer through WhatsApp."}
+                  : whatsapp.send
+                    ? "A Cashfree payment link will be generated for this order and sent to the customer on WhatsApp with the template you chose."
+                    : "A Cashfree payment link will be generated for this order. It is not sent automatically - use Send via WhatsApp above, or share it from the order."}
               </p>
+              {orderType !== "COD" ? (
+                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? "Could not load WhatsApp options." : null} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
+              ) : null}
               {createOrder.error ? (
                 <p role="alert" className="text-sm text-destructive">
                   {getErrorMessage(createOrder.error, "Could not create the order.")}
@@ -327,8 +427,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 <Button type="button" variant="outline" onClick={() => setStep("form")} disabled={createOrder.isPending}>
                   Back
                 </Button>
-                <Button type="button" onClick={submit} disabled={createOrder.isPending}>
-                  {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : "Create prepaid order"}
+                <Button type="button" onClick={submit} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
+                  {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : sendingWhatsApp ? "Create Order & Send Payment Link" : "Create prepaid order"}
                 </Button>
               </div>
             </div>
@@ -362,19 +462,48 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
               <PaymentSection value={orderType} onChange={setOrderType} />
 
+              {/* Prepaid: the payment-link / WhatsApp template choice is right here under the payment method, and again on Review. */}
+              {orderType !== "COD" ? (
+                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? "Could not load WhatsApp options." : null} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
+              ) : null}
+
               <ShippingSection
                 address={address}
                 onChange={(patch) => setEdits((prev) => ({ ...prev, ...patch }))}
                 weight={weight}
-                onWeightChange={setWeight}
+                weightError={weightError}
+                weightHint={weightHint(resolved.source, estimate)}
+                productWeightNote={estimate.complete && estimate.knownKg !== null ? `Product weight: ${formatKg(estimate.knownKg)} (estimate - not the parcel weight)` : undefined}
+                onUseSuggested={manualWeight !== null && estimate.complete && estimate.knownKg !== null ? () => setManualWeight(null) : undefined}
+                onWeightChange={setManualWeight}
+                dimensions={dimsResolved.draft}
+                dimensionsError={dimensionsError}
+                dimensionsHint={dimensionsHint(dimsResolved.source, dimensionLines)}
+                productDimensionsNote={productDimensionsNote(dimensionLines) ?? undefined}
+                onUseSuggestedDimensions={manualDims !== null && suggestPackedDimensions(dimensionLines) ? () => setManualDims(null) : undefined}
+                onDimensionsChange={(patch) => setManualDims({ ...(manualDims ?? dimsResolved.draft), ...patch })}
                 shippingAmount={shippingAmount}
-                onShippingAmountChange={setShippingAmount}
+                shippingStatus={shippingState}
+                onShippingAmountChange={setManualShipping}
                 prefilledFromLastOrder={Boolean(last)}
                 pincodeState={pincodeState}
                 lookup={lookup}
                 cityMismatch={Boolean(cityMismatch)}
                 onUseResolved={() => setEdits((prev) => ({ ...prev, city: resolvedCity ?? prev.city, state: resolvedState ?? prev.state }))}
-                serviceability={<ServiceabilityLine pincodeState={pincodeState} weightProvided={weightProvided} loading={serviceabilityLoading} result={serviceability} />}
+                serviceability={
+                  <ServiceabilityLine
+                    pincodeState={pincodeState}
+                    missing={rateRequest.ok ? null : rateRequest.missing === "pincode" ? null : rateRequest.missing}
+                    calculating={rates.calculating}
+                    failed={rates.failed}
+                    result={serviceability}
+                    parcelWeightKg={parcel.ok ? parcel.kg : undefined}
+                    dimensions={parcelDims.ok ? parcelDims.cm : undefined}
+                    onRefresh={rates.refresh}
+                    selectedKey={selectedKeyForTable}
+                    onSelect={(key) => rates.key && setCourierPick({ rateKey: rates.key, courier: key })}
+                  />
+                }
               />
             </div>
 
@@ -396,9 +525,29 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
             </div>
           </form>
         )}
+    </>
+  );
+
+  if (inline) {
+    return (
+      <div data-testid="create-order-inline">
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="max-h-[92vh] w-[calc(100vw-1.5rem)] overflow-y-auto sm:max-w-[min(1080px,calc(100vw-3rem))]">
+        <DialogHeader>
+          <DialogTitle className="text-lg">{title}</DialogTitle>
+          <DialogDescription>Order for the customer in this conversation.</DialogDescription>
+        </DialogHeader>
+
+        {content}
       </DialogContent>
 
-      {result ? <CreateShipmentDialog open={shipmentOpen} onOpenChange={setShipmentOpen} orderId={result.order.id} orderNumber={result.order.orderNumber} currency={result.order.currency} /> : null}
+      {result ? <CreateShipmentDialog open={shipmentOpen} onOpenChange={setShipmentOpen} orderId={result.order.id} orderNumber={result.order.orderNumber} currency={result.order.currency} items={result.order.items} orderValue={goodsValue(result.order)} parcelWeightKg={result.order.parcelWeightKg ?? null} pincode={result.order.shippingPincode} cod={result.order.paymentMode === "COD"} /> : null}
     </Dialog>
   );
 }

@@ -24,10 +24,22 @@ export interface LiveOrdersQuery {
   // unlinked order never matches any of them, since it has no CRM status/salesperson to compare) -
   // the same documented tradeoff the free-text `search` param already has for anything CRM-only
   // (lead number, payment reference) that Shopify's own search has no concept of either.
-  status?: OrderStatus;
-  paymentStatus?: PaymentStatusFilter;
-  source?: OrderSource;
-  salespersonId?: string;
+  //
+  // Column filters: each is a LIST (a single value is accepted too, for older callers). Values inside one filter are OR-ed;
+  // different filters are AND-ed. `paymentMode` and `paymentStatus` are two dimensions of the Payment column.
+  status?: OrderStatus | OrderStatus[];
+  paymentStatus?: PaymentStatusFilter | PaymentStatusFilter[];
+  paymentMode?: PaymentMode | PaymentMode[];
+  source?: OrderSource | OrderSource[];
+  salespersonId?: string | string[];
+  leadSourceId?: string | string[];
+  /** Shopify's own fulfilment status (UNFULFILLED, FULFILLED, PARTIALLY_FULFILLED...) as shown under Status. */
+  fulfillment?: string | string[];
+  /** Order total range, in the order's major currency unit (rupees). Either end may be omitted. */
+  totalMin?: number;
+  totalMax?: number;
+  /** Tags (Shopify tags and the CRM "CRM Confirmed by <name>" tag). Several = any of them (OR); exact tag match. */
+  tags?: string[];
 }
 
 type Money = string;
@@ -68,6 +80,20 @@ export interface LiveOrderListItem {
   hasTracking: boolean;
   /** Shopify's own shipping rate name (e.g. "Standard"), null when the order has no shipping line. */
   shippingMethod: string | null;
+  /** Shopify's live tags merged with the CRM confirmation tag (see orders.tags.ts) - one normalized, de-duplicated list. */
+  tags: string[];
+}
+
+export interface LiveOrderTagOption {
+  name: string;
+  /** Where the tag comes from: Shopify's tag list, or the CRM's own confirmation. */
+  source: "SHOPIFY" | "CRM";
+}
+
+export interface LiveOrderTagOptionsResult {
+  tags: LiveOrderTagOption[];
+  /** Set when Shopify's tag list could not be loaded - the CRM confirmation tags are still returned. */
+  error?: string;
 }
 
 export interface LiveOrderPageInfo {

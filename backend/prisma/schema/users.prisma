@@ -30,6 +30,9 @@ model User {
 
   groupsManaged Group[] @relation("GroupManager")
 
+  refundRequestsMade    RefundRequest[] @relation("RefundRequestedBy")
+  refundRequestsDecided RefundRequest[] @relation("RefundDecidedBy")
+
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
   leadsOwned             Lead[] @relation("LeadOwner")
@@ -57,6 +60,7 @@ model User {
   interestedPeriodsQualified InterestedLeadPeriod[] @relation("InterestedLeadPeriodQualifiedBy")
 
   ordersCreated Order[] @relation("OrderCreatedBy")
+  ordersConfirmed Order[] @relation("OrderConfirmedBy")
 
   recoveryActionsPerformed RecoveryAction[] @relation("RecoveryActionPerformedBy")
 

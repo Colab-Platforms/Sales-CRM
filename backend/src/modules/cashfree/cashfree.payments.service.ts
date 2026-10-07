@@ -9,9 +9,12 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown, fullName, scopedOrderWhere } from "../orders/orders.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import WhatsAppMessagingService from "../whatsapp/whatsapp.messaging.service.js";
-import { notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
+import { findConversationProvider } from "../whatsapp/whatsapp.conversation-provider.js";
+import { recordWhatsAppConsent } from "../orders/orders.whatsapp-payment.js";
+import { firstContactBlockReason, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 import type { WhatsAppMessageSummary } from "../whatsapp/whatsapp.types.js";
 import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
+import { readOffer } from "../orders/orders.prepaid-upgrade.hooks.js";
 import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE } from "./cashfree.apply.js";
 import { CashfreeClient, type CashfreeLink, type CreateLinkRequest } from "./cashfree.client.js";
 import { CashfreeConfigError, isCashfreeEnabled, loadCashfreeConfig, type CashfreeConfig } from "./cashfree.config.js";
@@ -73,10 +76,18 @@ const PAYMENT_SELECT = {
   externalId: true,
   paymentUrl: true,
   paymentExpiresAt: true,
-  order: { select: { id: true, leadId: true, orderNumber: true, lead: { select: { normalizedMobile: true, firstName: true, lastName: true } }, items: { select: { productNameSnapshot: true, variantNameSnapshot: true, quantity: true }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] } } },
+  metadata: true,
+  order: { select: { id: true, leadId: true, orderNumber: true, metadata: true, lead: { select: { normalizedMobile: true, firstName: true, lastName: true } }, items: { select: { productNameSnapshot: true, variantNameSnapshot: true, quantity: true }, orderBy: [{ createdAt: "asc" }, { id: "asc" }] } } },
 } satisfies Prisma.PaymentSelect;
 
 type PaymentRow = Prisma.PaymentGetPayload<{ select: typeof PAYMENT_SELECT }>;
+
+/** For a Prepaid Upgrade link only: the offer this payment was created for (matched by the id stamped on the payment), so the customer message can state the discount. */
+function upgradeDiscountFor(payment: { metadata: unknown; order: { metadata: unknown } }): { originalAmount: string; discountAmount: string } | undefined {
+  const upgradeId = asRecord(payment.metadata).prepaidUpgradeId;
+  const offer = readOffer(payment.order.metadata);
+  return typeof upgradeId === "string" && offer && offer.id === upgradeId ? { originalAmount: offer.originalAmount, discountAmount: offer.discountAmount } : undefined;
+}
 
 class CashfreePaymentsService {
   constructor(
@@ -114,9 +125,14 @@ class CashfreePaymentsService {
 
   // ---------------------------------------------------------------- create
 
-  async createPaymentLink(user: AuthUser, orderId: string): Promise<PaymentLinkResult> {
+  /**
+   * `opts.amountCents` collects a specific amount instead of the order's outstanding balance (used by Prepaid Upgrade,
+   * where a COD order is offered at a discount). `opts.upgradeId` tags the Payment so the success hook can tie it to
+   * that offer. With neither option the behaviour is exactly what it always was.
+   */
+  async createPaymentLink(user: AuthUser, orderId: string, opts: { amountCents?: number; upgradeId?: string } = {}): Promise<PaymentLinkResult> {
     const config = this.config();
-    const prepared = await this.runner.$transaction((tx) => this.prepare(tx, user, orderId, config));
+    const prepared = await this.runner.$transaction((tx) => this.prepare(tx, user, orderId, config, opts));
 
     if (prepared.needsProvider) {
       const link = await this.createOrRecover(config, prepared.request, prepared.paymentId, prepared.linkId);
@@ -130,7 +146,7 @@ class CashfreePaymentsService {
   }
 
   /** Phase 1 (locked): decide whether there is anything to pay and which row represents it. Nothing is sent to Cashfree here. */
-  private async prepare(tx: Db, user: AuthUser, orderId: string, config: CashfreeConfig) {
+  private async prepare(tx: Db, user: AuthUser, orderId: string, config: CashfreeConfig, opts: { amountCents?: number; upgradeId?: string } = {}) {
     await advisoryLock(tx, orderLockKey(orderId));
     const now = this.now();
     const scope = await getLeadScope(user, tx);
@@ -159,8 +175,11 @@ class CashfreePaymentsService {
 
     // The exact pending amount, by the same rule reconciliation uses for "outstanding".
     const breakdown = computePaymentBreakdown(order.payments);
-    const outstandingCents = Math.max(toCents(order.totalAmount.toString()) - breakdown.paidCents - breakdown.refundedCents, 0);
-    if (outstandingCents === 0) throw new ApiError("This order has no pending amount to collect", STATUS_CODES.BAD_REQUEST);
+    const owedCents = Math.max(toCents(order.totalAmount.toString()) - breakdown.paidCents - breakdown.refundedCents, 0);
+    if (owedCents === 0) throw new ApiError("This order has no pending amount to collect", STATUS_CODES.BAD_REQUEST);
+    // A requested amount (Prepaid Upgrade) can only ever be LESS than what is owed - never a way to over-collect.
+    if (opts.amountCents !== undefined && (!Number.isInteger(opts.amountCents) || opts.amountCents <= 0 || opts.amountCents > owedCents)) throw new ApiError("The requested payment amount is not valid for this order", STATUS_CODES.BAD_REQUEST);
+    const outstandingCents = opts.amountCents ?? owedCents;
 
     const open = order.payments.find((p) => p.externalSource === "CASHFREE" && OPEN.has(p.status));
     if (open) {
@@ -187,6 +206,7 @@ class CashfreePaymentsService {
         externalSource: "CASHFREE",
         externalId: linkIdFor(paymentId),
         paymentExpiresAt: expiresAt,
+        ...(opts.upgradeId ? { metadata: { prepaidUpgradeId: opts.upgradeId } as Prisma.InputJsonValue } : {}),
       },
     });
     return { paymentId, linkId: linkIdFor(paymentId), reused: false, needsProvider: true, request, orderNumber: order.orderNumber, leadId: order.lead.id, expiresAt };
@@ -359,13 +379,30 @@ class CashfreePaymentsService {
    * Sends the payment link to the customer through the existing E7.3 template messaging - no second sender. The template
    * must contain {{payment_link}}; the variable resolver fills it from this order's open Cashfree payment.
    */
-  async sendPaymentLinkWhatsApp(user: AuthUser, paymentId: string, templateId: string): Promise<WhatsAppMessageSummary> {
+  async sendPaymentLinkWhatsApp(user: AuthUser, paymentId: string, templateId: string, opts: { consent?: boolean } = {}): Promise<WhatsAppMessageSummary> {
     const payment = await this.runner.$transaction(async (tx) => {
       const found = await this.loadPayment(tx, user, paymentId);
-      const template = await tx.whatsAppTemplate.findUnique({ where: { id: templateId }, select: { variables: true } });
+      const template = await tx.whatsAppTemplate.findUnique({ where: { id: templateId }, select: { variables: true, provider: true, providerTemplateId: true } });
       if (!template) throw new ApiError("Template not found", STATUS_CODES.NOT_FOUND);
+      // A Meta template must be a real, synced one (the messaging layer already requires APPROVED).
+      if (template.provider === "META" && !template.providerTemplateId) throw new ApiError("Payment link not sent — the selected WhatsApp template is not available or approved.", STATUS_CODES.BAD_REQUEST);
       const variables = Array.isArray(template.variables) ? (template.variables as string[]) : [];
       if (!variables.includes("payment_link")) throw new ApiError("This template does not contain a {{payment_link}} placeholder, so it would not deliver the payment link", STATUS_CODES.BAD_REQUEST);
+      // A Meta template to a customer with no conversation/history is a business-initiated first contact: recorded opt-in is required
+      // (the ticked "customer has agreed" is recorded now). OPTED_OUT is never overwritten. Other providers: rules unchanged.
+      // The ticked "customer has agreed" is recorded whenever it is given (an existing OPTED_IN is kept, an OPTED_OUT never overwritten).
+      if (template.provider === "META" && opts.consent && found.order.lead.normalizedMobile) await recordWhatsAppConsent(tx as never, found.order.leadId, this.now());
+      if (template.provider === "META" && !(await findConversationProvider(tx, found.order.leadId)).provider) {
+        const reason = await firstContactBlockReason(tx, found.order.leadId, found.order.lead.normalizedMobile);
+        if (reason !== null) {
+          const pref = await tx.communicationPreference.findUnique({ where: { leadId_channel: { leadId: found.order.leadId, channel: "WHATSAPP" } }, select: { status: true } });
+          const mobileOk = Boolean(found.order.lead.normalizedMobile);
+          if (!opts.consent || !mobileOk || pref?.status === "OPTED_OUT") {
+            throw new ApiError(!mobileOk ? "Payment link not sent — this customer does not have a valid WhatsApp number." : pref?.status === "OPTED_OUT" ? "This customer has opted out of WhatsApp messages. Update their consent through the consent flow first." : "Payment link not sent — WhatsApp consent is required before sending a business-initiated message.", STATUS_CODES.BAD_REQUEST);
+          }
+          await recordWhatsAppConsent(tx as never, found.order.leadId, this.now());
+        }
+      }
       return found;
     });
 
@@ -392,7 +429,7 @@ class CashfreePaymentsService {
       const result = await notifyPaymentLink(
         tx,
         user,
-        { leadId: payment.order.leadId, orderId: payment.orderId, normalizedMobile: payment.order.lead.normalizedMobile, orderNumber: payment.order.orderNumber, paymentUrl: payment.paymentUrl!, amount: fromCents(toCents(payment.amount.toString())), currency: payment.currency, customerName: fullName(payment.order.lead.firstName, payment.order.lead.lastName), items: payment.order.items.map((i) => ({ name: i.productNameSnapshot, variant: i.variantNameSnapshot, quantity: i.quantity })) },
+        { leadId: payment.order.leadId, orderId: payment.orderId, normalizedMobile: payment.order.lead.normalizedMobile, orderNumber: payment.order.orderNumber, paymentUrl: payment.paymentUrl!, amount: fromCents(toCents(payment.amount.toString())), currency: payment.currency, customerName: fullName(payment.order.lead.firstName, payment.order.lead.lastName), items: payment.order.items.map((i) => ({ name: i.productNameSnapshot, variant: i.variantNameSnapshot, quantity: i.quantity })), discount: upgradeDiscountFor(payment) },
         this.deps.notifyDeps,
       );
       await recordOrderNotification(tx, payment.orderId, result, this.now());

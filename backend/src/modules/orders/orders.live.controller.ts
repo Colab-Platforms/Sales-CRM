@@ -26,6 +26,15 @@ export const listLiveOrders = async (req: AuthRequest, res: Response): Promise<v
 
 // Cancels a Shopify order the CRM has not synced yet - the only destructive action Shopify actually
 // supports (no delete). ADMIN-only, same visibility as the detail page itself.
+// Options for the Orders Tags filter (Shopify's tags + the CRM confirmation tags). Never fails the page: a Shopify problem comes back as `error`.
+export const getLiveTagOptions = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await ordersLiveService.listTagOptions(), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const cancelLiveOrder = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const externalId = String(req.params.externalId ?? "");

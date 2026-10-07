@@ -26,6 +26,8 @@ export interface ListAbandonmentsParams {
   managerId?: string;
   salespersonId?: string;
   workingStatus?: LeadWorkingStatus;
+  /** Item keys from GET /abandonments/items; any of them (OR). */
+  items?: string[];
 }
 
 export interface AbandonmentSummary {
@@ -44,6 +46,8 @@ export interface CartSnapshot {
   currency: string | null;
   itemCount: number | null;
   itemNames: string[];
+  /** Per-line product/variant id, SKU, name and quantity. Empty on carts captured before this was stored. */
+  items?: { productId: string | null; variantId: string | null; sku: string | null; name: string; quantity: number | null }[];
   stage: string | null;
   checkoutUrl: string | null;
 }
