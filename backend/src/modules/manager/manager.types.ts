@@ -5,9 +5,9 @@ export interface CreateGroupBody {
 
 export interface AddSalespersonBody {
   name: string;
-  email: string;
+  username: string;
   password: string;
-  phone?: string;
+  phone: string;
 }
 
 export interface CreateSalespersonBody extends AddSalespersonBody {

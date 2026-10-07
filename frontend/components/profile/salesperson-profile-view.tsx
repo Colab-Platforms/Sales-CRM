@@ -1,4 +1,4 @@
-import { Users, UsersRound, Mail, Phone } from "lucide-react";
+import { Users, UsersRound, AtSign, Phone } from "lucide-react";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { ProfileHeaderCard } from "./profile-header-card";
 import { Badge } from "@/components/ui/badge";
@@ -30,10 +30,10 @@ export function SalespersonProfileView({ profile }: { profile: SalespersonProfil
                 <p className="text-sm font-semibold">{profile.reportingManager.name}</p>
               </div>
               <div className="flex items-start gap-2">
-                <Mail className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                <AtSign className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                 <div className="space-y-0.5">
-                  <p className="text-xs text-muted-foreground">Email</p>
-                  <p className="text-sm">{profile.reportingManager.email}</p>
+                  <p className="text-xs text-muted-foreground">Username</p>
+                  <p className="text-sm">{profile.reportingManager.username}</p>
                 </div>
               </div>
               <div className="flex items-start gap-2">

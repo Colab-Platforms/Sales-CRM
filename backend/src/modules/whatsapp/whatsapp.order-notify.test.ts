@@ -9,7 +9,7 @@ import WhatsAppMessagingService from "./whatsapp.messaging.service.js";
 import type { MetaCloudApiProvider } from "./whatsapp.meta.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
 
-const USER: AuthUser = { id: "user-1", role: Role.ADMIN, email: "a@example.com" };
+const USER: AuthUser = { id: "user-1", role: Role.ADMIN, username: "test-user" };
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 const HOUR = 3_600_000;
 

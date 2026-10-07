@@ -152,7 +152,7 @@ function SalespersonRow({ salesperson, groups }: { salesperson: MySalesperson; g
     <TableRow>
       <TableCell className="pl-5">
         <div className="font-semibold">{salesperson.name}</div>
-        <div className="text-xs text-muted-foreground">{salesperson.email}</div>
+        <div className="text-xs text-muted-foreground">{salesperson.username}</div>
       </TableCell>
       <TableCell>{salesperson.phone ?? "—"}</TableCell>
       <TableCell>
@@ -207,7 +207,7 @@ export default function SalespersonsPage() {
     return list.filter(
       (sp) =>
         sp.name.toLowerCase().includes(q) ||
-        sp.email.toLowerCase().includes(q) ||
+        sp.username.toLowerCase().includes(q) ||
         (sp.groupName ?? "").toLowerCase().includes(q),
     );
   }, [salespersons, search]);
@@ -231,7 +231,7 @@ export default function SalespersonsPage() {
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name, email, or group..."
+            placeholder="Search by name, username, or group..."
             className="pl-9.5"
           />
         </div>

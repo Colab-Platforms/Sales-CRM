@@ -29,7 +29,7 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 const HOUR = 3_600_000;
 // Deliberately distinctive: if either ever shows up in an output, a test below fails.
@@ -57,7 +57,7 @@ function shopify(): ShopifyClient {
 interface Setup { provider: WhatsAppProviderName; windowOpen?: boolean; templates?: { provider: WhatsAppProviderName; variables: string[]; status?: "APPROVED" | "PENDING" }[]; metaThrows?: boolean }
 
 async function setup(tx: Db, runner: TxRunner, s: Setup, apiOver: Partial<CashfreeApi> = {}) {
-  const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+  const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", lastName: "Shah", mobile: "9000000123", normalizedMobile: "+919000000123", email: "priya@zz.invalid" }, select: { id: true } });
   await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: s.provider } });
   await tx.whatsAppMessage.create({ data: { provider: s.provider, providerMessageId: `in-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId: lead.id, fromNumber: "919000000123", normalizedContact: "+919000000123", body: "hi", createdAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR), receivedAt: new Date(NOW.getTime() - (s.windowOpen === false ? 30 : 1) * HOUR) } });

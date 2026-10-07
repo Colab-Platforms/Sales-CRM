@@ -10,15 +10,15 @@ import type {
   UpdateSalespersonBody,
 } from "./admin.types.js";
 
-function toPublicUser(user: { id: string; name: string; email: string; phone: string | null; role: string; status: string }) {
-  return { id: user.id, name: user.name, email: user.email, phone: user.phone, role: user.role, status: user.status };
+function toPublicUser(user: { id: string; name: string; username: string; phone: string | null; role: string; status: string }) {
+  return { id: user.id, name: user.name, username: user.username, phone: user.phone, role: user.role, status: user.status };
 }
 
 class AdminService {
   async createManager(data: CreateManagerBody) {
-    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    const existing = await prisma.user.findUnique({ where: { username: data.username } });
     if (existing) {
-      throw new ApiError("Email already in use", STATUS_CODES.CONFLICT);
+      throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
     }
 
     const passwordHash = await hashPassword(data.password);
@@ -26,7 +26,7 @@ class AdminService {
     const manager = await prisma.user.create({
       data: {
         name: data.name,
-        email: data.email,
+        username: data.username,
         phone: data.phone,
         passwordHash,
         role: Role.MANAGER,
@@ -104,9 +104,9 @@ class AdminService {
       throw new ApiError("Reporting manager is not active", STATUS_CODES.BAD_REQUEST);
     }
 
-    const existing = await prisma.user.findUnique({ where: { email: data.email } });
+    const existing = await prisma.user.findUnique({ where: { username: data.username } });
     if (existing) {
-      throw new ApiError("Email already in use", STATUS_CODES.CONFLICT);
+      throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
     }
 
     const passwordHash = await hashPassword(data.password);
@@ -114,7 +114,7 @@ class AdminService {
     const salesperson = await prisma.user.create({
       data: {
         name: data.name,
-        email: data.email,
+        username: data.username,
         phone: data.phone,
         passwordHash,
         role: Role.SALESPERSON,
@@ -130,7 +130,7 @@ class AdminService {
   async listSalespersons() {
     const salespersons = await prisma.user.findMany({
       where: { role: Role.SALESPERSON },
-      include: { reportingManager: { select: { id: true, name: true, email: true } } },
+      include: { reportingManager: { select: { id: true, name: true, username: true } } },
       orderBy: { createdAt: "desc" },
     });
 
@@ -166,7 +166,7 @@ class AdminService {
           status: data.status,
           reportingManagerId: data.reportingManagerId,
         },
-        include: { reportingManager: { select: { id: true, name: true, email: true } } },
+        include: { reportingManager: { select: { id: true, name: true, username: true } } },
       });
 
       if (isReassignment) {

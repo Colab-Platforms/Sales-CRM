@@ -28,7 +28,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -64,7 +64,7 @@ function fakeShopifyClient(queryImpl?: (document: string, variables: Record<stri
 describe("createManualOrder - idempotencyKey guards a double submit", () => {
   it("two concurrent calls with the SAME idempotencyKey create exactly one order and one Shopify push", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       let shopifyCalls = 0;
@@ -82,7 +82,7 @@ describe("createManualOrder - idempotencyKey guards a double submit", () => {
 
   it("a different idempotencyKey (or none at all) is a genuinely new order - never falsely deduplicated", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       let n = 0;
@@ -100,8 +100,8 @@ describe("createManualOrder - idempotencyKey guards a double submit", () => {
 
   it("the same idempotencyKey from a DIFFERENT user is never deduplicated against another user's order", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const manager = await tx.user.create({ data: { name: "Admin B", email: `b-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const manager = await tx.user.create({ data: { name: "Admin B", username: `b-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       let n = 0;
@@ -117,7 +117,7 @@ describe("createManualOrder - idempotencyKey guards a double submit", () => {
 
   it("a failed attempt is never cached - retrying the same idempotencyKey after a failure creates the order normally", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
       const key = `idem-${uid()}`;
@@ -134,7 +134,7 @@ describe("createManualOrder - idempotencyKey guards a double submit", () => {
 describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
   it("full happy path: creates the order/items/payment, audits it, and appears via getOrder/listOrders", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -166,7 +166,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
   it("a prepaid (non-COD) order starts PENDING_PAYMENT, not CONFIRMED", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -184,7 +184,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
   it("computes totals correctly with a per-item discount, order-level discount, and shipping", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -207,7 +207,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
   it("a salesperson can create an order for their own lead", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep.id });
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -223,8 +223,8 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
   it("404s (never leaks existence) for a lead outside the caller's scope, and persists nothing", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -239,7 +239,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
   it("rejects an unknown product, and persists nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
 
@@ -253,7 +253,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
   it("rejects a variant that does not belong to the given product", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const productA = await makeProduct(tx);
       const productB = await makeProduct(tx);
@@ -270,7 +270,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
 describe("createManualOrder's Shopify push - variant id sent to Shopify (mocked client)", () => {
   async function orderWithVariant(tx: Prisma.TransactionClient, variant: { externalSource?: "SHOPIFY" | null; externalId?: string | null }) {
-    const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+    const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
     const lead = await makeLead(tx);
     const product = await makeProduct(tx);
     const v = await tx.productVariant.create({ data: { productId: product.id, name: "1 Jar", price: "1199.00", externalSource: variant.externalSource ?? null, externalId: variant.externalId ?? null }, select: { id: true } });
@@ -346,7 +346,7 @@ describe("createManualOrder's Shopify push - variant id sent to Shopify (mocked 
 describe("createManualOrder's Shopify push (mocked client - never a real Shopify call)", () => {
   it("links the CRM order to Shopify on success", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const variant = await makeVariant(tx, product.id, { externalSource: "SHOPIFY", externalId: "gid://shopify/ProductVariant/1" });
@@ -368,7 +368,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
 
   it("reports a Shopify failure honestly - the CRM order is still created and unaffected", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient(async () => ({ orderCreate: { order: null, userErrors: [{ field: null, message: "Variant not found" }] } })));
@@ -390,7 +390,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
 
   it("retrying pushOrderToShopify after a failure succeeds without creating a duplicate CRM order", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       let calls = 0;
@@ -413,7 +413,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
 
   it("never calls Shopify again for an order already linked - returns already_linked", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       let calls = 0;
@@ -431,7 +431,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
 
   it("a Shopify-synced order (already has an externalId) is reported already_linked, never re-pushed", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await tx.order.create({
         data: { orderNumber: `SHP-${uid()}`, leadId: lead.id, source: "SHOPIFY", status: "CONFIRMED", totalAmount: "100.00", externalSource: "SHOPIFY", externalId: "gid://shopify/Order/existing", externalNumber: "#EXIST1" },
@@ -450,7 +450,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
 describe("getLastShippingAddress (Create Order prefill)", () => {
   it("returns the customer's most recent order address, understanding both the CRM and Shopify shapes", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await tx.order.create({ data: { orderNumber: `O-${uid()}`, leadId: lead.id, source: "SHOPIFY", status: "CONFIRMED", totalAmount: "10.00", shippingAddress: { name: "Old", address1: "1 Old Rd", city: "Pune", province: "Maharashtra", zip: "411001" } } });
       const svc = new OrdersService(tx);
@@ -464,7 +464,7 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
 
   it("a structured address round-trips through a created order and comes back for the next prefill", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -479,8 +479,8 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
 
   it("is null when the customer has no saved address, and out-of-scope customers read as not found", async () => {
     await inRollback(async (tx) => {
-      const owner = await tx.user.create({ data: { name: "Owner", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const stranger = await tx.user.create({ data: { name: "Stranger", email: `s-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const owner = await tx.user.create({ data: { name: "Owner", username: `o-${uid()}`, role: Role.SALESPERSON } });
+      const stranger = await tx.user.create({ data: { name: "Stranger", username: `s-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: owner.id });
       const svc = new OrdersService(tx);
       assert.equal((await svc.getLastShippingAddress(as(owner, Role.SALESPERSON), lead.id)).address, null);
@@ -492,7 +492,7 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
 describe("createManualOrder - parcel weight (entered, never assumed)", () => {
   it("records the entered parcel weight as a number on the order and shows it on the order; no weight entered -> null (nothing is invented)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       let n = 0;

@@ -28,10 +28,10 @@ const snap = (...lines: { sku: string; name: string }[]) => ({ cartValue: "499.0
 const keyOf = (l: { sku: string; name: string }) => `s:${l.sku}|${l.name}`;
 
 async function world(tx: Prisma.TransactionClient) {
-  const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-  const manager = await tx.user.create({ data: { name: "TL", email: `m-${uid()}@example.invalid`, role: Role.MANAGER } });
-  const other = await tx.user.create({ data: { name: "Other TL", email: `o-${uid()}@example.invalid`, role: Role.MANAGER } });
-  const vini = await tx.user.create({ data: { name: "Vini", email: `v-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+  const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+  const manager = await tx.user.create({ data: { name: "TL", username: `m-${uid()}`, role: Role.MANAGER } });
+  const other = await tx.user.create({ data: { name: "Other TL", username: `o-${uid()}`, role: Role.MANAGER } });
+  const vini = await tx.user.create({ data: { name: "Vini", username: `v-${uid()}`, role: Role.SALESPERSON } });
   let n = 0;
   const cart = async (cartSnapshot: unknown, lead: { managerId?: string | null; ownerId?: string | null; workingStatus?: "NEW" | "RINGING" } = {}, detectedAt = new Date()) => {
     n += 1;
@@ -42,7 +42,7 @@ async function world(tx: Prisma.TransactionClient) {
   const assigned: string[] = [];
   const stub = { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async (_m: string, body: { leadIds: string[] }) => { assigned.push(...body.leadIds); return { assignedCount: body.leadIds.length }; } } as never;
   const svc = new AbandonmentService(tx as never, stub);
-  const as = (u: { id: string; email: string; role: Role }) => ({ id: u.id, email: u.email, role: u.role });
+  const as = (u: { id: string; username: string; role: Role }) => ({ id: u.id, username: u.username, role: u.role });
   const list = (user: typeof admin, q: Record<string, string> = {}) => {
     const parsed = validateListAbandonmentsQuery(q);
     assert.ifError(parsed.error);

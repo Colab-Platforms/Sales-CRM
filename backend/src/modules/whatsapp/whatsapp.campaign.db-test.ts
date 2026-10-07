@@ -34,7 +34,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 let mobileSeq = 0;
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
@@ -80,7 +80,7 @@ function services(tx: Prisma.TransactionClient, providerOverrides: Partial<Whats
 }
 
 async function admin(tx: Prisma.TransactionClient) {
-  return tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+  return tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
 }
 
 describe("campaign CRUD", () => {
@@ -314,8 +314,8 @@ describe("audience filtering and preview", () => {
 
   it("scopes the audience to the caller's own leads for a salesperson", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const { campaign } = services(tx);
       const own = await makeLead(tx, { ownerId: rep1.id, firstName: "OwnLead" });
       const other = await makeLead(tx, { ownerId: rep2.id, firstName: "OtherLead" });
@@ -700,8 +700,8 @@ describe("Customer 360, Audit, E7.4 history and E7.5 tracking all reflect a camp
   it("recipient visibility is scoped to the viewer's own leads for a salesperson", async () => {
     await inRollback(async (tx) => {
       const a = await admin(tx);
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const { campaign } = services(tx);
       const template = await makeTemplate(tx);
       const tag = `Scope${uid().slice(0, 8)}`;

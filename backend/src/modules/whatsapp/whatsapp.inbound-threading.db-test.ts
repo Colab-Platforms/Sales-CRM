@@ -207,7 +207,7 @@ describe("WhatsApp inbound threading: concurrent delivery of two different messa
 // normalizedMobile, and that a real inbound reply for it threads into the SAME lead/conversation.
 describe("WhatsApp inbound threading: a contact created via the real 'Create Contact' path (LeadService.createLead)", () => {
   it("gets a canonical normalizedMobile, and a real inbound reply threads into the SAME lead - never a duplicate", async () => {
-    const admin = await prisma.user.findFirstOrThrow({ where: { role: Role.ADMIN }, select: { id: true, email: true, role: true } });
+    const admin = await prisma.user.findFirstOrThrow({ where: { role: Role.ADMIN }, select: { id: true, username: true, role: true } });
     const leadService = new LeadService();
     const whatsapp = new WhatsAppService(prisma);
     const brandNewNumber = `8${Date.now()}`.slice(0, 10);

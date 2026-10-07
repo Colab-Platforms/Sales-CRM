@@ -34,7 +34,7 @@ const CF_CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_ENV: "
 
 async function setup(tx: Db, runner: TxRunner, opts: { products?: { name: string; variant?: string; qty?: number }[]; metaThrows?: boolean; total?: string } = {}) {
   const total = opts.total ?? "699.00";
-  const tele = await tx.user.create({ data: { name: "Tele Caller", email: `t-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+  const tele = await tx.user.create({ data: { name: "Tele Caller", username: `t-${uid()}`, role: Role.SALESPERSON } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Pawa", lastName: "Kumar", mobile: "9000000123", normalizedMobile: "+919000000123", email: "p@zz.invalid", ownerId: tele.id }, select: { id: true } });
   await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: "META" } });
   await tx.whatsAppMessage.create({ data: { provider: "META", providerMessageId: `in-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId: lead.id, fromNumber: "919000000123", normalizedContact: "+919000000123", body: "hi", createdAt: new Date(NOW.getTime() - HOUR), receivedAt: new Date(NOW.getTime() - HOUR) } });
@@ -57,7 +57,7 @@ async function setup(tx: Db, runner: TxRunner, opts: { products?: { name: string
   const messaging = { sendTemplate: async () => ({ status: "SENT" }) as never } as unknown as WhatsAppMessagingService;
   const cashfree = new CashfreePaymentsService(runner, { config: () => CF_CONFIG, client: () => api, now: () => NOW, notifyDeps: { freeText, messaging } });
   const svc = new PrepaidUpgradeService(tx as never, () => cashfree, () => NOW);
-  const user = { id: tele.id, email: tele.email, role: Role.SALESPERSON };
+  const user = { id: tele.id, username: tele.username, role: Role.SALESPERSON };
   const offerWithLink = async (discountValue = "100") => {
     const o = await svc.createOffer(user, order.id, { discountType: "FIXED", discountValue });
     return svc.generateLink(user, order.id, o.offer!.id);

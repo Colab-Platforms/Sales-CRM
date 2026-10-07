@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { validateSchema } from "@/utils/validate.js";
+import { usernameSchema } from "@/lib/username.js";
 import type {
   CreateManagerBody,
   CreateSalespersonBody,
@@ -10,16 +11,16 @@ import type {
 
 const createManagerSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
-  email: z.string().email("Enter a valid email address"),
+  username: usernameSchema,
   password: z.string().min(6, "Password must be at least 6 characters"),
-  phone: z.string().max(20, "Phone number is too long").optional(),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
 });
 
 const createSalespersonSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
-  email: z.string().email("Enter a valid email address"),
+  username: usernameSchema,
   password: z.string().min(6, "Password must be at least 6 characters"),
-  phone: z.string().max(20, "Phone number is too long").optional(),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
   // .guid() (not .uuid()) — Postgres's uuid column accepts any UUID-shaped
   // id regardless of RFC 9562 version/variant bits, which .uuid() enforces.
   reportingManagerId: z.string().guid("Select a reporting manager"),

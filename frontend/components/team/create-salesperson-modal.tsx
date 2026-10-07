@@ -15,7 +15,7 @@ export function CreateSalespersonModal({ groups, onDone }: { groups: Group[]; on
   const createSalesperson = useCreateSalespersonMutation();
   const activeGroups = groups.filter((g) => g.status === "ACTIVE");
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
   const [groupId, setGroupId] = useState("");
@@ -23,7 +23,7 @@ export function CreateSalespersonModal({ groups, onDone }: { groups: Group[]; on
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     createSalesperson.mutate(
-      { name, email, password, phone: phone || undefined, groupId },
+      { name, username, password, phone, groupId },
       { onSuccess: onDone },
     );
   }
@@ -57,12 +57,12 @@ export function CreateSalespersonModal({ groups, onDone }: { groups: Group[]; on
           <Input id="new-sp-name" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor="new-sp-email">Email</Label>
+          <Label htmlFor="new-sp-username">Username</Label>
           <Input
-            id="new-sp-email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
+            id="new-sp-username"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
             required
           />
         </div>
@@ -73,9 +73,8 @@ export function CreateSalespersonModal({ groups, onDone }: { groups: Group[]; on
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
             <Label htmlFor="new-sp-phone">Phone</Label>
-            <span className="text-xs text-muted-foreground">Optional</span>
           </div>
-          <Input id="new-sp-phone" value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <Input id="new-sp-phone" required value={phone} onChange={(e) => setPhone(e.target.value)} />
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="new-sp-group">Group</Label>

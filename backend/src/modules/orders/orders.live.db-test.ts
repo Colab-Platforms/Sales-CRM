@@ -28,7 +28,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const ENV = { SHOPIFY_STORE_DOMAIN: "demo-store.myshopify.com", SHOPIFY_ACCESS_TOKEN: "shpat_faketoken", SHOPIFY_API_VERSION: "2026-01" };
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
@@ -175,7 +175,7 @@ function fakeShopifyDetailClient(orderBody: unknown) {
 describe("OrdersLiveService.getLiveOrderDetail", () => {
   it("ADMIN can view a Shopify order the CRM has not synced yet, by its numeric externalId", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const client = fakeShopifyDetailClient(orderByIdBody({ id: "gid://shopify/Order/555", name: "#4001" }));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(admin, Role.ADMIN), "555");
@@ -186,7 +186,7 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
 
   it("a non-admin gets a not-found result, never the order data, for an unsynced Shopify order", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const client = fakeShopifyDetailClient(orderByIdBody({ id: "gid://shopify/Order/556", name: "#4002" }));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(rep, Role.SALESPERSON), "556");
@@ -197,7 +197,7 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
 
   it("attaches live Shiprocket tracking for the order's Shopify-reported AWB", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const client = fakeShopifyDetailClient(orderByIdBody({ id: "gid://shopify/Order/557", name: "#4003", fulfillmentTrackingNumber: "AWB999" }));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(admin, Role.ADMIN), "557");
@@ -208,7 +208,7 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
 
   it("Shopify no longer has the order: reports a clear error, never throws", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const client = fakeShopifyDetailClient(orderByIdBody(null));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(admin, Role.ADMIN), "999999");
@@ -219,7 +219,7 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
 
   it("links to the matching CRM lead when the Shopify customer's phone matches an existing Lead", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { firstName: "Priya", normalizedMobile: "+919999911111", mobile: "9999911111" });
       const client = fakeShopifyDetailClient(orderByIdBody({ id: "gid://shopify/Order/558", name: "#4004", customerPhone: "+919999911111" }));
 
@@ -230,7 +230,7 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
 
   it("crmLink is null (never invented) when no CRM lead matches the Shopify customer's phone", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const client = fakeShopifyDetailClient(orderByIdBody({ id: "gid://shopify/Order/559", name: "#4005", customerPhone: "+919999922222" }));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(admin, Role.ADMIN), "559");
@@ -242,7 +242,7 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
 describe("OrdersLiveService.getLiveOrderHistory", () => {
   it("returns the customer's other Shopify orders, excluding the current one, with a ready-to-navigate id", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const linkedExtId = `${Date.now()}a`;
       await makeShopifyOrder(tx, lead.id, linkedExtId);
@@ -271,7 +271,7 @@ describe("OrdersLiveService.getLiveOrderHistory", () => {
 
   it("a non-admin gets a not-found result, never the history data", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const { client } = fakeShopifyClient(orderListBody([]));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderHistory(as(rep, Role.SALESPERSON), "1", "current", { first: 10 });
@@ -282,7 +282,7 @@ describe("OrdersLiveService.getLiveOrderHistory", () => {
 
   it("Shopify unreachable: reports a clear error and an empty list, never throws", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const failing = new ShopifyClient(loadShopifyConfig(ENV), { fetchImpl: (async () => { throw new Error("network down"); }) as unknown as typeof fetch });
 
       const result = await new OrdersLiveService(tx, () => failing).getLiveOrderHistory(as(admin, Role.ADMIN), "1", "current", { first: 10 });
@@ -295,7 +295,7 @@ describe("OrdersLiveService.getLiveOrderHistory", () => {
 describe("OrdersLiveService.listLiveOrders", () => {
   it("an unsynced Shopify order's item count comes from Shopify's own line items, never hardcoded to 0", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const extId = `${Date.now()}`;
       const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#5001", lineItemCount: 3 }]));
 
@@ -308,7 +308,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("joins the CRM's own Order/Lead row (already synced) onto the live Shopify page by externalId", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { firstName: "Aftab", lastName: null });
       const extId = `${Date.now()}`;
       await makeShopifyOrder(tx, lead.id, extId);
@@ -328,8 +328,8 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("a Shopify order the CRM has not synced yet is shown to ADMIN only, flagged linkedInCrm: false", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const extId = `${Date.now()}`;
       const { client: adminClient } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1002" }]));
 
@@ -351,7 +351,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
   describe("Shopify status/payment mapping for an UNSYNCED order (the 'No payment' bug)", () => {
     it("paid + fulfilled + tracking: shows a real payment/order status, fulfillment, and tracking - never 'No payment'/'Not synced to CRM' standing in for them", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}1`;
         const { client } = fakeShopifyClient(
           orderListBody([
@@ -384,7 +384,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("paid + unfulfilled: payment is confirmed but fulfillment/tracking correctly show nothing shipped yet", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}2`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1003", financialStatus: "PAID", fulfillmentStatus: "UNFULFILLED", paymentGateways: ["Razorpay"] }]),
@@ -400,7 +400,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("pending/unpaid: shows a real pending payment status, never 'No payment'", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}3`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1004", financialStatus: "PENDING", fulfillmentStatus: "UNFULFILLED", paymentGateways: ["Razorpay"] }]),
@@ -415,7 +415,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("partially paid: shows SUCCESS (the CRM's PaymentStatus vocabulary has no separate 'partial' bucket until a refund occurs)", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}4`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1005", financialStatus: "PARTIALLY_PAID", fulfillmentStatus: "UNFULFILLED", paymentGateways: ["Razorpay"] }]),
@@ -428,7 +428,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("refunded: shows REFUNDED, not 'No payment'", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}5`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1006", financialStatus: "REFUNDED", fulfillmentStatus: "FULFILLED", paymentGateways: ["Razorpay"], refundedAmount: "699.00" }]),
@@ -441,7 +441,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("partially refunded: shows PARTIALLY_REFUNDED, not 'No payment'", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}6`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1007", financialStatus: "PARTIALLY_REFUNDED", fulfillmentStatus: "FULFILLED", paymentGateways: ["Razorpay"], refundedAmount: "200.00" }]),
@@ -454,7 +454,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("fulfilled without tracking: fulfillment shows Fulfilled, but hasTracking is honestly false - never fabricated", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}7`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1008", financialStatus: "PAID", fulfillmentStatus: "FULFILLED", trackingNumbers: [null] }]),
@@ -469,7 +469,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("multiple fulfillments, only one with tracking: hasTracking is still correctly true", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}8`;
         const { client } = fakeShopifyClient(
           orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1009", financialStatus: "PAID", fulfillmentStatus: "PARTIALLY_FULFILLED", trackingNumbers: [null, "AWB99999"] }]),
@@ -484,7 +484,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("no shipping line: shippingMethod is honestly null, never a fabricated 'Standard'", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const extId = `${Date.now()}9`;
         const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1010", shippingMethod: null }]));
 
@@ -495,7 +495,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
     it("a linked (already-synced) order's fulfillmentStatus/hasTracking/shippingMethod also come from the SAME live Shopify read, not left null just because it's linked", async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const lead = await makeLead(tx);
         const extId = `${Date.now()}10`;
         await makeShopifyOrder(tx, lead.id, extId);
@@ -515,8 +515,8 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("RBAC: a salesperson only sees Shopify orders linked to their own leads, never a colleague's", async () => {
     await inRollback(async (tx) => {
-      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.SALESPERSON } });
       const leadA = await makeLead(tx, { ownerId: repA.id });
       const leadB = await makeLead(tx, { ownerId: repB.id });
       const extA = `${Date.now()}a`;
@@ -537,7 +537,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("Shopify unreachable: reports a clear error and an empty list, never throws", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const failing = new ShopifyClient(loadShopifyConfig(ENV), { fetchImpl: (async () => { throw new Error("network down"); }) as unknown as typeof fetch });
       const result = await new OrdersLiveService(tx, () => failing).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
       assert.equal(result.items.length, 0);
@@ -547,7 +547,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("caches a repeated identical query - Shopify is not called again within the TTL", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { client, calls } = fakeShopifyClient(orderListBody([{ id: "gid://shopify/Order/999", name: "#3001" }]));
       const svc = new OrdersLiveService(tx, () => client);
 
@@ -563,8 +563,8 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("does not cache across different users (RBAC-sensitive) or different search terms", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const marker = `distinct-${uid()}`;
       const { client, calls } = fakeShopifyClient(orderListBody([]), orderListBody([]));
       const svc = new OrdersLiveService(tx, () => client);
@@ -579,7 +579,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("passes the date window and free-text search through to Shopify's query string", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { client, calls } = fakeShopifyClient(orderListBody([]));
       const svc = new OrdersLiveService(tx, () => client);
 
@@ -597,7 +597,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("a linked order reports the CRM's own source (e.g. Salesperson), not a hardcoded Shopify", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const extId = `${Date.now()}`;
       await makeShopifyOrder(tx, lead.id, extId, { source: "SALESPERSON" });
@@ -610,8 +610,8 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("status/paymentStatus/source/salespersonId filter the page to matching linked orders only", async () => {
     await inRollback(async (tx) => {
-      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.ADMIN } });
       const leadA = await makeLead(tx, { ownerId: repA.id, normalizedMobile: "+913333300001", mobile: "3333300001" });
       const leadB = await makeLead(tx, { ownerId: repB.id, normalizedMobile: "+913333300002", mobile: "3333300002" });
       const extA = `${Date.now()}a`;
@@ -624,7 +624,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
         { id: `gid://shopify/Order/${extB}`, name: "#7002" },
       ]));
 
-      const admin = await tx.user.create({ data: { name: "Admin", email: `adm-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `adm-${uid()}`, role: Role.ADMIN } });
       const byStatus = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, status: "SHIPPED" });
       assert.equal(byStatus.items.length, 1);
       assert.equal(byStatus.items[0]!.orderNumber, "#7002");
@@ -641,7 +641,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
   it("an unsynced (unlinked) order never matches a status/salesperson filter, since it has neither", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const extId = `${Date.now()}`;
       const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#8001" }]));
 
@@ -658,7 +658,7 @@ function fakeCancelClient(response: unknown) {
 describe("OrdersLiveService.cancelLiveOrder", () => {
   it("ADMIN can cancel a Shopify order the CRM has not synced yet - the only destructive action Shopify supports", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const client = fakeCancelClient({ orderCancel: { job: { id: "1", done: true }, orderCancelUserErrors: [] } });
 
       const result = await new OrdersLiveService(tx, () => client).cancelLiveOrder(as(admin, Role.ADMIN), "123456");
@@ -668,7 +668,7 @@ describe("OrdersLiveService.cancelLiveOrder", () => {
 
   it("a non-admin cannot cancel an unsynced order - reports cleanly, never calls Shopify", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       let called = false;
       const client = { query: async () => { called = true; return {}; } } as unknown as ShopifyClient;
 
@@ -680,7 +680,7 @@ describe("OrdersLiveService.cancelLiveOrder", () => {
 
   it("Shopify rejects the cancellation: reports the real reason, never claims success", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const client = fakeCancelClient({ orderCancel: { job: null, orderCancelUserErrors: [{ field: null, message: "Order is already cancelled" }] } });
 
       const result = await new OrdersLiveService(tx, () => client).cancelLiveOrder(as(admin, Role.ADMIN), "123456");
@@ -696,7 +696,7 @@ describe("OrdersLiveService.listLiveOrders - column filters", () => {
 
   it("a sparse filter keeps reading further Shopify pages until it has matches, and the cursor continues from the last page read", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const ext = `${Date.now()}`;
       const { client } = fakeShopifyClient(
         orderListBody([prepaid(1, ext), prepaid(2, ext), prepaid(3, ext)], { hasNextPage: true, endCursor: "c1" }),
@@ -712,7 +712,7 @@ describe("OrdersLiveService.listLiveOrders - column filters", () => {
 
   it("combines filters with AND (COD + Shopify + Unfulfilled) and ORs values inside one filter", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const ext = `${Date.now()}`;
       const nodes = () => orderListBody([cod(1, ext), prepaid(2, ext), { ...cod(3, ext), fulfillmentStatus: "FULFILLED" }]);
       const and = await new OrdersLiveService(tx, () => fakeShopifyClient(nodes()).client).listLiveOrders(as(admin, Role.ADMIN), { first: 25, paymentMode: ["COD"], source: ["SHOPIFY"], fulfillment: ["UNFULFILLED"] });
@@ -726,8 +726,8 @@ describe("OrdersLiveService.listLiveOrders - column filters", () => {
 
   it("RBAC is preserved: a salesperson filtering by another salesperson's id still sees nothing of theirs, and unsynced orders stay hidden", async () => {
     await inRollback(async (tx) => {
-      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.SALESPERSON } });
       const leadA = await makeLead(tx, { ownerId: repA.id, normalizedMobile: "+913333300011", mobile: "3333300011" });
       const leadB = await makeLead(tx, { ownerId: repB.id, normalizedMobile: "+913333300012", mobile: "3333300012" });
       const extA = `${Date.now()}x`;

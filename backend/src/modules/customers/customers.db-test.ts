@@ -40,12 +40,12 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 describe("Customer 360", () => {
   it("aggregates orders and payments across a customer's whole history", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const source = await tx.source.create({ data: { name: "Instagram", code: `ig-${uid()}` } });
       const lead = await tx.lead.create({
         data: {
@@ -98,9 +98,9 @@ describe("Customer 360", () => {
 
   it("respects lead-based role scoping: owner and their manager can see it, an unrelated rep cannot", async () => {
     await inRollback(async (tx) => {
-      const manager = await tx.user.create({ data: { name: "Manager", email: `m-${uid()}@example.invalid`, role: Role.MANAGER } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const manager = await tx.user.create({ data: { name: "Manager", username: `m-${uid()}`, role: Role.MANAGER } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const group = await tx.group.create({ data: { name: `Team-${uid()}`, managerId: manager.id } });
       await tx.groupMember.create({ data: { groupId: group.id, userId: rep.id, joinedAt: new Date(), isActive: true } });
 
@@ -119,8 +119,8 @@ describe("Customer 360", () => {
 
   it("builds a chronological timeline from leads, orders, calls, assignments and interested periods with no duplicates", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
 
       const lead = await tx.lead.create({
         data: { leadNumber: `L-${uid()}`, firstName: "Timeline", ownerId: rep.id, createdAt: new Date("2026-01-01T00:00:00.000Z") },
@@ -260,7 +260,7 @@ describe("Customer 360", () => {
 describe("Customer list (E6.7)", () => {
   it("derives each customer's segment and post-sale state, filters by segment, and paginates", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       // Every seeded lead shares this token in its last name, so every query below is scoped by
       // `search` to just these 4 rows - an ADMIN's otherwise-unfiltered query would scan the whole
       // live/shared database (real Shopify-synced customers included), which is both slow and makes
@@ -331,9 +331,9 @@ describe("Customer list (E6.7)", () => {
 
   it("filters by owner and search, and supports the payment/shipment post-sale filters", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const owner = await tx.user.create({ data: { name: "Rep One", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const otherOwner = await tx.user.create({ data: { name: "Rep Two", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const owner = await tx.user.create({ data: { name: "Rep One", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const otherOwner = await tx.user.create({ data: { name: "Rep Two", username: `r2-${uid()}`, role: Role.SALESPERSON } });
 
       const searchToken = `Zephyr${uid().slice(0, 8)}`;
       const owned = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: searchToken, lastName: "Owned", ownerId: owner.id, lifecycleStage: "CUSTOMER" } });
@@ -369,8 +369,8 @@ describe("Customer list (E6.7)", () => {
 
   it("respects lead-based role scoping: a salesperson only sees customers for leads they own", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id, lifecycleStage: "CUSTOMER" } });
       await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id, lifecycleStage: "CUSTOMER" } });
 
@@ -385,7 +385,7 @@ describe("Customer list (E6.7)", () => {
 describe("Next Best Action (E6.8)", () => {
   it("recommends FOLLOW_UP_PAYMENT for an order with an outstanding balance, on Customer 360, the dedicated endpoint, and the list, in agreement", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Unpaid", lastName: "Customer", lifecycleStage: "CUSTOMER" } });
       const order = await tx.order.create({
         data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.PENDING_PAYMENT, totalAmount: "1200.00" },
@@ -411,7 +411,7 @@ describe("Next Best Action (E6.8)", () => {
 
   it("recommends FOLLOW_UP_DELIVERY for an out-for-delivery shipment, and HANDLE_RETURN for a returned one", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
 
       const ofdLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "OutForDelivery" } });
       const ofdOrder = await tx.order.create({
@@ -440,7 +440,7 @@ describe("Next Best Action (E6.8)", () => {
 
   it("recommends INTERESTED_LEAD_FOLLOW_UP, RETENTION_FOLLOW_UP, REPEAT_PURCHASE_FOLLOW_UP and HIGH_VALUE_CUSTOMER_FOLLOW_UP matching each segment", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new CustomersService(tx);
 
       const hotLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Interested", workingStatus: "INTERESTED" } });
@@ -473,7 +473,7 @@ describe("Next Best Action (E6.8)", () => {
 
   it("filters the customer list by NBA action and priority", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const token = `Nba${uid().slice(0, 8)}`;
 
       const unpaidLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Unpaid", lifecycleStage: "CUSTOMER" } });
@@ -510,8 +510,8 @@ describe("Next Best Action (E6.8)", () => {
 
   it("respects lead-based role scoping and 404s consistently for an out-of-scope customer on the dedicated NBA endpoint", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const otherRep = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const otherRep = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Owned", ownerId: rep.id } });
       const otherLead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotOwned", ownerId: otherRep.id } });
 
@@ -527,7 +527,7 @@ describe("Next Best Action (E6.8)", () => {
 describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
   it("reports related-record counts without deleting anything, ahead of deactivation", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Impact", lastName: "Check", mobile: "9876500000" } });
       const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" } });
 
@@ -542,7 +542,7 @@ describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
 
   it("sets workingStatus to DEACTIVATED, audits it, and leaves orders untouched", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "ToDeactivate", workingStatus: "NEW" } });
       const order = await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: lead.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "500.00" } });
 
@@ -563,7 +563,7 @@ describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
 
   it("is idempotent - deactivating an already-deactivated customer does not error or double-audit", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "AlreadyGone", workingStatus: "DEACTIVATED" } });
 
       const svc = new CustomersService(tx);
@@ -577,8 +577,8 @@ describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
 
   it("404s for a customer outside the caller's scope, and never reveals whether it exists", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "NotYours", ownerId: rep2.id } });
 
       const svc = new CustomersService(tx);
@@ -595,7 +595,7 @@ describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
   // never in a hard-delete sense - their record/orders/history stay fully intact and directly reachable.
   it("excludes a deactivated customer from the customer list, without deleting their record", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const token = `Deact${uid().slice(0, 8)}`;
       const active = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Active" } });
       const deactivated = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Deactivated", workingStatus: "DEACTIVATED" } });

@@ -31,7 +31,7 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const NOW = new Date("2026-10-05T12:00:00.000Z");
 const EXT = "5551234567";
 const CF_CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_ENV: "sandbox", CASHFREE_CLIENT_ID: "CFID_TEST", CASHFREE_CLIENT_SECRET: "cfsk_ma_test_SECRET0123456789", PUBLIC_BACKEND_URL: "https://crm.example.com" });
@@ -60,8 +60,8 @@ const shopifyClient = (n: Node = {}, calls: { query: string }[] = []) =>
   });
 
 async function setup(tx: Db, runner: TxRunner, node: Node = {}) {
-  const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-  const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+  const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+  const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
   const created: { link_amount: number }[] = [];
   const link = (id: string, status = "ACTIVE"): CashfreeLink => ({ cfLinkId: "1", linkId: id, linkStatus: status, linkUrl: `https://pay.test/${id}`, linkAmount: null, linkAmountPaid: "0", linkExpiryTime: null });
   const api: CashfreeApi = { createLink: async (r) => { created.push({ link_amount: r.link_amount }); return link(r.link_id); }, getLink: async (id) => link(id), cancelLink: async (id) => link(id, "CANCELLED") };

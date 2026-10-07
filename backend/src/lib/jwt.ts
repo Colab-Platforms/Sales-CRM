@@ -6,7 +6,7 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 export interface JwtPayload {
   sub: string;
   role: Role;
-  email: string;
+  username: string;
 }
 
 function getSecret(): string {

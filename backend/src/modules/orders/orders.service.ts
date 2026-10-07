@@ -145,7 +145,7 @@ const DETAIL_SELECT = {
   cancelledAt: true,
   confirmedByUserId: true,
   confirmedByName: true,
-  createdBy: { select: { id: true, name: true, email: true } },
+  createdBy: { select: { id: true, name: true, username: true } },
   lead: {
     select: {
       id: true,

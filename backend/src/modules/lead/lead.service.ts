@@ -60,8 +60,8 @@ interface ImportRowError {
 
 const leadListInclude = {
   source: { select: { id: true, name: true } },
-  owner: { select: { id: true, name: true, email: true } },
-  assignedManager: { select: { id: true, name: true, email: true } },
+  owner: { select: { id: true, name: true, username: true } },
+  assignedManager: { select: { id: true, name: true, username: true } },
   group: { select: { id: true, name: true } },
   importBatch: { select: { fileName: true, uploadedBy: { select: { id: true, name: true, role: true } } } },
   // The lead's pending call back / follow up reminder (at most one - scheduling a new one replaces it),

@@ -47,6 +47,6 @@ export function useAuth() {
     login,
     logout,
     isLoggingIn: loginMutation.isPending,
-    loginError: loginMutation.error ? getErrorMessage(loginMutation.error, "Invalid email or password.") : null,
+    loginError: loginMutation.error ? getErrorMessage(loginMutation.error, "Invalid username or password.") : null,
   };
 }

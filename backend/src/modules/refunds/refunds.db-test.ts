@@ -32,9 +32,9 @@ async function inRollback(fn: (tx: Db, svc: RefundsService) => Promise<void>): P
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-type U = { id: string; email: string; role: Role };
-const as = (u: { id: string; email: string }, role: Role): U => ({ id: u.id, email: u.email, role });
-const mk = (tx: Db, name: string, role: Role) => tx.user.create({ data: { name, email: `${name.toLowerCase()}-${uid()}@example.invalid`, role }, select: { id: true, email: true } });
+type U = { id: string; username: string; role: Role };
+const as = (u: { id: string; username: string }, role: Role): U => ({ id: u.id, username: u.username, role });
+const mk = (tx: Db, name: string, role: Role) => tx.user.create({ data: { name, username: `${name.toLowerCase()}-${uid()}`, role }, select: { id: true, username: true } });
 
 interface World {
   sales: U;

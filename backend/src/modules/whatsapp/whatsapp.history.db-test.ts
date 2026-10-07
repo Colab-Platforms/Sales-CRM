@@ -28,7 +28,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -68,7 +68,7 @@ async function makeMessage(tx: Prisma.TransactionClient, overrides: Partial<Pris
 describe("listing WhatsApp message history", () => {
   it("returns newest-first, with a stable id tiebreak, and correct pagination metadata", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const base = new Date("2026-09-20T10:00:00Z");
       const m1 = await makeMessage(tx, { leadId: lead.id, createdAt: new Date(base.getTime() - 2000), body: "first" });
@@ -84,7 +84,7 @@ describe("listing WhatsApp message history", () => {
 
   it("paginates correctly across pages", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const base = Date.now();
       for (let i = 0; i < 5; i++) {
@@ -104,7 +104,7 @@ describe("listing WhatsApp message history", () => {
 
   it("filters by direction", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await makeMessage(tx, { leadId: lead.id, direction: "OUTBOUND" });
       await makeMessage(tx, { leadId: lead.id, direction: "INBOUND", status: "RECEIVED", fromNumber: "+919876543210" });
@@ -118,7 +118,7 @@ describe("listing WhatsApp message history", () => {
 
   it("filters by status", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await makeMessage(tx, { leadId: lead.id, status: "SENT" });
       await makeMessage(tx, { leadId: lead.id, status: "FAILED", failedAt: new Date(), errorMessage: "AiSensy rejected the message (HTTP 400)" });
@@ -133,7 +133,7 @@ describe("listing WhatsApp message history", () => {
 
   it("filters by provider", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await makeMessage(tx, { leadId: lead.id, provider: "AISENSY" });
       await makeMessage(tx, { leadId: lead.id, provider: "GUPSHUP" });
@@ -147,7 +147,7 @@ describe("listing WhatsApp message history", () => {
 
   it("filters by template and resolves the template's name", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { name: "order_confirmation" });
       await makeMessage(tx, { leadId: lead.id, templateId: template.id, templateName: template.name });
@@ -162,7 +162,7 @@ describe("listing WhatsApp message history", () => {
 
   it("filters by order and resolves the order number", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       await makeMessage(tx, { leadId: lead.id, orderId: order.id });
@@ -177,7 +177,7 @@ describe("listing WhatsApp message history", () => {
 
   it("searches message body with a simple contains match", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await makeMessage(tx, { leadId: lead.id, direction: "INBOUND", status: "RECEIVED", body: "Is my order shipped yet?" });
       await makeMessage(tx, { leadId: lead.id, direction: "INBOUND", status: "RECEIVED", body: "Thanks!" });
@@ -191,7 +191,7 @@ describe("listing WhatsApp message history", () => {
 
   it("returns an empty page (not an error) for a customer with no messages", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const svc = new WhatsAppService(tx);
       const result = await svc.listMessages(as(admin, Role.ADMIN), { page: 1, pageSize: 20, leadId: lead.id });
@@ -202,7 +202,7 @@ describe("listing WhatsApp message history", () => {
 
   it("shows both inbound and outbound messages for the same customer, correctly distinguished", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await makeMessage(tx, { leadId: lead.id, direction: "OUTBOUND", status: "DELIVERED", templateName: "order_update" });
       await makeMessage(tx, { leadId: lead.id, direction: "INBOUND", status: "RECEIVED", body: "Yes, please confirm." });
@@ -218,8 +218,8 @@ describe("listing WhatsApp message history", () => {
 describe("RBAC / data scope", () => {
   it("a salesperson only sees messages for their own leads", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await makeLead(tx, { ownerId: rep1.id });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
       await makeMessage(tx, { leadId: ownLead.id });
@@ -234,8 +234,8 @@ describe("RBAC / data scope", () => {
 
   it("a leadId filter for another rep's customer returns an empty page, not an error or a leak", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
       await makeMessage(tx, { leadId: otherLead.id });
       const svc = new WhatsAppService(tx);
@@ -247,8 +247,8 @@ describe("RBAC / data scope", () => {
 
   it("a manager sees their team's messages", async () => {
     await inRollback(async (tx) => {
-      const manager = await tx.user.create({ data: { name: "Manager", email: `m-${uid()}@example.invalid`, role: Role.MANAGER } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const manager = await tx.user.create({ data: { name: "Manager", username: `m-${uid()}`, role: Role.MANAGER } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const group = await tx.group.create({ data: { name: `G-${uid()}`, managerId: manager.id } });
       await tx.groupMember.create({ data: { groupId: group.id, userId: rep.id, joinedAt: new Date(), isActive: true } });
       const lead = await makeLead(tx, { ownerId: rep.id, groupId: group.id });
@@ -262,7 +262,7 @@ describe("RBAC / data scope", () => {
 
   it("an admin sees everything, including a message from an unmatched sender with no lead", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await makeMessage(tx, { leadId: lead.id });
       await makeMessage(tx, { leadId: null, direction: "INBOUND", status: "RECEIVED", fromNumber: "+910000000000" });
@@ -276,7 +276,7 @@ describe("RBAC / data scope", () => {
 
   it("a salesperson never sees an unmatched-sender message (no lead to satisfy their scope)", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const unmatched = await makeMessage(tx, { leadId: null, direction: "INBOUND", status: "RECEIVED", fromNumber: "+910000000000" });
       const svc = new WhatsAppService(tx);
 
@@ -289,7 +289,7 @@ describe("RBAC / data scope", () => {
 describe("message detail", () => {
   it("returns full detail with resolved customer/template/order/sender", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin User", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin User", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx, { name: "order_confirmation" });
@@ -314,8 +314,8 @@ describe("message detail", () => {
 
   it("404s for an out-of-scope message, the same way an out-of-scope customer would", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
       const message = await makeMessage(tx, { leadId: otherLead.id });
       const svc = new WhatsAppService(tx);
@@ -326,7 +326,7 @@ describe("message detail", () => {
 
   it("404s for a message that does not exist", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppService(tx);
       await assert.rejects(() => svc.getMessage(as(admin, Role.ADMIN), randomUUID()), (e: any) => e.statusCode === 404);
     });
@@ -340,7 +340,7 @@ describe("central WhatsApp inbox: listConversations", () => {
 
   it("returns one row per lead, carrying only that lead's latest message", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const uniqueName = `Testlead${uid().slice(0, 8)}`;
       const lead = await makeLead(tx, { firstName: uniqueName });
       const base = new Date("2026-09-20T10:00:00Z");
@@ -357,7 +357,7 @@ describe("central WhatsApp inbox: listConversations", () => {
 
   it("marks awaitingReply true only when the lead's latest message is inbound", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const suffix = uid().slice(0, 8);
       const leadWaiting = await makeLead(tx, { firstName: `Waiting${suffix}` });
       const leadAnswered = await makeLead(tx, { firstName: `Answered${suffix}` });
@@ -375,7 +375,7 @@ describe("central WhatsApp inbox: listConversations", () => {
 
   it("searches by the lead's name and mobile, not by message body", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const suffix = uid().slice(0, 8);
       const target = await makeLead(tx, { firstName: `Priyanka${suffix}`, lastName: "Rao", mobile: "9998887770", normalizedMobile: "+919998887770" });
       const other = await makeLead(tx, { firstName: `Suresh${suffix}`, lastName: "Kumar", mobile: "9998887771", normalizedMobile: "+919998887771" });
@@ -391,8 +391,8 @@ describe("central WhatsApp inbox: listConversations", () => {
 
   it("a salesperson only sees conversations for their own leads", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await makeLead(tx, { ownerId: rep1.id });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
       await makeMessage(tx, { leadId: ownLead.id });
@@ -409,7 +409,7 @@ describe("central WhatsApp inbox: listConversations", () => {
   // buildConversationWhere) - their message history stays reachable through Customer 360's own timeline.
   it("excludes a deactivated customer's conversation from the Inbox list", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const uniqueName = `DeactChat${uid().slice(0, 8)}`;
       const lead = await makeLead(tx, { firstName: uniqueName, workingStatus: "DEACTIVATED" });
       await makeMessage(tx, { leadId: lead.id });
@@ -425,7 +425,7 @@ describe("central WhatsApp inbox: listConversations", () => {
     // against already has real, pre-existing committed WhatsApp messages (from earlier real
     // end-to-end sends in this project), which an unscoped ADMIN query legitimately also sees.
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppService(tx);
       const result = await svc.listConversations(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: `no-such-lead-${uid()}` });
       assert.deepEqual(result.items, []);
@@ -437,7 +437,7 @@ describe("central WhatsApp inbox: listConversations", () => {
 describe("read-only guarantee", () => {
   it("listing and viewing messages writes no Activity row and calls no provider", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const message = await makeMessage(tx, { leadId: lead.id });
       const before = await tx.activity.count({ where: { leadId: lead.id } });

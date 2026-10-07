@@ -7,7 +7,7 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 export interface AuthUser {
   id: string;
   role: Role;
-  email: string;
+  username: string;
 }
 
 export interface AuthRequest extends Request {
@@ -23,7 +23,7 @@ export function requireAuth(req: AuthRequest, _res: Response, next: NextFunction
 
   const token = header.slice(7);
   const payload = verifyToken(token);
-  req.user = { id: payload.sub, role: payload.role, email: payload.email };
+  req.user = { id: payload.sub, role: payload.role, username: payload.username };
   next();
 }
 

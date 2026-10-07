@@ -59,7 +59,7 @@ export function NavUser({ user }: { user: CurrentUser }) {
               <DropdownMenuLabel className="font-normal">
                 <div className="flex flex-col gap-0.5 py-0.5">
                   <span className="text-sm font-semibold text-foreground">{user.name}</span>
-                  <span className="text-xs break-all text-muted-foreground">{user.email}</span>
+                  <span className="text-xs break-all text-muted-foreground">{user.username}</span>
                 </div>
               </DropdownMenuLabel>
             </DropdownMenuGroup>

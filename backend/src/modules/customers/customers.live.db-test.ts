@@ -28,7 +28,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const ENV = { SHOPIFY_STORE_DOMAIN: "demo-store.myshopify.com", SHOPIFY_ACCESS_TOKEN: "shpat_faketoken", SHOPIFY_API_VERSION: "2026-01" };
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
@@ -79,7 +79,7 @@ function fakeShopifyClient(...listResponses: unknown[]) {
 describe("CustomersLiveService.listLiveCustomers", () => {
   it("joins the CRM's own Lead row (matched by normalized mobile) onto the live Shopify page", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { firstName: "Aftab", lastName: null });
       const extId = `${Date.now()}`;
 
@@ -96,8 +96,8 @@ describe("CustomersLiveService.listLiveCustomers", () => {
 
   it("a Shopify customer with no matching CRM lead is shown to ADMIN only, flagged linkedInCrm: false", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const extId = `${Date.now()}`;
       const phone = "+919999888877";
 
@@ -118,8 +118,8 @@ describe("CustomersLiveService.listLiveCustomers", () => {
 
   it("RBAC: a salesperson only sees Shopify customers matching their own leads, never a colleague's", async () => {
     await inRollback(async (tx) => {
-      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.SALESPERSON } });
       const leadA = await makeLead(tx, { ownerId: repA.id, normalizedMobile: "+911111111111", mobile: "1111111111" });
       const leadB = await makeLead(tx, { ownerId: repB.id, normalizedMobile: "+912222222222", mobile: "2222222222" });
 
@@ -136,7 +136,7 @@ describe("CustomersLiveService.listLiveCustomers", () => {
 
   it("Shopify unreachable: reports a clear error and an empty list, never throws", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const failing = new ShopifyClient(loadShopifyConfig(ENV), { fetchImpl: (async () => { throw new Error("network down"); }) as unknown as typeof fetch });
       const result = await new CustomersLiveService(tx, () => failing).listLiveCustomers(as(admin, Role.ADMIN), { first: 25 });
       assert.equal(result.items.length, 0);
@@ -146,7 +146,7 @@ describe("CustomersLiveService.listLiveCustomers", () => {
 
   it("caches a repeated identical search - Shopify is not called again within the TTL", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { client, calls } = fakeShopifyClient(customerListBody([{ id: "gid://shopify/Customer/999", firstName: "Cache", phone: null }]));
       const svc = new CustomersLiveService(tx, () => client);
 
@@ -162,8 +162,8 @@ describe("CustomersLiveService.listLiveCustomers", () => {
 
   it("does not cache across different users (RBAC-sensitive)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const marker = `distinct-${uid()}`;
       const { client, calls } = fakeShopifyClient(customerListBody([]), customerListBody([]));
       const svc = new CustomersLiveService(tx, () => client);

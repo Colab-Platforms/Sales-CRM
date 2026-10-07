@@ -55,12 +55,12 @@ export interface ConfirmationRecord {
  */
 export async function recordConfirmation(tx: Db, orderId: string, actor: ConfirmationActor, now: Date = new Date()): Promise<ConfirmationRecord> {
   const [user, order] = await Promise.all([
-    tx.user.findUnique({ where: { id: actor.id }, select: { id: true, name: true, email: true } }),
+    tx.user.findUnique({ where: { id: actor.id }, select: { id: true, name: true, username: true } }),
     tx.order.findUnique({ where: { id: orderId }, select: { id: true, leadId: true, orderNumber: true, confirmedByUserId: true, confirmedByName: true, confirmedAt: true } }),
   ]);
   if (!user) throw new Error("The confirming user no longer exists");
   if (!order) throw new Error("Order not found");
-  const name = (user.name?.trim() || user.email.split("@")[0] || "CRM user").slice(0, 150);
+  const name = (user.name?.trim() || user.username || "CRM user").slice(0, 150);
   const base = { confirmedByUserId: user.id, confirmedByName: name, previousConfirmedByUserId: order.confirmedByUserId, previousConfirmedByName: order.confirmedByName };
   if (order.confirmedByUserId === user.id && order.confirmedAt) return { changed: false, ...base };
 

@@ -37,7 +37,7 @@ const uid = () => randomUUID();
 const TOKEN = "EAA-super-secret-access-token";
 
 async function setup(tx: Prisma.TransactionClient, opts: { conversationProvider?: WhatsAppProviderName | null; historyProvider?: WhatsAppProviderName | null; templateProvider: WhatsAppProviderName; templateStatus?: WhatsAppTemplateStatus; language?: string; providerTemplateId?: string }) {
-  const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+  const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Mahadev", lastName: "Babar", mobile: "9876543210", normalizedMobile: "+919876543210" }, select: { id: true } });
   if (opts.conversationProvider) await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: opts.conversationProvider } });
   if (opts.historyProvider) {
@@ -47,7 +47,7 @@ async function setup(tx: Prisma.TransactionClient, opts: { conversationProvider?
     data: { name: `tpl_${uid()}`, provider: opts.templateProvider, providerTemplateId: opts.providerTemplateId, language: opts.language ?? "en", body: "Hi {{customer_name}}", variables: ["customer_name"], status: opts.templateStatus ?? WhatsAppTemplateStatus.APPROVED },
     select: { id: true, name: true },
   });
-  return { user: { id: admin.id, email: admin.email, role: Role.ADMIN }, lead, template };
+  return { user: { id: admin.id, username: admin.username, role: Role.ADMIN }, lead, template };
 }
 
 /** A provider stub recording every template send it receives. */
@@ -304,8 +304,8 @@ describe("Meta template send - real MetaCloudApiProvider over a fake network", (
 describe("Meta template sync", () => {
   it("syncs templates from the Meta config when asked (making them APPROVED and sendable); the default sync still uses the legacy provider", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const user = { id: admin.id, email: admin.email, role: Role.ADMIN };
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const user = { id: admin.id, username: admin.username, role: Role.ADMIN };
       const name = `meta_tpl_${uid()}`;
       const metaProvider = recordingProvider("META", {
         listTemplates: async () => ({ supported: true, templates: [{ providerTemplateId: `mt-${uid()}`, externalId: "1", name, category: "UTILITY", language: "en_US", body: "Hi {{1}}", status: "APPROVED", quality: null }] }),

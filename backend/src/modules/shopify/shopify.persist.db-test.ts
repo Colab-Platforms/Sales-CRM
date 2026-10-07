@@ -372,7 +372,7 @@ describe("importing an order", () => {
 describe("matching Shopify customers to leads", () => {
   it("uses the lead that already carries the Shopify customer id", async () => {
     await inRollback(async (tx) => {
-      const owner = await tx.user.create({ data: { name: "Rep", email: `rep-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const owner = await tx.user.create({ data: { name: "Rep", username: `rep-${uid()}`, role: Role.SALESPERSON } });
       const customerId = uid();
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Existing", ownerId: owner.id, externalSource: "SHOPIFY", externalId: customerId } });
       const before = await tx.lead.count();
@@ -392,7 +392,7 @@ describe("matching Shopify customers to leads", () => {
 
   it("matches by phone number however it is written, keeping the lead's source, owner and name, and claiming the Shopify id", async () => {
     await inRollback(async (tx) => {
-      const owner = await tx.user.create({ data: { name: "Rep", email: `rep-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const owner = await tx.user.create({ data: { name: "Rep", username: `rep-${uid()}`, role: Role.SALESPERSON } });
       const source = await tx.source.create({ data: { name: "Google Ads", code: `GADS-${uid()}` } });
       const number = phone();
       const lead = await tx.lead.create({
@@ -589,10 +589,10 @@ describe("webhook events in the database", () => {
 describe("the E6 Orders API on imported Shopify data", () => {
   it("lists and shows a Shopify COD order, with role scoping still applied", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const other = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const other = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
+      const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
       const suffix = uid().slice(-6);
       const cod = make({ cod: true, name: `#DBAPI${suffix}` });
@@ -652,10 +652,10 @@ describe("the E6 Orders API on imported Shopify data", () => {
 
   it("shows a prepaid order as prepaid", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { mapped } = make({ name: "#TST1001" });
       await upsertOrder(tx, mapped);
-      const [row] = (await new OrdersService(tx).listOrders({ id: admin.id, email: admin.email, role: Role.ADMIN }, { page: 1, pageSize: 10, search: "TST1001" })).items;
+      const [row] = (await new OrdersService(tx).listOrders({ id: admin.id, username: admin.username, role: Role.ADMIN }, { page: 1, pageSize: 10, search: "TST1001" })).items;
       assert.equal(row.paymentMode, "PREPAID");
       assert.equal(row.paymentStatus, PaymentStatus.SUCCESS);
     });

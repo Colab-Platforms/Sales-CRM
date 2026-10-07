@@ -53,7 +53,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 function fakeProvider(overrides: Partial<WhatsAppProvider> = {}): WhatsAppProvider {
   return {
@@ -70,7 +70,7 @@ function fakeProvider(overrides: Partial<WhatsAppProvider> = {}): WhatsAppProvid
 describe("creating a local template", () => {
   it("extracts variables, defaults to DRAFT, and records WHATSAPP_TEMPLATE_CREATED with no lead", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
 
       const result = await svc.createTemplate(as(admin, Role.ADMIN), {
@@ -95,7 +95,7 @@ describe("creating a local template", () => {
 
   it("rejects a malformed body before ever writing a row", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       await assert.rejects(
         () => svc.createTemplate(as(admin, Role.ADMIN), { name: `bad_${uid()}`, provider: "AISENSY", language: "en", body: "Hi {{}}" }),
@@ -107,7 +107,7 @@ describe("creating a local template", () => {
 
   it("rejects a duplicate (provider, name, language) with 409", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const name = `dup_${uid()}`;
       await svc.createTemplate(as(admin, Role.ADMIN), { name, provider: "AISENSY", language: "en", body: "Hello" });
@@ -120,7 +120,7 @@ describe("creating a local template", () => {
 
   it("allows the same name for two different languages", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const name = `multilang_${uid()}`;
       await svc.createTemplate(as(admin, Role.ADMIN), { name, provider: "AISENSY", language: "en", body: "Hello" });
@@ -133,7 +133,7 @@ describe("creating a local template", () => {
 describe("updating a template", () => {
   it("updates body/variables and records WHATSAPP_TEMPLATE_UPDATED", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const created = await svc.createTemplate(as(admin, Role.ADMIN), { name: `t_${uid()}`, provider: "AISENSY", language: "en", body: "Hi {{a}}" });
 
@@ -145,7 +145,7 @@ describe("updating a template", () => {
 
   it("allows DRAFT -> DISABLED and records a status-changed event too", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const created = await svc.createTemplate(as(admin, Role.ADMIN), { name: `t_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
 
@@ -157,7 +157,7 @@ describe("updating a template", () => {
 
   it("404s for a template that does not exist", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       await assert.rejects(() => svc.updateTemplate(as(admin, Role.ADMIN), randomUUID(), { body: "x" }), (e: any) => e.statusCode === 404);
     });
@@ -177,8 +177,8 @@ describe("RBAC: a salesperson only sees approved templates", () => {
 
   it("ADMIN sees every status; SALESPERSON only sees APPROVED", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const seeded = await seedTemplates(tx);
       const svc = new WhatsAppTemplateService(tx);
 
@@ -201,7 +201,7 @@ describe("RBAC: a salesperson only sees approved templates", () => {
 
   it("SALESPERSON gets 404 fetching a non-approved template by id", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const seeded = await seedTemplates(tx);
       const svc = new WhatsAppTemplateService(tx);
       await assert.rejects(() => svc.getTemplate(as(rep, Role.SALESPERSON), seeded.draft.id), (e: any) => e.statusCode === 404);
@@ -212,7 +212,7 @@ describe("RBAC: a salesperson only sees approved templates", () => {
 
   it("SALESPERSON filtering by a status they cannot see gets an empty page, not an error", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       await seedTemplates(tx);
       const svc = new WhatsAppTemplateService(tx);
       const result = await svc.listTemplates(as(rep, Role.SALESPERSON), { page: 1, pageSize: 50, status: WhatsAppTemplateStatus.REJECTED });
@@ -224,7 +224,7 @@ describe("RBAC: a salesperson only sees approved templates", () => {
 describe("listing and filtering", () => {
   it("filters by search, provider, category and language", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       await svc.createTemplate(as(admin, Role.ADMIN), { name: `shipping_update_${uid()}`, provider: "AISENSY", category: "UTILITY", language: "en", body: "Shipped" });
       await svc.createTemplate(as(admin, Role.ADMIN), { name: `promo_${uid()}`, provider: "GUPSHUP", category: "MARKETING", language: "en", body: "Sale" });
@@ -244,7 +244,7 @@ describe("listing and filtering", () => {
 describe("template sync", () => {
   it("creates new templates, is idempotent on a second identical sync, and records WHATSAPP_TEMPLATE_SYNCED", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const providerTemplateId = `gs-${uid()}`;
       const template: NormalizedTemplate = { providerTemplateId, externalId: "meta-1", name: `synced_${uid()}`, category: "UTILITY", language: "en", body: "Your order {{1}} shipped", status: "APPROVED", quality: "HIGH" };
       const listTemplates = async (): Promise<TemplateSyncResult> => ({ supported: true, templates: [template] });
@@ -265,7 +265,7 @@ describe("template sync", () => {
 
   it("marks a synced row updated when the provider's content actually changed", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const providerTemplateId = `gs-${uid()}`;
       let status: NormalizedTemplate["status"] = "PENDING";
       const listTemplates = async (): Promise<TemplateSyncResult> => ({
@@ -285,7 +285,7 @@ describe("template sync", () => {
 
   it("never overwrites a real local category/quality/externalId with a blank one the provider happens to report", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const providerTemplateId = `gs-${uid()}`;
       const listTemplates = async (): Promise<TemplateSyncResult> => ({
         supported: true,
@@ -315,7 +315,7 @@ describe("template sync", () => {
 
   it("never touches a template's local components (header/footer/buttons) on sync - no provider integration returns that shape", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const providerTemplateId = `gs-${uid()}`;
       const listTemplates = async (): Promise<TemplateSyncResult> => ({ supported: true, templates: [{ providerTemplateId, externalId: null, name: "t", category: "UTILITY", language: "en", body: "Body", status: "APPROVED", quality: null }] });
       const svc = new WhatsAppTemplateService(tx, () => fakeProvider({ id: "GUPSHUP", listTemplates }));
@@ -330,7 +330,7 @@ describe("template sync", () => {
 
   it("disables (never silently leaves APPROVED) a previously-synced template the provider no longer reports at all - a real remote deletion", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const gone = `gs-gone-${uid()}`;
       const stays = `gs-stays-${uid()}`;
       let templates: NormalizedTemplate[] = [
@@ -360,7 +360,7 @@ describe("template sync", () => {
 
   it("reports unsupported cleanly for AiSensy-style providers, creating nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx, () => fakeProvider());
       // A before/after count, not an absolute 0 - real templates (AiSensy/Gupshup/Meta) already exist in the
       // (shared) database; "creating nothing" means this call adds none, not that the table is empty.
@@ -373,7 +373,7 @@ describe("template sync", () => {
 
   it("reports 503 when WhatsApp is not configured at all", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx, () => null);
       await assert.rejects(() => svc.syncTemplates(as(admin, Role.ADMIN)), (e: any) => e.statusCode === 503);
     });
@@ -383,7 +383,7 @@ describe("template sync", () => {
 describe("template events reach the Audit Trail with no lead, and stay out of a customer's own audit view", () => {
   it("shows a create+sync event for ADMIN with leadId/customer null", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const templateSvc = new WhatsAppTemplateService(tx);
       const created = await templateSvc.createTemplate(as(admin, Role.ADMIN), { name: `audit_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
 
@@ -399,8 +399,8 @@ describe("template events reach the Audit Trail with no lead, and stay out of a 
 
   it("never appears in a salesperson's lead-scoped audit list (their scope is non-empty and never matches a null lead)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const templateSvc = new WhatsAppTemplateService(tx);
       const created = await templateSvc.createTemplate(as(admin, Role.ADMIN), { name: `audit_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
 
@@ -414,7 +414,7 @@ describe("template events reach the Audit Trail with no lead, and stay out of a 
 describe("template components (header/footer/buttons)", () => {
   it("persists and round-trips a structured header/footer/buttons payload", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const components = {
         header: { type: "TEXT" as const, text: "Order update" },
@@ -435,7 +435,7 @@ describe("template components (header/footer/buttons)", () => {
 
   it("a template created before this field existed reads back with components: null", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const created = await svc.createTemplate(as(admin, Role.ADMIN), { name: `nocomp_${uid()}`, provider: "AISENSY", language: "en", body: "Plain" });
       assert.equal(created.components, null);
@@ -446,7 +446,7 @@ describe("template components (header/footer/buttons)", () => {
 describe("deleting a template (local CRM record only - no provider delete API exists anywhere)", () => {
   it("ADMIN can delete a local draft; it is gone from the list and Activity records it with no lead", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const created = await svc.createTemplate(as(admin, Role.ADMIN), { name: `del_${uid()}`, provider: "AISENSY", language: "en", body: "Bye" });
 
@@ -477,7 +477,7 @@ describe("deleting a template (local CRM record only - no provider delete API ex
 
   it("404s deleting a template that does not exist or was already deleted", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       await assert.rejects(() => svc.deleteTemplate(as(admin, Role.ADMIN), randomUUID()), (e: any) => e.statusCode === 404);
 
@@ -489,7 +489,7 @@ describe("deleting a template (local CRM record only - no provider delete API ex
 
   it("refuses to delete a template a WhatsAppCampaign still references, with a clear message - never a raw FK error", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const created = await svc.createTemplate(as(admin, Role.ADMIN), { name: `camp_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
       await tx.whatsAppCampaign.create({ data: { name: "Campaign A", templateId: created.id, filters: {}, createdById: admin.id } });
@@ -505,7 +505,7 @@ describe("deleting a template (local CRM record only - no provider delete API ex
 
   it("deleting a template used only by messages/automation configs (never a campaign) succeeds - their history survives with templateId set to null", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", mobile: "9876500000", normalizedMobile: "919876500000" }, select: { id: true } });
       const svc = new WhatsAppTemplateService(tx);
       const created = await svc.createTemplate(as(admin, Role.ADMIN), { name: `msg_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
@@ -541,7 +541,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("full lifecycle: Draft -> Submit -> Pending -> Sync -> Approved", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-1" });
       const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
@@ -571,7 +571,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("full lifecycle: Draft -> Submit -> Pending -> Sync -> Rejected, with the reason preserved", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-2" });
       const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
@@ -593,7 +593,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("submission is idempotent: calling it again while PENDING never calls Meta a second time, and returns the existing state", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-3" });
       const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
@@ -609,7 +609,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("two truly concurrent submissions of the same DRAFT template still result in exactly one real Meta create call", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const fake = fakeMetaFetch({ createStatus: "PENDING", createId: "meta-tpl-4" });
       const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => fake.provider);
@@ -622,7 +622,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("a REJECTED template CAN be resubmitted (the real Meta workflow: fix it, try again) - and an APPROVED one cannot", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       await tx.whatsAppTemplate.update({ where: { id: template.id }, data: { status: "REJECTED", providerTemplateId: "old-rejected-id" } });
 
@@ -637,7 +637,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("rejects submitting a non-META template", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const aisensy = await svc.createTemplate(as(admin, Role.ADMIN), { name: `t_${uid()}`, provider: "AISENSY", language: "en", body: "Hi" });
       await assert.rejects(() => svc.submitToMeta(as(admin, Role.ADMIN), aisensy.id), (e: any) => e.statusCode === 400 && /Meta Cloud API template/.test(e.message));
@@ -646,7 +646,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("rejects submission when a variable has no example value - never calls Meta with an incomplete payload", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const svc = new WhatsAppTemplateService(tx);
       const template = await svc.createTemplate(as(admin, Role.ADMIN), { name: `missing_ex_${uid().slice(0, 6)}`, provider: "META", language: "en_US", category: "UTILITY", body: "Hi {{name}}" });
       const fake = fakeMetaFetch({});
@@ -658,7 +658,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("exposes a clear 503 when Meta is not configured at all - never silently falls back to a local draft", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const svc = new WhatsAppTemplateService(tx, undefined, undefined, async () => null);
       await assert.rejects(() => svc.submitToMeta(as(admin, Role.ADMIN), template.id), (e: any) => e.statusCode === 503 && /not configured/.test(e.message));
@@ -669,7 +669,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
 
   it("surfaces Meta's own rejection reason for the API call itself, without leaking credentials", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const fetchImpl = (async () => new Response(JSON.stringify({ error: { message: "Invalid parameter", error_user_msg: "This template name is already in use." } }), { status: 400 })) as unknown as typeof fetch;
       const provider = new MetaCloudApiProvider(META_CREDS, { fetchImpl });
@@ -687,7 +687,7 @@ describe("submitting a Meta template for real Meta approval (fake Graph API - no
     const { default: CustomersService } = await import("../customers/customers.service.js");
     const { default: WhatsAppCampaignService } = await import("./whatsapp.campaign.service.js");
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const template = await draft(tx, admin);
       const campaignSvc = new WhatsAppCampaignService(tx, new CustomersService(tx));
 

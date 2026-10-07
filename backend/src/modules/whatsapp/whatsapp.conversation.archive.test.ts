@@ -6,8 +6,8 @@ import type { AuthUser } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import WhatsAppConversationService from "./whatsapp.conversation.service.js";
 
-const ADMIN: AuthUser = { id: "admin-1", role: Role.ADMIN, email: "admin@example.com" };
-const SALES_B: AuthUser = { id: "sales-b", role: Role.SALESPERSON, email: "b@example.com" };
+const ADMIN: AuthUser = { id: "admin-1", role: Role.ADMIN, username: "test-user" };
+const SALES_B: AuthUser = { id: "sales-b", role: Role.SALESPERSON, username: "test-user" };
 
 function fakeDb(seed: { leads?: any[]; conversations?: any[]; messages?: any[]; activities?: any[] } = {}) {
   const activities: any[] = seed.activities ?? [];

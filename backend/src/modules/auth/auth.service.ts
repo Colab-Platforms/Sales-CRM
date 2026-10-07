@@ -6,16 +6,16 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { LoginBody } from "./auth.types.js";
 
-function toPublicUser(user: { id: string; name: string; email: string; role: string; status: string }) {
-  return { id: user.id, name: user.name, email: user.email, role: user.role, status: user.status };
+function toPublicUser(user: { id: string; name: string; username: string; role: string; status: string }) {
+  return { id: user.id, name: user.name, username: user.username, role: user.role, status: user.status };
 }
 
 class AuthService {
   async login(data: LoginBody) {
-    const user = await prisma.user.findUnique({ where: { email: data.email } });
+    const user = await prisma.user.findUnique({ where: { username: data.username } });
 
     if (!user || !user.passwordHash) {
-      throw new ApiError("Invalid email or password", STATUS_CODES.UNAUTHORIZED);
+      throw new ApiError("Invalid username or password", STATUS_CODES.UNAUTHORIZED);
     }
 
     if (user.status !== UserStatus.ACTIVE) {
@@ -24,10 +24,10 @@ class AuthService {
 
     const isPasswordValid = await comparePassword(data.password, user.passwordHash);
     if (!isPasswordValid) {
-      throw new ApiError("Invalid email or password", STATUS_CODES.UNAUTHORIZED);
+      throw new ApiError("Invalid username or password", STATUS_CODES.UNAUTHORIZED);
     }
 
-    const accessToken = signToken({ sub: user.id, role: user.role, email: user.email });
+    const accessToken = signToken({ sub: user.id, role: user.role, username: user.username });
 
     await prisma.user.update({
       where: { id: user.id },
@@ -57,6 +57,7 @@ class AuthService {
     const base = {
       id: user.id,
       name: user.name,
+      username: user.username,
       email: user.email,
       phone: user.phone,
       role: user.role,
@@ -70,7 +71,7 @@ class AuthService {
         user.reportingManagerId
           ? prisma.user.findUnique({
               where: { id: user.reportingManagerId },
-              select: { id: true, name: true, email: true, phone: true },
+              select: { id: true, name: true, username: true, phone: true },
             })
           : null,
         prisma.groupMember.findMany({

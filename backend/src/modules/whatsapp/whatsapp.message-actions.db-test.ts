@@ -29,7 +29,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -52,7 +52,7 @@ function fakeFreeText(sendText: (...args: any[]) => Promise<{ id: string }>): Wh
 describe("WhatsAppMessageActionsService: star/unstar", () => {
   it("starring persists and is reflected back in listMessages/getMessage for that user", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const message = await makeMessage(tx, { leadId: lead.id });
 
@@ -71,7 +71,7 @@ describe("WhatsAppMessageActionsService: star/unstar", () => {
 
   it("unstarring clears it, and never creates a second WhatsAppMessage row", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const message = await makeMessage(tx, { leadId: lead.id });
       const actions = new WhatsAppMessageActionsService(tx);
@@ -90,8 +90,8 @@ describe("WhatsAppMessageActionsService: star/unstar", () => {
 
   it("two different CRM users starring the same message do not affect each other", async () => {
     await inRollback(async (tx) => {
-      const userA = await tx.user.create({ data: { name: "A", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const userB = await tx.user.create({ data: { name: "B", email: `b-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const userA = await tx.user.create({ data: { name: "A", username: `a-${uid()}`, role: Role.ADMIN } });
+      const userB = await tx.user.create({ data: { name: "B", username: `b-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const message = await makeMessage(tx, { leadId: lead.id });
       const actions = new WhatsAppMessageActionsService(tx);
@@ -107,7 +107,7 @@ describe("WhatsAppMessageActionsService: star/unstar", () => {
 
   it("listStarredMessages returns only this user's starred messages, newest-starred first", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const m1 = await makeMessage(tx, { leadId: lead.id, body: "first" });
       const m2 = await makeMessage(tx, { leadId: lead.id, body: "second" });
@@ -128,8 +128,8 @@ describe("WhatsAppMessageActionsService: star/unstar", () => {
 describe("WhatsAppMessageActionsService: delete for me", () => {
   it("hides the message for the deleting user only - another CRM user still sees it", async () => {
     await inRollback(async (tx) => {
-      const userA = await tx.user.create({ data: { name: "A", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const userB = await tx.user.create({ data: { name: "B", email: `b-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const userA = await tx.user.create({ data: { name: "A", username: `a-${uid()}`, role: Role.ADMIN } });
+      const userB = await tx.user.create({ data: { name: "B", username: `b-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const message = await makeMessage(tx, { leadId: lead.id });
       const actions = new WhatsAppMessageActionsService(tx);
@@ -149,7 +149,7 @@ describe("WhatsAppMessageActionsService: delete for me", () => {
 
   it("bulk delete-for-me hides every valid, in-scope message and ignores the rest silently-safe", async () => {
     await inRollback(async (tx) => {
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const myLead = await makeLead(tx, { ownerId: rep.id });
       const otherLead = await makeLead(tx);
       const m1 = await makeMessage(tx, { leadId: myLead.id });
@@ -170,7 +170,7 @@ describe("WhatsAppMessageActionsService: delete for me", () => {
 describe("WhatsAppMessageActionsService: forward", () => {
   it("forwards a text message's real body through the existing free-text send pipeline", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const source = await makeLead(tx);
       const target = await makeLead(tx, { normalizedMobile: "+919876500000", mobile: "9876500000" });
       const message = await makeMessage(tx, { leadId: source.id, body: "Your order has shipped!" });
@@ -190,7 +190,7 @@ describe("WhatsAppMessageActionsService: forward", () => {
 
   it("refuses to forward a non-text message - there is no stored media to resend", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const source = await makeLead(tx);
       const target = await makeLead(tx, { normalizedMobile: "+919876500001", mobile: "9876500001" });
       const message = await makeMessage(tx, { leadId: source.id, messageType: "MEDIA", body: null });
@@ -202,8 +202,8 @@ describe("WhatsAppMessageActionsService: forward", () => {
 
   it("RBAC: a salesperson cannot forward a message that belongs to another rep's lead", async () => {
     await inRollback(async (tx) => {
-      const repA = await tx.user.create({ data: { name: "Rep A", email: `ra-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const repB = await tx.user.create({ data: { name: "Rep B", email: `rb-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
+      const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.SALESPERSON } });
       const leadB = await makeLead(tx, { ownerId: repB.id });
       const myLead = await makeLead(tx, { ownerId: repA.id, normalizedMobile: "+919876500002", mobile: "9876500002" });
       const message = await makeMessage(tx, { leadId: leadB.id, body: "private to rep B" });
@@ -262,8 +262,8 @@ describe("WhatsAppMessageActionsService: delete for everyone (confirmed unsuppor
 
   it("'delete for me' remains fully intact and unaffected by the delete-for-everyone investigation", async () => {
     await inRollback(async (tx) => {
-      const userA = await tx.user.create({ data: { name: "A", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const userB = await tx.user.create({ data: { name: "B", email: `b-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const userA = await tx.user.create({ data: { name: "A", username: `a-${uid()}`, role: Role.ADMIN } });
+      const userB = await tx.user.create({ data: { name: "B", username: `b-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const message = await makeMessage(tx, { leadId: lead.id });
       const actions = new WhatsAppMessageActionsService(tx);

@@ -35,7 +35,7 @@ async function world(tx: Prisma.TransactionClient, o: Opts = {}) {
   // Isolation: the dev DB holds the real synced `prepaid_template`; these tests pick among the templates THEY create.
   await tx.whatsAppTemplate.updateMany({ where: { status: "APPROVED" }, data: { status: "DISABLED" } });
   const mobile = o.mobile === undefined ? "+919876543210" : o.mobile;
-  const user = await tx.user.create({ data: { name: "Tele", email: `t-${uid()}@example.invalid`, role: Role.ADMIN } });
+  const user = await tx.user.create({ data: { name: "Tele", username: `t-${uid()}`, role: Role.ADMIN } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Vishwa", mobile: mobile ? mobile.slice(3) : null, normalizedMobile: mobile }, select: { id: true } });
   if (o.conversation) await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: "META" } });
   if (o.consent) await tx.communicationPreference.create({ data: { leadId: lead.id, channel: "WHATSAPP", status: o.consent, consentAt: o.consent === "OPTED_IN" ? new Date("2026-01-01T00:00:00Z") : null, source: "earlier" } });
@@ -64,7 +64,7 @@ async function world(tx: Prisma.TransactionClient, o: Opts = {}) {
     cancelPaymentLink: async () => ({}),
   } as never;
   const svc = new OrdersService(tx as never, () => fakeShopify(), () => cashfree, notify);
-  const as = { id: user.id, email: user.email, role: Role.ADMIN };
+  const as = { id: user.id, username: user.username, role: Role.ADMIN };
   const create = (extra: Record<string, unknown> = {}) => svc.createManualOrder(as, { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "449.00" }], paymentMethod: "PAYMENT_LINK", ...extra } as never);
   const ordersFor = () => tx.order.count({ where: { leadId: lead.id } });
   const pref = () => tx.communicationPreference.findMany({ where: { leadId: lead.id, channel: "WHATSAPP" } });
@@ -335,8 +335,8 @@ describe("template options for the Create Order screen", () => {
       const w = await world(tx, { mobile: null });
       const o = await w.svc.getWhatsAppPaymentOptions(w.as, w.lead.id);
       assert.deepEqual([o.consent, o.hasWhatsAppNumber], [null, false]);
-      const sales = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      await assert.rejects(() => w.svc.getWhatsAppPaymentOptions({ id: sales.id, email: sales.email, role: Role.SALESPERSON }, w.lead.id), (e: any) => e.statusCode === 404);
+      const sales = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
+      await assert.rejects(() => w.svc.getWhatsAppPaymentOptions({ id: sales.id, username: sales.username, role: Role.SALESPERSON }, w.lead.id), (e: any) => e.statusCode === 404);
     });
   });
 });

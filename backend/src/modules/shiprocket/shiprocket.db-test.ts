@@ -38,13 +38,13 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const CONFIG = loadShiprocketConfig({ SHIPROCKET_ENABLED: "true", SHIPROCKET_EMAIL: "api@example.com", SHIPROCKET_PASSWORD: "not-real", SHIPROCKET_PICKUP_LOCATION: "Primary" });
 const DIMS = { weight: 0.5, length: 10, breadth: 10, height: 5 };
 const ADDRESS = { name: "Priya Shah", address1: "12 MG Road", city: "Pune", province: "Maharashtra", zip: "411001", country: "India", phone: "9876500000" };
 
 async function makeUser(tx: Db, role: Role = Role.MANAGER) {
-  return tx.user.create({ data: { name: "User", email: `u-${uid()}@example.invalid`, role }, select: { id: true, email: true } });
+  return tx.user.create({ data: { name: "User", username: `u-${uid()}`, role }, select: { id: true, username: true } });
 }
 
 async function makeLead(tx: Db, ownerId: string, groupId?: string) {

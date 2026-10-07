@@ -31,7 +31,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -72,7 +72,7 @@ function fakeProvider(overrides: Partial<WhatsAppProvider> = {}): WhatsAppProvid
 describe("previewing a template message", () => {
   it("resolves variables and renders the body, writing nothing to the database", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -87,7 +87,7 @@ describe("previewing a template message", () => {
 
   it("does not require the configured provider to match the template's provider", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { provider: "GUPSHUP", body: "Hi {{customer_name}}", variables: ["customer_name"] });
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -99,7 +99,7 @@ describe("previewing a template message", () => {
   for (const status of ["DRAFT", "PENDING", "REJECTED", "DISABLED"] as const) {
     it(`refuses to preview a ${status} template`, async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const lead = await makeLead(tx);
         const template = await makeTemplate(tx, { status: WhatsAppTemplateStatus[status] });
         const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -110,8 +110,8 @@ describe("previewing a template message", () => {
 
   it("404s for a customer outside the caller's scope", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep2.id });
       const template = await makeTemplate(tx);
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -123,7 +123,7 @@ describe("previewing a template message", () => {
 describe("sending a template message", () => {
   it("full happy path: resolves variables in template order, sends, persists, and audits", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -156,7 +156,7 @@ describe("sending a template message", () => {
   for (const status of ["DRAFT", "PENDING", "REJECTED", "DISABLED"] as const) {
     it(`never sends a ${status} template`, async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const lead = await makeLead(tx);
         const template = await makeTemplate(tx, { status: WhatsAppTemplateStatus[status] });
         let called = false;
@@ -171,7 +171,7 @@ describe("sending a template message", () => {
 
   it("refuses to send when the template belongs to a different provider than the one configured", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { provider: "GUPSHUP" });
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -182,7 +182,7 @@ describe("sending a template message", () => {
 
   it("reports 503 when WhatsApp is not configured, and sends nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx);
       const svc = new WhatsAppMessagingService(tx, () => null, async () => null);
@@ -193,7 +193,7 @@ describe("sending a template message", () => {
 
   it("refuses an order that belongs to a different customer", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const otherLead = await makeLead(tx);
       const otherOrder = await makeOrder(tx, otherLead.id);
@@ -206,8 +206,8 @@ describe("sending a template message", () => {
 
   it("404s for a customer outside the caller's scope - never reveals whether the customer exists", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep2.id });
       const template = await makeTemplate(tx);
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -217,8 +217,8 @@ describe("sending a template message", () => {
 
   it("lets a manager send to their team member's customer", async () => {
     await inRollback(async (tx) => {
-      const manager = await tx.user.create({ data: { name: "Manager", email: `m-${uid()}@example.invalid`, role: Role.MANAGER } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const manager = await tx.user.create({ data: { name: "Manager", username: `m-${uid()}`, role: Role.MANAGER } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const group = await tx.group.create({ data: { name: `G-${uid()}`, managerId: manager.id } });
       await tx.groupMember.create({ data: { groupId: group.id, userId: rep.id, joinedAt: new Date(), isActive: true } });
       const lead = await makeLead(tx, { ownerId: rep.id, groupId: group.id });
@@ -231,7 +231,7 @@ describe("sending a template message", () => {
 
   it("fails validation on a missing variable and persists nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx); // needs order_number, no order given
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -242,7 +242,7 @@ describe("sending a template message", () => {
 
   it("persists a FAILED message (never DELIVERED/SENT) when the provider rejects the request, and audits it", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider({ sendTemplateMessage: async () => { throw new WhatsAppSendError("AiSensy rejected the message (HTTP 400)"); } }));
@@ -262,7 +262,7 @@ describe("sending a template message", () => {
 
   it("does not create a duplicate message for the same customer/template/order within the guard window", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const template = await makeTemplate(tx);
@@ -280,7 +280,7 @@ describe("sending a template message", () => {
 
   it("a resend to a different order is not blocked by the duplicate guard", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order1 = await makeOrder(tx, lead.id);
       const order2 = await makeOrder(tx, lead.id);
@@ -296,7 +296,7 @@ describe("sending a template message", () => {
 
   it("recovers cleanly if two sends race to the same provider message id", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
       // Simulate the other half of the race: a row already exists under the provider message id
@@ -316,7 +316,7 @@ describe("sending a template message", () => {
 describe("optional media on a template send (AiSensy's documented media: {url, filename})", () => {
   it("passes media through to the provider exactly as given, and records it in the message body", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
       let capturedMedia: { url: string; filename?: string } | undefined;
@@ -343,7 +343,7 @@ describe("optional media on a template send (AiSensy's documented media: {url, f
 
   it("omits media entirely from the provider call when none is given - existing template sends are unchanged", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
       let capturedInput: { media?: unknown } | undefined;
@@ -363,7 +363,7 @@ describe("optional media on a template send (AiSensy's documented media: {url, f
 
   it("rejects a non-https/local media URL before ever calling the provider, and persists nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
       let providerCalled = false;
@@ -380,7 +380,7 @@ describe("optional media on a template send (AiSensy's documented media: {url, f
 
   it("still applies the normal template-status/scope rules when media is attached - media is not a bypass", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { status: WhatsAppTemplateStatus.DRAFT });
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -409,7 +409,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
 
   it("is refused end-to-end now that AiSensy is disabled for user sends, even with a valid APPROVED AiSensy template and a configured Meta provider - the provider never sees the request", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id, { totalAmount: "1200.00" });
       await makeOrderConfirmationTemplate(tx);
@@ -432,7 +432,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
 
   it('reports a clear, actionable 404 when no "crm_order_confirmation" template exists yet', async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
@@ -447,7 +447,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
   for (const status of ["DRAFT", "PENDING", "REJECTED", "DISABLED"] as const) {
     it(`refuses to send while the template is ${status}, and never calls the provider`, async () => {
       await inRollback(async (tx) => {
-        const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+        const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
         const lead = await makeLead(tx);
         const order = await makeOrder(tx, lead.id);
         await makeOrderConfirmationTemplate(tx, { status: WhatsAppTemplateStatus[status] });
@@ -461,7 +461,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
 
   it("fails safely, before calling the provider, when the customer has no phone number on file", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { normalizedMobile: null });
       const order = await makeOrder(tx, lead.id);
       await makeOrderConfirmationTemplate(tx);
@@ -474,8 +474,8 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
 
   it("404s for an order outside the caller's lead scope - never reveals whether it exists", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: rep2.id });
       const order = await makeOrder(tx, lead.id);
       await makeOrderConfirmationTemplate(tx);
@@ -490,7 +490,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
 
   it("reports 503 when WhatsApp is not configured, and sends nothing", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await makeOrder(tx, lead.id);
       await makeOrderConfirmationTemplate(tx);
@@ -504,7 +504,7 @@ describe("sendOrderConfirmationTest (safe, manual test path for the AiSensy orde
 describe("Customer 360 timeline shows a template send with provider and sender", () => {
   it("includes the template name, provider, and the sending user as actor", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin User", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin User", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeTemplate(tx, { name: "order_confirmation", body: "Hi {{customer_name}}", variables: ["customer_name"] });
       const messaging = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());

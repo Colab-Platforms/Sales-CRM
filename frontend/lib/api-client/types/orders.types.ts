@@ -434,7 +434,7 @@ export interface OrderDetail {
     email: string | null;
   };
   leadSource: { id: string; name: string } | null;
-  bookedBy: { id: string; name: string; email: string } | null;
+  bookedBy: { id: string; name: string; username: string } | null;
   leadOwner: { id: string; name: string } | null;
   items: OrderItemDetail[];
   payments: PaymentDetail[];

@@ -125,12 +125,12 @@ describe("resolve + validation (the server decides the discount)", () => {
 
 describe("Create Order: default, edit, Fastrr coupon, custom, persistence, tamper-proofing", () => {
   async function setup(tx: Prisma.TransactionClient) {
-    const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+    const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
     const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", mobile: "9000000123", normalizedMobile: "+919000000123" }, select: { id: true } });
     const product = await tx.product.create({ data: { name: "Herbal Tea", type: ProductType.PRODUCT, sku: `SKU-${uid()}`, basePrice: "499.00" }, select: { id: true } });
     setDefaultOffersSource(stub());
     const svc = new OrdersService(tx as never, () => fakeShopify(), undefined, fakeNotify);
-    const create = (extra: Record<string, unknown>) => svc.createManualOrder({ id: admin.id, email: admin.email, role: Role.ADMIN }, { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "499.00" }], paymentMethod: "COD", ...extra } as never);
+    const create = (extra: Record<string, unknown>) => svc.createManualOrder({ id: admin.id, username: admin.username, role: Role.ADMIN }, { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "499.00" }], paymentMethod: "COD", ...extra } as never);
     return { create };
   }
   const meta = async (tx: Prisma.TransactionClient, orderId: string) => ((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true } })).metadata as any).discount;

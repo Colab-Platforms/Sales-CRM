@@ -27,7 +27,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -77,7 +77,7 @@ function makeServices(tx: Prisma.TransactionClient, provider: WhatsAppProvider =
 describe("Bulk/selected-chat sending: classification (Part 5 safety states)", () => {
   it("classifies READY once a manual value is supplied for the one variable with no CRM source", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeWebinarTemplate(tx);
       const { bulk } = makeServices(tx);
@@ -91,7 +91,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 
   it("classifies MISSING_VARIABLE, naming the variable, when no manual value is supplied", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeWebinarTemplate(tx);
       const { bulk } = makeServices(tx);
@@ -104,7 +104,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 
   it("classifies OPTED_OUT and never lets that recipient reach READY, even with a manual value", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       await tx.communicationPreference.create({ data: { leadId: lead.id, channel: "WHATSAPP", status: "OPTED_OUT" } });
       const template = await makeWebinarTemplate(tx);
@@ -118,7 +118,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 
   it("classifies INVALID_PHONE for a customer with no mobile number on file", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { mobile: null, normalizedMobile: null });
       const template = await makeWebinarTemplate(tx);
       const { bulk } = makeServices(tx);
@@ -130,7 +130,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 
   it("classifies every recipient TEMPLATE_NOT_SENDABLE when the template is not APPROVED, without touching provider/variable checks", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead1 = await makeLead(tx);
       const lead2 = await makeLead(tx);
       const template = await makeWebinarTemplate(tx, { status: WhatsAppTemplateStatus.PENDING });
@@ -144,7 +144,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 
   it("mixes multiple selected chats with different outcomes in one review, with an accurate summary count", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const ready = await makeLead(tx);
       const optedOut = await makeLead(tx);
       await tx.communicationPreference.create({ data: { leadId: optedOut.id, channel: "WHATSAPP", status: "OPTED_OUT" } });
@@ -167,8 +167,8 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 
   it("404-equivalent: a lead outside the caller's scope is still reported, never silently dropped", async () => {
     await inRollback(async (tx) => {
-      const rep1 = await tx.user.create({ data: { name: "Rep1", email: `r1-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const rep2 = await tx.user.create({ data: { name: "Rep2", email: `r2-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
+      const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const notMine = await makeLead(tx, { ownerId: rep2.id });
       const template = await makeWebinarTemplate(tx);
       const { bulk } = makeServices(tx);
@@ -184,7 +184,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
   // checked before opt-out/phone/template so the reason is always specific.
   it("classifies a deactivated customer as CUSTOMER_DEACTIVATED, never READY, even with every other condition satisfied", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx, { workingStatus: "DEACTIVATED" });
       const template = await makeWebinarTemplate(tx);
       const { bulk } = makeServices(tx);
@@ -199,7 +199,7 @@ describe("Bulk/selected-chat sending: classification (Part 5 safety states)", ()
 describe("Bulk/selected-chat sending: send (Parts 3-4)", () => {
   it("sends only to READY recipients via the real per-message send path, and reports per-recipient outcomes", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const ready1 = await makeLead(tx);
       const ready2 = await makeLead(tx);
       const optedOut = await makeLead(tx);
@@ -227,7 +227,7 @@ describe("Bulk/selected-chat sending: send (Parts 3-4)", () => {
 
   it("never sends to an opted-out contact even if it were somehow re-attempted", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const optedOut = await makeLead(tx);
       await tx.communicationPreference.create({ data: { leadId: optedOut.id, channel: "WHATSAPP", status: "OPTED_OUT" } });
       const template = await makeWebinarTemplate(tx);
@@ -242,7 +242,7 @@ describe("Bulk/selected-chat sending: send (Parts 3-4)", () => {
 
   it("persists a per-recipient FAILED outcome (never a silent skip) when the provider rejects one send", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeWebinarTemplate(tx);
       const rejecting = fakeProvider({
@@ -262,7 +262,7 @@ describe("Bulk/selected-chat sending: send (Parts 3-4)", () => {
 
   it("never attempts a send for a TEMPLATE_NOT_SENDABLE template, for any recipient", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const template = await makeWebinarTemplate(tx, { status: WhatsAppTemplateStatus.DRAFT });
       const { bulk } = makeServices(tx);

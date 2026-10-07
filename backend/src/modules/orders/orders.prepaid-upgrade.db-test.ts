@@ -26,13 +26,13 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const NOW = new Date("2026-09-25T12:00:00.000Z");
 const CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_ENV: "sandbox", CASHFREE_CLIENT_ID: "CFID_TEST", CASHFREE_CLIENT_SECRET: "cfsk_ma_test_SECRET0123456789", PUBLIC_BACKEND_URL: "https://crm.example.com" });
 
 async function setup(tx: Db, runner: TxRunner, opts: { total?: string; method?: "COD" | "UPI"; status?: string; shopify?: boolean; metadataOnlyCod?: boolean; codPaid?: boolean } = {}) {
   const total = opts.total ?? "1249.00";
-  const tele = await tx.user.create({ data: { name: "Tele Caller", email: `t-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+  const tele = await tx.user.create({ data: { name: "Tele Caller", username: `t-${uid()}`, role: Role.SALESPERSON } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", lastName: "Shah", mobile: "9000000123", normalizedMobile: "+919000000123", email: "p@zz.invalid", ownerId: tele.id }, select: { id: true } });
   const method = opts.method ?? "COD";
   const order = await tx.order.create({
@@ -264,12 +264,12 @@ describe("permissions", () => {
   it("a salesperson cannot touch another salesperson's order (404, nothing changed); an admin can", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner);
-      const stranger = await tx.user.create({ data: { name: "Other", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const stranger = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const s = as(stranger, Role.SALESPERSON);
       await assert.rejects(() => t.svc.getUpgrade(s, t.order.id), (e: any) => e.statusCode === 404);
       await assert.rejects(() => t.svc.createOffer(s, t.order.id, { discountType: "FIXED", discountValue: "100" }), (e: any) => e.statusCode === 404);
       assert.equal((await t.svc.getUpgrade(t.user, t.order.id)).offer, null);
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const r = await t.svc.createOffer(as(admin, Role.ADMIN), t.order.id, { discountType: "FIXED", discountValue: "100" });
       assert.equal(r.offer!.status, "OFFERED");
     });

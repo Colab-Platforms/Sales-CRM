@@ -64,7 +64,7 @@ function fakeShopify(orders: FakeOrder[], opts: { popularTags?: string[]; failTa
 }
 
 async function world(tx: Prisma.TransactionClient, orders: FakeOrder[], fakeOpts: Parameters<typeof fakeShopify>[1] = {}) {
-  const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+  const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", mobile: "9000000555", normalizedMobile: "+919000000555" }, select: { id: true } });
   const shop = fakeShopify(orders, fakeOpts);
   const svc = new OrdersLiveService(tx as never, () => shop.client);
@@ -74,7 +74,7 @@ async function world(tx: Prisma.TransactionClient, orders: FakeOrder[], fakeOpts
   const list = async (q: Record<string, string>) => {
     const parsed = validateLiveOrdersQuery({ first: "25", ...q });
     assert.ifError(parsed.error);
-    return svc.listLiveOrders({ id: admin.id, email: admin.email, role: Role.ADMIN }, { ...parsed.value!, after: parsed.value!.after });
+    return svc.listLiveOrders({ id: admin.id, username: admin.username, role: Role.ADMIN }, { ...parsed.value!, after: parsed.value!.after });
   };
   return { svc, shop, link, list, admin };
 }

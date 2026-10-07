@@ -1,8 +1,8 @@
 export interface CreateManagerBody {
   name: string;
-  email: string;
+  username: string;
   password: string;
-  phone?: string;
+  phone: string;
 }
 
 export interface UpdateManagerBody {
@@ -13,9 +13,9 @@ export interface UpdateManagerBody {
 
 export interface CreateSalespersonBody {
   name: string;
-  email: string;
+  username: string;
   password: string;
-  phone?: string;
+  phone: string;
   reportingManagerId: string;
 }
 

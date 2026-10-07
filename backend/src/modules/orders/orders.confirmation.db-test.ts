@@ -52,13 +52,13 @@ function shopify(initialTags: string[] = []) {
 }
 
 async function world(tx: Prisma.TransactionClient, shop = shopify()) {
-  const vini = await tx.user.create({ data: { name: "Vini", email: `vini-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-  const rahul = await tx.user.create({ data: { name: "Rahul", email: `rahul-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+  const vini = await tx.user.create({ data: { name: "Vini", username: `vini-${uid()}`, role: Role.SALESPERSON } });
+  const rahul = await tx.user.create({ data: { name: "Rahul", username: `rahul-${uid()}`, role: Role.SALESPERSON } });
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", mobile: "9000000777", normalizedMobile: "+919000000777", ownerId: vini.id }, select: { id: true } });
   const product = await tx.product.create({ data: { name: "Sleep Gummies", type: ProductType.PRODUCT, sku: `SKU-${uid()}`, basePrice: "499.00" }, select: { id: true } });
   const svc = new OrdersService(tx as never, () => shop.client, undefined, fakeNotify);
-  const as = (u: { id: string; email: string }) => ({ id: u.id, email: u.email, role: Role.SALESPERSON });
-  const create = (u: { id: string; email: string }, extra: Record<string, unknown> = {}) => svc.createManualOrder(as(u), { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "499.00" }], paymentMethod: "COD", ...extra } as never);
+  const as = (u: { id: string; username: string }) => ({ id: u.id, username: u.username, role: Role.SALESPERSON });
+  const create = (u: { id: string; username: string }, extra: Record<string, unknown> = {}) => svc.createManualOrder(as(u), { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "499.00" }], paymentMethod: "COD", ...extra } as never);
   const row = (orderId: string) => tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { status: true, confirmedAt: true, confirmedByUserId: true, confirmedByName: true, externalId: true, metadata: true } });
   const tagState = async (orderId: string) => (((await row(orderId)).metadata ?? {}) as any).shopifyConfirmationTag;
   return { vini, rahul, lead, svc, as, create, row, tagState, shop, tx };
@@ -136,7 +136,7 @@ describe("Shopify tags: preserved, idempotent, replaceable", () => {
       const result = await syncConfirmationTag(tx as never, r.order.id, { getShopifyClient: () => w.shop.client });
       assert.deepEqual([result.status, result.tag], ["synced", "CRM Confirmed by Rahul"]);
       assert.deepEqual(w.shop.state.tags, ["VIP", "CRM Confirmed by Rahul"]);
-      const detail = await w.svc.getOrder({ id: w.rahul.id, email: w.rahul.email, role: Role.ADMIN }, r.order.id);
+      const detail = await w.svc.getOrder({ id: w.rahul.id, username: w.rahul.username, role: Role.ADMIN }, r.order.id);
       assert.deepEqual([detail.confirmedBy?.name, detail.confirmationTag], ["Rahul", "CRM Confirmed by Rahul"]);
       const history = await tx.activity.findMany({ where: { orderId: r.order.id, type: "ORDER_CONFIRMED" }, orderBy: { createdAt: "asc" } });
       assert.equal(history.length, 2);

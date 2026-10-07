@@ -28,7 +28,7 @@ const APPROVED_BODY = "Hi {{customer_name}},\n\nYour order {{order_number}} has 
 const NOW = new Date();
 
 async function world(tx: Prisma.TransactionClient, o: { orderTotal: string; linkAmount: string; inboundHoursAgo?: number | null; url?: string; conversation?: boolean; consent?: "OPTED_IN" | "OPTED_OUT" | "UNKNOWN" | null; mobile?: string | null }) {
-  const user = await tx.user.create({ data: { name: "Tele", email: `t-${uid()}@example.invalid`, role: Role.ADMIN } });
+  const user = await tx.user.create({ data: { name: "Tele", username: `t-${uid()}`, role: Role.ADMIN } });
   const mobile = o.mobile === undefined ? "+919876543210" : o.mobile;
   const lead = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Vishwa", mobile: mobile ? mobile.slice(3) : null, normalizedMobile: mobile }, select: { id: true } });
   if (o.conversation !== false) await tx.whatsAppConversation.create({ data: { leadId: lead.id, provider: "META" } });
@@ -49,7 +49,7 @@ async function world(tx: Prisma.TransactionClient, o: { orderTotal: string; link
   const fetchImpl = (async (_u: string, init: any) => { requests.push(JSON.parse(init.body)); return new Response(JSON.stringify({ messages: [{ id: "wamid.T1" }] }), { status: 200 }); }) as unknown as typeof fetch;
   const meta = new MetaCloudApiProvider(creds, { fetchImpl });
   const deps = { messaging: new WhatsAppMessagingService(tx, () => null, async () => meta), freeText: new WhatsAppFreeTextService(tx, async () => meta, () => NOW) };
-  const send = () => notifyPaymentLink(tx, { id: user.id, email: user.email, role: Role.ADMIN }, { leadId: lead.id, orderId: order.id, normalizedMobile: mobile, orderNumber: order.orderNumber, paymentUrl: url, amount: o.linkAmount, currency: "INR", customerName: "Vishwa" }, deps);
+  const send = () => notifyPaymentLink(tx, { id: user.id, username: user.username, role: Role.ADMIN }, { leadId: lead.id, orderId: order.id, normalizedMobile: mobile, orderNumber: order.orderNumber, paymentUrl: url, amount: o.linkAmount, currency: "INR", customerName: "Vishwa" }, deps);
   return { send, requests, template, order, url, lead };
 }
 
@@ -204,7 +204,7 @@ describe("first contact: a customer who has never messaged the business", () => 
       const w = await world(tx, { ...first, consent: "OPTED_IN" });
       const leaky = (async () => new Response(JSON.stringify({ error: { message: `Invalid OAuth access token ${creds.accessToken}`, code: 190 } }), { status: 401 })) as unknown as typeof fetch;
       const meta = new MetaCloudApiProvider(creds, { fetchImpl: leaky });
-      const result = await notifyPaymentLink(tx, { id: (await tx.user.findFirstOrThrow({ select: { id: true } })).id, email: "x@example.invalid", role: Role.ADMIN }, { leadId: w.lead.id, orderId: w.order.id, normalizedMobile: "+919876543210", orderNumber: w.order.orderNumber, paymentUrl: w.url, amount: "449.00", currency: "INR", customerName: "Vishwa" }, { messaging: new WhatsAppMessagingService(tx, () => null, async () => meta), freeText: new WhatsAppFreeTextService(tx, async () => meta, () => NOW) });
+      const result = await notifyPaymentLink(tx, { id: (await tx.user.findFirstOrThrow({ select: { id: true } })).id, username: "test-user", role: Role.ADMIN }, { leadId: w.lead.id, orderId: w.order.id, normalizedMobile: "+919876543210", orderNumber: w.order.orderNumber, paymentUrl: w.url, amount: "449.00", currency: "INR", customerName: "Vishwa" }, { messaging: new WhatsAppMessagingService(tx, () => null, async () => meta), freeText: new WhatsAppFreeTextService(tx, async () => meta, () => NOW) });
       const rows = await tx.whatsAppMessage.findMany({ where: { orderId: w.order.id }, select: { errorMessage: true, body: true } });
       const acts = await tx.activity.findMany({ where: { leadId: w.lead.id }, select: { description: true, title: true } });
       assert.equal(result.sent, false);

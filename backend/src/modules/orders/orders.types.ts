@@ -263,7 +263,7 @@ export interface OrderDetail {
   };
   leadSource: { id: string; name: string } | null;
   // Salesperson who booked the order (null for website/API orders).
-  bookedBy: { id: string; name: string; email: string } | null;
+  bookedBy: { id: string; name: string; username: string } | null;
   // Current owner of the original lead.
   leadOwner: { id: string; name: string } | null;
   items: OrderItemDetail[];

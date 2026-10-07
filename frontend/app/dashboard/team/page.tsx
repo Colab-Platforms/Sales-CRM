@@ -172,14 +172,14 @@ function EditGroupForm({ group, onDone }: { group: Group; onDone: () => void }) 
 function AddSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () => void }) {
   const addSalesperson = useAddSalespersonMutation();
   const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [phone, setPhone] = useState("");
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     addSalesperson.mutate(
-      { groupId, payload: { name, email, password, phone: phone || undefined } },
+      { groupId, payload: { name, username, password, phone } },
       { onSuccess: onDone },
     );
   }
@@ -191,12 +191,12 @@ function AddSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () =
         <Input id={`sp-name-${groupId}`} value={name} onChange={(e) => setName(e.target.value)} required />
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor={`sp-email-${groupId}`}>Email</Label>
+        <Label htmlFor={`sp-username-${groupId}`}>Username</Label>
         <Input
-          id={`sp-email-${groupId}`}
-          type="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          id={`sp-username-${groupId}`}
+          type="text"
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
           required
         />
       </div>
@@ -210,8 +210,8 @@ function AddSalespersonForm({ groupId, onDone }: { groupId: string; onDone: () =
         />
       </div>
       <div className="space-y-1.5">
-        <Label htmlFor={`sp-phone-${groupId}`}>Phone (optional)</Label>
-        <Input id={`sp-phone-${groupId}`} value={phone} onChange={(e) => setPhone(e.target.value)} />
+        <Label htmlFor={`sp-phone-${groupId}`}>Phone</Label>
+        <Input id={`sp-phone-${groupId}`} required value={phone} onChange={(e) => setPhone(e.target.value)} />
       </div>
       {addSalesperson.error ? (
         <p className="text-sm text-destructive sm:col-span-2 lg:col-span-4">
@@ -273,7 +273,7 @@ function AddExistingSalespersonForm({
           </option>
           {options.map((sp) => (
             <option key={sp.id} value={sp.id}>
-              {sp.name} ({sp.email}){sp.currentGroup ? ` — currently in ${sp.currentGroup.name}` : ""}
+              {sp.name} ({sp.username}){sp.currentGroup ? ` — currently in ${sp.currentGroup.name}` : ""}
             </option>
           ))}
         </NativeSelect>
@@ -452,7 +452,7 @@ function MemberRow({ groupId, member }: { groupId: string; member: GroupMember }
       <TableRow>
         <TableCell>
           <div className="font-medium">{member.user.name}</div>
-          <div className="text-xs text-muted-foreground">{member.user.email}</div>
+          <div className="text-xs text-muted-foreground">{member.user.username}</div>
         </TableCell>
         <TableCell>{member.user.phone ?? "—"}</TableCell>
         <TableCell>

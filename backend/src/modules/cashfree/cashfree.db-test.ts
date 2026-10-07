@@ -43,11 +43,11 @@ async function inRollback(fn: (tx: Db, runner: TxRunner) => Promise<void>): Prom
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 const CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_CLIENT_ID: "TEST_APP", CASHFREE_CLIENT_SECRET: "test-secret", PUBLIC_BACKEND_URL: "https://crm.example.com" });
 
 async function makeRep(tx: Db, role: Role = Role.SALESPERSON) {
-  return tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role }, select: { id: true, email: true } });
+  return tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role }, select: { id: true, username: true } });
 }
 
 async function makeLead(tx: Db, ownerId: string, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {

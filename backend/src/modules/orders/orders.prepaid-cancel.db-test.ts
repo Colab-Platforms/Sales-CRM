@@ -31,7 +31,7 @@ async function inRollback(fn: (tx: Prisma.TransactionClient) => Promise<void>): 
 after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
-const as = (u: { id: string; email: string }, role: Role) => ({ id: u.id, email: u.email, role });
+const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
   return tx.lead.create({
@@ -85,7 +85,7 @@ const orderInput = (leadId: string, productId: string, paymentMethod: "COD" | "P
 describe("createManualOrder - PAYMENT_LINK (prepaid)", () => {
   it("creates the order with NO generic payment row, creates exactly one Cashfree link, and sends it over WhatsApp", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const cashfree = fakeCashfree();
@@ -111,7 +111,7 @@ describe("createManualOrder - PAYMENT_LINK (prepaid)", () => {
 
   it("a Cashfree failure does not fail order creation, and is reported honestly (never a fake success)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const failingCashfree: Pick<CashfreePaymentsService, "createPaymentLink" | "cancelPaymentLink"> = { createPaymentLink: async () => { throw new ApiError("Cashfree is not configured", 503); }, cancelPaymentLink: async () => { throw new ApiError("Cashfree is not configured", 503); } };
@@ -130,7 +130,7 @@ describe("createManualOrder - PAYMENT_LINK (prepaid)", () => {
 
   it("a repeated createPaymentLink call for the same order (Cashfree's own idempotency) is reused, never a second row", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const cashfree = fakeCashfree({ reused: true });
@@ -145,7 +145,7 @@ describe("createManualOrder - PAYMENT_LINK (prepaid)", () => {
 describe("createManualOrder - COD sends the existing order confirmation", () => {
   it("calls the confirmation notifier (not the payment-link one) with the real order number/amount", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const confirmation = fakeNotify({ sent: true, via: "TEMPLATE", provider: "AISENSY" });
@@ -167,7 +167,7 @@ describe("createManualOrder - COD sends the existing order confirmation", () => 
 
   it("a WhatsApp send failure does not fail order creation", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const product = await makeProduct(tx);
       const throwing = { confirmation: async () => { throw new Error("boom"); }, paymentLink: fakeNotify().fn };
@@ -182,7 +182,7 @@ describe("createManualOrder - COD sends the existing order confirmation", () => 
 });
 
 describe("cancelOrder", () => {
-  async function makeConfirmedOrder(tx: Prisma.TransactionClient, admin: { id: string; email: string }, overrides: Partial<Prisma.OrderUncheckedCreateInput> = {}) {
+  async function makeConfirmedOrder(tx: Prisma.TransactionClient, admin: { id: string; username: string }, overrides: Partial<Prisma.OrderUncheckedCreateInput> = {}) {
     const lead = await makeLead(tx);
     const order = await tx.order.create({
       data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: admin.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "699.00", confirmedAt: new Date(), ...overrides },
@@ -193,7 +193,7 @@ describe("cancelOrder", () => {
 
   it("cancels a CONFIRMED order, attempts the linked Shopify order, records ORDER_CANCELLED once, and preserves the payment record", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeConfirmedOrder(tx, admin, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/1" });
       await tx.payment.create({ data: { orderId: order.id, amount: "699.00", status: "SUCCESS", method: "UPI", paidAt: new Date() } });
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -217,7 +217,7 @@ describe("cancelOrder", () => {
 
   it("is idempotent: cancelling an already-cancelled order (Shopify already cancelled) makes no further changes and returns a clear message", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeConfirmedOrder(tx, admin);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
       await svc.cancelOrder(as(admin, Role.ADMIN), order.id, {});
@@ -235,7 +235,7 @@ describe("cancelOrder", () => {
 
   it("keeps the Shopify half retryable: a failed Shopify cancel can be retried without re-cancelling the CRM order or duplicating the Activity", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeConfirmedOrder(tx, admin, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/1" });
 
       const failingClient = fakeShopifyClient(async () => { throw Object.assign(new Error("Shopify rejected the mutation"), {}); });
@@ -254,7 +254,7 @@ describe("cancelOrder", () => {
 
   it("regression (found by real-UI double click): two CONCURRENT cancels record exactly one ORDER_CANCELLED and one Shopify attempt", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeConfirmedOrder(tx, admin, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/77" });
       let shopifyCalls = 0;
       const client = fakeShopifyClient(async () => { shopifyCalls += 1; return { orderCancel: { job: { id: "1", done: true }, orderCancelUserErrors: [] } }; });
@@ -270,7 +270,7 @@ describe("cancelOrder", () => {
 
   it("an order never pushed to Shopify reports not_linked, not a false failure", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeConfirmedOrder(tx, admin);
       const result = await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(admin, Role.ADMIN), order.id, {});
       assert.equal(result.shopify.status, "not_linked");
@@ -279,8 +279,8 @@ describe("cancelOrder", () => {
 
   it("a salesperson cannot cancel another salesperson's order (RBAC, 404, not corrupted)", async () => {
     await inRollback(async (tx) => {
-      const owner = await tx.user.create({ data: { name: "Owner", email: `o-${uid()}@example.invalid`, role: Role.SALESPERSON } });
-      const stranger = await tx.user.create({ data: { name: "Stranger", email: `s-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const owner = await tx.user.create({ data: { name: "Owner", username: `o-${uid()}`, role: Role.SALESPERSON } });
+      const stranger = await tx.user.create({ data: { name: "Stranger", username: `s-${uid()}`, role: Role.SALESPERSON } });
       const lead = await makeLead(tx, { ownerId: owner.id });
       const order = await tx.order.create({ data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: owner.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "699.00" }, select: { id: true } });
 
@@ -314,7 +314,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("COD order: no Cashfree call at all, paymentLink is 'none'", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const lead = await makeLead(tx);
       const order = await tx.order.create({ data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: admin.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "699.00" }, select: { id: true } });
       await tx.payment.create({ data: { orderId: order.id, amount: "699.00", method: "COD", status: "PENDING" } });
@@ -327,7 +327,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("prepaid + pending link: Cashfree cancellation is called exactly once and the result/state record it", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order, payment } = await prepaidOrder(tx, admin, { paymentStatus: "PENDING" });
       const cf = fakeCashfree({}, { tx });
       const result = await new OrdersService(tx, () => fakeShopifyClient(), () => cf.api).cancelOrder(as(admin, Role.ADMIN), order.id, { reason: "mistake" });
@@ -345,7 +345,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("a Cashfree failure never undoes the CRM cancellation, and is reported honestly", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order, payment } = await prepaidOrder(tx, admin, { paymentStatus: "PENDING" });
       const cf = fakeCashfree({}, { tx });
       cf.state.fail = true;
@@ -362,7 +362,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("retry after a Cashfree failure works, calls Cashfree only for the outstanding link, and does not touch Shopify or the audit trail again", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await prepaidOrder(tx, admin, { paymentStatus: "PENDING", shopify: true });
       const cf = fakeCashfree({}, { tx });
       const shop = countingShopify();
@@ -385,7 +385,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("prepaid + SUCCESS payment: no link cancellation is attempted, the payment stays SUCCESS, no refund is created", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order, payment } = await prepaidOrder(tx, admin, { paymentStatus: "SUCCESS" });
       const cf = fakeCashfree({}, { tx });
       const result = await new OrdersService(tx, () => fakeShopifyClient(), () => cf.api).cancelOrder(as(admin, Role.ADMIN), order.id, {});
@@ -401,7 +401,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("concurrent cancels (double click): one Cashfree cancellation, one Shopify cancellation, one ORDER_CANCELLED", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await prepaidOrder(tx, admin, { paymentStatus: "PENDING", shopify: true });
       const cf = fakeCashfree({}, { tx });
       const shop = countingShopify();
@@ -418,7 +418,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("two concurrent RETRIES after a failure collapse into one Cashfree attempt", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await prepaidOrder(tx, admin, { paymentStatus: "PENDING" });
       const cf = fakeCashfree({}, { tx });
       const svc = new OrdersService(tx, () => fakeShopifyClient(), () => cf.api);
@@ -433,7 +433,7 @@ describe("cancelOrder - Cashfree payment link", () => {
 
   it("repeating cancel on a fully cancelled order makes no Cashfree (or Shopify) call", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await prepaidOrder(tx, admin, { paymentStatus: "PENDING", shopify: true });
       const cf = fakeCashfree({}, { tx });
       const shop = countingShopify();
@@ -461,7 +461,7 @@ describe("revertCancellation", () => {
 
   it("restores the exact pre-cancel status and leaves payment, amount, items and customer untouched", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeOrder(tx, admin, { status: "PROCESSING" });
       await tx.payment.create({ data: { orderId: order.id, amount: "699.00", status: "SUCCESS", method: "UPI", paidAt: new Date() } });
       const svc = new OrdersService(tx, () => fakeShopifyClient());
@@ -485,7 +485,7 @@ describe("revertCancellation", () => {
 
   it("can be cancelled again after a revert without re-calling an already-cancelled Shopify order", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeOrder(tx, admin, { externalSource: "SHOPIFY", externalId: "gid://shopify/Order/9" });
       await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(admin, Role.ADMIN), order.id, {});
       await new OrdersService(tx, () => fakeShopifyClient()).revertCancellation(as(admin, Role.ADMIN), order.id);
@@ -500,7 +500,7 @@ describe("revertCancellation", () => {
 
   it("a second (double-click) revert is a harmless no-op", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeOrder(tx, admin);
       const svc = new OrdersService(tx, () => fakeShopifyClient());
       await svc.cancelOrder(as(admin, Role.ADMIN), order.id, {});
@@ -514,7 +514,7 @@ describe("revertCancellation", () => {
 
   it("refuses to guess when no previous status was recorded (cancelled before this feature)", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const { order } = await makeOrder(tx, admin, { status: "CANCELLED", cancelledAt: new Date() });
       await assert.rejects(() => new OrdersService(tx, () => fakeShopifyClient()).revertCancellation(as(admin, Role.ADMIN), order.id), (e: any) => e.statusCode === 409);
       assert.equal((await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } })).status, "CANCELLED");
@@ -523,8 +523,8 @@ describe("revertCancellation", () => {
 
   it("keeps existing scoping: a salesperson cannot revert an order on someone else's lead", async () => {
     await inRollback(async (tx) => {
-      const admin = await tx.user.create({ data: { name: "Admin", email: `a-${uid()}@example.invalid`, role: Role.ADMIN } });
-      const rep = await tx.user.create({ data: { name: "Rep", email: `r-${uid()}@example.invalid`, role: Role.SALESPERSON } });
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const { order } = await makeOrder(tx, admin);
       await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(admin, Role.ADMIN), order.id, {});
       await assert.rejects(() => new OrdersService(tx, () => fakeShopifyClient()).revertCancellation(as(rep, Role.SALESPERSON), order.id), (e: any) => e.statusCode === 404);
