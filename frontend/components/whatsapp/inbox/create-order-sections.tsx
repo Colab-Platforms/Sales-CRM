@@ -34,6 +34,8 @@ export interface DraftItem {
   variantId: string;
   quantity: string;
   unitPrice: string;
+  /** true once the person typed a price: the catalogue price is then never written over it. */
+  priceEdited?: boolean;
 }
 
 export interface AddressDraft extends StructuredAddress {
@@ -208,7 +210,7 @@ export function ItemCard({
           <Input id={`qty-${item.key}`} type="number" min="1" inputMode="numeric" value={item.quantity} onChange={(e) => onChange({ quantity: e.target.value })} />
         </Field>
         <Field label="Unit price (₹)" htmlFor={`price-${item.key}`}>
-          <Input id={`price-${item.key}`} inputMode="decimal" value={item.unitPrice} onChange={(e) => onChange({ unitPrice: e.target.value })} placeholder="0.00" />
+          <Input id={`price-${item.key}`} inputMode="decimal" value={item.unitPrice} onChange={(e) => onChange({ unitPrice: e.target.value, priceEdited: true })} placeholder="0.00" />
         </Field>
         <div className="grid gap-1.5">
           <span className="text-xs font-medium">Line total</span>

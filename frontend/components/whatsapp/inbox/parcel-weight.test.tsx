@@ -242,3 +242,17 @@ describe("parcel weight from the catalogue (real export values)", () => {
     assert.deepEqual(resolveParcelWeight(null, est), { text: "0.36", source: "suggested" });
   });
 });
+
+describe("total parcel weight across several selected variants", () => {
+  it("sums unit weight x quantity over all lines: (0.12 x 2) + (0.5 x 1) + (0.12 x 1) = 0.86 kg", () => {
+    const est = estimateProductWeight([{ unitKg: 0.12, quantity: 2 }, { unitKg: 0.5, quantity: 1 }, { unitKg: 0.12, quantity: 1 }]);
+    assert.equal(est.knownKg, 0.86);
+    assert.deepEqual(resolveParcelWeight(null, est), { text: "0.86", source: "suggested" });
+  });
+  it("one item without a catalogue weight: no total is presented as the parcel weight, the known part is still reported, and the field stays manual", () => {
+    const est = estimateProductWeight([{ unitKg: 0.12, quantity: 2 }, { unitKg: 0.5, quantity: 1 }, { unitKg: null, quantity: 1 }]);
+    assert.equal(est.complete, false);
+    assert.equal(est.knownKg, 0.74);
+    assert.deepEqual(resolveParcelWeight(null, est), { text: "", source: "none" });
+  });
+});

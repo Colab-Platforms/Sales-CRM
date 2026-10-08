@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OrderRefundSectionBody, RefundHeaderButtons, RefundRequestRow, refundHeaderActions, type RefundRowActions } from "./order-refund-section";
 import { RefundRequestForm } from "./refund-request-dialog";
 import { RefundQueueTable } from "./refund-queue-view";
-import { APPROVAL_DISCLAIMER, approvalCancelsOrder, approvalCopy, canDecide, canExecute, canRequestRefund, isApprover, validateRefundForm } from "@/lib/refund-status";
+import { APPROVAL_DISCLAIMER, approvalCancelsOrder, approvalCopy, canDecide, canRequestRefund, isApprover, validateRefundForm } from "@/lib/refund-status";
 import type { OrderRefundInfo, RefundRequestView, RefundablePaymentView } from "@/lib/api-client/types/refunds.types";
 
 const text = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();

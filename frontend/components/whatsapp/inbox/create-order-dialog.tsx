@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useCreateOrderMutation, usePushOrderToShopifyMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
+import { productsApi } from "@/lib/api-client/endpoints/products.api";
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useCourierRates } from "@/hooks/useCourierRates";
@@ -106,7 +107,20 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const idempotencyKey = useRef<string>(crypto.randomUUID());
   const submittingRef = useRef(false);
 
-  const productsQuery = useQuery({ ...productListQueryOptions({ page: 1, pageSize: 100 }), enabled: open });
+  // The catalogue is read fresh every time the creator opens (never a cached copy) and again whenever a product/variant is chosen. ALL pages are read, so a product is
+  // never missing just because it sorts after the first 100.
+  const productsQuery = useQuery({
+    ...productListQueryOptions({ page: 1, pageSize: 100 }),
+    queryFn: async () => {
+      const first = await productsApi.list({ page: 1, pageSize: 100 });
+      const items = [...first.items];
+      for (let page = 2; page <= Math.min(first.pagination.totalPages, 20); page++) items.push(...(await productsApi.list({ page, pageSize: 100 })).items);
+      return { items, pagination: first.pagination };
+    },
+    enabled: open,
+    staleTime: 0,
+    refetchOnMount: "always",
+  });
   const products = useMemo(() => productsQuery.data?.items ?? [], [productsQuery.data]);
 
   const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open });
@@ -166,9 +180,11 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     .map((i) => {
       const p = products.find((x) => x.id === i.productId);
       const v = p?.variants.find((x) => x.id === i.variantId);
-      return { unitKg: unitWeightKg(p, v), quantity: Number(i.quantity) };
+      return { unitKg: unitWeightKg(p, v), quantity: Number(i.quantity), label: p ? (v ? `${p.name} — ${v.name}` : p.name) : "" };
     });
   const estimate = estimateProductWeight(weightLines);
+  // Items whose catalogue has no valid weight are named, so a missing weight is visible per item instead of just leaving the field empty. Their price is unaffected.
+  const missingWeightLabels = weightLines.filter((l) => l.unitKg === null && l.label).map((l) => l.label);
   const resolved = resolveParcelWeight(manualWeight, estimate);
   const weight = resolved.text;
   const parcel = parseParcelWeight(weight);
@@ -212,17 +228,45 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     setItems((prev) => prev.map((item) => (item.key === key ? { ...item, ...patch } : item)));
   }
 
+  // A line's price comes from the exact variant that is selected - never from another variant (the product's base price is the cheapest variant's) and never from the
+  // previously selected product. With several variants and none chosen yet, the price stays empty.
+  const catalogPrice = (product: (typeof products)[number] | undefined, variantId: string): string => {
+    if (!product) return "";
+    if (product.variants.length === 0) return product.basePrice ?? "";
+    return product.variants.find((v) => v.id === variantId)?.price ?? "";
+  };
+
   function handleProductChange(key: string, productId: string) {
     const product = products.find((p) => p.id === productId);
     const only = product && product.variants.length === 1 ? product.variants[0] : null;
-    updateItem(key, { productId, variantId: only?.id ?? "", unitPrice: only?.price ?? product?.basePrice ?? "" });
+    const variantId = only?.id ?? "";
+    updateItem(key, { productId, variantId, unitPrice: catalogPrice(product, variantId), priceEdited: false });
+    void productsQuery.refetch(); // pick up the product's current price/weight from the catalogue
   }
 
   function handleVariantChange(key: string, productId: string, variantId: string) {
     const product = products.find((p) => p.id === productId);
     const variant = product?.variants.find((v) => v.id === variantId);
-    updateItem(key, { variantId, unitPrice: variant?.price ?? product?.basePrice ?? "" });
+    updateItem(key, { variantId, unitPrice: catalogPrice(product, variantId), priceEdited: false });
+    void productsQuery.refetch();
   }
+
+  // When fresh catalogue data arrives, every line that has not had its price typed over follows the catalogue (price changes made since the product was selected apply).
+  useEffect(() => {
+    if (!productsQuery.data) return;
+    setItems((prev) => {
+      let changed = false;
+      const next = prev.map((item) => {
+        if (!item.productId || item.priceEdited) return item;
+        const fresh = catalogPrice(productsQuery.data!.items.find((p) => p.id === item.productId) as never, item.variantId);
+        if (fresh === "" || fresh === item.unitPrice) return item;
+        changed = true;
+        return { ...item, unitPrice: fresh };
+      });
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productsQuery.dataUpdatedAt]);
 
   const itemValid = (i: DraftItem) => {
     const product = products.find((p) => p.id === i.productId);
@@ -473,7 +517,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 weight={weight}
                 weightError={weightError}
                 weightHint={weightHint(resolved.source, estimate)}
-                productWeightNote={estimate.complete && estimate.knownKg !== null ? `Product weight: ${formatKg(estimate.knownKg)} (estimate - not the parcel weight)` : undefined}
+                productWeightNote={estimate.complete && estimate.knownKg !== null ? `Product weight: ${formatKg(estimate.knownKg)} (estimate - not the parcel weight)` : missingWeightLabels.length > 0 ? `Catalogue weight unavailable for: ${missingWeightLabels.join("; ")}.${estimate.knownKg !== null ? ` The other items add up to ${formatKg(estimate.knownKg)} - enter the full parcel weight yourself.` : ""}` : undefined}
                 onUseSuggested={manualWeight !== null && estimate.complete && estimate.knownKg !== null ? () => setManualWeight(null) : undefined}
                 onWeightChange={setManualWeight}
                 dimensions={dimsResolved.draft}
