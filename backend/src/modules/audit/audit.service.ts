@@ -5,7 +5,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
-import { scopedOrderWhere } from "../orders/orders.filters.js";
+import { orderReadWhere } from "../orders/orders.filters.js";
 import { ORDER_REFERENCE_TYPE } from "../orders/orders.types.js";
 import { buildAuditWhere, mapAuditEntry, orderAuditWhere } from "./audit.filters.js";
 import type { AuditListResult, EntityAuditQuery, ListAuditQuery } from "./audit.types.js";
@@ -69,7 +69,7 @@ class AuditService {
   async getOrderAudit(user: AuthUser, orderId: string, query: EntityAuditQuery): Promise<AuditListResult> {
     const leadScope = await getLeadScope(user, this.db);
     // Out-of-scope orders look the same as missing ones so ids can't be probed.
-    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
+    const order = await this.db.order.findFirst({ where: orderReadWhere(user, orderId, leadScope), select: { id: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
 
     return this.page(orderAuditWhere(orderId), query.page, query.pageSize);

@@ -13,7 +13,6 @@
 //  - Payment.refundedAmount / refundedAt / status change only on COMPLETED. Order.status is never touched.
 //  - Only the sandbox may execute unless CASHFREE_ALLOW_PRODUCTION_REFUNDS=true is set explicitly.
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -206,11 +205,12 @@ class RefundExecutionService {
     if (blocked) throw new ApiError(blocked, STATUS_CODES.FORBIDDEN);
   }
 
-  private async load(tx: Db, user: AuthUser, id: string) {
+  private async load(tx: Db, _user: AuthUser, id: string) {
     const head = await tx.refundRequest.findUnique({ where: { id }, select: { orderId: true } });
     if (!head) throw new ApiError("Refund request not found", STATUS_CODES.NOT_FOUND);
     await advisoryLock(tx, orderLockKey(head.orderId));
-    const scope = await getLeadScope(user, tx);
+    // Executing/checking a refund is manager/admin only and, like approving it, is company-wide (not limited to the approver's own team).
+    const scope: Prisma.LeadWhereInput = {};
     const found = await tx.refundRequest.findFirst({
       where: { id, ...(Object.keys(scope).length > 0 ? { order: { lead: scope } } : {}) },
       select: {

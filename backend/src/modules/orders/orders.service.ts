@@ -31,6 +31,7 @@ import {
   derivePaymentMode,
   derivePaymentStatus,
   fullName,
+  orderReadWhere,
   scopedOrderWhere,
 } from "./orders.filters.js";
 import {
@@ -274,10 +275,11 @@ class OrdersService {
     };
   }
 
-  async getOrder(user: AuthUser, id: string): Promise<OrderDetail> {
-    const leadScope = await getLeadScope(user, this.db);
+  async getOrder(user: AuthUser, id: string, opts: { approverScope?: boolean } = {}): Promise<OrderDetail> {
+    const leadScope = opts.approverScope ? {} : await getLeadScope(user, this.db);
+    // orderReadWhere: a manager who reviews a refund request can also open the order it is about, whichever team it belongs to (reading only).
     const order = await this.db.order.findFirst({
-      where: scopedOrderWhere(id, leadScope),
+      where: orderReadWhere(user, id, leadScope),
       select: DETAIL_SELECT,
     });
 
@@ -819,8 +821,9 @@ class OrdersService {
   // real refund is actually performed - see cashfree.apply.ts).
   private static readonly retryingCancellations = new Set<string>();
 
-  async cancelOrder(user: AuthUser, orderId: string, input: CancelOrderInput): Promise<CancelOrderResult> {
-    const leadScope = await getLeadScope(user, this.db);
+  async cancelOrder(user: AuthUser, orderId: string, input: CancelOrderInput, opts: { approverScope?: boolean } = {}): Promise<CancelOrderResult> {
+    // approverScope: the refund approval (manager/admin only, decided in RefundsService.approve) cancels the order whichever team it belongs to.
+    const leadScope = opts.approverScope ? {} : await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({
       where: scopedOrderWhere(orderId, leadScope),
       select: { id: true, leadId: true, status: true, externalId: true, metadata: true, payments: { select: { id: true, status: true, externalSource: true, failureReason: true } } },
@@ -836,7 +839,7 @@ class OrdersService {
 
     // Nothing left to do: already cancelled, Shopify not in a failed state, and no Cashfree link still open.
     if (alreadyCancelled && priorCancellation?.status !== "failed" && openLinks.length === 0) {
-      return { order: await this.getOrder(user, orderId), shopify: priorShopify, paymentLink: summarizePaymentLink(order.payments, priorLinkCancellation), alreadyCancelled: true };
+      return { order: await this.getOrder(user, orderId, opts), shopify: priorShopify, paymentLink: summarizePaymentLink(order.payments, priorLinkCancellation), alreadyCancelled: true };
     }
 
     // A retry (the order is already cancelled) is not protected by the conditional status write below, so two
@@ -844,7 +847,7 @@ class OrdersService {
     if (alreadyCancelled) {
       if (OrdersService.retryingCancellations.has(orderId)) {
         return {
-          order: await this.getOrder(user, orderId),
+          order: await this.getOrder(user, orderId, opts),
           shopify: priorShopify,
           paymentLink: openLinks.length ? { status: "failed", reason: "Another cancellation of this order is already in progress." } : summarizePaymentLink(order.payments, priorLinkCancellation),
           alreadyCancelled: true,
@@ -870,7 +873,7 @@ class OrdersService {
         if (!cancelledNow) {
           // Lost the race to a concurrent cancel that is already handling Shopify, Cashfree and the audit event.
           return {
-            order: await this.getOrder(user, orderId),
+            order: await this.getOrder(user, orderId, opts),
             shopify: { status: order.externalId ? "failed" : "not_linked", reason: order.externalId ? "Another cancellation of this order is already in progress." : undefined },
             paymentLink: openLinks.length ? { status: "failed", reason: "Another cancellation of this order is already in progress." } : { status: "none" },
             alreadyCancelled: true,
@@ -944,7 +947,7 @@ class OrdersService {
         });
       }
 
-      return { order: await this.getOrder(user, orderId), shopify, paymentLink, alreadyCancelled };
+      return { order: await this.getOrder(user, orderId, opts), shopify, paymentLink, alreadyCancelled };
     } finally {
       if (alreadyCancelled) OrdersService.retryingCancellations.delete(orderId);
     }
@@ -1003,7 +1006,7 @@ class OrdersService {
   async getStatusHistory(user: AuthUser, id: string): Promise<OrderStatusHistory> {
     const leadScope = await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({
-      where: scopedOrderWhere(id, leadScope),
+      where: orderReadWhere(user, id, leadScope),
       select: {
         id: true,
         orderNumber: true,

@@ -215,3 +215,30 @@ describe("existing order -> shipment dialog weight", () => {
     assert.deepEqual(shipmentDialogWeight("0.75", "0.5", est(0.25, 2)), { text: "0.75", source: "manual" });
   });
 });
+
+// The catalogue values below are the real Shiprocket export's (Calcium+ Pack Of 1 = 0.120 kg, Dreamy Sleep 2 Jars = 0.120 kg, Brain Fuel Pack Of 2 = not recorded).
+import { lineProductWeightKg as lineKg, unitWeightKg as unitKg } from "@/lib/parcel-weight";
+describe("parcel weight from the catalogue (real export values)", () => {
+  const calcium1 = { weightKg: "0.12" };
+  it("variant-specific weight x quantity: Calcium+ Pack Of 1 x3 = 0.36 kg; Dreamy Sleep 2 Jars x2 = 0.24 kg", () => {
+    assert.equal(lineKg(unitKg({ weightKg: null }, calcium1), 3), 0.36);
+    assert.equal(lineKg(unitKg(null, { weightKg: "0.12" }), 2), 0.24);
+  });
+  it("the variant's own weight wins over the product's base weight", () => {
+    assert.equal(unitKg({ weightKg: "0.5" }, calcium1), 0.12);
+  });
+  it("a variant with no recorded weight yields no suggestion (Brain Fuel Pack Of 2) - the field stays empty, nothing is invented", () => {
+    const est = estimateProductWeight([{ unitKg: unitKg({ weightKg: null }, { weightKg: null }), quantity: 1 }]);
+    assert.deepEqual(resolveParcelWeight(null, est), { text: "", source: "none" });
+  });
+  it("an order mixing a recorded and an unrecorded variant suggests nothing (a partial total is never the parcel weight)", () => {
+    const est = estimateProductWeight([{ unitKg: 0.12, quantity: 2 }, { unitKg: null, quantity: 1 }]);
+    assert.equal(est.complete, false);
+    assert.deepEqual(resolveParcelWeight(null, est), { text: "", source: "none" });
+  });
+  it("what the person typed is never replaced by the catalogue suggestion", () => {
+    const est = estimateProductWeight([{ unitKg: 0.12, quantity: 3 }]);
+    assert.deepEqual(resolveParcelWeight("0.5", est), { text: "0.5", source: "manual" });
+    assert.deepEqual(resolveParcelWeight(null, est), { text: "0.36", source: "suggested" });
+  });
+});

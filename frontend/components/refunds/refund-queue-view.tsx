@@ -121,7 +121,7 @@ export function RefundQueueTable({
                     </Button>
                   ) : r.status === "PENDING" && own ? (
                     <span className="text-xs text-muted-foreground" data-testid="own-request-note">
-                      Your request — another approver decides it
+                      You requested this refund. Another authorized approver must approve it.
                     </span>
                   ) : null}
                 </td>

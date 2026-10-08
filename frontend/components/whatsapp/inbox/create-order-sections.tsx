@@ -175,6 +175,11 @@ export function ItemCard({
               Weight: {formatKg(unitWeight)}
               {productWeight !== null && Number(item.quantity) > 1 ? ` · Product weight: ${formatKg(productWeight)} (estimate - not the parcel weight)` : ""}
             </p>
+          ) : !needsVariant || variant ? (
+            // The catalogue (Shiprocket export / Product Weights) has no weight for this exact variant: say so, instead of silently leaving the parcel weight empty.
+            <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400" data-testid="product-weight-missing">
+              The catalogue has no recorded unit weight for {variant ? `${product.name} — ${variant.name}` : product.name}, so no parcel weight can be suggested. Enter it below, or record it under Product Weights.
+            </p>
           ) : null}
           {unitDimensions ? (
             <p className="mt-0.5 text-xs text-muted-foreground" data-testid="product-dimensions-line">

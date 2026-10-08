@@ -7,7 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { OrderRefundSectionBody, RefundHeaderButtons, RefundRequestRow, refundHeaderActions, type RefundRowActions } from "./order-refund-section";
 import { RefundRequestForm } from "./refund-request-dialog";
 import { RefundQueueTable } from "./refund-queue-view";
-import { APPROVAL_DISCLAIMER, approvalCancelsOrder, approvalCopy, canDecide, canRequestRefund, isApprover, validateRefundForm } from "@/lib/refund-status";
+import { APPROVAL_DISCLAIMER, approvalCancelsOrder, approvalCopy, canDecide, canExecute, canRequestRefund, isApprover, validateRefundForm } from "@/lib/refund-status";
 import type { OrderRefundInfo, RefundRequestView, RefundablePaymentView } from "@/lib/api-client/types/refunds.types";
 
 const text = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
@@ -254,7 +254,7 @@ describe("approval queue", () => {
     const h = table([request({ requestedBy: { id: "u-mgr", name: "Mgr", role: "MANAGER" } })], "MANAGER", "u-mgr");
     assert.doesNotMatch(h, />Approve</);
     assert.doesNotMatch(h, />Reject</);
-    assert.match(text(h), /Your request — another approver decides it/);
+    assert.match(text(h), /You requested this refund. Another authorized approver must approve it./);
   });
   it("decided requests have no controls and approved ones are not shown as refunded", () => {
     const h = table([request({ status: "APPROVED", decidedBy: { id: "m", name: "Mgr", role: "MANAGER" } }), request({ id: "r2", status: "REJECTED" })], "MANAGER", "u-x");
@@ -460,5 +460,39 @@ describe("the refund flow in the UI: request on an ACTIVE order; the manager's a
   it("the request form tells the telecaller that submitting does NOT cancel the order", () => {
     const h = renderToStaticMarkup(<RefundRequestForm orderNumber="X" payment={payment()} values={{ amount: "", reason: "" }} errors={{}} onChange={() => {}} onSubmit={() => {}} onCancel={() => {}} />);
     assert.match(text(h), /the order is NOT cancelled and no money is returned now\. If a manager approves it, the order is cancelled automatically/);
+  });
+});
+
+describe("approval queue freshness", () => {
+  it("polls, so a request submitted while a manager/admin already has the queue open appears without a reload", () => {
+    const src = readFileSync(new URL("../../lib/api-client/queries/refunds.queries.ts", import.meta.url), "utf8");
+    assert.match(src, /refundQueueQueryOptions[\s\S]*refetchInterval: \d+/);
+    assert.match(src, /refundQueueQueryOptions[\s\S]*refetchOnWindowFocus: true/);
+  });
+});
+
+describe("who can approve / execute (decided by the logged-in user versus the requester, never by role alone)", () => {
+  const pending = (requesterId: string) => ({ status: "PENDING" as const, requestedBy: { id: requesterId } }) as never;
+  it("a different manager or admin can approve a telecaller's request; the requester can not; a telecaller never can", () => {
+    assert.equal(canDecide("MANAGER", "manager-b", pending("telecaller-a")), true);
+    assert.equal(canDecide("ADMIN", "admin-c", pending("telecaller-a")), true);
+    assert.equal(canDecide("ADMIN", "admin-a", pending("admin-a")), false); // own request
+    assert.equal(canDecide("MANAGER", "manager-b", pending("manager-b")), false); // own request
+    assert.equal(canDecide("MANAGER", "manager-b", pending("admin-a")), true); // an admin's request is approved by another approver
+    assert.equal(canDecide("ADMIN", "admin-c", pending("manager-b")), true);
+    assert.equal(canDecide("SALESPERSON", "telecaller-a", pending("someone")), false);
+    assert.equal(canDecide("MANAGER", undefined, pending("telecaller-a")), false);
+    assert.equal(canDecide("MANAGER", "manager-b", { status: "APPROVED", requestedBy: { id: "telecaller-a" } } as never), false); // approved: the approve action disappears
+  });
+  it("after approval (order cancelled) an authorized executor sees Execute Refund; not the requester, not a telecaller, not before approval", () => {
+    const approved = (requesterId: string, orderStatus = "CANCELLED", executionStatus: string | null = null) => ({ status: "APPROVED" as const, requestedBy: { id: requesterId }, orderStatus, executionStatus }) as never;
+    assert.equal(canExecute("MANAGER", "manager-b", approved("telecaller-a")), true);
+    assert.equal(canExecute("ADMIN", "admin-c", approved("telecaller-a")), true);
+    assert.equal(canExecute("ADMIN", "admin-a", approved("admin-a")), false);
+    assert.equal(canExecute("SALESPERSON", "telecaller-a", approved("telecaller-a")), false);
+    assert.equal(canExecute("MANAGER", "manager-b", approved("telecaller-a", "CONFIRMED")), false);
+    assert.equal(canExecute("MANAGER", "manager-b", approved("telecaller-a", "CANCELLED", "COMPLETED")), false);
+    assert.equal(canExecute("MANAGER", "manager-b", approved("telecaller-a", "CANCELLED", "FAILED")), true); // retry
+    assert.equal(canExecute("MANAGER", "manager-b", { status: "PENDING", requestedBy: { id: "telecaller-a" }, orderStatus: "CANCELLED" } as never), false);
   });
 });

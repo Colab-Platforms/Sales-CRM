@@ -1,4 +1,4 @@
-import { PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
+import { PaymentMethod, PaymentStatus, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { toCents } from "../shopify/shopify.money.js";
 import { NO_PAYMENT, type ListOrdersQuery, type PaymentMode, type PaymentStatusFilter } from "./orders.types.js";
@@ -90,6 +90,16 @@ export function buildOrderWhere(query: ListOrdersQuery, leadScope: Prisma.LeadWh
 // One order, but only if the user's lead scope allows it.
 export function scopedOrderWhere(id: string, leadScope: Prisma.LeadWhereInput): Prisma.OrderWhereInput {
   return Object.keys(leadScope).length > 0 ? { AND: [{ id }, { lead: leadScope }] } : { id };
+}
+
+/**
+ * Who may READ an order (order page, timeline, audit history, prepaid-upgrade panel): the usual lead scope - plus, for a MANAGER, any order that has a refund
+ * request, because refund approval is company-wide and the reviewer must be able to open the order it is about. This widens reading only, only for managers
+ * (admins are unscoped already) and only for orders with a refund request; every action on an order keeps using scopedOrderWhere.
+ */
+export function orderReadWhere(user: { role: string }, id: string, leadScope: Prisma.LeadWhereInput): Prisma.OrderWhereInput {
+  const own = scopedOrderWhere(id, leadScope);
+  return user.role === Role.MANAGER ? { OR: [own, { id, refundRequests: { some: {} } }] } : own;
 }
 
 export function fullName(firstName: string, lastName: string | null): string {
