@@ -256,7 +256,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
       {/* Main Two-Column Compact Dossier Workspace */}
       <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
         {/* Left Column (5 cols): Requirement Brief & Lead Info */}
-        <div className="space-y-4 lg:col-span-5">
+        <div className="min-w-0 space-y-4 lg:col-span-5">
           <div className="sketch-panel space-y-3 bg-card p-4.5">
             <div className="flex items-center justify-between border-b-[1.5px] border-ink-line-soft pb-2">
               <div className="flex items-center gap-2">
@@ -267,7 +267,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             </div>
 
             <div className="rounded-lg border border-border/70 bg-muted/20 p-3.5">
-              <p className="text-sm leading-relaxed text-foreground">
+              <p className="break-words text-sm leading-relaxed text-foreground">
                 {lead.requirement?.trim() ? lead.requirement.trim() : "No specific customer requirement noted yet."}
               </p>
             </div>
@@ -291,13 +291,13 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         </div>
 
         {/* Right Column (7 cols): Doodle Binder Workspace with Tabs */}
-        <div className="space-y-0 lg:col-span-7">
+        <div className="min-w-0 space-y-0 lg:col-span-7">
           {/* Doodle Binder Tabs Bar */}
-          <div className="flex items-center gap-1.5 border-b-[2px] border-ink-line px-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto border-b-[2px] border-ink-line px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <button
               type="button"
               onClick={() => setActiveTab("calls")}
-              className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "calls"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -313,7 +313,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("timeline")}
-              className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "timeline"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -326,7 +326,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("assignments")}
-              className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "assignments"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -340,7 +340,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <button
                 type="button"
                 onClick={() => setActiveTab("abandonment")}
-                className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+                className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                   activeTab === "abandonment"
                     ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                     : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
