@@ -38,6 +38,7 @@ export async function getManagerTeam(managerId: string, db: DbClient = prisma): 
 //   ADMIN       -> every lead
 //   MANAGER     -> leads in their groups, or owned by their active team members
 //   SALESPERSON -> leads they own
+//   HR          -> none (HR only works within Team management, never with leads)
 export function buildLeadScope(role: Role, userId: string, team?: ManagerTeam): Prisma.LeadWhereInput {
   switch (role) {
     case Role.ADMIN:
@@ -51,6 +52,9 @@ export function buildLeadScope(role: Role, userId: string, team?: ManagerTeam): 
       };
     case Role.SALESPERSON:
       return { ownerId: userId };
+    case Role.HR:
+      // Matches no row: an id can never be in an empty list.
+      return { id: { in: [] } };
   }
 }
 
