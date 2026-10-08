@@ -40,8 +40,6 @@ function DashboardShell({ children }: { children: ReactNode }) {
         {/* Global: call back / follow-up reminders fire on any dashboard page -
             except HR, who has no leads and isn't allowed to hit this endpoint. */}
         {user.role !== "HR" ? <FollowUpReminders /> : null}
-        {/* Global: call back / follow-up reminders fire on any dashboard page. */}
-        <FollowUpReminders />
         {/* Global: starts the salesperson's shift and holds their presence stream open on any page. */}
         <AttendanceProvider />
         <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
