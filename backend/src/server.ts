@@ -17,6 +17,7 @@ import legalRoutes from "./modules/legal/legal.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
+import { attendanceService } from "./modules/attendance/attendance.service.js";
 
 const app = express();
 
@@ -96,5 +97,6 @@ app.listen(PORT, () => {
   startMetaWebhookWorker();
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
+  attendanceService.start();
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
 });

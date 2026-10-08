@@ -57,6 +57,9 @@ model User {
 
   callsAsAgent Call[] @relation("CallAgent")
 
+  workSessions WorkSession[] @relation("WorkSessionUser")
+  statusLogs   StatusLog[]   @relation("StatusLogUser")
+
   tasksAssignedToMe Task[] @relation("TaskAssignedTo")
   tasksCreatedByMe  Task[] @relation("TaskCreatedBy")
 
@@ -66,9 +69,6 @@ model User {
   ordersConfirmed Order[] @relation("OrderConfirmedBy")
 
   recoveryActionsPerformed RecoveryAction[] @relation("RecoveryActionPerformedBy")
-
-  workSessions WorkSession[] @relation("WorkSessionUser")
-  statusLogs   StatusLog[]   @relation("StatusLogUser")
 
   activitiesAsActor Activity[] @relation("ActivityActor")
 
