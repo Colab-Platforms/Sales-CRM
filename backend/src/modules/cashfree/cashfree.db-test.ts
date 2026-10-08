@@ -360,14 +360,14 @@ describe("Cashfree webhooks", () => {
     });
   });
 
-  it("stores the amount Cashfree actually reports, and flags it when it differs from the link", async () => {
+  it("does not reconcile a delivery whose amount differs from the link: the payment stays open and unchanged", async () => {
     await inRollback(async (tx, runner) => {
       const { order, link } = await linkedOrder(tx, runner);
       await deliver(tx, runner, linkPaid(link.linkId, "500.00"));
       const [payment] = await cashfreePayments(tx, order.id);
-      assert.equal(payment.status, PaymentStatus.SUCCESS);
-      assert.equal(payment.amount.toString(), "500");
-      assert.ok((await activityTypes(tx, order.id)).includes(ActivityType.PAYMENT_MISMATCH_DETECTED));
+      assert.equal(payment.status, PaymentStatus.PENDING);
+      assert.equal(payment.amount.toString(), "649");
+      assert.ok(!(await activityTypes(tx, order.id)).includes(ActivityType.PAYMENT_MISMATCH_DETECTED));
     });
   });
 

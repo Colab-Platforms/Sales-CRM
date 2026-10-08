@@ -87,9 +87,13 @@ describe("environment guard", () => {
 describe("no refund call exists outside the refund execution path", () => {
   it("payment-link creation / refresh / cancel and the webhook code never call a refund endpoint", () => {
     const dir = new URL("../cashfree/", import.meta.url);
-    for (const f of ["cashfree.payments.service.ts", "cashfree.apply.ts", "cashfree.webhook.processor.ts", "cashfree.webhook.handler.ts"]) {
+    for (const f of ["cashfree.payments.service.ts", "cashfree.apply.ts", "cashfree.webhook.handler.ts"]) {
       const code = readFileSync(new URL(f, dir), "utf8").replace(/\/\/.*$/gm, "");
       assert.doesNotMatch(code, /createRefund|getRefund|\/refunds/i, f);
     }
+    // The refund WEBHOOK may only report: it reads a refund through an injected verifier and applies the outcome; it can never create one.
+    const processor = readFileSync(new URL("cashfree.webhook.processor.ts", dir), "utf8").replace(/\/\/.*$/gm, "");
+    assert.doesNotMatch(processor, /createRefund|\.getRefund\(/);
+    assert.match(processor, /verifyRefund\(cashfreeOrderId, event\.refundId\)/);
   });
 });
