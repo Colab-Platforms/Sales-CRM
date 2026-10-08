@@ -4,6 +4,10 @@ import { usePathname } from "next/navigation";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { FollowUpBell } from "@/components/follow-ups/follow-up-bell";
+import {
+  ShiftTimer,
+  WorkStatusMenu,
+} from "@/components/attendance/work-status-widget";
 
 const SEGMENT_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
@@ -21,7 +25,11 @@ function labelFor(segment: string) {
  * The title used to be hardcoded, so every page read "Dashboard". It now
  * tracks the route and shows the trail for nested pages.
  */
-export function SiteHeader({ showFollowUps = true }: { showFollowUps?: boolean }) {
+export function SiteHeader({
+  showFollowUps = true,
+}: {
+  showFollowUps?: boolean;
+}) {
   const pathname = usePathname();
   const segments = pathname.split("/").filter(Boolean);
   const trail = segments.map(labelFor);
@@ -32,7 +40,10 @@ export function SiteHeader({ showFollowUps = true }: { showFollowUps?: boolean }
     <header className="sticky top-0 z-30 flex h-14 shrink-0 items-center gap-3 border-b-[1.5px] border-border bg-background/85 px-4 backdrop-blur-sm sm:px-6">
       <SidebarTrigger className="-ml-1" />
       <Separator orientation="vertical" className="h-5" />
-      <nav aria-label="Breadcrumb" className="flex min-w-0 items-center gap-1.5 text-sm">
+      <nav
+        aria-label="Breadcrumb"
+        className="flex min-w-0 items-center gap-1.5 text-sm"
+      >
         {parents.map((parent) => (
           <span key={parent} className="hidden items-center gap-1.5 sm:flex">
             <span className="text-muted-foreground capitalize">{parent}</span>
@@ -41,7 +52,19 @@ export function SiteHeader({ showFollowUps = true }: { showFollowUps?: boolean }
         ))}
         <span className="truncate font-bold capitalize">{current}</span>
       </nav>
-      <div className="ml-auto">
+      {/* Dead centre of the header on large screens; smaller screens get the compact timer on the right. */}
+      <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
+        <div className="pointer-events-auto flex items-center gap-3">
+          <WorkStatusMenu />
+          <ShiftTimer variant="center" />
+        </div>
+      </div>
+      <div className="ml-auto flex items-center gap-3">
+        <div className="flex items-center gap-3 lg:hidden">
+          <WorkStatusMenu />
+          <ShiftTimer variant="inline" />
+        </div>
+        {/* <FollowUpBell /> */}
         {showFollowUps ? <FollowUpBell /> : null}
       </div>
     </header>

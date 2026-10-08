@@ -3,10 +3,12 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import { triggerClickToCall } from "./callerdesk.client.js";
-import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType } from "../../../generated/prisma/enums.js";
+import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType, WorkStatus } from "../../../generated/prisma/enums.js";
 import { OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
 import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { enqueueTranscription } from "./calling.transcription.js";
+import { attendanceService } from "../attendance/attendance.service.js";
+import { ENDED_CALL_STATUSES } from "../attendance/attendance.constants.js";
 import type {
   CallerDeskWebhookPayload,
   ClickToCallResult,
@@ -175,6 +177,11 @@ class CallingService {
           description: `${agent.name} called ${lead.mobile} via ${virtualNumber.displayName ?? virtualNumber.number}`,
         },
       });
+
+      // Shift tracking must never break calling.
+      attendanceService
+        .setSystemStatus(agent.id, WorkStatus.ON_CALL)
+        .catch((e) => logger.error("[attendance] could not set ON_CALL", e));
 
       return { callId: updated.id, status: updated.status };
     } catch (error: any) {
@@ -363,6 +370,12 @@ class CallingService {
         durationSeconds: durationSeconds ?? call.durationSeconds,
       },
     });
+
+    if (isFinalReport && ENDED_CALL_STATUSES.has(status)) {
+      attendanceService
+        .restoreFromCall(call.agentId)
+        .catch((e) => logger.error("[attendance] could not restore status after call", e));
+    }
 
     if (payload.CallRecordingUrl) {
       await prisma.callRecording.upsert({

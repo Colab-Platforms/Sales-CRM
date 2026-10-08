@@ -19,6 +19,7 @@ import offersRoutes from "@modules/offers/offers.routes.js";
 import discountRoutes from "@modules/discounts/discounts.routes.js";
 import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
 import refundRoutes from "@modules/refunds/refunds.routes.js";
+import attendanceRoutes from "@modules/attendance/attendance.routes.js";
 
 const router = Router();
 
@@ -46,5 +47,6 @@ router.use("/tasks", tasksRoutes);
 router.use("/delivery", deliveryRoutes);
 router.use("/abandonments", abandonmentRoutes);
 router.use("/refund-requests", refundRoutes);
+router.use("/attendance", attendanceRoutes);
 
 export default router;
