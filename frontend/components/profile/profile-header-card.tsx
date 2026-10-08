@@ -6,6 +6,7 @@ import type { UserProfile } from "@/lib/api-client/types/auth.types";
 
 const ROLE_LABELS: Record<UserProfile["role"], string> = {
   ADMIN: "Admin",
+  HR: "HR",
   MANAGER: "Manager",
   SALESPERSON: "Salesperson",
 };
