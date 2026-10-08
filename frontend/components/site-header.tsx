@@ -21,7 +21,7 @@ function labelFor(segment: string) {
  * The title used to be hardcoded, so every page read "Dashboard". It now
  * tracks the route and shows the trail for nested pages.
  */
-export function SiteHeader() {
+export function SiteHeader({ showFollowUps = true }: { showFollowUps?: boolean }) {
   const pathname = usePathname();
   const segments = pathname.split("/").filter(Boolean);
   const trail = segments.map(labelFor);
@@ -42,7 +42,7 @@ export function SiteHeader() {
         <span className="truncate font-bold capitalize">{current}</span>
       </nav>
       <div className="ml-auto">
-        <FollowUpBell />
+        {showFollowUps ? <FollowUpBell /> : null}
       </div>
     </header>
   );

@@ -29,3 +29,34 @@ export interface UpdateSalespersonBody {
 export interface ResetPasswordBody {
   password: string;
 }
+
+export interface CreateHrBody {
+  name: string;
+  username: string;
+  password: string;
+  phone: string;
+}
+
+export interface CreateGroupBody {
+  name: string;
+  description?: string;
+  managerId: string;
+}
+
+export interface UpdateGroupBody {
+  name?: string;
+  description?: string;
+  status?: "ACTIVE" | "INACTIVE";
+  managerId?: string;
+}
+
+export interface AddSalespersonBody {
+  name: string;
+  username: string;
+  password: string;
+  phone: string;
+}
+
+export interface AddExistingMemberBody {
+  userId: string;
+}

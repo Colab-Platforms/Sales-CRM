@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useDashboard } from "@/hooks/useDashboard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SalespersonDashboardView } from "@/components/dashboard/salesperson-dashboard";
@@ -8,8 +10,15 @@ import { AdminDashboardView } from "@/components/dashboard/admin-dashboard";
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard();
+  const router = useRouter();
 
-  if (isLoading) {
+  useEffect(() => {
+    if (data?.role === "HR") {
+      router.replace("/dashboard/groups");
+    }
+  }, [data, router]);
+
+  if (isLoading || data?.role === "HR") {
     return (
       <div className="space-y-6">
         <div className="space-y-2">

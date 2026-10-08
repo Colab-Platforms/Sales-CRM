@@ -1,0 +1,38 @@
+model WorkSession {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation("WorkSessionUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  startedAt DateTime  @default(now()) @map("started_at")
+  endedAt   DateTime? @map("ended_at")
+  endReason SessionEndReason? @map("end_reason")
+
+  lastSeenAt     DateTime   @default(now()) @map("last_seen_at")
+  currentStatus  WorkStatus @default(ACTIVE) @map("current_status")
+  statusSince    DateTime   @default(now()) @map("status_since")
+
+  statusLogs StatusLog[]
+
+  @@index([userId, startedAt])
+  @@index([endedAt])
+  @@map("work_sessions")
+}
+
+model StatusLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  sessionId String      @map("session_id") @db.Uuid
+  session   WorkSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation("StatusLogUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  status    WorkStatus @map("status")
+  startedAt DateTime   @default(now()) @map("started_at")
+  endedAt   DateTime?  @map("ended_at")
+
+  @@index([sessionId])
+  @@index([userId, startedAt])
+  @@map("status_logs")
+}

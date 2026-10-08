@@ -1,5 +1,6 @@
 enum Role {
   ADMIN
+  HR
   MANAGER
   SALESPERSON
 
@@ -344,6 +345,7 @@ enum ActivityType {
   // transitions only - never invented for a message that was not actually sent/received.
   WHATSAPP_MESSAGE_SENT
   WHATSAPP_MESSAGE_RECEIVED
+  WHATSAPP_MESSAGE_EDITED
   WHATSAPP_DELIVERED
   WHATSAPP_READ
   WHATSAPP_FAILED
@@ -612,4 +614,24 @@ enum RefundExecutionStatus {
   FAILED // Cashfree rejected / cancelled it; retryable with the SAME refund id
 
   @@map("refund_execution_status")
+}
+
+enum WorkStatus {
+  ACTIVE
+  ON_CALL
+  TEA_BREAK
+  LUNCH_BREAK
+  BIO_BREAK
+  TEAM_HUDDLE
+  IDLE
+  OFFLINE
+
+  @@map("work_status")
+}
+
+enum SessionEndReason {
+  LOGOUT
+  STALE
+
+  @@map("session_end_reason")
 }

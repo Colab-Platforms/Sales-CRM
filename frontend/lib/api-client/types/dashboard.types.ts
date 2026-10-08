@@ -55,4 +55,8 @@ export interface AdminDashboard {
   usersByRole: { role: string; count: number }[];
 }
 
-export type DashboardData = SalespersonDashboard | ManagerDashboard | AdminDashboard;
+export interface HrDashboard {
+  role: "HR";
+}
+
+export type DashboardData = SalespersonDashboard | ManagerDashboard | AdminDashboard | HrDashboard;

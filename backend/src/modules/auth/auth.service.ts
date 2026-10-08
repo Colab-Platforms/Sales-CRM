@@ -112,6 +112,22 @@ class AuthService {
       };
     }
 
+    if (user.role === Role.HR) {
+      const [usersByRole, totalGroups] = await Promise.all([
+        prisma.user.groupBy({ by: ["role"], _count: { _all: true } }),
+        prisma.group.count(),
+      ]);
+
+      return {
+        ...base,
+        orgOverview: {
+          totalManagers: usersByRole.find((r) => r.role === Role.MANAGER)?._count._all ?? 0,
+          totalSalespersons: usersByRole.find((r) => r.role === Role.SALESPERSON)?._count._all ?? 0,
+          totalGroups,
+        },
+      };
+    }
+
     const [usersByRole, totalGroups, totalLeads] = await Promise.all([
       prisma.user.groupBy({ by: ["role"], _count: { _all: true } }),
       prisma.group.count(),
