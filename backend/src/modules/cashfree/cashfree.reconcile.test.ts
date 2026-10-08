@@ -1,5 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { parseEvent, SUPPORTED_TYPES } from "./cashfree.events.js";
+import { eventToUpdate } from "./cashfree.webhook.processor.js";
 import { resolvePublicBackendUrl } from "./cashfree.config.js";
 import { createCashfreeReconciler, loadReconcileMinutes } from "./cashfree.catchup.js";
 import { crmDiscountFigures } from "./cashfree.payment-success.js";
@@ -65,5 +67,18 @@ describe("Cashfree reconciler", () => {
     assert.equal(loadReconcileMinutes({ CASHFREE_RECONCILE_MINUTES: "0" }), 0);
     assert.equal(loadReconcileMinutes({ CASHFREE_RECONCILE_MINUTES: "x" }), 0);
     assert.equal(loadReconcileMinutes({ CASHFREE_RECONCILE_MINUTES: "5" }), 5);
+  });
+});
+
+describe("refund webhook payload", () => {
+  it("is a supported type and parses refund id / order / status / amount (2022-09-01 shape)", () => {
+    assert.ok((SUPPORTED_TYPES as readonly string[]).includes("REFUND_STATUS_WEBHOOK"));
+    const ev = parseEvent({ type: "REFUND_STATUS_WEBHOOK", data: { refund: { cf_refund_id: 123, refund_id: "rfabc", order_id: "ORD_1", refund_amount: 100, refund_status: "success" } } });
+    assert.deepEqual(ev, { kind: "refund", refundId: "rfabc", orderId: "ORD_1", rawStatus: "SUCCESS", amount: "100", cfRefundId: "123" });
+    assert.equal(parseEvent({ type: "REFUND_STATUS_WEBHOOK", data: {} }), null);
+  });
+  it("is never turned into a payment update", () => {
+    const ev = parseEvent({ type: "REFUND_STATUS_WEBHOOK", data: { refund: { refund_id: "rfabc", refund_status: "SUCCESS" } } })!;
+    assert.equal(eventToUpdate(ev, new Date()), null);
   });
 });

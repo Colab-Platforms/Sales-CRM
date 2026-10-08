@@ -34,6 +34,8 @@ export interface DraftItem {
   variantId: string;
   quantity: string;
   unitPrice: string;
+  /** true once the person typed a price: the catalogue price is then never written over it. */
+  priceEdited?: boolean;
 }
 
 export interface AddressDraft extends StructuredAddress {
@@ -175,6 +177,11 @@ export function ItemCard({
               Weight: {formatKg(unitWeight)}
               {productWeight !== null && Number(item.quantity) > 1 ? ` · Product weight: ${formatKg(productWeight)} (estimate - not the parcel weight)` : ""}
             </p>
+          ) : !needsVariant || variant ? (
+            // The catalogue (Shiprocket export / Product Weights) has no weight for this exact variant: say so, instead of silently leaving the parcel weight empty.
+            <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400" data-testid="product-weight-missing">
+              The catalogue has no recorded unit weight for {variant ? `${product.name} — ${variant.name}` : product.name}, so no parcel weight can be suggested. Enter it below, or record it under Product Weights.
+            </p>
           ) : null}
           {unitDimensions ? (
             <p className="mt-0.5 text-xs text-muted-foreground" data-testid="product-dimensions-line">
@@ -203,7 +210,7 @@ export function ItemCard({
           <Input id={`qty-${item.key}`} type="number" min="1" inputMode="numeric" value={item.quantity} onChange={(e) => onChange({ quantity: e.target.value })} />
         </Field>
         <Field label="Unit price (₹)" htmlFor={`price-${item.key}`}>
-          <Input id={`price-${item.key}`} inputMode="decimal" value={item.unitPrice} onChange={(e) => onChange({ unitPrice: e.target.value })} placeholder="0.00" />
+          <Input id={`price-${item.key}`} inputMode="decimal" value={item.unitPrice} onChange={(e) => onChange({ unitPrice: e.target.value, priceEdited: true })} placeholder="0.00" />
         </Field>
         <div className="grid gap-1.5">
           <span className="text-xs font-medium">Line total</span>

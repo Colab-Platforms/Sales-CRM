@@ -13,7 +13,6 @@
 //  - Payment.refundedAmount / refundedAt / status change only on COMPLETED. Order.status is never touched.
 //  - Only the sandbox may execute unless CASHFREE_ALLOW_PRODUCTION_REFUNDS=true is set explicitly.
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -75,13 +74,15 @@ interface OutcomeContext {
   allowComplete: boolean;
   /** Set when the provider rejected the call outright. */
   failure?: { reason: string; code: string };
+  /** The refund webhook: only a refund still PROCESSING is touched, so a repeated delivery (or one for an already failed/finished refund) changes nothing and logs nothing. */
+  onlyIfProcessing?: boolean;
 }
 
 export type OutcomeResult = { outcome: "completed" | "failed" | "processing" | "unchanged" | "mismatch" };
 
 /**
  * Applies what Cashfree says about a refund to the request (and, once confirmed COMPLETED, to the Payment). Idempotent and lock-protected, so a webhook,
- * a status refresh and a retry can all call it for the same refund without ever counting it twice. The future refund webhook should call exactly this.
+ * a status refresh and a retry can all call it for the same refund without ever counting it twice. The refund webhook (cashfree.webhook.processor.ts) calls exactly this, after re-reading the refund from Cashfree.
  */
 export async function applyRefundOutcome(tx: Db, requestId: string, provider: CashfreeRefund | null, ctx: OutcomeContext): Promise<OutcomeResult> {
   const head = await tx.refundRequest.findUnique({ where: { id: requestId }, select: { orderId: true } });
@@ -98,6 +99,7 @@ export async function applyRefundOutcome(tx: Db, requestId: string, provider: Ca
   });
   if (req.status !== RefundRequestStatus.APPROVED || req.executionStatus === RefundExecutionStatus.COMPLETED) return { outcome: "unchanged" };
   if (req.executionStatus === null) return { outcome: "unchanged" }; // execution was never started: nothing to apply
+  if (ctx.onlyIfProcessing && req.executionStatus !== RefundExecutionStatus.PROCESSING) return { outcome: "unchanged" };
 
   const base = { leadId: req.order.leadId, orderId: req.orderId, actorId: ctx.actor?.id ?? null, actorRole: ctx.actor?.role ?? null, source: ctx.source };
   const providerCtx = { provider: "CASHFREE", refundRequestId: req.id, refundId: req.refundId, cfRefundId: provider?.cfRefundId ?? req.cfRefundId, providerStatus: provider?.refundStatus ?? req.providerStatus };
@@ -203,11 +205,12 @@ class RefundExecutionService {
     if (blocked) throw new ApiError(blocked, STATUS_CODES.FORBIDDEN);
   }
 
-  private async load(tx: Db, user: AuthUser, id: string) {
+  private async load(tx: Db, _user: AuthUser, id: string) {
     const head = await tx.refundRequest.findUnique({ where: { id }, select: { orderId: true } });
     if (!head) throw new ApiError("Refund request not found", STATUS_CODES.NOT_FOUND);
     await advisoryLock(tx, orderLockKey(head.orderId));
-    const scope = await getLeadScope(user, tx);
+    // Executing/checking a refund is manager/admin only and, like approving it, is company-wide (not limited to the approver's own team).
+    const scope: Prisma.LeadWhereInput = {};
     const found = await tx.refundRequest.findFirst({
       where: { id, ...(Object.keys(scope).length > 0 ? { order: { lead: scope } } : {}) },
       select: {

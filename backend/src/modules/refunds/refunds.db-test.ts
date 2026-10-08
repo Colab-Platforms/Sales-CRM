@@ -231,8 +231,8 @@ describe("approval and rejection", () => {
       assert.ok(done.decisionAt);
       const act = await tx.activity.findFirstOrThrow({ where: { orderId: w.orderId, type: ActivityType.REFUND_APPROVED } });
       assert.deepEqual([act.actorId, act.actorRole, act.referenceType, act.referenceId], [w.manager.id, Role.MANAGER, "RefundRequest", r.id]);
-      assert.equal((await svc.list(w.manager, { status: "PENDING", page: 1, pageSize: 20 })).items.length, 0);
-      assert.equal((await svc.list(w.manager, { status: "APPROVED", page: 1, pageSize: 20 })).items.length, 1);
+      assert.equal((await svc.list(w.manager, { status: "PENDING", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 0);
+      assert.equal((await svc.list(w.manager, { status: "APPROVED", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 1);
     });
   });
 
@@ -262,16 +262,16 @@ describe("approval and rejection", () => {
     });
   });
 
-  it("a salesperson can not decide or list; a manager outside the team can not see or decide the request", async () => {
+  it("a salesperson can not decide or list; EVERY manager - whatever their team - sees the request and may decide it", async () => {
     await inRollback(async (tx, svc) => {
       const w = await world(tx);
       const r = await svc.createRequest(w.sales, w.orderId, body(w, "100"));
       await rejects(svc.approve(w.sales, r.id), 403);
       await rejects(svc.reject(w.sales, r.id, "x"), 403);
       await rejects(svc.list(w.sales, { status: "PENDING", page: 1, pageSize: 20 }), 403);
-      await rejects(svc.approve(w.outsiderManager, r.id), 404);
-      assert.equal((await svc.list(w.outsiderManager, { status: "PENDING", page: 1, pageSize: 20 })).items.length, 0);
-      assert.equal((await svc.list(w.manager, { status: "PENDING", page: 1, pageSize: 20 })).items.length, 1);
+      // approval is company-wide: a manager of another team sees it too (deciding is exercised in refunds.visibility.db-test.ts)
+      assert.equal((await svc.list(w.outsiderManager, { status: "PENDING", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 1);
+      assert.equal((await svc.list(w.manager, { status: "PENDING", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 1);
       assert.equal((await svc.list(w.admin, { status: "PENDING", page: 1, pageSize: 20 })).items.some((i) => i.id === r.id), true);
     });
   });
@@ -293,13 +293,14 @@ describe("approval and rejection", () => {
     });
   });
 
-  it("the pending badge counts only what this user could act on (in scope, not their own)", async () => {
+  it("the pending badge counts what this user could act on (any team, not their own)", async () => {
     await inRollback(async (tx, svc) => {
       const w = await world(tx);
       await svc.createRequest(w.sales, w.orderId, body(w, "100"));
       await svc.createRequest(w.manager, w.orderId, body(w, "100"));
-      assert.equal((await svc.pendingCount(w.manager)).count, 1);
-      assert.equal((await svc.pendingCount(w.outsiderManager)).count, 0);
+      const mine = (await svc.pendingCount(w.manager)).count; // the database may hold other pending requests; only the difference is ours
+      const outsider = (await svc.pendingCount(w.outsiderManager)).count;
+      assert.equal(outsider - mine, 1); // the outsider can act on both of the two new requests, the manager only on the one he did not raise
       assert.ok((await svc.pendingCount(w.admin)).count >= 2);
       await rejects(svc.pendingCount(w.sales), 403);
     });

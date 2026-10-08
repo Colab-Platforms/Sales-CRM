@@ -14,7 +14,10 @@ import { asRecord, asString, headerOf, sha256Hex } from "../integrations/integra
 // UNCONFIRMED until sandbox: whether a payment made through a link also fires PAYMENT_SUCCESS_WEBHOOK, and how its
 // order_id relates to the link_id. Both webhook types are therefore matched to the CRM payment by either id.
 
-export const SUPPORTED_TYPES = ["PAYMENT_LINK_EVENT", "PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK"] as const;
+//   REFUND_STATUS_WEBHOOK (2022-09-01): { type, event_time, data: { refund: { cf_refund_id, refund_id, order_id, refund_amount, refund_status, status_description, processed_at, ... } } }
+//     Only an ANNOUNCEMENT that a refund changed: the processor re-reads the refund from Cashfree before applying anything, and a refund webhook can never start a refund.
+
+export const SUPPORTED_TYPES = ["PAYMENT_LINK_EVENT", "PAYMENT_SUCCESS_WEBHOOK", "PAYMENT_FAILED_WEBHOOK", "PAYMENT_USER_DROPPED_WEBHOOK", "REFUND_STATUS_WEBHOOK"] as const;
 
 export function eventType(payload: unknown): string | null {
   const body = asRecord(payload);
@@ -47,6 +50,7 @@ export type CashfreeEvent =
       crmPaymentId: string | null;
       payment: PaymentInfo | null;
     }
+  | { kind: "refund"; refundId: string; orderId: string | null; rawStatus: string; amount: string | null; cfRefundId: string | null }
   | { kind: "payment"; outcome: "SUCCESS" | "FAILED" | "DROPPED" | "OTHER"; orderId: string; linkId: string | null; crmPaymentId: string | null; payment: PaymentInfo };
 
 export function methodFromGroup(group: string | null): PaymentMethod | null {
@@ -129,6 +133,13 @@ export function parseEvent(payload: unknown): CashfreeEvent | null {
       crmPaymentId: crmPaymentId(order.order_tags, order.order_meta, data.link_notes),
       payment,
     };
+  }
+  if (type === "REFUND_STATUS_WEBHOOK") {
+    const refund = asRecord(data.refund);
+    const refundId = asString(refund.refund_id);
+    const rawStatus = asString(refund.refund_status);
+    if (!refundId || !rawStatus) return null;
+    return { kind: "refund", refundId, orderId: asString(refund.order_id) ?? asString(data.order_id), rawStatus: rawStatus.toUpperCase(), amount: asString(refund.refund_amount), cfRefundId: asString(refund.cf_refund_id) };
   }
   return null;
 }

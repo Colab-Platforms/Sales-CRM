@@ -165,8 +165,15 @@ export interface RefundsServiceDeps {
 
 const defaultCancelOrder: CancelOrderFn = async (user, orderId, reason) => {
   const { default: OrdersService } = await import("../orders/orders.service.js");
-  return new OrdersService().cancelOrder(user, orderId, { reason });
+  // Only reached from approve(), which is manager/admin only: the approver cancels the order whichever team its customer belongs to.
+  return new OrdersService().cancelOrder(user, orderId, { reason }, { approverScope: true });
 };
+
+/**
+ * Refund APPROVAL is a company-wide queue: every manager and every admin sees every pending request and may decide it (never their own), whichever team the
+ * telecaller or the customer belongs to. Requesting a refund stays inside the requester's own lead scope (createRequest) - only deciding/viewing is global.
+ */
+const APPROVER_SCOPE: Prisma.LeadWhereInput = {};
 
 class RefundsService {
   constructor(
@@ -272,7 +279,7 @@ class RefundsService {
     if (!APPROVER_ROLES.has(user.role)) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
 
     const pre = await this.runner.$transaction(async (tx) => {
-      const scope = await getLeadScope(user, tx);
+      const scope = APPROVER_SCOPE;
       const found = await tx.refundRequest.findFirst({ where: { id, ...(Object.keys(scope).length > 0 ? { order: { lead: scope } } : {}) }, select: { ...REQUEST_SELECT } });
       if (!found) throw new ApiError("Refund request not found", STATUS_CODES.NOT_FOUND);
       if (found.requestedBy.id === user.id) throw new ApiError("You can not approve or reject your own refund request", STATUS_CODES.FORBIDDEN);
@@ -312,7 +319,7 @@ class RefundsService {
       if (!head) throw new ApiError("Refund request not found", STATUS_CODES.NOT_FOUND);
       await advisoryLock(tx, orderLockKey(head.orderId));
 
-      const scope = await getLeadScope(user, tx);
+      const scope = APPROVER_SCOPE;
       const found = await tx.refundRequest.findFirst({ where: { id, ...(Object.keys(scope).length > 0 ? { order: { lead: scope } } : {}) }, select: { ...REQUEST_SELECT } });
       if (!found) throw new ApiError("Refund request not found", STATUS_CODES.NOT_FOUND);
 
@@ -361,7 +368,7 @@ class RefundsService {
   async list(user: AuthUser, query: ListRefundRequestsQuery): Promise<RefundRequestListResult> {
     if (!APPROVER_ROLES.has(user.role)) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
     return this.runner.$transaction(async (tx) => {
-      const scope = await getLeadScope(user, tx);
+      const scope = APPROVER_SCOPE;
       const where: Prisma.RefundRequestWhereInput = {
         ...(Object.keys(scope).length > 0 ? { order: { lead: scope } } : {}),
         ...(query.status !== "ALL" ? { status: query.status } : {}),
@@ -377,11 +384,11 @@ class RefundsService {
     });
   }
 
-  /** How many pending requests THIS user could act on (in scope, not their own) - the sidebar badge. */
+  /** How many pending requests THIS user could act on (any team, not their own) - the sidebar badge. */
   async pendingCount(user: AuthUser): Promise<{ count: number }> {
     if (!APPROVER_ROLES.has(user.role)) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
     return this.runner.$transaction(async (tx) => {
-      const scope = await getLeadScope(user, tx);
+      const scope = APPROVER_SCOPE;
       const count = await tx.refundRequest.count({
         where: { status: RefundRequestStatus.PENDING, requestedById: { not: user.id }, ...(Object.keys(scope).length > 0 ? { order: { lead: scope } } : {}) },
       });

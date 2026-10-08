@@ -18,7 +18,7 @@ const store = createPrismaWebhookStore(prisma, CASHFREE_PROVIDER);
 
 async function process(eventId: string) {
   try {
-    return await processCashfreeEvent(eventId, { store, runner: prisma, verifyLink: (linkId) => new CashfreeClient(loadCashfreeConfig()).getLink(linkId) });
+    return await processCashfreeEvent(eventId, { store, runner: prisma, verifyLink: (linkId) => new CashfreeClient(loadCashfreeConfig()).getLink(linkId), verifyRefund: (orderId, refundId) => new CashfreeClient(loadCashfreeConfig()).getRefund(orderId, refundId) });
   } catch (error) {
     logger.error("Cashfree webhook processing crashed", error);
     return "failed";
