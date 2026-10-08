@@ -14,16 +14,21 @@ import type { WebChatConversationListItem, WebChatListParams } from "@/lib/api-c
 import { useAuthStore } from "@/stores/auth-store";
 import { cn } from "@/lib/utils";
 import { WebChatConversationPanel } from "./webchat-conversation-panel";
-import { FILTER_LABELS, displayName, filterToParams, isUnread, type WebChatQueueFilter } from "./webchat-helpers";
+import { FILTER_LABELS, PRIMARY_FILTERS, displayName, filterToParams, isUnread, type WebChatQueueFilter } from "./webchat-helpers";
 
 const SEARCH_DEBOUNCE_MS = 300;
 
 const TIME_FORMAT = new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit", day: "2-digit", month: "short" });
 
+const PREVIEW_PREFIX: Record<string, string> = { AGENT: "You: ", AI: "AI: " };
+
 function QueueItem({ conversation, selected, onSelect }: { conversation: WebChatConversationListItem; selected: boolean; onSelect: () => void }) {
   const unread = isUnread(conversation);
   const contact = conversation.lead?.mobile ?? conversation.lead?.email ?? null;
   const stamp = conversation.lastMessageAt ?? conversation.createdAt;
+  const preview = conversation.lastMessagePreview
+    ? `${conversation.lastMessageSender ? (PREVIEW_PREFIX[conversation.lastMessageSender] ?? "") : ""}${conversation.lastMessagePreview}`
+    : null;
 
   return (
     <li>
@@ -41,6 +46,9 @@ function QueueItem({ conversation, selected, onSelect }: { conversation: WebChat
           <span className="shrink-0 text-xs text-muted-foreground">{TIME_FORMAT.format(new Date(stamp))}</span>
         </div>
         {contact ? <span className="truncate text-xs text-muted-foreground">{contact}</span> : null}
+        {preview ? (
+          <span className={cn("truncate text-xs", unread ? "font-medium text-foreground" : "text-muted-foreground")}>{preview}</span>
+        ) : null}
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className={cn("rounded px-1.5 py-0.5 font-medium", conversation.mode === "HUMAN" ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground")}>
             {conversation.mode === "HUMAN" ? "Human" : "AI"}
@@ -56,7 +64,7 @@ function QueueItem({ conversation, selected, onSelect }: { conversation: WebChat
 
 export function WebChatLiveQueueView() {
   const userId = useAuthStore((s) => s.user?.id);
-  const [filter, setFilter] = useState<WebChatQueueFilter>("active");
+  const [filter, setFilter] = useState<WebChatQueueFilter>("all");
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -90,17 +98,35 @@ export function WebChatLiveQueueView() {
     <div className="space-y-4">
       <div>
         <h1 className="text-2xl font-semibold">Website Chat</h1>
-        <p className="text-sm text-muted-foreground">
-          Website visitors who asked for a human. Replies you send are saved in the CRM; delivery to the visitor is not connected yet.
-        </p>
+        <p className="text-sm text-muted-foreground">Every active website chat, AI-handled or handed off to a human.</p>
       </div>
 
       <Card className="overflow-hidden p-0">
         <CardContent className="grid h-[calc(100vh-14rem)] min-h-[420px] grid-cols-1 gap-0 p-0 md:grid-cols-[320px_1fr]">
           <div className={cn("flex min-h-0 flex-col border-b md:border-r md:border-b-0", selectedId ? "hidden md:flex" : "flex")}>
             <div className="space-y-2 border-b p-3">
+              <div role="tablist" aria-label="Queue view" className="flex flex-wrap gap-1.5">
+                {PRIMARY_FILTERS.map((key) => {
+                  const isActive = key === filter;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      onClick={() => changeFilter(key)}
+                      className={cn(
+                        "inline-flex h-7 items-center rounded-full border px-2.5 text-xs font-semibold whitespace-nowrap transition-colors",
+                        isActive ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {FILTER_LABELS[key]}
+                    </button>
+                  );
+                })}
+              </div>
               <NativeSelect
-                aria-label="Queue view"
+                aria-label="More queue filters"
                 value={filter}
                 onChange={(e) => changeFilter(e.target.value as WebChatQueueFilter)}
               >

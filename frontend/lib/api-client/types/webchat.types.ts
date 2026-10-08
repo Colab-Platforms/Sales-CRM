@@ -27,6 +27,8 @@ export interface WebChatConversationListItem {
   intent: string | null;
   productInterest: string | null;
   lastMessageAt: string | null;
+  lastMessagePreview: string | null;
+  lastMessageSender: WebChatSender | null;
   lastReadAt: string | null;
   archivedAt: string | null;
   createdAt: string;
@@ -78,4 +80,7 @@ export interface WebChatAssignResult {
 export interface WebChatSendMessageResult {
   messageId: string;
   createdAt: string;
+  /** Whether the reply reached the chatbot for the visitor to see - false means it is saved in the
+   * CRM only (chatbot unreachable or two-way reply not configured). */
+  delivered: boolean;
 }

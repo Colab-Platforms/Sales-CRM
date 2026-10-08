@@ -201,9 +201,10 @@ export function WebChatConversationPanel({
     sendMessage(
       { id: data!.id, text },
       {
-        onSuccess: () => {
+        onSuccess: (result) => {
           setDraft("");
-          toast.success("Reply saved. Delivery to the visitor is not connected yet.");
+          if (result.delivered) toast.success("Reply sent.");
+          else toast.warning("Reply saved, but could not be delivered to the visitor.");
         },
         onError: (e) => toast.error(getErrorMessage(e, "Could not save your reply.")),
       },
@@ -300,9 +301,6 @@ export function WebChatConversationPanel({
         </div>
 
         <div className="space-y-2 border-t p-3">
-          <p className="text-xs text-muted-foreground">
-            Replies are saved in the CRM. The website visitor does not receive them yet.
-          </p>
           <div className="flex items-end gap-2">
             <textarea
               value={draft}

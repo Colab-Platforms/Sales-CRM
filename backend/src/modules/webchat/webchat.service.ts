@@ -6,6 +6,7 @@ import type { AuthUser } from "@/middlewares/auth.js";
 import { ActivityType, ConversationMode, Role, UserStatus, WebChatSender } from "../../../generated/prisma/enums.js";
 import { buildWebChatListWhere, scopedWebChatWhere } from "./webchat.filters.js";
 import { buildWebChatScope, canAssignConversationTo } from "./webchat.scope.js";
+import { httpAgentReplyDelivery, type AgentReplyDelivery } from "./webchat.chatbotClient.js";
 import type {
   ListWebChatConversationsQuery,
   WebChatConversationDetail,
@@ -25,13 +26,22 @@ import type {
  * agent replies have NO matching ActivityType today; they are not recorded here and this gap is
  * reported rather than solved by adding enum values.
  *
- * Phase 2 boundary: sendAgentMessage stores the reply only. Delivering it to the chatbot is the
- * Phase 2 integration point marked inside that method - intentionally not implemented yet.
+ * Agent replies: sendAgentMessage always stores the AGENT message first (the CRM is the source of
+ * truth for what was sent), then attempts delivery to the chatbot via the injected
+ * AgentReplyDelivery port (webchat.chatbotClient.ts). Delivery is fail-soft - its result is
+ * reported back as `delivered` but never changes whether the message was saved.
  */
 
 const conversationInclude = {
   lead: { select: { id: true, leadNumber: true, firstName: true, lastName: true, mobile: true, email: true } },
   assignedTo: { select: { id: true, name: true } },
+  // Just the latest message, for the queue preview - same one-row-per-relation convention as
+  // call list previews. Never the full thread here; getConversation loads that separately.
+  messages: {
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: { sender: true, body: true },
+  },
 } as const;
 
 type ConversationRow = {
@@ -46,9 +56,11 @@ type ConversationRow = {
   createdAt: Date;
   lead: { id: string; leadNumber: string; firstName: string; lastName: string | null; mobile: string | null; email: string | null } | null;
   assignedTo: { id: string; name: string } | null;
+  messages: { sender: WebChatSender; body: string }[];
 };
 
 function mapListItem(row: ConversationRow): WebChatConversationListItem {
+  const latest = row.messages?.[0] ?? null;
   return {
     id: row.id,
     externalConversationId: row.externalConversationId,
@@ -58,6 +70,8 @@ function mapListItem(row: ConversationRow): WebChatConversationListItem {
     intent: row.intent,
     productInterest: row.productInterest,
     lastMessageAt: row.lastMessageAt,
+    lastMessagePreview: latest?.body ?? null,
+    lastMessageSender: latest?.sender ?? null,
     lastReadAt: row.lastReadAt,
     archivedAt: row.archivedAt,
     createdAt: row.createdAt,
@@ -65,7 +79,10 @@ function mapListItem(row: ConversationRow): WebChatConversationListItem {
 }
 
 export class WebChatService {
-  constructor(private readonly db: DbClient = prisma) {}
+  constructor(
+    private readonly db: DbClient = prisma,
+    private readonly chatbot: AgentReplyDelivery = httpAgentReplyDelivery,
+  ) {}
 
   private async findScoped(user: AuthUser, id: string) {
     const scope = await buildWebChatScope(user, this.db);
@@ -176,8 +193,8 @@ export class WebChatService {
     return { id, archivedAt };
   }
 
-  async sendAgentMessage(user: AuthUser, id: string, text: string): Promise<{ messageId: string; createdAt: Date }> {
-    await this.findScoped(user, id);
+  async sendAgentMessage(user: AuthUser, id: string, text: string): Promise<{ messageId: string; createdAt: Date; delivered: boolean }> {
+    const row = await this.findScoped(user, id);
 
     const message = await this.db.webChatMessage.create({
       data: {
@@ -195,10 +212,15 @@ export class WebChatService {
       select: { id: true },
     });
 
-    // PHASE 2 BOUNDARY: deliver `text` to the chatbot backend here (CRM -> chatbot reply call using
-    // its own shared secret). Intentionally not implemented in Phase 1 - the message is stored only.
+    // The CRM message above is the source of truth and is already committed - delivery to the
+    // chatbot is attempted after, and its outcome never undoes the save (see chatbotClient.ts).
+    const delivered = await this.chatbot.deliver({
+      externalConversationId: row.externalConversationId,
+      text,
+      agentName: user.username,
+    });
 
-    return { messageId: message.id, createdAt: message.createdAt };
+    return { messageId: message.id, createdAt: message.createdAt, delivered };
   }
 }
 

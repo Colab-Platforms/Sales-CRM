@@ -118,7 +118,7 @@ export const sendWebChatAgentMessage = async (req: AuthRequest, res: Response): 
       return;
     }
     const result = await webChatService.sendAgentMessage(req.user!, id, value.text);
-    sendResponse(res, true, result, "Message stored.", STATUS_CODES.CREATED);
+    sendResponse(res, true, result, result.delivered ? "Message sent." : "Message saved, but could not be delivered to the visitor.", STATUS_CODES.CREATED);
   } catch (error: any) {
     handleError(res, error);
   }

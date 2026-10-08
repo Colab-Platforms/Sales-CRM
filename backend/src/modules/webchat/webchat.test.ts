@@ -186,6 +186,33 @@ describe("read / archive / handoff / ai-mode / agent message (tests 10, 11, 14, 
     await assert.rejects(service.assign(admin, UUID_A, "ghost"), (err: any) => err.statusCode === 400);
   });
 
+  it("an agent reply delivered to the chatbot is stored AND reported as delivered (test: two-way reply)", async () => {
+    const conv = { id: UUID_A, leadId: null, externalConversationId: "web-session-1" };
+    const { db, messages } = fakeDb({ conversations: [conv] });
+    const calls: unknown[] = [];
+    const chatbot = { deliver: async (payload: unknown) => (calls.push(payload), true) };
+    const service = new WebChatService(db, chatbot as any);
+
+    const result = await service.sendAgentMessage(salesperson, UUID_A, "We'll ship it today.");
+
+    assert.equal(result.delivered, true);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].sender, WebChatSender.AGENT);
+    assert.deepEqual(calls, [{ externalConversationId: "web-session-1", text: "We'll ship it today.", agentName: "sp1" }]);
+  });
+
+  it("a reply the chatbot could not receive is still saved in the CRM - delivery never blocks the save", async () => {
+    const conv = { id: UUID_A, leadId: null, externalConversationId: "web-session-1" };
+    const { db, messages } = fakeDb({ conversations: [conv] });
+    const chatbot = { deliver: async () => false };
+    const service = new WebChatService(db, chatbot as any);
+
+    const result = await service.sendAgentMessage(salesperson, UUID_A, "Hello");
+
+    assert.equal(result.delivered, false);
+    assert.equal(messages.length, 1, "message is still stored even though delivery failed");
+  });
+
   it("assignment with a Lead records an ASSIGNMENT activity; without a Lead it records nothing", async () => {
     const withLead = { id: UUID_A, leadId: "lead-1", assignedToId: null };
     const withoutLead = { id: UUID_B, leadId: null, assignedToId: null };
@@ -235,6 +262,22 @@ describe("list query: pagination, search, archived, mode, assigned (tests 17, 18
     assert.deepEqual(where.AND[0], scope);
     assert.ok(where.AND.some((c: any) => c.mode === ConversationMode.HUMAN));
     assert.ok(where.AND.some((c: any) => c.assignedToId === null));
+  });
+
+  it("Live Queue 'All' tab: mode omitted returns both AI and HUMAN (only archived is filtered)", () => {
+    const where = buildWebChatListWhere({}, {}) as any;
+    assert.deepEqual(where, { AND: [{ archivedAt: null }] });
+    assert.ok(!where.AND.some((c: any) => "mode" in c), "no mode clause at all - never defaults to HUMAN-only");
+  });
+
+  it("Live Queue 'AI Active' tab: mode=AI returns only AI conversations", () => {
+    const where = buildWebChatListWhere({ mode: ConversationMode.AI }, {}) as any;
+    assert.ok(where.AND.some((c: any) => c.mode === ConversationMode.AI));
+  });
+
+  it("Live Queue 'Waiting for Human' tab: mode=HUMAN returns only HUMAN conversations", () => {
+    const where = buildWebChatListWhere({ mode: ConversationMode.HUMAN }, {}) as any;
+    assert.ok(where.AND.some((c: any) => c.mode === ConversationMode.HUMAN));
   });
 
   it("body validators reject empty agent text and bad assignee ids", () => {

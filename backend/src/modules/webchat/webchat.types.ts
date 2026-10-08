@@ -39,6 +39,10 @@ export interface WebChatConversationListItem {
   intent: string | null;
   productInterest: string | null;
   lastMessageAt: Date | null;
+  /** The most recent message's text/sender, for the queue preview - null for a brand-new
+   * conversation with no messages yet. */
+  lastMessagePreview: string | null;
+  lastMessageSender: WebChatSender | null;
   lastReadAt: Date | null;
   archivedAt: Date | null;
   createdAt: Date;
