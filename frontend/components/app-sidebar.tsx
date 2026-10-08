@@ -335,7 +335,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Organization",
       items: [
         { title: "Users", href: "/dashboard/users", icon: UserCog },
-        { title: "Groups", icon: Building2 },
+        { title: "Groups", href: "/dashboard/groups", icon: Building2 },
         { title: "Sources", href: "/dashboard/sources", icon: Plug },
         {
           title: "Virtual Numbers",
@@ -415,6 +415,23 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Administration",
       items: [
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
+      ],
+    },
+  ],
+
+  // HR only handles team/salesperson management — nothing else is exposed.
+  HR: [
+    {
+      label: "Overview",
+      items: [
+        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "Organization",
+      items: [
+        { title: "Users", href: "/dashboard/staff", icon: UserCog },
+        { title: "Teams", href: "/dashboard/groups", icon: Building2 },
       ],
     },
   ],

@@ -9,6 +9,11 @@ import {
   validateResetPasswordSchema,
   validateUpdateManagerSchema,
   validateUpdateSalespersonSchema,
+  validateCreateHrSchema,
+  validateCreateGroupSchema,
+  validateUpdateGroupSchema,
+  validateAddSalespersonSchema,
+  validateAddExistingMemberSchema,
 } from "./admin.validators.js";
 
 const adminService = new AdminService();
@@ -134,6 +139,126 @@ export const resetSalespersonPassword = async (req: AuthRequest, res: Response):
 
     const result = await adminService.resetSalespersonPassword(req.params.id as string, value.password);
     sendResponse(res, true, result, "Salesperson password updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const createHr = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCreateHrSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.createHr(value);
+    sendResponse(res, true, result, "HR user created successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listHr = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await adminService.listHr();
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const createGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCreateGroupSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.createGroup(value);
+    sendResponse(res, true, result, "Group created successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listGroups = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await adminService.listGroups();
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const getGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await adminService.getGroupById(req.params.groupId as string);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const updateGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateUpdateGroupSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.updateGroup(req.params.groupId as string, value);
+    sendResponse(res, true, result, "Group updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const deleteGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await adminService.deleteGroup(req.params.groupId as string);
+    sendResponse(res, true, result, "Group deleted successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const addNewSalespersonToGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAddSalespersonSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.addNewSalesperson(req.params.groupId as string, req.user!.id, value);
+    sendResponse(res, true, result, "Salesperson added to group.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const addExistingSalespersonToGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAddExistingMemberSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await adminService.addExistingSalesperson(req.params.groupId as string, value);
+    sendResponse(res, true, result, "Salesperson added to group.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const removeSalespersonFromGroup = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    await adminService.removeSalesperson(req.params.groupId as string, req.params.userId as string);
+    sendResponse(res, true, null, "Salesperson removed from group.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

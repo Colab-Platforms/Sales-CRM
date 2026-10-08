@@ -7,6 +7,11 @@ import type {
   ResetPasswordBody,
   UpdateManagerBody,
   UpdateSalespersonBody,
+  CreateHrBody,
+  CreateGroupBody,
+  UpdateGroupBody,
+  AddSalespersonBody,
+  AddExistingMemberBody,
 } from "./admin.types.js";
 
 const createManagerSchema = z.object({
@@ -14,6 +19,39 @@ const createManagerSchema = z.object({
   username: usernameSchema,
   password: z.string().min(6, "Password must be at least 6 characters"),
   phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
+});
+
+const createHrSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
+  username: usernameSchema,
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
+});
+
+const createGroupSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
+  description: z.string().max(1000, "Description is too long").optional(),
+  managerId: z.string().guid("Select a manager"),
+});
+
+const updateGroupSchema = z
+  .object({
+    name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long").optional(),
+    description: z.string().max(1000, "Description is too long").optional(),
+    status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
+    managerId: z.string().guid("Select a valid manager").optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
+
+const addSalespersonSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
+  username: usernameSchema,
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
+});
+
+const addExistingMemberSchema = z.object({
+  userId: z.string().guid("Select a salesperson"),
 });
 
 const createSalespersonSchema = z.object({
@@ -61,3 +99,15 @@ export const validateUpdateManagerSchema = (body: unknown) =>
 
 export const validateUpdateSalespersonSchema = (body: unknown) =>
   validateSchema<UpdateSalespersonBody>(updateSalespersonSchema, body);
+
+export const validateCreateHrSchema = (body: unknown) => validateSchema<CreateHrBody>(createHrSchema, body);
+
+export const validateCreateGroupSchema = (body: unknown) => validateSchema<CreateGroupBody>(createGroupSchema, body);
+
+export const validateUpdateGroupSchema = (body: unknown) => validateSchema<UpdateGroupBody>(updateGroupSchema, body);
+
+export const validateAddSalespersonSchema = (body: unknown) =>
+  validateSchema<AddSalespersonBody>(addSalespersonSchema, body);
+
+export const validateAddExistingMemberSchema = (body: unknown) =>
+  validateSchema<AddExistingMemberBody>(addExistingMemberSchema, body);

@@ -3,10 +3,10 @@
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { KeyRound, UserPlus, Users } from "lucide-react";
-import { adminSalespersonsQueryOptions, hrQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
+import { FolderPlus, KeyRound, UserPlus, Users } from "lucide-react";
+import { adminSalespersonsQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
 import {
-  useCreateHrMutation,
+  useCreateAdminGroupMutation,
   useCreateManagerMutation,
   useCreateSalespersonMutation,
   useDeactivateManagerMutation,
@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { HrUser, ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
+import type { ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
 
 interface AccountFieldErrors {
   name?: string;
@@ -45,10 +45,6 @@ interface AccountFieldErrors {
 
 const USERNAME_PATTERN = /^[a-z0-9._-]{3,50}$/i;
 
-// Client-side mirror of the backend's zod rules, so obvious mistakes (short
-// password, malformed username) show up instantly under the offending field
-// instead of round-tripping to the server and landing in a generic banner
-// that gives no clue which field was wrong.
 function validateAccountFields(
   fields: { name: string; username: string; password: string; reportingManagerId?: string },
   opts: { requireReportingManager: boolean },
@@ -99,9 +95,9 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="create-name">Full Name</Label>
+          <Label htmlFor="staff-create-mgr-name">Full Name</Label>
           <Input
-            id="create-name"
+            id="staff-create-mgr-name"
             placeholder="e.g. Sarah Connor"
             value={name}
             onChange={(e) => {
@@ -115,9 +111,9 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-username">Username</Label>
+          <Label htmlFor="staff-create-mgr-username">Username</Label>
           <Input
-            id="create-username"
+            id="staff-create-mgr-username"
             type="text"
             placeholder="sarah.connor_avatar"
             value={username}
@@ -131,9 +127,9 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-password">Password</Label>
+          <Label htmlFor="staff-create-mgr-password">Password</Label>
           <PasswordInput
-            id="create-password"
+            id="staff-create-mgr-password"
             placeholder="Enter a secure password"
             value={password}
             onChange={(e) => {
@@ -147,11 +143,9 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </div>
 
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="create-phone">Phone Number</Label>
-          </div>
+          <Label htmlFor="staff-create-mgr-phone">Phone Number</Label>
           <Input
-            id="create-phone"
+            id="staff-create-mgr-phone"
             type="tel"
             required
             placeholder="+1 (555) 000-0000"
@@ -167,12 +161,7 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         ) : null}
 
         <DialogFooter className="gap-2 pt-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onDone}
-            disabled={createManager.isPending}
-          >
+          <Button type="button" variant="outline" onClick={onDone} disabled={createManager.isPending}>
             Cancel
           </Button>
           <Button type="submit" disabled={createManager.isPending}>
@@ -181,135 +170,6 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </DialogFooter>
       </form>
     </DialogContent>
-  );
-}
-
-function CreateHrModalContent({ onDone }: { onDone: () => void }) {
-  const createHr = useCreateHrMutation();
-  const [name, setName] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [phone, setPhone] = useState("");
-  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({});
-
-  function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const errors = validateAccountFields({ name, username, password }, { requireReportingManager: false });
-    setFieldErrors(errors);
-    if (Object.keys(errors).length > 0) return;
-
-    createHr.mutate(
-      { name, username, password, phone },
-      {
-        onSuccess: () => {
-          toast.success("HR user added successfully.");
-          onDone();
-        },
-      },
-    );
-  }
-
-  return (
-    <DialogContent className="sm:max-w-[460px]">
-      <DialogHeader>
-        <DialogTitle>Add HR User</DialogTitle>
-        <DialogDescription>
-          Create an HR account. HR can create/edit/deactivate teams and salespersons, but nothing else.
-        </DialogDescription>
-      </DialogHeader>
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="create-hr-name">Full Name</Label>
-          <Input
-            id="create-hr-name"
-            placeholder="e.g. Priya Sharma"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setFieldErrors((prev) => ({ ...prev, name: undefined }));
-            }}
-            required
-            autoFocus
-          />
-          {fieldErrors.name ? <p className="text-xs text-destructive">{fieldErrors.name}</p> : null}
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="create-hr-username">Username</Label>
-          <Input
-            id="create-hr-username"
-            type="text"
-            placeholder="priya.sharma_avatar"
-            value={username}
-            onChange={(e) => {
-              setUsername(e.target.value);
-              setFieldErrors((prev) => ({ ...prev, username: undefined }));
-            }}
-            required
-          />
-          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="create-hr-password">Password</Label>
-          <PasswordInput
-            id="create-hr-password"
-            placeholder="Enter a secure password"
-            value={password}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              setFieldErrors((prev) => ({ ...prev, password: undefined }));
-            }}
-            required
-            autoComplete="new-password"
-          />
-          {fieldErrors.password ? <p className="text-xs text-destructive">{fieldErrors.password}</p> : null}
-        </div>
-
-        <div className="space-y-1.5">
-          <Label htmlFor="create-hr-phone">Phone Number</Label>
-          <Input
-            id="create-hr-phone"
-            type="tel"
-            required
-            placeholder="+1 (555) 000-0000"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-          />
-        </div>
-
-        {createHr.error ? (
-          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            {getErrorMessage(createHr.error, "Failed to create HR user.")}
-          </div>
-        ) : null}
-
-        <DialogFooter className="gap-2 pt-2">
-          <Button type="button" variant="outline" onClick={onDone} disabled={createHr.isPending}>
-            Cancel
-          </Button>
-          <Button type="submit" disabled={createHr.isPending}>
-            {createHr.isPending ? "Adding HR User..." : "Add HR User"}
-          </Button>
-        </DialogFooter>
-      </form>
-    </DialogContent>
-  );
-}
-
-function HrRow({ hr }: { hr: HrUser }) {
-  const isActive = hr.status === "ACTIVE";
-
-  return (
-    <TableRow>
-      <TableCell className="pl-5 font-semibold">{hr.name}</TableCell>
-      <TableCell className="text-muted-foreground">{hr.username}</TableCell>
-      <TableCell>{hr.phone ?? "—"}</TableCell>
-      <TableCell className="pr-5">
-        <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
-      </TableCell>
-    </TableRow>
   );
 }
 
@@ -356,9 +216,9 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="create-sp-name">Full Name</Label>
+          <Label htmlFor="staff-create-sp-name">Full Name</Label>
           <Input
-            id="create-sp-name"
+            id="staff-create-sp-name"
             placeholder="e.g. John Doe"
             value={name}
             onChange={(e) => {
@@ -372,9 +232,9 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-sp-username">Username</Label>
+          <Label htmlFor="staff-create-sp-username">Username</Label>
           <Input
-            id="create-sp-username"
+            id="staff-create-sp-username"
             type="text"
             placeholder="john.doe@company.com"
             value={username}
@@ -388,9 +248,9 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-sp-password">Password</Label>
+          <Label htmlFor="staff-create-sp-password">Password</Label>
           <PasswordInput
-            id="create-sp-password"
+            id="staff-create-sp-password"
             placeholder="Enter a secure password"
             value={password}
             onChange={(e) => {
@@ -408,11 +268,9 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         </div>
 
         <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <Label htmlFor="create-sp-phone">Phone Number</Label>
-          </div>
+          <Label htmlFor="staff-create-sp-phone">Phone Number</Label>
           <Input
-            id="create-sp-phone"
+            id="staff-create-sp-phone"
             type="tel"
             required
             placeholder="+1 (555) 000-0000"
@@ -422,9 +280,9 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="create-sp-manager">Reporting Manager</Label>
+          <Label htmlFor="staff-create-sp-manager">Reporting Manager</Label>
           <NativeSelect
-            id="create-sp-manager"
+            id="staff-create-sp-manager"
             value={reportingManagerId}
             onChange={(e) => {
               setReportingManagerId(e.target.value);
@@ -455,16 +313,105 @@ function CreateSalespersonModalContent({ managers, onDone }: { managers: Manager
         ) : null}
 
         <DialogFooter className="gap-2 pt-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onDone}
-            disabled={createSalesperson.isPending}
-          >
+          <Button type="button" variant="outline" onClick={onDone} disabled={createSalesperson.isPending}>
             Cancel
           </Button>
           <Button type="submit" disabled={createSalesperson.isPending || !reportingManagerId}>
             {createSalesperson.isPending ? "Adding Salesperson..." : "Add Salesperson"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function CreateGroupModalContent({ managers, onDone }: { managers: ManagerUser[]; onDone: () => void }) {
+  const createGroup = useCreateAdminGroupMutation();
+  const activeManagers = managers.filter((m) => m.status === "ACTIVE");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [managerId, setManagerId] = useState("");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    createGroup.mutate(
+      { name, description: description || undefined, managerId },
+      {
+        onSuccess: () => {
+          toast.success("Group created successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Create Group</DialogTitle>
+        <DialogDescription>Create a new team and assign the manager who will own it.</DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-group-name">Group Name</Label>
+          <Input
+            id="staff-group-name"
+            placeholder="e.g. North Region Sales"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="staff-group-description">Description</Label>
+            <span className="text-xs text-muted-foreground">Optional</span>
+          </div>
+          <Input
+            id="staff-group-description"
+            placeholder="e.g. Handles inbound leads for the north region"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-group-manager">Manager</Label>
+          <NativeSelect
+            id="staff-group-manager"
+            value={managerId}
+            onChange={(e) => setManagerId(e.target.value)}
+            required
+          >
+            <option value="" disabled>
+              Select a manager
+            </option>
+            {activeManagers.map((manager) => (
+              <option key={manager.id} value={manager.id}>
+                {manager.name} ({manager.username})
+              </option>
+            ))}
+          </NativeSelect>
+          {activeManagers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Add an active manager first.</p>
+          ) : null}
+        </div>
+
+        {createGroup.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createGroup.error, "Failed to create group.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={createGroup.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createGroup.isPending || !managerId}>
+            {createGroup.isPending ? "Creating..." : "Create Group"}
           </Button>
         </DialogFooter>
       </form>
@@ -516,9 +463,9 @@ function ChangePasswordModalContent({
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor="change-password-new">New Password</Label>
+          <Label htmlFor="staff-change-password-new">New Password</Label>
           <PasswordInput
-            id="change-password-new"
+            id="staff-change-password-new"
             placeholder="Enter a new password"
             value={password}
             onChange={(e) => {
@@ -537,9 +484,9 @@ function ChangePasswordModalContent({
         </div>
 
         <div className="space-y-1.5">
-          <Label htmlFor="change-password-confirm">Confirm Password</Label>
+          <Label htmlFor="staff-change-password-confirm">Confirm Password</Label>
           <PasswordInput
-            id="change-password-confirm"
+            id="staff-change-password-confirm"
             placeholder="Re-enter the new password"
             value={confirmPassword}
             onChange={(e) => {
@@ -617,9 +564,9 @@ function EditSalespersonModalContent({
       </DialogHeader>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-sp-name-${salesperson.id}`}>Name</Label>
+          <Label htmlFor={`staff-edit-sp-name-${salesperson.id}`}>Name</Label>
           <Input
-            id={`edit-sp-name-${salesperson.id}`}
+            id={`staff-edit-sp-name-${salesperson.id}`}
             value={name}
             onChange={(e) => {
               setName(e.target.value);
@@ -631,9 +578,9 @@ function EditSalespersonModalContent({
           {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-sp-username-${salesperson.id}`}>Username</Label>
+          <Label htmlFor={`staff-edit-sp-username-${salesperson.id}`}>Username</Label>
           <Input
-            id={`edit-sp-username-${salesperson.id}`}
+            id={`staff-edit-sp-username-${salesperson.id}`}
             value={salesperson.username}
             disabled
             className="bg-muted/50 text-muted-foreground cursor-not-allowed"
@@ -642,20 +589,20 @@ function EditSalespersonModalContent({
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <Label htmlFor={`edit-sp-phone-${salesperson.id}`}>Phone</Label>
+            <Label htmlFor={`staff-edit-sp-phone-${salesperson.id}`}>Phone</Label>
             <span className="text-xs text-muted-foreground">Optional</span>
           </div>
           <Input
-            id={`edit-sp-phone-${salesperson.id}`}
+            id={`staff-edit-sp-phone-${salesperson.id}`}
             value={phone}
             placeholder="+1 (555) 000-0000"
             onChange={(e) => setPhone(e.target.value)}
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-sp-manager-${salesperson.id}`}>Reporting Manager</Label>
+          <Label htmlFor={`staff-edit-sp-manager-${salesperson.id}`}>Reporting Manager</Label>
           <NativeSelect
-            id={`edit-sp-manager-${salesperson.id}`}
+            id={`staff-edit-sp-manager-${salesperson.id}`}
             value={reportingManagerId}
             onChange={(e) => setReportingManagerId(e.target.value)}
             required
@@ -788,13 +735,7 @@ function SalespersonRow({ salesperson, managers }: { salesperson: SalespersonUse
   );
 }
 
-function EditManagerModalContent({
-  manager,
-  onDone,
-}: {
-  manager: ManagerUser;
-  onDone: () => void;
-}) {
+function EditManagerModalContent({ manager, onDone }: { manager: ManagerUser; onDone: () => void }) {
   const updateManager = useUpdateManagerMutation();
   const [name, setName] = useState(manager.name);
   const [phone, setPhone] = useState(manager.phone ?? "");
@@ -816,15 +757,13 @@ function EditManagerModalContent({
     <DialogContent className="sm:max-w-[440px]">
       <DialogHeader>
         <DialogTitle>Edit Manager</DialogTitle>
-        <DialogDescription>
-          Update profile information for {manager.name}.
-        </DialogDescription>
+        <DialogDescription>Update profile information for {manager.name}.</DialogDescription>
       </DialogHeader>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-name-${manager.id}`}>Name</Label>
+          <Label htmlFor={`staff-edit-name-${manager.id}`}>Name</Label>
           <Input
-            id={`edit-name-${manager.id}`}
+            id={`staff-edit-name-${manager.id}`}
             value={name}
             onChange={(e) => setName(e.target.value)}
             required
@@ -832,9 +771,9 @@ function EditManagerModalContent({
           />
         </div>
         <div className="space-y-1.5">
-          <Label htmlFor={`edit-username-${manager.id}`}>Username</Label>
+          <Label htmlFor={`staff-edit-username-${manager.id}`}>Username</Label>
           <Input
-            id={`edit-username-${manager.id}`}
+            id={`staff-edit-username-${manager.id}`}
             value={manager.username}
             disabled
             className="bg-muted/50 text-muted-foreground cursor-not-allowed"
@@ -843,11 +782,11 @@ function EditManagerModalContent({
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
-            <Label htmlFor={`edit-phone-${manager.id}`}>Phone</Label>
+            <Label htmlFor={`staff-edit-phone-${manager.id}`}>Phone</Label>
             <span className="text-xs text-muted-foreground">Optional</span>
           </div>
           <Input
-            id={`edit-phone-${manager.id}`}
+            id={`staff-edit-phone-${manager.id}`}
             value={phone}
             placeholder="+1 (555) 000-0000"
             onChange={(e) => setPhone(e.target.value)}
@@ -859,12 +798,7 @@ function EditManagerModalContent({
           </div>
         ) : null}
         <DialogFooter className="pt-2">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onDone}
-            disabled={updateManager.isPending}
-          >
+          <Button type="button" variant="outline" onClick={onDone} disabled={updateManager.isPending}>
             Cancel
           </Button>
           <Button type="submit" disabled={updateManager.isPending}>
@@ -892,9 +826,7 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
         <TableCell className="text-muted-foreground">{manager.username}</TableCell>
         <TableCell>{manager.phone ?? "—"}</TableCell>
         <TableCell>
-          <Badge variant={isActive ? "default" : "secondary"}>
-            {isActive ? "Active" : "Inactive"}
-          </Badge>
+          <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
         </TableCell>
         <TableCell className="pr-5 text-right">
           <div className="flex justify-end gap-2">
@@ -941,10 +873,7 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
 
       <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
         {isEditDialogOpen ? (
-          <EditManagerModalContent
-            manager={manager}
-            onDone={() => setIsEditDialogOpen(false)}
-          />
+          <EditManagerModalContent manager={manager} onDone={() => setIsEditDialogOpen(false)} />
         ) : null}
       </Dialog>
 
@@ -974,34 +903,33 @@ function ManagerRow({ manager }: { manager: ManagerUser }) {
   );
 }
 
-export default function UsersPage() {
+export default function StaffPage() {
   const { data: managers, isPending, error } = useQuery(managersQueryOptions());
   const { data: salespersons, isPending: isSalespersonsPending, error: salespersonsError } = useQuery(
     adminSalespersonsQueryOptions(),
   );
-  const { data: hrUsers, isPending: isHrPending, error: hrError } = useQuery(hrQueryOptions());
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
-  const [isAddHrOpen, setIsAddHrOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Users"
-        description="Manage manager, HR, and salesperson accounts. Salespersons are visible only to the manager they report to."
+        description="All managers and salespersons across the organization."
         actions={
           <>
             <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)}>
               <UserPlus />
               Add Salesperson
             </Button>
-            <Button variant="outline" onClick={() => setIsAddHrOpen(true)}>
-              <UserPlus />
-              Add HR
-            </Button>
-            <Button onClick={() => setIsAddOpen(true)}>
+            <Button variant="outline" onClick={() => setIsAddOpen(true)}>
               <UserPlus />
               Add Manager
+            </Button>
+            <Button onClick={() => setIsCreateGroupOpen(true)}>
+              <FolderPlus />
+              Create Group
             </Button>
           </>
         }
@@ -1009,20 +937,20 @@ export default function UsersPage() {
 
       {/* Add Manager Dialog */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
-        {isAddOpen ? (
-          <CreateManagerModalContent onDone={() => setIsAddOpen(false)} />
-        ) : null}
-      </Dialog>
-
-      {/* Add HR Dialog */}
-      <Dialog open={isAddHrOpen} onOpenChange={setIsAddHrOpen}>
-        {isAddHrOpen ? <CreateHrModalContent onDone={() => setIsAddHrOpen(false)} /> : null}
+        {isAddOpen ? <CreateManagerModalContent onDone={() => setIsAddOpen(false)} /> : null}
       </Dialog>
 
       {/* Add Salesperson Dialog */}
       <Dialog open={isAddSalespersonOpen} onOpenChange={setIsAddSalespersonOpen}>
         {isAddSalespersonOpen ? (
           <CreateSalespersonModalContent managers={managers ?? []} onDone={() => setIsAddSalespersonOpen(false)} />
+        ) : null}
+      </Dialog>
+
+      {/* Create Group Dialog */}
+      <Dialog open={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+        {isCreateGroupOpen ? (
+          <CreateGroupModalContent managers={managers ?? []} onDone={() => setIsCreateGroupOpen(false)} />
         ) : null}
       </Dialog>
 
@@ -1077,60 +1005,6 @@ export default function UsersPage() {
                   </TableRow>
                 ) : (
                   managers?.map((manager) => <ManagerRow key={manager.id} manager={manager} />)
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* HR Table Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle>All HR</CardTitle>
-          <CardDescription>
-            {hrUsers ? `${hrUsers.length} HR user${hrUsers.length === 1 ? "" : "s"} listed` : "Loading HR users..."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="px-0">
-          {isHrPending ? (
-            <div className="space-y-3 px-5">
-              <Skeleton className="h-10 w-full" />
-              <Skeleton className="h-10 w-full" />
-            </div>
-          ) : hrError ? (
-            <div className="sketch-outline mx-5 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-              {getErrorMessage(hrError, "Failed to load HR users.")}
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">Name</TableHead>
-                  <TableHead>Username</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead className="pr-5">Status</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {hrUsers && hrUsers.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={4} className="py-14 text-center">
-                      <div className="flex flex-col items-center justify-center gap-2">
-                        <Users className="size-9 text-muted-foreground/40" />
-                        <p className="font-heading text-lg font-bold">No HR users yet</p>
-                        <p className="font-hand text-base text-muted-foreground">
-                          Add an HR user to manage teams and salespersons.
-                        </p>
-                        <Button className="mt-3" onClick={() => setIsAddHrOpen(true)}>
-                          <UserPlus />
-                          Add HR
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  hrUsers?.map((hr) => <HrRow key={hr.id} hr={hr} />)
                 )}
               </TableBody>
             </Table>

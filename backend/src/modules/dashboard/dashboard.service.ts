@@ -47,6 +47,10 @@ class DashboardService {
         return this.managerDashboard(user.id);
       case Role.ADMIN:
         return this.adminDashboard();
+      case Role.HR:
+        // HR only works within Team management — no dashboard widgets of its
+        // own; the frontend redirects straight to /dashboard/groups.
+        return { role: Role.HR };
     }
   }
 

@@ -1,19 +1,5 @@
 import { Router } from "express";
-import {
-  createGroup,
-  listMyGroups,
-  getGroup,
-  updateGroup,
-  deleteGroup,
-  listSalespersons,
-  listMySalespersons,
-  createSalesperson,
-  addNewSalesperson,
-  addExistingSalesperson,
-  updateSalesperson,
-  resetSalespersonPassword,
-  removeSalesperson,
-} from "./manager.controller.js";
+import { listMyGroups, getGroup, listMySalespersons } from "./manager.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 
@@ -21,18 +7,10 @@ const router = Router();
 
 router.use(requireAuth, requireRole(Role.MANAGER));
 
-router.post("/groups", createGroup);
+// Manager has read-only visibility into their own team — all team/salesperson
+// mutations (create/edit/delete) now live with Admin/HR only.
 router.get("/groups", listMyGroups);
 router.get("/groups/:groupId", getGroup);
-router.get("/salespersons", listSalespersons);
 router.get("/salespersons/mine", listMySalespersons);
-router.post("/salespersons", createSalesperson);
-router.patch("/groups/:groupId", updateGroup);
-router.delete("/groups/:groupId", deleteGroup);
-router.post("/groups/:groupId/members", addNewSalesperson);
-router.post("/groups/:groupId/members/existing", addExistingSalesperson);
-router.patch("/groups/:groupId/members/:userId", updateSalesperson);
-router.patch("/groups/:groupId/members/:userId/password", resetSalespersonPassword);
-router.delete("/groups/:groupId/members/:userId", removeSalesperson);
 
 export default router;

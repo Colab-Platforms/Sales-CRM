@@ -67,6 +67,9 @@ model User {
 
   recoveryActionsPerformed RecoveryAction[] @relation("RecoveryActionPerformedBy")
 
+  workSessions WorkSession[] @relation("WorkSessionUser")
+  statusLogs   StatusLog[]   @relation("StatusLogUser")
+
   activitiesAsActor Activity[] @relation("ActivityActor")
 
   whatsAppMessagesSent WhatsAppMessage[] @relation("WhatsAppMessageSentBy")
