@@ -129,3 +129,9 @@ export interface BulkAssignSalespersonPayload {
 export interface AutoAssignConfig {
   enabled: boolean;
 }
+
+// Manager stage only: which managers are opted into the round robin. `managerIds` persists even
+// while `enabled` is false, so re-opening the picker shows the last selection.
+export interface ManagerAutoAssignConfig extends AutoAssignConfig {
+  managerIds: string[];
+}

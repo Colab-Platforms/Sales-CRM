@@ -54,6 +54,7 @@ model User {
 
   managerAutoAssignConfigsUpdated      ManagerAutoAssignConfig[]    @relation("ManagerAutoAssignConfigUpdatedBy")
   salespersonAutoAssignConfigAsManager SalespersonAutoAssignConfig? @relation("SalespersonAutoAssignConfigManager")
+  managerAutoAssignTarget               ManagerAutoAssignTarget?     @relation("ManagerAutoAssignTargetManager")
 
   callsAsAgent Call[] @relation("CallAgent")
 

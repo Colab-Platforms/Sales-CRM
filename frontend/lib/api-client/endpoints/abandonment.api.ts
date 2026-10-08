@@ -9,6 +9,7 @@ import type {
   CreateRecoveryActionInput,
   ListAbandonmentsParams,
   ListAbandonmentsResult,
+  ManagerAutoAssignConfig,
 } from "../types/abandonment.types";
 
 // `items` travels as one comma list of URL-encoded keys (a product name may itself contain commas); axios drops undefined params,
@@ -57,13 +58,15 @@ export const abandonmentApi = {
     return res.data.data;
   },
 
-  async getManagerAutoAssignConfig(): Promise<AutoAssignConfig> {
-    const res = await apiClient.get<ApiEnvelope<AutoAssignConfig>>("/abandonments/auto-assign/manager-config");
+  async getManagerAutoAssignConfig(): Promise<ManagerAutoAssignConfig> {
+    const res = await apiClient.get<ApiEnvelope<ManagerAutoAssignConfig>>("/abandonments/auto-assign/manager-config");
     return res.data.data;
   },
 
-  async setManagerAutoAssignConfig(enabled: boolean): Promise<AutoAssignConfig> {
-    const res = await apiClient.patch<ApiEnvelope<AutoAssignConfig>>("/abandonments/auto-assign/manager-config", { enabled });
+  /** `managerIds` omitted leaves the stored selection untouched (e.g. a plain "turn off"); pass it
+   *  whenever the admin just picked/changed the set of managers. */
+  async setManagerAutoAssignConfig(enabled: boolean, managerIds?: string[]): Promise<ManagerAutoAssignConfig> {
+    const res = await apiClient.patch<ApiEnvelope<ManagerAutoAssignConfig>>("/abandonments/auto-assign/manager-config", { enabled, managerIds });
     return res.data.data;
   },
 

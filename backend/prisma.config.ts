@@ -10,6 +10,10 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts",
   },
   datasource: {
+    // CLI-only (migrate/studio/db push) - the app's own PrismaClient (src/lib/prisma.ts) builds its
+    // adapter straight from DATABASE_URL and never reads this file. Neon's pooled DATABASE_URL
+    // (PgBouncer, transaction mode) doesn't support the session-level advisory lock `migrate` takes,
+    // so the CLI needs the direct, non-pooled connection instead.
     url: process.env["DATABASE_URL"],
   },
 });

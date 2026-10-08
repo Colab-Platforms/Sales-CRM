@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { abandonmentApi } from "../endpoints/abandonment.api";
 import { abandonmentKeys } from "../queries/abandonment.queries";
-import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, CreateRecoveryActionInput } from "../types/abandonment.types";
+import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, CreateRecoveryActionInput, ManagerAutoAssignConfig } from "../types/abandonment.types";
 
 export function useLogRecoveryActionMutation(abandonmentId: string) {
   const queryClient = useQueryClient();
@@ -35,8 +35,8 @@ export function useBulkAssignSalespersonMutation() {
 
 export function useSetManagerAutoAssignMutation() {
   const queryClient = useQueryClient();
-  return useMutation<AutoAssignConfig, unknown, boolean>({
-    mutationFn: (enabled) => abandonmentApi.setManagerAutoAssignConfig(enabled),
+  return useMutation<ManagerAutoAssignConfig, unknown, { enabled: boolean; managerIds?: string[] }>({
+    mutationFn: ({ enabled, managerIds }) => abandonmentApi.setManagerAutoAssignConfig(enabled, managerIds),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: abandonmentKeys.managerAutoAssignConfig() });
     },

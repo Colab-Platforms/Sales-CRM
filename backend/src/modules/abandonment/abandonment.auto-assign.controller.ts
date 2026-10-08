@@ -3,7 +3,7 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import AbandonmentAutoAssignService from "./abandonment.auto-assign.service.js";
-import { validateSetAutoAssignEnabled } from "./abandonment.auto-assign.validators.js";
+import { validateSetAutoAssignEnabled, validateSetManagerAutoAssignConfig } from "./abandonment.auto-assign.validators.js";
 
 const service = new AbandonmentAutoAssignService();
 
@@ -20,9 +20,9 @@ export const getManagerAutoAssignConfig = async (_req: AuthRequest, res: Respons
 
 export const updateManagerAutoAssignConfig = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { error, value } = validateSetAutoAssignEnabled(req.body);
+    const { error, value } = validateSetManagerAutoAssignConfig(req.body);
     if (error) return void bad(res, error.message);
-    const result = await service.setManagerConfig(req.user!, value.enabled);
+    const result = await service.setManagerConfig(req.user!, value.enabled, value.managerIds);
     sendResponse(res, true, result, `Auto-assignment to managers ${result.enabled ? "enabled" : "disabled"}.`, STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);

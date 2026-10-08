@@ -198,6 +198,20 @@ model ManagerAutoAssignConfig {
   @@map("manager_auto_assign_config")
 }
 
+// Which managers participate in ManagerAutoAssignConfig's round robin - admin picks a subset of
+// managers rather than every active manager getting leads. One row per selected manager; a manager
+// with no row here is skipped by autoAssignManagerForLead even while the master toggle is enabled.
+model ManagerAutoAssignTarget {
+  id String @id @default(uuid()) @db.Uuid
+
+  managerId String @unique @map("manager_id") @db.Uuid
+  manager   User   @relation("ManagerAutoAssignTargetManager", fields: [managerId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("manager_auto_assign_targets")
+}
+
 // Each manager's own on/off switch for auto-assigning abandoned leads under them to their
 // salespeople via round robin. One row per manager, created lazily on first toggle - a manager
 // with no row here has auto-assignment disabled, same as a missing ManagerAutoAssignConfig row.
