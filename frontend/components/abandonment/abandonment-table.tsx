@@ -8,11 +8,12 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { cn } from "@/lib/utils";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
 import { StatusBadge } from "@/components/dashboard/status-badge";
-import { leadDetailHref, CallHistoryButton } from "@/components/leads/lead-table";
+import { leadDetailHref, CallHistoryButton, LeadStatusSelect } from "@/components/leads/lead-table";
 import { ClickToCallButton } from "@/components/leads/calling";
 import { RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
 import { parseAbandonmentCart } from "./abandonment-cart-utils";
 import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.types";
+import type { Role } from "@/lib/api-client/types/auth.types";
 import { cartLines, lineLabel, type ItemOption } from "@/lib/abandonment-items";
 import { ItemsFilter } from "./items-filter";
 
@@ -23,7 +24,7 @@ const HEADERS = [
   { label: "Items", className: "min-w-[220px] max-w-[320px]" },
   { label: "Value", className: "w-[120px] text-right" },
   { label: "Detected", className: "w-[110px]" },
-  { label: "Lead Status", className: "w-[120px]" },
+  { label: "Lead Status", className: "w-[170px]" },
   { label: "Last action", className: "w-[140px]" },
   { label: "Assigned to", className: "w-[160px]" },
 ];
@@ -111,9 +112,10 @@ interface AbandonmentTableProps {
   selectedIds?: Set<string>;
   onToggleOne?: (id: string, checked: boolean) => void;
   onToggleAll?: (checked: boolean) => void;
+  role: Role;
 }
 
-export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, onToggleOne, onToggleAll }: AbandonmentTableProps) {
+export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, onToggleOne, onToggleAll, role }: AbandonmentTableProps) {
   const router = useRouter();
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
@@ -196,8 +198,12 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
                 <span title={formatDateTime(item.detectedAt)}>{timeSince(item.detectedAt)}</span>
               </TableCell>
 
-              <TableCell className="w-[120px] whitespace-nowrap">
-                <StatusBadge status={item.lead.workingStatus} />
+              <TableCell className="w-[170px] whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                {role === "SALESPERSON" ? (
+                  <LeadStatusSelect lead={item.lead} />
+                ) : (
+                  <StatusBadge status={item.lead.workingStatus} />
+                )}
               </TableCell>
 
               <TableCell className="w-[140px] whitespace-nowrap text-sm">

@@ -3,6 +3,7 @@ import { callingApi } from "../endpoints/calling.api";
 import { callingKeys } from "../queries/calling.queries";
 import { leadKeys } from "../queries/lead.queries";
 import { tasksKeys } from "../queries/tasks.queries";
+import { abandonmentKeys } from "../queries/abandonment.queries";
 import type {
   Call,
   ClickToCallResult,
@@ -34,6 +35,8 @@ export function useSubmitCallOutcomeMutation(leadId: string) {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
       // Logging a call closes the lead's pending reminder and may schedule a new one.
       queryClient.invalidateQueries({ queryKey: tasksKeys.all });
+      // The Abandoned Leads table reads this lead's workingStatus off its own query (not leadKeys).
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
     },
   });
 }

@@ -189,6 +189,7 @@ export function AbandonedLeadsView() {
                   selectedIds={isAdmin || isManager ? selectedIds : undefined}
                   onToggleOne={isAdmin || isManager ? toggleOne : undefined}
                   onToggleAll={isAdmin || isManager ? toggleAll : undefined}
+                  role={user.role}
                 />
                 {data ? <OrdersPagination pagination={data.pagination} onPageChange={goToPage} disabled={isFetching} /> : null}
               </>

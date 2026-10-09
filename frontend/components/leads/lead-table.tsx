@@ -47,6 +47,7 @@ import type {
 } from "@/lib/api-client/types/lead.types";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
+import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
 
 // Every history-showing surface (this table's popup, the lead detail page) links back to a single
 // per-lead page, so a salesperson's "My Leads" list stops routing into the unrelated Customer 360
@@ -246,7 +247,17 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
   );
 }
 
-function LeadStatusSelect({ lead }: { lead: Lead }) {
+// Minimal shape this select needs off a lead - satisfied structurally by both the full Lead type
+// (leads pages) and AbandonmentListItem.lead (abandoned-leads pages), same pattern as CallableLead.
+export interface StatusEditableLead {
+  id: string;
+  firstName: string;
+  lastName?: string | null;
+  workingStatus: LeadWorkingStatus;
+  tasks: LeadFollowUp[];
+}
+
+export function LeadStatusSelect({ lead }: { lead: StatusEditableLead }) {
   const updateLead = useUpdateLeadMutation();
   // Call back / follow up need a reminder time first, so they're held here until the dialog confirms.
   const [pendingFollowUp, setPendingFollowUp] = useState<

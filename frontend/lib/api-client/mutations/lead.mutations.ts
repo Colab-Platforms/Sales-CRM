@@ -4,6 +4,7 @@ import { leadKeys } from "../queries/lead.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { tasksKeys } from "../queries/tasks.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
+import { abandonmentKeys } from "../queries/abandonment.queries";
 import type {
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
@@ -69,6 +70,9 @@ export function useUpdateLeadMutation() {
       // If this lead already has a real WhatsApp conversation, its row in the Inbox list shows the
       // lead's name - a rename must be reflected there too, without a manual page refresh.
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
+      // The Abandoned Leads table reads this lead's workingStatus off its own query (not leadKeys) -
+      // without this it only shows the update after a manual page refresh.
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
     },
   });
 }
