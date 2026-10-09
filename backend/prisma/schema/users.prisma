@@ -32,6 +32,10 @@ model User {
 
   groupsManaged Group[] @relation("GroupManager")
 
+  ticketsRaised   Ticket[]        @relation("TicketRaisedBy")
+  ticketsResolved Ticket[]        @relation("TicketResolvedBy")
+  ticketComments  TicketComment[] @relation("TicketCommentAuthor")
+
   refundRequestsMade    RefundRequest[] @relation("RefundRequestedBy")
   refundRequestsDecided RefundRequest[] @relation("RefundDecidedBy")
   refundRequestsExecuted RefundRequest[] @relation("RefundExecutedBy")

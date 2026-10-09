@@ -20,6 +20,7 @@ import discountRoutes from "@modules/discounts/discounts.routes.js";
 import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
 import refundRoutes from "@modules/refunds/refunds.routes.js";
 import attendanceRoutes from "@modules/attendance/attendance.routes.js";
+import ticketsRoutes from "@modules/tickets/tickets.routes.js";
 
 const router = Router();
 
@@ -48,5 +49,6 @@ router.use("/delivery", deliveryRoutes);
 router.use("/abandonments", abandonmentRoutes);
 router.use("/refund-requests", refundRoutes);
 router.use("/attendance", attendanceRoutes);
+router.use("/tickets", ticketsRoutes);
 
 export default router;
