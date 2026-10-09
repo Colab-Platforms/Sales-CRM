@@ -52,7 +52,10 @@ import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
 // Every history-showing surface (this table's popup, the lead detail page) links back to a single
 // per-lead page, so a salesperson's "My Leads" list stops routing into the unrelated Customer 360
 // view and instead lands somewhere that actually shows this lead's own assignment/call history.
-export function leadDetailHref(leadId: string) {
+export function leadDetailHref(leadId: string, options?: { from?: string }) {
+  if (options?.from) {
+    return `/dashboard/leads/${leadId}?from=${encodeURIComponent(options.from)}`;
+  }
   return `/dashboard/leads/${leadId}`;
 }
 

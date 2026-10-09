@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -36,16 +36,25 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { formatDateTime } from "@/lib/order-status";
 import { LEAD_PRIORITY_LABELS } from "@/lib/customer-status";
 
-const LEADS_HREF = "/dashboard/leads";
+function BackLink({ from }: { from?: string | null }) {
+  const router = useRouter();
+  const isFromAbandoned = from === "abandoned-leads";
+  const defaultHref = isFromAbandoned ? "/dashboard/abandoned-leads" : "/dashboard/leads";
+  const label = isFromAbandoned ? "Back to abandoned leads" : "Back to leads";
 
-function BackLink() {
   return (
     <Link
-      href={LEADS_HREF}
+      href={defaultHref}
+      onClick={(e) => {
+        if (typeof window !== "undefined" && window.history.length > 1 && document.referrer.includes(defaultHref)) {
+          e.preventDefault();
+          router.back();
+        }
+      }}
       className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
     >
       <ArrowLeft className="size-3.5" />
-      <span>Back to leads</span>
+      <span>{label}</span>
     </Link>
   );
 }
@@ -65,6 +74,18 @@ function LeadDetailSkeleton() {
 
 export function LeadDetailView({ leadId }: { leadId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromParam = searchParams.get("from");
+  const [from, setFrom] = useState<string | null>(fromParam);
+
+  useEffect(() => {
+    if (fromParam) {
+      setFrom(fromParam);
+    } else if (typeof document !== "undefined" && document.referrer.includes("/dashboard/abandoned-leads")) {
+      setFrom("abandoned-leads");
+    }
+  }, [fromParam]);
+
   const currentUser = useAuthStore((s) => s.user);
   const role = currentUser?.role;
 
@@ -85,7 +106,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   if (error || !lead) {
     return (
       <div className="space-y-4">
-        <BackLink />
+        <BackLink from={from} />
         <div role="alert" className="sketch-panel flex flex-col items-start gap-3 bg-card p-6">
           <p className="text-sm font-semibold text-destructive">{getErrorMessage(error, "Failed to load lead.")}</p>
           <button
@@ -106,7 +127,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
     <div className="@container space-y-5">
       {/* Top Bar: Back Link & Doodle Action Buttons */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <BackLink />
+        <BackLink from={from} />
 
         <div className="flex flex-wrap items-center gap-2">
           {/* Reuses the exact same Send WhatsApp dialog/provider-agnostic template send flow Customer
@@ -446,7 +467,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         lead={{ id: lead.id, name }}
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        onDeleted={() => router.push(LEADS_HREF)}
+        onDeleted={() => router.push(from === "abandoned-leads" ? "/dashboard/abandoned-leads" : "/dashboard/leads")}
       />
       {/* No order list loaded on this page - the dialog's own order-selection step is already
           optional and stays hidden whenever there are none, exactly as it does for a customer with

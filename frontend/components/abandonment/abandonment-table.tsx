@@ -156,7 +156,7 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
               key={item.id}
               className="cursor-pointer"
               data-state={withSelection && selectedIds!.has(item.id) ? "selected" : undefined}
-              onClick={() => router.push(leadDetailHref(item.lead.id))}
+              onClick={() => router.push(leadDetailHref(item.lead.id, { from: "abandoned-leads" }))}
             >
               {withSelection ? (
                 <TableCell onClick={(e) => e.stopPropagation()}>
@@ -227,7 +227,7 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
                   aria-label="View lead"
                   onClick={(e) => {
                     e.stopPropagation();
-                    router.push(leadDetailHref(item.lead.id));
+                    router.push(leadDetailHref(item.lead.id, { from: "abandoned-leads" }));
                   }}
                 >
                   <Eye className="size-4" />
