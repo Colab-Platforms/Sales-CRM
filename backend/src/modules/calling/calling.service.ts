@@ -34,7 +34,24 @@ const STATUS_MAP: Record<string, CallStatus> = {
   busy: CallStatus.BUSY,
   abandonment: CallStatus.NO_ANSWER,
   cancel: CallStatus.FAILED,
+  // Hangup-style values a live_call ping may carry when either side cuts the call. Unconfirmed
+  // guesses - the warn log in mapWebhookStatus prints the real string if one still slips through.
+  hangup: CallStatus.COMPLETED,
+  "customer hangup": CallStatus.COMPLETED,
+  "agent hangup": CallStatus.COMPLETED,
+  completed: CallStatus.COMPLETED,
+  disconnected: CallStatus.COMPLETED,
+  "no answer": CallStatus.NO_ANSWER,
+  noanswer: CallStatus.NO_ANSWER,
 };
+
+const TERMINAL_STATUSES: ReadonlySet<CallStatus> = new Set([
+  CallStatus.COMPLETED,
+  CallStatus.NO_ANSWER,
+  CallStatus.BUSY,
+  CallStatus.NOT_REACHABLE,
+  CallStatus.FAILED,
+]);
 
 // Fallback when the raw Status string doesn't match anything in STATUS_MAP. Only ever guesses a
 // *terminal* status (COMPLETED/FAILED) for the final call_report — never for a mid-call `live_call`
@@ -46,8 +63,15 @@ const STATUS_MAP: Record<string, CallStatus> = {
 // the update rather than guess.
 function mapWebhookStatus(status: string | undefined, isFinalReport: boolean, hasSignalOfConnection: boolean): CallStatus | null {
   if (status) {
-    const mapped = STATUS_MAP[status.trim().toLowerCase()];
+    const normalized = status.trim().toLowerCase();
+    const mapped = STATUS_MAP[normalized];
     if (mapped) return mapped;
+    // Real final-report values look like "cancel-Customer" (customer cut/never picked up).
+    // "cancel-Agent" is the agent cutting before the customer connected, not the customer ignoring it.
+    if (isFinalReport && normalized.startsWith("cancel")) {
+      if (hasSignalOfConnection) return CallStatus.COMPLETED;
+      return normalized.includes("agent") ? CallStatus.FAILED : CallStatus.NO_ANSWER;
+    }
     logger.warn(`[callerdesk] unrecognized webhook Status="${status}" (${isFinalReport ? "call_report" : "live_call"})`);
   }
   if (!isFinalReport) return null;
@@ -330,7 +354,7 @@ class CallingService {
     // triggerClickToCall only gets `campid` back at dial time (no CallSid), so that's what
     // we stored as providerCallId — match on it first, falling back to CallSid in case a
     // future trigger response starts returning one instead.
-    const providerCallId = payload.campid ?? payload.CallSid;
+    const providerCallId = payload.campid || payload.CallSid;
     if (!providerCallId) {
       // Seen in real traffic for an early, pre-dial event that isn't about a call we've created yet -
       // harmless (the controller acks CallerDesk regardless), just not something to act on.
@@ -350,9 +374,20 @@ class CallingService {
     // on an older payload shape) is a mid-call ping and must never be allowed to guess COMPLETED/FAILED.
     const isFinalReport = payload.type !== "live_call";
     const durationSeconds = toSeconds(payload.CallDuration ?? payload.TalkDuration);
-    const status = mapWebhookStatus(payload.Status, isFinalReport, Boolean(durationSeconds) || Boolean(payload.CallRecordingUrl));
+    // CallDuration includes ring time (58s on a call nobody picked up); only TalkDuration proves the
+    // customer actually spoke. Recording URL is present even on unanswered calls, so it's no signal.
+    const talkSeconds = toSeconds(payload.TalkDuration);
+    const status = mapWebhookStatus(payload.Status, isFinalReport, Boolean(talkSeconds));
     if (status === null) {
       // An unrecognized live_call ping - nothing safe to record yet, wait for the next update.
+      return;
+    }
+
+    // Webhooks can arrive out of order: a late live_call "Picked" must never drag an already-ended
+    // call back to CONNECTED (the UI would show "On call…" forever). Only the final report may
+    // revise a terminal call, e.g. to attach the recording and duration.
+    if (!isFinalReport && TERMINAL_STATUSES.has(call.status)) {
+      logger.info(`[callerdesk] ignoring late live_call ${status} for already-ended call=${call.id} (${call.status})`);
       return;
     }
 
@@ -371,7 +406,7 @@ class CallingService {
       },
     });
 
-    if (isFinalReport && ENDED_CALL_STATUSES.has(status)) {
+    if (ENDED_CALL_STATUSES.has(status)) {
       attendanceService
         .restoreFromCall(call.agentId)
         .catch((e) => logger.error("[attendance] could not restore status after call", e));
