@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useDashboard } from "@/hooks/useDashboard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SalespersonDashboardView } from "@/components/dashboard/salesperson-dashboard";
-import { ManagerDashboardView } from "@/components/dashboard/manager-dashboard";
+import { ManagerSalesDashboard } from "@/components/manager-dashboard/manager-sales-dashboard";
 import { AdminDashboardView } from "@/components/dashboard/admin-dashboard";
 
 export default function DashboardPage() {
@@ -46,7 +46,7 @@ export default function DashboardPage() {
   return (
     <>
       {data.role === "SALESPERSON" && <SalespersonDashboardView data={data} />}
-      {data.role === "MANAGER" && <ManagerDashboardView data={data} />}
+      {data.role === "MANAGER" && <ManagerSalesDashboard />}
       {data.role === "ADMIN" && <AdminDashboardView data={data} />}
     </>
   );

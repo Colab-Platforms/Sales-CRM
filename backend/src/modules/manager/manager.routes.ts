@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listMyGroups, getGroup, listMySalespersons } from "./manager.controller.js";
+import { listMyGroups, getGroup, listMySalespersons, getAnalyticsOverview, getSalespersonAnalytics } from "./manager.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 
@@ -12,5 +12,8 @@ router.use(requireAuth, requireRole(Role.MANAGER));
 router.get("/groups", listMyGroups);
 router.get("/groups/:groupId", getGroup);
 router.get("/salespersons/mine", listMySalespersons);
+
+router.get("/analytics", getAnalyticsOverview);
+router.get("/analytics/salespersons/:salespersonId", getSalespersonAnalytics);
 
 export default router;

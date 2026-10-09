@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Contact, Search, Users2 } from "lucide-react";
 import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
@@ -85,7 +86,9 @@ export default function SalespersonsPage() {
                 {filtered.map((sp) => (
                   <TableRow key={sp.id}>
                     <TableCell className="pl-5">
-                      <div className="font-semibold">{sp.name}</div>
+                      <Link href={`/dashboard/salespersons/${sp.id}`} className="font-semibold hover:underline">
+                        {sp.name}
+                      </Link>
                       <div className="text-xs text-muted-foreground">{sp.username}</div>
                     </TableCell>
                     <TableCell>{sp.phone ?? "—"}</TableCell>
