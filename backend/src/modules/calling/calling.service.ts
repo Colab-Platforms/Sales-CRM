@@ -67,10 +67,9 @@ function mapWebhookStatus(status: string | undefined, isFinalReport: boolean, ha
     const mapped = STATUS_MAP[normalized];
     if (mapped) return mapped;
     // Real final-report values look like "cancel-Customer" (customer cut/never picked up).
-    // "cancel-Agent" is the agent cutting before the customer connected, not the customer ignoring it.
+    // "cancel-Customer" / "cancel-Agent": someone hung up before any conversation - no answer either way.
     if (isFinalReport && normalized.startsWith("cancel")) {
-      if (hasSignalOfConnection) return CallStatus.COMPLETED;
-      return normalized.includes("agent") ? CallStatus.FAILED : CallStatus.NO_ANSWER;
+      return hasSignalOfConnection ? CallStatus.COMPLETED : CallStatus.NO_ANSWER;
     }
     logger.warn(`[callerdesk] unrecognized webhook Status="${status}" (${isFinalReport ? "call_report" : "live_call"})`);
   }
@@ -350,11 +349,36 @@ class CallingService {
     return provided === expected;
   }
 
+  private async autoLogNoAnswer(callId: string, leadId: string, agentId: string): Promise<void> {
+    const outcome = await prisma.callOutcome.findFirst({ where: { code: "RINGING_NO_ANSWER", isActive: true } });
+    if (!outcome) return;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.call.update({ where: { id: callId }, data: { outcomeId: outcome.id } });
+      const newStatus = OUTCOME_LEAD_STATUS[outcome.code];
+      if (newStatus) await tx.lead.update({ where: { id: leadId }, data: { workingStatus: newStatus } });
+      await tx.activity.create({
+        data: {
+          leadId,
+          actorId: agentId,
+          type: ActivityType.STATUS_CHANGE,
+          referenceType: "CALL",
+          referenceId: callId,
+          title: `Call outcome: ${outcome.name}`,
+          description: "Logged automatically - call was not answered",
+        },
+      });
+    });
+  }
+
   async handleCallWebhook(payload: CallerDeskWebhookPayload): Promise<void> {
     // triggerClickToCall only gets `campid` back at dial time (no CallSid), so that's what
     // we stored as providerCallId — match on it first, falling back to CallSid in case a
     // future trigger response starts returning one instead.
-    const providerCallId = payload.campid || payload.CallSid;
+    // A live_call ping with an empty campid is the early "ringing the agent" event (it fires before
+    // the agent's leg picks up), so it must not match a call by CallSid and claim we're already
+    // dialing the customer. Only the final report may fall back to CallSid.
+    const providerCallId = payload.campid || (payload.type === "live_call" ? undefined : payload.CallSid);
     if (!providerCallId) {
       // Seen in real traffic for an early, pre-dial event that isn't about a call we've created yet -
       // harmless (the controller acks CallerDesk regardless), just not something to act on.
@@ -410,6 +434,13 @@ class CallingService {
       attendanceService
         .restoreFromCall(call.agentId)
         .catch((e) => logger.error("[attendance] could not restore status after call", e));
+    }
+
+    // Nobody spoke, so there's nothing for the salesperson to log: record "Ringing / no answer" for them.
+    if (isFinalReport && status === CallStatus.NO_ANSWER && !call.outcomeId) {
+      await this.autoLogNoAnswer(call.id, call.leadId, call.agentId).catch((e) =>
+        logger.error("[callerdesk] could not auto-log no-answer outcome", e)
+      );
     }
 
     if (payload.CallRecordingUrl) {

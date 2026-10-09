@@ -240,7 +240,9 @@ export function ActiveCallDialog({
   });
   const call = calls?.find((c) => c.id === callId);
   const ended = Boolean(call && TERMINAL_CALL_STATUSES.has(call.status));
-  const showOutcome = Boolean(call && CONNECTED_OR_LATER.has(call.status));
+  // Nobody spoke: the backend already logged "Ringing / no answer", so there's no form to fill in.
+  const noAnswer = call?.status === "NO_ANSWER";
+  const showOutcome = Boolean(call && !noAnswer && CONNECTED_OR_LATER.has(call.status));
   const outcomeFormRef = useRef<CallOutcomeFormHandle>(null);
 
   // Closing (the footer button, the built-in "X", Escape, or a click outside) must never silently
@@ -272,11 +274,15 @@ export function ActiveCallDialog({
             {lead.firstName} {lead.lastName ?? ""}
           </DialogTitle>
           <DialogDescription>
-            {ended ? "Call ended — log what happened." : showOutcome ? "On call — you can log the outcome now." : "Call in progress."}
+            {noAnswer
+              ? "Call ended."
+              : ended ? "Call ended — log what happened." : showOutcome ? "On call — you can log the outcome now." : "Call in progress."}
           </DialogDescription>
         </DialogHeader>
 
-        {!showOutcome ? (
+        {noAnswer ? (
+          <div className="text-sm text-muted-foreground">No answer — marked as “Ringing / no answer” automatically.</div>
+        ) : !showOutcome ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
             {call ? IN_PROGRESS_LABEL[call.status] : "Starting the call…"}
