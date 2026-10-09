@@ -4,6 +4,7 @@ import { Role } from "../../../generated/prisma/enums.js";
 import {
   bulkAssignManager,
   bulkAssignSalesperson,
+  bulkUpdateLeadStatus,
   createRecoveryAction,
   getAbandonment,
   getAbandonmentByLead,
@@ -45,5 +46,6 @@ router.patch("/:id/status", requireAuth, allRoles, updateAbandonmentStatus);
 
 router.post("/bulk/assign-manager", requireAuth, requireRole(Role.ADMIN), bulkAssignManager);
 router.post("/bulk/assign-salesperson", requireAuth, requireRole(Role.MANAGER), bulkAssignSalesperson);
+router.post("/bulk/update-lead-status", requireAuth, requireRole(Role.ADMIN), bulkUpdateLeadStatus);
 
 export default router;

@@ -6,6 +6,7 @@ import type {
   AutoAssignConfig,
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
+  BulkUpdateLeadStatusPayload,
   CreateRecoveryActionInput,
   ListAbandonmentsParams,
   ListAbandonmentsResult,
@@ -55,6 +56,11 @@ export const abandonmentApi = {
 
   async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number }> {
     const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>("/abandonments/bulk/assign-salesperson", payload);
+    return res.data.data;
+  },
+
+  async bulkUpdateLeadStatus(payload: BulkUpdateLeadStatusPayload): Promise<{ updatedCount: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ updatedCount: number }>>("/abandonments/bulk/update-lead-status", payload);
     return res.data.data;
   },
 

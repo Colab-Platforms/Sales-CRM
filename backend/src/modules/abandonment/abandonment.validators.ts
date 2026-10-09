@@ -5,10 +5,15 @@ import { parseItemKeys } from "./abandonment.items.js";
 import type {
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
+  BulkUpdateLeadStatusBody,
   CreateRecoveryActionBody,
   ListAbandonmentsQuery,
   UpdateAbandonmentStatusBody,
 } from "./abandonment.types.js";
+
+// Same set lead.validators.ts's workingStatusEnum allows - excludes DEACTIVATED, which isn't a
+// status a user picks directly.
+const leadWorkingStatusEnum = z.enum(["NEW", "ASSIGNED", "RINGING", "BUSY", "CALL_BACK", "FOLLOW_UP", "SWITCHED_OFF", "DND", "NOT_REACHABLE", "INTERESTED", "NOT_INTERESTED", "CONVERTED"]);
 
 const idParams = z.object({ id: z.uuid({ error: "Invalid abandonment id" }) });
 const leadIdParams = z.object({ leadId: z.uuid({ error: "Invalid lead id" }) });
@@ -65,6 +70,12 @@ const bulkAssignSalespersonSchema = z
     message: "salespersonId is required for manual assignment, salespersonIds is required for round robin",
   });
 
+const bulkUpdateLeadStatusSchema = z.object({
+  abandonmentIds: z.array(z.uuid()).min(1, "No abandoned leads selected"),
+  workingStatus: leadWorkingStatusEnum,
+  followUpAt: z.iso.datetime({ offset: true, error: "followUpAt must be an ISO date-time" }).optional(),
+});
+
 const createRecoveryActionSchema = z.object({
   type: z.enum(RecoveryActionType, { error: "Invalid recovery action type" }),
   status: optional(z.enum(RecoveryActionStatus, { error: "Invalid recovery action status" })),
@@ -82,3 +93,4 @@ export const validateCreateRecoveryAction = (body: unknown) => validateSchema<Cr
 export const validateUpdateStatus = (body: unknown) => validateSchema<UpdateAbandonmentStatusBody>(updateStatusSchema, body);
 export const validateBulkAssignManager = (body: unknown) => validateSchema<BulkAssignManagerBody>(bulkAssignManagerSchema, body);
 export const validateBulkAssignSalesperson = (body: unknown) => validateSchema<BulkAssignSalespersonBody>(bulkAssignSalespersonSchema, body);
+export const validateBulkUpdateLeadStatus = (body: unknown) => validateSchema<BulkUpdateLeadStatusBody>(bulkUpdateLeadStatusSchema, body);

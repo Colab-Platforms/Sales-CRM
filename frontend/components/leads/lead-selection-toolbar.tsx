@@ -6,11 +6,13 @@ export function LeadSelectionToolbar({
   onClear,
   onAssignManager,
   onAssignSalesperson,
+  onUpdateStatus,
 }: {
   count: number;
   onClear: () => void;
   onAssignManager?: () => void;
   onAssignSalesperson?: () => void;
+  onUpdateStatus?: () => void;
 }) {
   return (
     <div className="sketch-outline flex flex-wrap items-center justify-between gap-3 border-primary/40 bg-primary/8 px-4 py-3">
@@ -29,6 +31,11 @@ export function LeadSelectionToolbar({
         {onAssignSalesperson ? (
           <Button size="sm" onClick={onAssignSalesperson}>
             Assign Salesperson
+          </Button>
+        ) : null}
+        {onUpdateStatus ? (
+          <Button size="sm" variant="outline" onClick={onUpdateStatus}>
+            Change Status
           </Button>
         ) : null}
         <Button size="sm" variant="ghost" onClick={onClear}>

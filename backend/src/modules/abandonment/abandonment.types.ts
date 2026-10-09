@@ -149,3 +149,13 @@ export interface BulkAssignSalespersonBody {
   salespersonId?: string;
   salespersonIds?: string[];
 }
+
+// Distinct from UpdateAbandonmentStatusBody above: this changes the underlying LEAD's pipeline
+// status (workingStatus - NEW/INTERESTED/NOT_INTERESTED/...), not the Abandonment's own cart-recovery
+// status (ACTIVE/RECOVERED/...). Same admin-only bulk tool the Leads page has, offered here too since
+// an abandoned lead is still a Lead underneath.
+export interface BulkUpdateLeadStatusBody {
+  abandonmentIds: string[];
+  workingStatus: "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED";
+  followUpAt?: string;
+}

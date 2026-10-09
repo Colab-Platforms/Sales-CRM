@@ -7,6 +7,7 @@ import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
 import type {
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
+  BulkUpdateStatusPayload,
   CreateLeadPayload,
   Lead,
   LeadListResult,
@@ -105,6 +106,20 @@ export function useBulkAssignSalespersonMutation() {
     mutationFn: (payload) => leadApi.bulkAssignSalesperson(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
+    },
+  });
+}
+
+export function useBulkUpdateStatusMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ updatedCount: number }, unknown, BulkUpdateStatusPayload>({
+    mutationFn: (payload) => leadApi.bulkUpdateStatus(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: leadKeys.all });
+      // A status change can schedule or close a follow-up reminder.
+      queryClient.invalidateQueries({ queryKey: tasksKeys.all });
+      queryClient.invalidateQueries({ queryKey: customersKeys.all });
     },
   });
 }

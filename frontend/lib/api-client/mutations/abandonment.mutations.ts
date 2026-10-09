@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { abandonmentApi } from "../endpoints/abandonment.api";
 import { abandonmentKeys } from "../queries/abandonment.queries";
-import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, CreateRecoveryActionInput, ManagerAutoAssignConfig } from "../types/abandonment.types";
+import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, BulkUpdateLeadStatusPayload, CreateRecoveryActionInput, ManagerAutoAssignConfig } from "../types/abandonment.types";
 
 export function useLogRecoveryActionMutation(abandonmentId: string) {
   const queryClient = useQueryClient();
@@ -27,6 +27,16 @@ export function useBulkAssignSalespersonMutation() {
   const queryClient = useQueryClient();
   return useMutation<{ assignedCount: number }, unknown, BulkAssignSalespersonPayload>({
     mutationFn: (payload) => abandonmentApi.bulkAssignSalesperson(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
+    },
+  });
+}
+
+export function useBulkUpdateLeadStatusMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<{ updatedCount: number }, unknown, BulkUpdateLeadStatusPayload>({
+    mutationFn: (payload) => abandonmentApi.bulkUpdateLeadStatus(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
     },

@@ -8,6 +8,7 @@ import {
   getAssignmentHistory,
   bulkAssignManager,
   bulkAssignSalesperson,
+  bulkUpdateStatus,
   previewImport,
   confirmImport,
   getImportBatch,
@@ -31,6 +32,7 @@ router.delete("/leads/:id", requireRole(Role.ADMIN), deleteLead);
 
 router.post("/leads/bulk/assign-manager", requireRole(Role.ADMIN), bulkAssignManager);
 router.post("/leads/bulk/assign-salesperson", requireRole(Role.MANAGER), bulkAssignSalesperson);
+router.post("/leads/bulk/update-status", requireRole(Role.ADMIN), bulkUpdateStatus);
 
 router.post(
   "/leads/import/preview",

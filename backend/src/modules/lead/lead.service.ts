@@ -37,6 +37,7 @@ import type {
   ListLeadsQuery,
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
+  BulkUpdateStatusBody,
 } from "./lead.types.js";
 
 type TxClient = Prisma.TransactionClient;
@@ -719,6 +720,51 @@ class LeadService {
         });
 
         return { assignedCount: leads.length };
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
+  }
+
+  // Admin-only bulk status change (e.g. cleaning up test leads without touching the database
+  // directly). Unlike updateLead, this sets the real workingStatus unconditionally for every
+  // selected lead - there's no "shown status" role view to reconcile against since only ADMIN can
+  // call it. One followUpAt, if given, applies to every lead moved to CALL_BACK/FOLLOW_UP; each
+  // lead's own owner (falling back to the admin) gets the reminder, same as the single-lead path.
+  async bulkUpdateStatus(user: AuthUser, body: BulkUpdateStatusBody) {
+    const isFollowUpStatus = body.workingStatus === "CALL_BACK" || body.workingStatus === "FOLLOW_UP";
+    const followUpAt = isFollowUpStatus ? parseFollowUpAt(body.followUpAt, body.workingStatus === "CALL_BACK" ? "call back" : "follow up") : null;
+
+    return prisma.$transaction(
+      async (tx) => {
+        const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
+
+        await tx.lead.updateMany({ where: { id: { in: body.leadIds } }, data: { workingStatus: body.workingStatus } });
+
+        for (const lead of leads) {
+          if (followUpAt) {
+            await scheduleFollowUp(tx, {
+              leadId: lead.id,
+              leadName: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
+              assignedToId: lead.ownerId ?? user.id,
+              actor: { id: user.id, role: user.role },
+              type: body.workingStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
+              scheduledAt: followUpAt,
+            });
+          } else {
+            await completePendingFollowUps(tx, lead.id);
+          }
+        }
+
+        await tx.activity.createMany({
+          data: leads.map((lead) => ({
+            leadId: lead.id,
+            actorId: user.id,
+            type: ActivityType.STATUS_CHANGE,
+            title: `Status changed to ${body.workingStatus}`,
+          })),
+        });
+
+        return { updatedCount: leads.length };
       },
       { timeout: 20000, maxWait: 10000 },
     );

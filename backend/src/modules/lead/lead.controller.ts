@@ -9,6 +9,7 @@ import {
   validateListLeadsQuerySchema,
   validateBulkAssignManagerSchema,
   validateBulkAssignSalespersonSchema,
+  validateBulkUpdateStatusSchema,
   validateImportPreviewSchema,
 } from "./lead.validators.js";
 
@@ -111,6 +112,21 @@ export const bulkAssignSalesperson = async (req: AuthRequest, res: Response): Pr
 
     const result = await leadService.bulkAssignSalespersons(req.user!.id, value);
     sendResponse(res, true, result, "Leads assigned to salesperson successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const bulkUpdateStatus = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateBulkUpdateStatusSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    const result = await leadService.bulkUpdateStatus(req.user!, value);
+    sendResponse(res, true, result, "Lead status updated successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
