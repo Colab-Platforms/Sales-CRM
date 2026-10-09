@@ -127,7 +127,15 @@ export interface ConversationSummary {
   archived: boolean;
 }
 
+/** A phone number no lead has: shown read-only rather than hidden. */
+export interface UnmatchedConversation {
+  phone: string;
+  messageCount: number;
+  lastMessage: { id: string; direction: ConversationSummary["lastMessage"]["direction"]; body: string | null; at: string };
+}
+
 export interface ConversationListResult {
+  unmatched?: UnmatchedConversation[];
   items: ConversationSummary[];
   pagination: Pagination;
 }

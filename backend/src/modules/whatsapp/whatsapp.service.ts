@@ -12,13 +12,13 @@ import { resolveWhatsAppConfig } from "./whatsapp.config.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
-import { matchSenderToLead } from "./whatsapp.matching.js";
+import { legacyMatchCandidates, matchSenderToLead, threadOf } from "./whatsapp.matching.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import LeadService from "../lead/lead.service.js";
 import WhatsAppConversationService from "./whatsapp.conversation.service.js";
 import WhatsAppOrderConversationService from "./whatsapp.order-conversation.service.js";
-import { buildConversationWhere, buildMessageWhere, mapMessageHistoryItem, scopedMessageWhere } from "./whatsapp.history.filters.js";
-import type { ConversationListResult, ConversationSummary, ListConversationsQuery, ListMessagesQuery, WhatsAppMessageHistoryItem, WhatsAppMessageListResult } from "./whatsapp.history.types.js";
+import { buildConversationWhere, buildMessageWhere, mapMessageHistoryItem, scopedMessageWhere, whatsAppReadScope, canViewAllWhatsAppConversations } from "./whatsapp.history.filters.js";
+import type { ConversationListResult, ConversationSummary, ListConversationsQuery, ListMessagesQuery, UnmatchedConversation, WhatsAppMessageHistoryItem, WhatsAppMessageListResult } from "./whatsapp.history.types.js";
 import type { CustomerWhatsAppStatus, SendWhatsAppMessageInput, WhatsAppMessageSummary, WhatsAppStatusResult } from "./whatsapp.types.js";
 
 // E7.4: a read-only, richer view (customer/template/order/sender resolved to names, not just ids)
@@ -179,7 +179,7 @@ class WhatsAppService {
   // rows E7.1/E7.3 already wrote. ----
 
   async listMessages(user: AuthUser, query: ListMessagesQuery): Promise<WhatsAppMessageListResult> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = whatsAppReadScope(user.role, await getLeadScope(user, this.db));
 
     // A leadId filter for a customer outside the caller's scope must not silently return someone
     // else's messages under a scope-widened query - fail the same way a direct customer lookup
@@ -189,7 +189,9 @@ class WhatsAppService {
       if (!lead) return { items: [], pagination: { page: query.page, pageSize: query.pageSize, totalItems: 0, totalPages: 0 } };
     }
 
-    const where = buildMessageWhere(query, leadScope, user.id);
+    // One customer = one thread: for the roles that read every conversation, a lead's history also includes the messages sitting on another lead with the same phone number.
+    const thread = query.leadId && canViewAllWhatsAppConversations(user.role) ? await threadOf(this.db, query.leadId) : undefined;
+    const where = buildMessageWhere(query, leadScope, user.id, thread);
     const [totalItems, rows] = await Promise.all([
       this.db.whatsAppMessage.count({ where }),
       this.db.whatsAppMessage.findMany({
@@ -215,7 +217,7 @@ class WhatsAppService {
   }
 
   async getMessage(user: AuthUser, id: string): Promise<WhatsAppMessageHistoryItem> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = whatsAppReadScope(user.role, await getLeadScope(user, this.db));
     const row = await this.db.whatsAppMessage.findFirst({ where: scopedMessageWhere(id, leadScope), select: HISTORY_SELECT });
     if (!row) throw new ApiError("Message not found", STATUS_CODES.NOT_FOUND);
     const state = await this.db.whatsAppMessageUserState.findUnique({ where: { messageId_userId: { messageId: id, userId: user.id } }, select: { starred: true } });
@@ -227,7 +229,7 @@ class WhatsAppService {
   // setStarred() above writes. RBAC: a message whose lead has since left this user's scope (a
   // reassignment, say) is excluded, the same as every other lead-scoped read.
   async listStarredMessages(user: AuthUser, leadId?: string): Promise<WhatsAppMessageHistoryItem[]> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = whatsAppReadScope(user.role, await getLeadScope(user, this.db));
     const states = await this.db.whatsAppMessageUserState.findMany({
       where: {
         userId: user.id,
@@ -247,7 +249,7 @@ class WhatsAppService {
   // SQL - correct and simple at this CRM's real message volume; the window (not the whole table) is
   // what's paginated, a known, documented limit rather than a silent one.
   async listConversations(user: AuthUser, query: ListConversationsQuery): Promise<ConversationListResult> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = whatsAppReadScope(user.role, await getLeadScope(user, this.db));
     const where = buildConversationWhere(leadScope, query.search);
 
     const RECENT_WINDOW = 500;
@@ -275,7 +277,52 @@ class WhatsAppService {
       if (!m.leadId || byLead.has(m.leadId)) continue;
       byLead.set(m.leadId, m);
     }
-    const deduped = [...byLead.values()]; // already newest-first, since `recent` was fetched newest-first and only the first occurrence per lead is kept
+    const perLead = [...byLead.values()]; // already newest-first, since `recent` was fetched newest-first and only the first occurrence per lead is kept
+
+    // ONE row per customer phone. The same phone can exist on more than one lead (an import, a webhook or a manual entry created a duplicate); the Inbox used to show a row per lead.
+    // Rows are grouped on the canonical phone only (never on a name), the newest message represents the group, and the other leads' ids are kept to sum the unread count.
+    const groups = new Map<string, { rep: (typeof perLead)[number]; leadIds: string[] }>();
+    for (const m of perLead) {
+      const key = normalizeMobile(m.lead!.normalizedMobile ?? m.lead!.mobile ?? "") ?? `lead:${m.leadId}`;
+      const group = groups.get(key);
+      if (group) group.leadIds.push(m.leadId!);
+      else groups.set(key, { rep: m, leadIds: [m.leadId!] });
+    }
+
+    // Messages stored with NO lead (an inbound that predates lead creation). They are never re-attached in the database; they are shown by EXACT phone: under the conversation of the
+    // leads that have this phone, or - when no lead has it at all - in a read-only "unmatched" list, so they are never silently hidden. Only for the roles that read every conversation.
+    const unmatched: UnmatchedConversation[] = [];
+    const searchDigits = query.search ? query.search.replace(/\D/g, "") : null;
+    if (canViewAllWhatsAppConversations(user.role) && (!query.search || searchDigits)) {
+      const leadless = await this.db.whatsAppMessage.findMany({
+        where: { leadId: null, ...(searchDigits ? { normalizedContact: { contains: searchDigits } } : {}) },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 200,
+        select: { id: true, leadId: true, direction: true, messageType: true, status: true, body: true, templateName: true, createdAt: true, sentAt: true, receivedAt: true, normalizedContact: true, fromNumber: true, toNumber: true },
+      });
+      const byContact = new Map<string, typeof leadless>();
+      for (const m of leadless) {
+        const key = normalizeMobile(m.normalizedContact ?? m.fromNumber ?? m.toNumber ?? "");
+        if (key) (byContact.get(key) ?? byContact.set(key, []).get(key)!).push(m);
+      }
+      for (const [key, msgs] of byContact) {
+        const newest = msgs[0]!;
+        const group = groups.get(key);
+        if (group) {
+          if (newest.createdAt > group.rep.createdAt) group.rep = { ...group.rep, ...newest, leadId: group.rep.leadId, lead: group.rep.lead };
+          continue;
+        }
+        const lead = await this.db.lead.findFirst({
+          where: { normalizedMobile: { in: legacyMatchCandidates(key) }, workingStatus: { not: "DEACTIVATED" } },
+          orderBy: { createdAt: "asc" },
+          select: { id: true, leadNumber: true, firstName: true, lastName: true, mobile: true, normalizedMobile: true },
+        });
+        if (lead) groups.set(key, { rep: { ...newest, leadId: lead.id, lead }, leadIds: [lead.id] });
+        else unmatched.push({ phone: key, messageCount: msgs.length, lastMessage: { id: newest.id, direction: newest.direction, body: newest.body, at: newest.receivedAt ?? newest.createdAt } });
+      }
+    }
+    const deduped = [...groups.values()].map((g) => g.rep).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    const memberLeadIds = new Map([...groups.values()].map((g) => [g.rep.leadId!, g.leadIds]));
 
     // Archived conversations are hidden from the normal inbox (default/archived=false) - or, with
     // ?archived=true, ONLY archived ones are shown. See WhatsAppConversationService.archivedLeadIds
@@ -293,15 +340,21 @@ class WhatsAppService {
     // messages predating this feature (or whose conversation row hasn't been created yet) simply
     // gets the HUMAN/DISCOVERY/unassigned defaults below, same defaults getOrCreateConversation itself uses.
     const leadIds = page.map((m) => m.leadId!);
+    const allMemberIds = [...new Set(leadIds.flatMap((id) => memberLeadIds.get(id) ?? [id]))];
     const conversationRows = await this.db.whatsAppConversation.findMany({
-      where: { leadId: { in: leadIds } },
+      where: { leadId: { in: allMemberIds } },
       select: { leadId: true, mode: true, orderState: true, lastReadAt: true, assignedTo: { select: { id: true, name: true } } },
     });
     const conversationByLead = new Map(conversationRows.map((c) => [c.leadId, c]));
     const unreadCounts = await Promise.all(
-      leadIds.map((leadId) => {
-        const lastReadAt = conversationByLead.get(leadId)?.lastReadAt ?? null;
-        return this.db.whatsAppMessage.count({ where: { leadId, direction: "INBOUND", createdAt: { gt: lastReadAt ?? new Date(0) } } });
+      leadIds.map(async (leadId) => {
+        const counts = await Promise.all(
+          (memberLeadIds.get(leadId) ?? [leadId]).map((memberId) => {
+            const lastReadAt = conversationByLead.get(memberId)?.lastReadAt ?? null;
+            return this.db.whatsAppMessage.count({ where: { leadId: memberId, direction: "INBOUND", createdAt: { gt: lastReadAt ?? new Date(0) } } });
+          }),
+        );
+        return counts.reduce((a, b) => a + b, 0);
       }),
     );
     const unreadByLead = new Map(leadIds.map((leadId, i) => [leadId, unreadCounts[i]]));
@@ -331,7 +384,7 @@ class WhatsAppService {
       };
     });
 
-    return { items, pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) } };
+    return { items, pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) }, ...(unmatched.length > 0 && query.page === 1 ? { unmatched } : {}) };
   }
 
   // ---- Webhook-driven persistence (called from whatsapp.webhook.processor.ts). ----

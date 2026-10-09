@@ -37,8 +37,27 @@ function fakeDb(overrides: { leads?: any[] } = {}) {
         Object.assign(row, data);
         return select ? project(row, select, users) : row;
       },
+      async updateMany({ where, data }: any) {
+        const ids: string[] = where.leadId.in;
+        conversations.filter((c) => ids.includes(c.leadId)).forEach((c) => Object.assign(c, data));
+        return { count: ids.length };
+      },
+      async createMany({ data }: any) {
+        for (const d of data) if (!conversations.some((c) => c.leadId === d.leadId)) conversations.push({ id: `conv-${conversations.length + 1}`, mode: "HUMAN", assignedToId: null, lastReadAt: null, orderState: "DISCOVERY", orderDraft: null, aiSuggestedReply: null, lastAiHandoffReason: null, createdOrderId: null, ...d });
+        return { count: data.length };
+      },
+      async findMany({ where }: any) {
+        return conversations.filter((c) => where.leadId.in.includes(c.leadId));
+      },
     },
     lead: {
+      // phone-less leads in these fakes: no siblings, the conversation is just the lead itself
+      async findUnique({ where }: any) {
+        return leads.find((l) => l.id === where.id) ?? null;
+      },
+      async findMany() {
+        return [];
+      },
       async findFirst({ where }: any) {
         const id = where.AND ? where.AND[0].id : where.id;
         const scope = where.AND?.[1];

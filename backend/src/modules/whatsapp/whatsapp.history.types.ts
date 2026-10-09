@@ -99,7 +99,15 @@ export interface ConversationSummary {
   archived: boolean;
 }
 
+/** Messages from a phone number that no lead has (so there is no customer to open): shown read-only instead of being hidden. Never merged or attached automatically. */
+export interface UnmatchedConversation {
+  phone: string;
+  messageCount: number;
+  lastMessage: { id: string; direction: ConversationSummary["lastMessage"]["direction"]; body: string | null; at: Date };
+}
+
 export interface ConversationListResult {
   items: ConversationSummary[];
   pagination: Pagination;
+  unmatched?: UnmatchedConversation[];
 }

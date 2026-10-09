@@ -41,7 +41,8 @@ async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.
   mobileSeq += 1;
   const mobile = `98765${String(400000 + mobileSeq).padStart(6, "0")}`;
   return tx.lead.create({
-    data: { leadNumber: `L-${uid()}`, firstName: "Kiran", lastName: "Verma", mobile, normalizedMobile: `+91${mobile}`, ...overrides },
+    // lifecycleStage CUSTOMER: a campaign audience is resolved by CustomersService, which only returns converted leads (customers.filters.ts); the schema default is LEAD.
+    data: { leadNumber: `L-${uid()}`, firstName: "Kiran", lastName: "Verma", mobile, normalizedMobile: `+91${mobile}`, lifecycleStage: "CUSTOMER", ...overrides },
     select: { id: true, mobile: true },
   });
 }

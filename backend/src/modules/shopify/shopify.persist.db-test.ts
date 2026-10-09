@@ -587,7 +587,7 @@ describe("webhook events in the database", () => {
 // ---------------------------------------------------------------------------------------------
 
 describe("the E6 Orders API on imported Shopify data", () => {
-  it("lists and shows a Shopify COD order, with role scoping still applied", async () => {
+  it("lists and shows a Shopify COD order, visible to every salesperson (order visibility is company-wide)", async () => {
     await inRollback(async (tx) => {
       const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
@@ -621,15 +621,15 @@ describe("the E6 Orders API on imported Shopify data", () => {
       assert.equal((await seen(as(admin, Role.ADMIN), { status: OrderStatus.CONFIRMED })).length, 1);
       assert.equal((await seen(as(admin, Role.ADMIN), { status: OrderStatus.DELIVERED })).length, 0);
 
-      // The lead has no owner yet, so only an admin sees the order.
-      assert.equal((await seen(as(rep, Role.SALESPERSON))).length, 0);
-      assert.equal((await seen(as(other, Role.SALESPERSON))).length, 0);
-      await assert.rejects(() => svc.getOrder(as(rep, Role.SALESPERSON), row.id), /Order not found/);
+      // The lead has no owner yet; every salesperson still sees the order (visibility is company-wide).
+      assert.equal((await seen(as(rep, Role.SALESPERSON))).length, 1);
+      assert.equal((await seen(as(other, Role.SALESPERSON))).length, 1);
+      assert.equal((await svc.getOrder(as(rep, Role.SALESPERSON), row.id)).id, row.id);
 
-      // Once the lead is owned, its owner sees the order and nobody else does.
+      // Once the lead is owned, the order stays visible to everyone.
       await tx.lead.update({ where: { id: (await tx.order.findUniqueOrThrow({ where: { id: row.id } })).leadId }, data: { ownerId: rep.id } });
       assert.equal((await seen(as(rep, Role.SALESPERSON))).length, 1);
-      assert.equal((await seen(as(other, Role.SALESPERSON))).length, 0);
+      assert.equal((await seen(as(other, Role.SALESPERSON))).length, 1);
 
       const detail = await svc.getOrder(as(rep, Role.SALESPERSON), row.id);
       assert.equal(detail.externalNumber, `#DBAPI${suffix}`);

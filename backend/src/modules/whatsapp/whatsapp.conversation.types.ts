@@ -32,6 +32,8 @@ export interface ConversationDetail {
   createdOrderId: string | null;
   unreadCount: number;
   archived: boolean;
+  /** Who the conversation is with (name + phone), present on the read-only view so the Inbox header never depends on the team-scoped Customer 360 lookup. */
+  contact?: { name: string; mobile: string | null; leadNumber: string };
 }
 
 export interface AssignConversationInput {

@@ -165,6 +165,12 @@ const ORDER_CANCEL_MUTATION = `
   }
 `;
 
+const ORDER_CANCEL_STATE_QUERY = `
+  query crmOrderCancelState($id: ID!) {
+    order(id: $id) { id cancelledAt }
+  }
+`;
+
 interface OrderCancelResponse {
   orderCancel: {
     job: { id: string; done: boolean } | null;
@@ -177,8 +183,24 @@ interface OrderCancelResponse {
  *  processes the cancel asynchronously (a job), so `cancelledAt` here is best-effort/not always set;
  *  the CRM's own Order.cancelledAt (set by the caller) is the authoritative timestamp either way. */
 export async function cancelShopifyOrder(client: ShopifyClient, shopifyOrderId: string): Promise<ShopifyOrderCancelResult> {
-  // Order.externalId is the canonical numeric id (or a legacy GID); orderCancel needs the GID.
-  const gid = /^d+$/.test(shopifyOrderId.trim()) ? `gid://shopify/Order/${shopifyOrderId.trim()}` : shopifyOrderId;
+  // Order.externalId is the canonical numeric id (or a legacy GID); orderCancel's $orderId: ID! needs the GID. toShopifyOrderGid is the ONE normalisation path: a numeric id
+  // or an Order GID in, the GID out; anything else is refused here, before Shopify is called.
+  let gid: string;
+  try {
+    gid = toShopifyOrderGid(shopifyOrderId);
+  } catch (error) {
+    throw new ShopifyOrderCancelError(error instanceof Error ? error.message : "Invalid Shopify order id");
+  }
+
+  // Idempotent retry: if Shopify already shows the order as cancelled (an earlier attempt got through, or someone cancelled it there), there is nothing left to do. A failed
+  // read never blocks the cancellation itself - the mutation below reports any genuine error unchanged.
+  try {
+    const state = await client.query<{ order: { cancelledAt: string | null } | null }>(ORDER_CANCEL_STATE_QUERY, { id: gid });
+    if (state?.order?.cancelledAt) return { shopifyOrderId, cancelledAt: state.order.cancelledAt };
+  } catch {
+    /* fall through to the mutation */
+  }
+
   let data: OrderCancelResponse;
   try {
     data = await client.query<OrderCancelResponse>(ORDER_CANCEL_MUTATION, { orderId: gid, reason: "OTHER", refund: false, restock: false, notifyCustomer: false });

@@ -32,6 +32,7 @@ import {
   derivePaymentStatus,
   fullName,
   orderReadWhere,
+  orderVisibilityScope,
   scopedOrderWhere,
 } from "./orders.filters.js";
 import {
@@ -228,7 +229,7 @@ class OrdersService {
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildOrderWhere(query, leadScope);
+    const where = buildOrderWhere(query, orderVisibilityScope(user.role, leadScope));
 
     const [totalItems, rows] = await Promise.all([
       this.db.order.count({ where }),
@@ -277,7 +278,7 @@ class OrdersService {
 
   async getOrder(user: AuthUser, id: string, opts: { approverScope?: boolean } = {}): Promise<OrderDetail> {
     const leadScope = opts.approverScope ? {} : await getLeadScope(user, this.db);
-    // orderReadWhere: a manager who reviews a refund request can also open the order it is about, whichever team it belongs to (reading only).
+    // orderReadWhere: every order is readable by admin, manager and salesperson, whichever team it belongs to (reading only; actions keep their own scope).
     const order = await this.db.order.findFirst({
       where: orderReadWhere(user, id, leadScope),
       select: DETAIL_SELECT,

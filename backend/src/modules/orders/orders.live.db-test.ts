@@ -11,6 +11,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { ShopifyClient } from "../shopify/shopify.client.js";
 import { loadShopifyConfig } from "../shopify/shopify.config.js";
 import OrdersLiveService from "./orders.live.service.js";
+import OrdersService from "./orders.service.js";
 
 class Rollback extends Error {}
 
@@ -326,7 +327,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
     });
   });
 
-  it("a Shopify order the CRM has not synced yet is shown to ADMIN only, flagged linkedInCrm: false", async () => {
+  it("a Shopify order the CRM has not synced yet is shown to ADMIN, MANAGER and SALESPERSON (flagged linkedInCrm: false) but not to HR", async () => {
     await inRollback(async (tx) => {
       const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
@@ -340,7 +341,14 @@ describe("OrdersLiveService.listLiveOrders", () => {
 
       const { client: repClient } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1002" }]));
       const repResult = await new OrdersLiveService(tx, () => repClient).listLiveOrders(as(rep, Role.SALESPERSON), { first: 25 });
-      assert.equal(repResult.items.length, 0, "an unsynced order is never shown to a non-admin, since there is no lead to check scope against");
+      assert.equal(repResult.items.length, 1, "every order is visible to a salesperson, synced or not");
+      assert.equal(repResult.items[0]!.linkedInCrm, false);
+      const manager = await tx.user.create({ data: { name: "Mgr", username: `m-${uid()}`, role: Role.MANAGER } });
+      const hr = await tx.user.create({ data: { name: "HR", username: `h-${uid()}`, role: Role.HR } });
+      const { client: mgrClient } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1002" }]));
+      assert.equal((await new OrdersLiveService(tx, () => mgrClient).listLiveOrders(as(manager, Role.MANAGER), { first: 25 })).items.length, 1);
+      const { client: hrClient } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1002" }]));
+      assert.equal((await new OrdersLiveService(tx, () => hrClient).listLiveOrders(as(hr, Role.HR), { first: 25 })).items.length, 0, "HR sees no orders");
     });
   });
 
@@ -513,7 +521,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
     });
   });
 
-  it("RBAC: a salesperson only sees Shopify orders linked to their own leads, never a colleague's", async () => {
+  it("a salesperson sees Shopify orders linked to a colleague's leads too (visibility is company-wide)", async () => {
     await inRollback(async (tx) => {
       const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
       const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.SALESPERSON } });
@@ -530,8 +538,8 @@ describe("OrdersLiveService.listLiveOrders", () => {
       ]));
 
       const result = await new OrdersLiveService(tx, () => client).listLiveOrders(as(repA, Role.SALESPERSON), { first: 25 });
-      assert.equal(result.items.length, 1);
-      assert.equal(result.items[0]!.customer.leadId, leadA.id);
+      assert.equal(result.items.length, 2);
+      assert.deepEqual(result.items.map((i) => i.customer.leadId).sort(), [leadA.id, leadB.id].sort());
     });
   });
 
@@ -724,7 +732,7 @@ describe("OrdersLiveService.listLiveOrders - column filters", () => {
     });
   });
 
-  it("RBAC is preserved: a salesperson filtering by another salesperson's id still sees nothing of theirs, and unsynced orders stay hidden", async () => {
+  it("the salesperson filter still narrows the list for a salesperson, and an unsynced order never matches it", async () => {
     await inRollback(async (tx) => {
       const repA = await tx.user.create({ data: { name: "Rep A", username: `ra-${uid()}`, role: Role.SALESPERSON } });
       const repB = await tx.user.create({ data: { name: "Rep B", username: `rb-${uid()}`, role: Role.SALESPERSON } });
@@ -738,7 +746,41 @@ describe("OrdersLiveService.listLiveOrders - column filters", () => {
       const own = await new OrdersLiveService(tx, () => fakeShopifyClient(page()).client).listLiveOrders(as(repA, Role.SALESPERSON), { first: 25, salespersonId: [repA.id] });
       assert.deepEqual(own.items.map((i) => i.orderNumber), ["#A1"]);
       const other = await new OrdersLiveService(tx, () => fakeShopifyClient(page()).client).listLiveOrders(as(repA, Role.SALESPERSON), { first: 25, salespersonId: [repB.id] });
-      assert.deepEqual(other.items, [], "filtering cannot widen a salesperson's scope");
+      assert.deepEqual(other.items.map((i) => i.orderNumber), ["#B1"], "the filter picks the colleague's order; the unsynced one never matches a salesperson filter");
+    });
+  });
+});
+
+describe("list and detail show the same order total", () => {
+  it("a CRM-created order (subtotal 1199, discount 100, shipping 66.72, tax 0) is 1165.72 in the live list AND on the order page, even though Shopify holds its own 999 copy", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const extId = `${Date.now()}`;
+      const order = await makeShopifyOrder(tx, lead.id, extId, { source: "SALESPERSON", subtotal: "1199.00", discountAmount: "100.00", shippingAmount: "66.72", taxAmount: "0.00", totalAmount: "1165.72" });
+
+      const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#2023", totalAmount: "999.00" }]));
+      const list = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+      assert.equal(list.items[0]!.linkedInCrm, true);
+      const detail = await new OrdersService(tx as never).getOrder(as(admin, Role.ADMIN), order.id);
+
+      assert.equal(Number(list.items[0]!.totalAmount), 1165.72);
+      assert.equal(Number(detail.totalAmount), 1165.72);
+      // the separate figures are untouched, and the total is subtotal - discount + shipping + tax
+      assert.deepEqual([detail.subtotal, detail.discountAmount, detail.shippingAmount, detail.taxAmount].map(Number), [1199, 100, 66.72, 0]);
+      assert.equal(Math.round((Number(detail.subtotal) - Number(detail.discountAmount) + Number(detail.shippingAmount) + Number(detail.taxAmount)) * 100), 116572);
+    });
+  });
+
+  it("a Shopify-originated order keeps Shopify's live total in the list", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const extId = `${Date.now()}`;
+      await makeShopifyOrder(tx, lead.id, extId, { source: "SHOPIFY", totalAmount: "699.00" });
+      const { client } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#2024", totalAmount: "749.00" }]));
+      const list = await new OrdersLiveService(tx, () => client).listLiveOrders(as(admin, Role.ADMIN), { first: 25 });
+      assert.equal(Number(list.items[0]!.totalAmount), 749);
     });
   });
 });

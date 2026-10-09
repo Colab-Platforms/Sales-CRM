@@ -28,6 +28,8 @@ export interface ConversationDetail {
   lastAiHandoffReason: string | null;
   createdOrderId: string | null;
   unreadCount: number;
+  /** Who the conversation is with, so the header does not depend on the team-scoped Customer 360 lookup. */
+  contact?: { name: string; mobile: string | null; leadNumber: string };
   archived: boolean;
 }
 

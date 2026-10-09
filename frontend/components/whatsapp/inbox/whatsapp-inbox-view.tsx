@@ -196,6 +196,20 @@ function ConversationListPanel({
             ))}
           </ul>
         )}
+        {data?.unmatched && data.unmatched.length > 0 ? (
+          <div className="border-t p-3" data-testid="unmatched-conversations">
+            <p className="mb-2 text-xs font-medium text-muted-foreground">Numbers not linked to any customer</p>
+            <ul className="space-y-1">
+              {data.unmatched.map((u) => (
+                <li key={u.phone} className="rounded-md border px-2 py-1.5 text-xs">
+                  <span className="font-medium">{u.phone}</span>
+                  <span className="text-muted-foreground"> · {u.messageCount} message{u.messageCount === 1 ? "" : "s"}</span>
+                  {u.lastMessage.body ? <p className="truncate text-muted-foreground">{u.lastMessage.body}</p> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
 
       {data && data.pagination.totalPages > 1 ? (
@@ -246,6 +260,13 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const conversation = useQuery({ ...conversationDetailQueryOptions(leadId), retry: false });
   const capability = useQuery({ ...messagingCapabilityQueryOptions(leadId), retry: false }).data;
   const canSendFreeText = capability?.freeText.allowed ?? false;
+  // The header and composer come from the CONVERSATION's own contact when the team-scoped Customer 360 record is not available to this viewer (another team's customer) - the
+  // conversation stays readable and repliable; only customer-level actions (orders, delete customer, template dialog) still need the Customer 360 record.
+  const contact = conversation.data?.contact;
+  const headerName = data?.profile.name ?? contact?.name;
+  const headerMobile = data ? data.profile.mobile : contact?.mobile;
+  const headerLeadNumber = data?.profile.leadNumber ?? contact?.leadNumber;
+  const hasPhone = Boolean(headerMobile);
   const markRead = useMarkConversationReadMutation();
   const unread = conversation.data?.unreadCount ?? 0;
   const archiveMutation = useArchiveConversationMutation();
@@ -317,17 +338,21 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
             <Button variant="ghost" size="icon-sm" onClick={() => setStarredOpen(true)} aria-label="Starred messages" title="Starred messages">
               <Star className="size-4" />
             </Button>
-            {isLoading ? (
+            {(isLoading || conversation.isPending) && !headerName ? (
               <Skeleton className="h-6 w-40" />
-            ) : error || !data ? (
-              <p className="text-sm text-destructive">{error ?? "Failed to load this customer."}</p>
+            ) : !headerName ? (
+              <p className="text-sm text-destructive">{error ?? "Failed to load this conversation."}</p>
             ) : (
               <div className="min-w-0">
-                <Link href={customerDetailHref(leadId)} className="truncate font-semibold hover:underline">
-                  {data.profile.name}
-                </Link>
+                {data ? (
+                  <Link href={customerDetailHref(leadId)} className="truncate font-semibold hover:underline">
+                    {headerName}
+                  </Link>
+                ) : (
+                  <span className="block truncate font-semibold">{headerName}</span>
+                )}
                 <p className="truncate text-xs text-muted-foreground">
-                  {data.profile.mobile ?? "No phone on file"} · {data.profile.leadNumber}
+                  {headerMobile ?? "No phone on file"} · {headerLeadNumber}
                 </p>
                 {capability ? (
                   <p className="truncate text-xs text-muted-foreground" data-testid="conversation-provider">
@@ -349,7 +374,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
             <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!data}>
               Create Order
             </Button>
-            <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data?.profile.mobile}>
+            <Button size="sm" onClick={() => setSendOpen(true)} disabled={!hasPhone}>
               Send WhatsApp
             </Button>
             {conversation.data ? (
@@ -378,7 +403,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
             canSendFreeText={canSendFreeText}
             blockedMessage={capability?.freeText.message ?? null}
             onOpenTemplateSend={() => setSendOpen(true)}
-            disabled={!data?.profile.mobile}
+            disabled={!hasPhone}
             replyTarget={replyTarget}
             isCorrection={isCorrection}
             onCancelReply={cancelReply}
@@ -394,7 +419,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
       <div className="hidden h-full min-h-0 w-[340px] min-w-[340px] max-w-[340px] shrink-0 flex-col border-l lg:flex">
         <ConversationContextPanel
           leadId={leadId}
-          canSendWhatsApp={Boolean(data?.profile.mobile)}
+          canSendWhatsApp={hasPhone}
           onSendWhatsApp={() => setSendOpen(true)}
           onCreateOrder={() => setCreateOrderOpen(true)}
           isArchived={isArchived}
@@ -415,9 +440,10 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
         onConfirm={confirmArchive}
       />
 
+      {/* The template dialog needs only the conversation's own contact; the customer's orders (for order-based variables) exist only when the Customer 360 record is available to this viewer. */}
+      {headerName ? <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={headerName} orders={data?.orders ?? []} /> : null}
       {data ? (
         <>
-          <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={data.profile.name} orders={data.orders} />
           <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={leadId} customerName={data.profile.name} customerMobile={data.profile.mobile} />
           <DeleteCustomerDialog open={deleteCustomerOpen} onOpenChange={setDeleteCustomerOpen} leadId={leadId} customerName={data.profile.name} onDeactivated={onBack} />
         </>

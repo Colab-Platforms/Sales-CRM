@@ -8,6 +8,7 @@ import { ActivitySource, ActivityType } from "../../../generated/prisma/enums.js
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { fullName, scopedOrderWhere } from "../orders/orders.filters.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
+import { canViewAllWhatsAppConversations } from "./whatsapp.history.filters.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import type { WhatsAppProvider } from "./whatsapp.provider.js";
@@ -403,6 +404,17 @@ class WhatsAppMessagingService {
 
   // Shared by preview and send: everything up to "here is the message that would be sent", so the
   // two flows can never disagree about what a template needs or whether it is actually sendable.
+  /**
+   * The lead a signed-in user may send a template to: their normal lead scope, plus - for ADMIN, MANAGER and SALESPERSON (telecaller), who handle the Inbox company-wide - any lead that already
+   * HAS a WhatsApp conversation (messages exist), whichever team owns it. A lead with no conversation outside the user's scope stays "not found", so this never opens up sending to arbitrary
+   * customers. Template approval, the Meta-only provider rule and variable validation still apply afterwards, unchanged.
+   */
+  private async loadLeadForUser(user: AuthUser, leadId: string) {
+    const scoped = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, await getLeadScope(user, this.db)), select: LEAD_SELECT });
+    if (scoped || !canViewAllWhatsAppConversations(user.role)) return scoped;
+    return this.db.lead.findFirst({ where: { id: leadId, workingStatus: { not: "DEACTIVATED" }, whatsAppMessages: { some: {} } }, select: LEAD_SELECT });
+  }
+
   private async loadAndResolve(
     actor: SendActor,
     input: PreviewTemplateInput,
@@ -414,7 +426,7 @@ class WhatsAppMessagingService {
     // so there is no separate human "can they see this lead" question to ask here.
     const lead =
       actor.kind === "user"
-        ? await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, await getLeadScope(actor.user, this.db)), select: LEAD_SELECT })
+        ? await this.loadLeadForUser(actor.user, input.leadId)
         : await this.db.lead.findFirst({ where: { id: input.leadId }, select: LEAD_SELECT });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
 

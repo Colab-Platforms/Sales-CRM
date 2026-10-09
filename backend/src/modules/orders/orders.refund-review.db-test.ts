@@ -1,5 +1,5 @@
-// Database tests: opening the ORDER behind a refund request. Refund approval is company-wide, so a manager (or admin) who reviews a request must be able to open its order
-// whichever team it belongs to - but ONLY orders that actually have a refund request, only to read, and nobody else gains anything. Run with: npm run test:db
+// Database tests: opening the ORDER behind a refund request. Order visibility is company-wide (admin, manager, salesperson), so the order behind a refund request opens for any of them
+// whichever team it belongs to - to read only; every action keeps its own scope. (Visibility itself is covered in orders.visibility.db-test.ts.) Run with: npm run test:db
 // Rolled-back transaction only; no Cashfree, no Shopify.
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
@@ -23,10 +23,9 @@ after(() => prisma.$disconnect());
 
 const uid = () => randomUUID();
 const as = (u: { id: string; username: string }, role: Role): AuthUser => ({ id: u.id, username: u.username, role }) as AuthUser;
-const notFound = (p: Promise<unknown>) => assert.rejects(p, /Order not found/);
 
 describe("opening the order behind a refund request", () => {
-  it("any manager and any admin can open an order that has a refund request; nobody gains access to orders without one", async () => {
+  it("any manager, telecaller and admin can open an order that has a refund request - read only", async () => {
     await inRollback(async (tx) => {
       const mk = (role: Role) => tx.user.create({ data: { name: role, username: `u-${uid()}`, role }, select: { id: true, username: true } });
       const [manager, otherManager, admin, tele, outsider] = [await mk(Role.MANAGER), await mk(Role.MANAGER), await mk(Role.ADMIN), await mk(Role.SALESPERSON), await mk(Role.SALESPERSON)];
@@ -47,23 +46,24 @@ describe("opening the order behind a refund request", () => {
       assert.equal((await svc.getOrder(as(tele, Role.SALESPERSON), withRequest)).id, withRequest);
       // another team's manager: the order behind a refund request opens ...
       assert.equal((await svc.getOrder(as(otherManager, Role.MANAGER), withRequest)).id, withRequest);
-      // ... but an order without one stays closed, and nothing else about the order is opened up for them
-      await notFound(svc.getOrder(as(otherManager, Role.MANAGER), withoutRequest));
+      // ... and so does any other order (visibility is company-wide), but reading grants no action on it
+      assert.equal((await svc.getOrder(as(otherManager, Role.MANAGER), withoutRequest)).id, withoutRequest);
       await assert.rejects(svc.cancelOrder(as(otherManager, Role.MANAGER), withRequest, { reason: "not mine" }), /Order not found/);
       // the order page's timeline and audit history follow the same rule (they used to answer "Order not found" on an otherwise open page)
       const audit = new AuditService(tx as never);
       assert.equal((await svc.getStatusHistory(as(otherManager, Role.MANAGER), withRequest)).orderId ?? withRequest, withRequest);
       await audit.getOrderAudit(as(otherManager, Role.MANAGER), withRequest, { page: 1, pageSize: 10 });
-      await notFound(svc.getStatusHistory(as(otherManager, Role.MANAGER), withoutRequest));
-      await assert.rejects(audit.getOrderAudit(as(otherManager, Role.MANAGER), withoutRequest, { page: 1, pageSize: 10 }), /Order not found/);
-      await notFound(svc.getStatusHistory(as(outsider, Role.SALESPERSON), withRequest));
-      await assert.rejects(audit.getOrderAudit(as(outsider, Role.SALESPERSON), withRequest, { page: 1, pageSize: 10 }), /Order not found/);
+      await svc.getStatusHistory(as(otherManager, Role.MANAGER), withoutRequest);
+      await audit.getOrderAudit(as(otherManager, Role.MANAGER), withoutRequest, { page: 1, pageSize: 10 });
+      await svc.getStatusHistory(as(outsider, Role.SALESPERSON), withRequest);
+      await audit.getOrderAudit(as(outsider, Role.SALESPERSON), withRequest, { page: 1, pageSize: 10 });
       // an admin opens both
       assert.equal((await svc.getOrder(as(admin, Role.ADMIN), withRequest)).id, withRequest);
       assert.equal((await svc.getOrder(as(admin, Role.ADMIN), withoutRequest)).id, withoutRequest);
-      // a telecaller outside the order's scope still cannot, even though a refund request exists
-      await notFound(svc.getOrder(as(outsider, Role.SALESPERSON), withRequest));
-      await notFound(svc.getOrder(as(outsider, Role.SALESPERSON), withoutRequest));
+      // a telecaller outside the order's team can read it too, but still cannot cancel it
+      assert.equal((await svc.getOrder(as(outsider, Role.SALESPERSON), withRequest)).id, withRequest);
+      assert.equal((await svc.getOrder(as(outsider, Role.SALESPERSON), withoutRequest)).id, withoutRequest);
+      await assert.rejects(svc.cancelOrder(as(outsider, Role.SALESPERSON), withRequest, { reason: "not mine" }), /Order not found/);
     });
   });
 });

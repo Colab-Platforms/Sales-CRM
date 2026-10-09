@@ -31,9 +31,13 @@ after(() => prisma.$disconnect());
 const uid = () => randomUUID();
 const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
+// Each lead gets its OWN phone by default: the Inbox treats leads with the same phone as one customer, so fixtures that mean "two different customers" must not share a number.
+let phoneSeq = 0;
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
+  phoneSeq += 1;
+  const mobile = `98765${String(10000 + phoneSeq).padStart(5, "0")}`;
   return tx.lead.create({
-    data: { leadNumber: `L-${uid()}`, firstName: "Mahadev", lastName: "Babar", mobile: "9876543210", normalizedMobile: "+919876543210", ...overrides },
+    data: { leadNumber: `L-${uid()}`, firstName: "Mahadev", lastName: "Babar", mobile, normalizedMobile: `+91${mobile}`, ...overrides },
     select: { id: true, normalizedMobile: true },
   });
 }

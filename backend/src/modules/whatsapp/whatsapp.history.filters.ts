@@ -1,18 +1,38 @@
 import type { Prisma } from "../../../generated/prisma/client.js";
+import { Role } from "../../../generated/prisma/enums.js";
 import { fullName } from "../orders/orders.filters.js";
 import type { ListMessagesQuery, WhatsAppMessageHistoryItem } from "./whatsapp.history.types.js";
+
+/**
+ * WhatsApp conversations and message history are READABLE company-wide by ADMIN, MANAGER and SALESPERSON (telecaller): a customer's reply is visible whichever team or user owns the
+ * lead. Only reading uses this - sending, deleting, assigning, archiving, forwarding, starring and order creation keep the normal lead scope (or their own role checks). HR keeps the
+ * normal scope, which matches no lead. Customer, lead, order and abandoned-checkout scoping are separate and unchanged.
+ */
+export function canViewAllWhatsAppConversations(role: string): boolean {
+  return role === Role.ADMIN || role === Role.MANAGER || role === Role.SALESPERSON;
+}
+
+export function whatsAppReadScope(role: string, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
+  return canViewAllWhatsAppConversations(role) ? {} : leadScope;
+}
 
 // userId: whoever is asking - a message this user chose "Delete for me" on is excluded for them
 // alone (WhatsAppMessageUserState is per-user; everyone else still sees it). The row itself is
 // never touched, so this can never hide a message "for everyone" by accident.
-export function buildMessageWhere(query: ListMessagesQuery, leadScope: Prisma.LeadWhereInput, userId: string): Prisma.WhatsAppMessageWhereInput {
+export function buildMessageWhere(query: ListMessagesQuery, leadScope: Prisma.LeadWhereInput, userId: string, thread?: { leadIds: string[]; contacts: string[] }): Prisma.WhatsAppMessageWhereInput {
   const and: Prisma.WhatsAppMessageWhereInput[] = [];
 
   // A message with no lead (an inbound sender the CRM could not match, E7.1) has no lead to
   // satisfy this filter against, so it is naturally invisible to anyone but ADMIN - the same rule
   // already relied on for lead-less WhatsApp template Activity rows (E7.2).
   if (Object.keys(leadScope).length > 0) and.push({ lead: leadScope });
-  if (query.leadId) and.push({ leadId: query.leadId });
+  // thread: the same phone number can sit on more than one lead, and a message may have been stored with no lead at all; the customer's thread is read across all of them by EXACT phone
+  // (see threadOf). Nothing is re-attached in the database - this only decides what is shown together.
+  if (query.leadId) {
+    and.push(thread && thread.leadIds.length > 0
+      ? { OR: [{ leadId: { in: thread.leadIds } }, ...(thread.contacts.length > 0 ? [{ leadId: null, normalizedContact: { in: thread.contacts } }] : [])] }
+      : { leadId: query.leadId });
+  }
   if (query.direction) and.push({ direction: query.direction });
   if (query.status) and.push({ status: query.status });
   if (query.provider) and.push({ provider: query.provider });

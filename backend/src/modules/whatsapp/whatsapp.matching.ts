@@ -10,7 +10,8 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 // simply not attached to anyone, exactly as E7.1 Phase 6 requires.
 
 export interface MatchDeps {
-  db: Pick<Prisma.TransactionClient, "lead">;
+  // whatsAppMessage is optional only so callers/tests that never need thread-affinity can pass just `lead`; the webhook always passes the full client.
+  db: Pick<Prisma.TransactionClient, "lead"> & Partial<Pick<Prisma.TransactionClient, "whatsAppMessage">>;
 }
 
 export interface MatchResult {
@@ -29,7 +30,7 @@ export interface MatchResult {
 // the reply landed in a separate Inbox conversation instead of the customer's real, existing one.
 // Matching against every plausible legacy shape makes this resilient regardless of which one a given
 // lead happens to have, without requiring every existing lead to be individually repaired first.
-function legacyMatchCandidates(normalized: string): string[] {
+export function legacyMatchCandidates(normalized: string): string[] {
   const candidates = new Set<string>([normalized, normalized.replace(/^\+/, "")]);
   // India-specific extra legacy shapes - this CRM's only default country (see normalizeMobile's own
   // comment: "The store is Indian (INR)"). A stored value that dropped the country code entirely,
@@ -42,12 +43,47 @@ function legacyMatchCandidates(normalized: string): string[] {
   return [...candidates];
 }
 
+/**
+ * The leads that are the SAME customer for messaging purposes: every lead whose phone is this lead's phone in any stored shape (+91..., 91..., bare 10 digits). Always includes the lead
+ * itself. Exact-phone only - two people are never merged on a name or a partial number. Used to show ONE Inbox conversation per phone and to read its whole thread.
+ */
+export async function siblingLeadIds(db: Pick<Prisma.TransactionClient, "lead">, leadId: string): Promise<string[]> {
+  const lead = await db.lead.findUnique({ where: { id: leadId }, select: { normalizedMobile: true, mobile: true } });
+  const normalized = normalizeMobile(lead?.normalizedMobile ?? lead?.mobile ?? "");
+  if (!normalized) return [leadId];
+  const rows = await db.lead.findMany({ where: { normalizedMobile: { in: legacyMatchCandidates(normalized) } }, select: { id: true } });
+  return [...new Set([leadId, ...rows.map((r) => r.id)])];
+}
+
+/** The thread of a customer: every lead with this phone, plus the phone shapes under which lead-less messages for it may be stored. */
+export async function threadOf(db: Pick<Prisma.TransactionClient, "lead">, leadId: string): Promise<{ leadIds: string[]; contacts: string[] }> {
+  const leadIds = await siblingLeadIds(db, leadId);
+  const lead = await db.lead.findUnique({ where: { id: leadId }, select: { normalizedMobile: true, mobile: true } });
+  const normalized = normalizeMobile(lead?.normalizedMobile ?? lead?.mobile ?? "");
+  return { leadIds, contacts: normalized ? legacyMatchCandidates(normalized) : [] };
+}
+
 export async function matchSenderToLead(rawFrom: string, { db }: MatchDeps): Promise<MatchResult> {
   const normalizedContact = normalizeMobile(rawFrom);
   if (!normalizedContact) return { leadId: null, normalizedContact: null };
 
+  const candidates = legacyMatchCandidates(normalizedContact);
+
+  // Thread affinity. The same phone number can legitimately sit on more than one lead (a duplicate created by an import, a webhook or a manual entry). A reply must land in the
+  // conversation the CRM was last talking to this customer in - the lead the template / message was SENT from - not simply the oldest lead with that number, or the customer's
+  // answer lands on a different lead (often one outside the sender's team) and "disappears" from the Inbox thread that sent the template. The outbound row's contact may be stored
+  // in any legacy shape, so it is looked up with the same candidate list.
+  if (db.whatsAppMessage) {
+    const lastSent = await db.whatsAppMessage.findFirst({
+      where: { direction: "OUTBOUND", leadId: { not: null }, normalizedContact: { in: candidates }, lead: { normalizedMobile: { in: candidates } } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { leadId: true },
+    });
+    if (lastSent?.leadId) return { leadId: lastSent.leadId, normalizedContact };
+  }
+
   const lead = await db.lead.findFirst({
-    where: { normalizedMobile: { in: legacyMatchCandidates(normalizedContact) } },
+    where: { normalizedMobile: { in: candidates } },
     select: { id: true },
     orderBy: { createdAt: "asc" },
   });
