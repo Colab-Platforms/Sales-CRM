@@ -26,6 +26,7 @@ import {
   Settings,
   AlertTriangle,
   RotateCcw,
+  LifeBuoy,
   ChevronRight,
 } from "lucide-react";
 import {
@@ -46,6 +47,7 @@ import {
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/nav-user";
 import { PendingRefundBadge } from "@/components/refunds/pending-refund-badge";
+import { OpenTicketBadge } from "@/components/tickets/open-ticket-badge";
 import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
@@ -227,6 +229,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Administration",
       items: [
+        { title: "Support Tickets", href: "/dashboard/tickets", icon: LifeBuoy },
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
       ],
     },
@@ -321,6 +324,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Administration",
       items: [
+        { title: "Support Tickets", href: "/dashboard/tickets", icon: LifeBuoy },
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
       ],
     },
@@ -417,6 +421,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Administration",
       items: [
+        { title: "Support Tickets", href: "/dashboard/tickets", icon: LifeBuoy },
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
       ],
     },
@@ -563,6 +568,9 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
                           </SidebarMenuButton>
                           {item.href === "/dashboard/refunds" ? (
                             <PendingRefundBadge />
+                          ) : null}
+                          {item.href === "/dashboard/tickets" ? (
+                            <OpenTicketBadge />
                           ) : null}
                         </>
                       ) : (

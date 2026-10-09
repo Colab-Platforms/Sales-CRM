@@ -55,9 +55,9 @@ function LeadDetailSkeleton() {
     <div className="space-y-6" aria-busy="true" aria-label="Loading lead dossier">
       <Skeleton className="h-9 w-44 rounded-xl" />
       <Skeleton className="h-44 rounded-2xl" />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <Skeleton className="h-80 rounded-2xl lg:col-span-5" />
-        <Skeleton className="h-80 rounded-2xl lg:col-span-7" />
+      <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-12">
+        <Skeleton className="h-80 rounded-2xl @4xl:col-span-4" />
+        <Skeleton className="h-80 rounded-2xl @4xl:col-span-8" />
       </div>
     </div>
   );
@@ -103,7 +103,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const name = `${lead.firstName} ${lead.lastName ?? ""}`.trim();
 
   return (
-    <div className="space-y-5">
+    <div className="@container space-y-5">
       {/* Top Bar: Back Link & Doodle Action Buttons */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <BackLink />
@@ -207,11 +207,11 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           </div>
 
           {/* Compact Quick-Stats Ribbon */}
-          <div className="grid grid-cols-2 gap-3 border-t-[1.5px] border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 md:grid-cols-6">
-            <div className="space-y-0.5">
+          <div className="grid grid-cols-2 gap-3 border-t-[1.5px] border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 @6xl:grid-cols-6">
+            <div className="min-w-0 space-y-0.5">
               <p className="text-[11px] font-medium text-muted-foreground">Phone</p>
-              <div className="flex items-center gap-1">
-                <span className="truncate text-xs font-bold">{lead.mobile ?? "—"}</span>
+              <div className="flex flex-wrap items-center gap-1">
+                <span className="shrink-0 text-xs font-bold">{lead.mobile ?? "—"}</span>
                 <ClickToCallButton lead={lead} />
               </div>
             </div>
@@ -254,9 +254,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
       </div>
 
       {/* Main Two-Column Compact Dossier Workspace */}
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
+      <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
         {/* Left Column (5 cols): Requirement Brief & Lead Info */}
-        <div className="min-w-0 space-y-4 lg:col-span-5">
+        <div className="min-w-0 space-y-4 @4xl:col-span-4">
           <div className="sketch-panel space-y-3 bg-card p-4.5">
             <div className="flex items-center justify-between border-b-[1.5px] border-ink-line-soft pb-2">
               <div className="flex items-center gap-2">
@@ -291,7 +291,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         </div>
 
         {/* Right Column (7 cols): Doodle Binder Workspace with Tabs */}
-        <div className="min-w-0 space-y-0 lg:col-span-7">
+        <div className="min-w-0 space-y-0 @4xl:col-span-8">
           {/* Doodle Binder Tabs Bar */}
           <div className="flex items-center gap-1.5 overflow-x-auto border-b-[2px] border-ink-line px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <button
