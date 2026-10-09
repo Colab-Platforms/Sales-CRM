@@ -28,6 +28,8 @@ import {
   RotateCcw,
   LifeBuoy,
   ChevronRight,
+  ClipboardCheck,
+  ClipboardList,
 } from "lucide-react";
 import {
   Sidebar,
@@ -48,6 +50,7 @@ import {
 import { NavUser } from "@/components/nav-user";
 import { PendingRefundBadge } from "@/components/refunds/pending-refund-badge";
 import { OpenTicketBadge } from "@/components/tickets/open-ticket-badge";
+import { PendingMembershipRequestBadge } from "@/components/membership-requests/pending-membership-request-badge";
 import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
@@ -252,6 +255,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: Contact,
         },
         { title: "Attendance", href: "/dashboard/attendance", icon: Timer },
+        { title: "Requests", href: "/dashboard/requests", icon: ClipboardList },
       ],
     },
     {
@@ -342,6 +346,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Users", href: "/dashboard/users", icon: UserCog },
         { title: "Groups", href: "/dashboard/groups", icon: Building2 },
+        { title: "Approvals", href: "/dashboard/approvals", icon: ClipboardCheck },
         { title: "Attendance", href: "/dashboard/attendance", icon: Timer },
         { title: "Sources", href: "/dashboard/sources", icon: Plug },
         {
@@ -440,6 +445,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Users", href: "/dashboard/staff", icon: UserCog },
         { title: "Teams", href: "/dashboard/groups", icon: Building2 },
+        { title: "Approvals", href: "/dashboard/approvals", icon: ClipboardCheck },
       ],
     },
   ],
@@ -571,6 +577,9 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
                           ) : null}
                           {item.href === "/dashboard/tickets" ? (
                             <OpenTicketBadge />
+                          ) : null}
+                          {item.href === "/dashboard/approvals" ? (
+                            <PendingMembershipRequestBadge />
                           ) : null}
                         </>
                       ) : (

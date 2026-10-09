@@ -401,6 +401,13 @@ enum ActivityType {
   REFUND_COMPLETED
   REFUND_EXECUTION_FAILED
 
+  // Manager requests to add an existing salesperson to one of their groups, decided by Admin/HR
+  // (request -> approve/reject). APPROVED performs the group-membership add in the same step -
+  // there is no separate execution phase, unlike refunds.
+  GROUP_MEMBERSHIP_REQUESTED
+  GROUP_MEMBERSHIP_APPROVED
+  GROUP_MEMBERSHIP_REJECTED
+
   @@map("activity_type")
 }
 
@@ -614,6 +621,14 @@ enum RefundExecutionStatus {
   FAILED // Cashfree rejected / cancelled it; retryable with the SAME refund id
 
   @@map("refund_execution_status")
+}
+
+enum GroupMembershipRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+
+  @@map("group_membership_request_status")
 }
 
 enum WorkStatus {

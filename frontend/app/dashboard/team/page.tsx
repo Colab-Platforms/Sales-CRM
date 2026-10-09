@@ -1,19 +1,125 @@
 "use client";
 
+import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutGrid } from "lucide-react";
-import { groupsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { LayoutGrid, UserPlus } from "lucide-react";
+import { groupsQueryOptions, mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { useCreateMembershipRequestMutation } from "@/lib/api-client/mutations/membership-requests.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { Group } from "@/lib/api-client/types/manager.types";
 
+function RequestAddSalespersonModalContent({ group, onDone }: { group: Group; onDone: () => void }) {
+  const createRequest = useCreateMembershipRequestMutation();
+  const { data: salespersons, isPending, error: loadError } = useQuery(mySalespersonsQueryOptions());
+  const [salespersonId, setSalespersonId] = useState("");
+  const [note, setNote] = useState("");
+
+  const currentMemberIds = new Set(group.members.filter((m) => m.isActive).map((m) => m.userId));
+  const options = (salespersons ?? []).filter((sp) => sp.status === "ACTIVE" && !currentMemberIds.has(sp.id));
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    createRequest.mutate(
+      { groupId: group.id, salespersonId, note: note.trim() || undefined },
+      { onSuccess: onDone },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Request to Add Salesperson</DialogTitle>
+        <DialogDescription>
+          Send Admin/HR a request to add a salesperson to {group.name}. They&apos;ll review it before anything
+          changes.
+        </DialogDescription>
+      </DialogHeader>
+
+      {isPending ? (
+        <Skeleton className="h-16" />
+      ) : loadError ? (
+        <p className="text-sm text-destructive">{getErrorMessage(loadError, "Failed to load salespersons.")}</p>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor={`request-sp-${group.id}`}>Salesperson</Label>
+            <NativeSelect
+              id={`request-sp-${group.id}`}
+              value={salespersonId}
+              onChange={(e) => setSalespersonId(e.target.value)}
+              required
+            >
+              <option value="" disabled>
+                Select a salesperson
+              </option>
+              {options.map((sp) => (
+                <option key={sp.id} value={sp.id}>
+                  {sp.name} ({sp.username}){sp.groupName ? ` — currently in ${sp.groupName}` : ""}
+                </option>
+              ))}
+            </NativeSelect>
+            {options.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Everyone reporting to you is already in this group.
+              </p>
+            ) : null}
+          </div>
+
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor={`request-note-${group.id}`}>Note</Label>
+              <span className="text-xs text-muted-foreground">Optional</span>
+            </div>
+            <textarea
+              id={`request-note-${group.id}`}
+              rows={3}
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Why should this salesperson join this team?"
+              className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+          </div>
+
+          {createRequest.error ? (
+            <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+              {getErrorMessage(createRequest.error, "Failed to submit request.")}
+            </div>
+          ) : null}
+
+          <DialogFooter className="gap-2 pt-2">
+            <Button type="button" variant="outline" onClick={onDone} disabled={createRequest.isPending}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={createRequest.isPending || !salespersonId}>
+              {createRequest.isPending ? "Submitting..." : "Submit Request"}
+            </Button>
+          </DialogFooter>
+        </form>
+      )}
+    </DialogContent>
+  );
+}
+
 function GroupCard({ group }: { group: Group }) {
   const activeMembers = group.members.filter((m) => m.isActive);
   const isActive = group.status === "ACTIVE";
+  const [isRequestOpen, setIsRequestOpen] = useState(false);
 
   return (
     <Card>
@@ -25,7 +131,15 @@ function GroupCard({ group }: { group: Group }) {
             {activeMembers.length} salesperson{activeMembers.length === 1 ? "" : "s"}
           </p>
         </div>
-        <Badge variant={isActive ? "default" : "secondary"}>{group.status}</Badge>
+        <div className="flex items-center gap-2">
+          <Badge variant={isActive ? "default" : "secondary"}>{group.status}</Badge>
+          {isActive ? (
+            <Button size="sm" variant="outline" onClick={() => setIsRequestOpen(true)}>
+              <UserPlus />
+              Request to add salesperson
+            </Button>
+          ) : null}
+        </div>
       </CardHeader>
       <CardContent>
         <div className="sketch-outline overflow-x-auto">
@@ -64,6 +178,12 @@ function GroupCard({ group }: { group: Group }) {
           </Table>
         </div>
       </CardContent>
+
+      <Dialog open={isRequestOpen} onOpenChange={setIsRequestOpen}>
+        {isRequestOpen ? (
+          <RequestAddSalespersonModalContent group={group} onDone={() => setIsRequestOpen(false)} />
+        ) : null}
+      </Dialog>
     </Card>
   );
 }

@@ -1,0 +1,34 @@
+// A manager's request to add an existing salesperson to one of their own groups,
+// decided by Admin/HR. Unlike RefundRequest there is no separate execution phase:
+// APPROVED performs the group-membership add in the same transaction as the decision.
+model GroupMembershipRequest {
+  id String @id @default(uuid()) @db.Uuid
+
+  groupId String @map("group_id") @db.Uuid
+  group   Group  @relation(fields: [groupId], references: [id])
+
+  salespersonId String @map("salesperson_id") @db.Uuid
+  salesperson   User   @relation("GroupMembershipSalesperson", fields: [salespersonId], references: [id])
+
+  requestedById   String @map("requested_by_id") @db.Uuid
+  requestedBy     User   @relation("GroupMembershipRequestedBy", fields: [requestedById], references: [id])
+  requestedByRole Role   @map("requested_by_role")
+  requestNote     String? @map("request_note")
+
+  status GroupMembershipRequestStatus @default(PENDING) @map("status")
+
+  decidedById   String?   @map("decided_by_id") @db.Uuid
+  decidedBy     User?     @relation("GroupMembershipDecidedBy", fields: [decidedById], references: [id])
+  decidedByRole Role?     @map("decided_by_role")
+  decisionAt    DateTime? @map("decision_at")
+  decisionNote  String?   @map("decision_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([groupId])
+  @@index([salespersonId])
+  @@index([status])
+  @@index([requestedById])
+  @@map("group_membership_requests")
+}

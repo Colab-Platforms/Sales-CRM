@@ -42,6 +42,10 @@ model User {
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
+  groupMembershipRequestsMade          GroupMembershipRequest[] @relation("GroupMembershipRequestedBy")
+  groupMembershipRequestsDecided       GroupMembershipRequest[] @relation("GroupMembershipDecidedBy")
+  groupMembershipRequestsAsSalesperson GroupMembershipRequest[] @relation("GroupMembershipSalesperson")
+
   leadsOwned             Lead[] @relation("LeadOwner")
   leadsAssignedAsManager Lead[] @relation("LeadAssignedManager")
 
@@ -111,6 +115,7 @@ model Group {
   leadAssignments       LeadAssignment[]
   groupAssignmentConfig GroupAssignmentConfig?
   virtualNumbers        VirtualNumber[]
+  membershipRequests    GroupMembershipRequest[]
 
   @@index([managerId])
   @@index([status])
