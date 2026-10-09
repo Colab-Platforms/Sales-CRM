@@ -2,6 +2,7 @@
 // CRM's own structured confirmation (Order.confirmedByName). There is no separate tag store. The confirmation tag is always derived
 // from the CRM's confirmer here, never taken from a request, and never duplicated.
 import { confirmationTagFor, isConfirmationTag } from "./orders.confirmation.js";
+import { creatorTagFor } from "./orders.creator-tag.js";
 
 const key = (tag: string) => tag.trim().toLowerCase();
 
@@ -10,8 +11,10 @@ const key = (tag: string) => tag.trim().toLowerCase();
  * in the CRM, any Shopify-held confirmation tag (for instance the previous confirmer's, until the sync catches up) is replaced by the
  * current one. With no CRM confirmer, Shopify's own tags are shown untouched. Duplicates (any case) are dropped; the confirmation tag leads.
  */
-export function mergeOrderTags(shopifyTags: readonly string[], confirmedByName?: string | null): string[] {
+export function mergeOrderTags(shopifyTags: readonly string[], confirmedByName?: string | null, createdByName?: string | null): string[] {
   const crmTag = confirmedByName && confirmedByName.trim() ? confirmationTagFor(confirmedByName) : null;
+  // The creator tag ("Order Created by <name>") comes from the creator snapshot stored on the order. It is only ever ADDED to what Shopify holds (never replaces anything) and is never duplicated.
+  const creatorTag = createdByName && createdByName.trim() ? creatorTagFor(createdByName) : null;
   const seen = new Set<string>();
   const out: string[] = [];
   const push = (tag: string) => {
@@ -21,6 +24,7 @@ export function mergeOrderTags(shopifyTags: readonly string[], confirmedByName?:
     out.push(t);
   };
   if (crmTag) push(crmTag);
+  if (creatorTag) push(creatorTag);
   for (const tag of shopifyTags) {
     if (crmTag && isConfirmationTag(tag)) continue; // the CRM's confirmer wins over whatever Shopify still holds
     push(tag);

@@ -64,6 +64,9 @@ async function world(tx: Prisma.TransactionClient, shop = shopify()) {
   return { vini, rahul, lead, svc, as, create, row, tagState, shop, tx };
 }
 const TAG_VINI = "CRM Confirmed by Vini";
+const CREATOR_TAG_PREFIX = "Order Created by ";
+/** The confirmation-related view of Shopify's tags: the creator tag ("Order Created by ...") has its own tests below. */
+const confirmTags = (tags: string[]) => tags.filter((t) => !t.startsWith(CREATOR_TAG_PREFIX));
 
 describe("telecaller confirms an order (Create Order, COD)", () => {
   it("stores the authenticated user as confirmer, shows the tag, writes the history, and tags the Shopify order", async () => {
@@ -74,7 +77,7 @@ describe("telecaller confirms an order (Create Order, COD)", () => {
       assert.deepEqual([o.status, o.confirmedByUserId, o.confirmedByName], ["CONFIRMED", w.vini.id, "Vini"]);
       assert.ok(o.confirmedAt);
       assert.deepEqual([r.order.confirmedBy, r.order.confirmationTag], [{ id: w.vini.id, name: "Vini" }, TAG_VINI]);
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
       assert.equal((await w.tagState(r.order.id)).status, "synced");
       const history = await tx.activity.findMany({ where: { orderId: r.order.id, type: "ORDER_CONFIRMED" } });
       assert.equal(history.length, 1);
@@ -87,7 +90,7 @@ describe("telecaller confirms an order (Create Order, COD)", () => {
       const w = await world(tx);
       const r = await w.create(w.vini, { confirmedByName: "Rahul", confirmedByUserId: w.rahul.id, confirmationTag: "CRM Confirmed by Rahul" });
       assert.deepEqual([r.order.confirmedBy?.name, r.order.confirmationTag], ["Vini", TAG_VINI]);
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
     });
   });
   it("abandoned checkout -> CRM order -> confirmed: the confirmer survives the conversion and reaches Shopify", async () => {
@@ -96,7 +99,7 @@ describe("telecaller confirms an order (Create Order, COD)", () => {
       await tx.abandonment.create({ data: { leadId: w.lead.id, type: AbandonmentType.CHECKOUT, detectedAt: new Date(), cartSnapshot: { itemNames: ["Sleep Gummies"] } } });
       const r = await w.create(w.vini);
       assert.equal((await w.row(r.order.id)).confirmedByUserId, w.vini.id);
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
     });
   });
 });
@@ -107,7 +110,7 @@ describe("Shopify tags: preserved, idempotent, replaceable", () => {
       const w = await world(tx, shopify(["VIP", "COD", "Campaign-Diwali"]));
       // The fake returns the same tag list for any created order id, so seed it on the order Shopify "creates".
       const r = await w.create(w.vini);
-      assert.deepEqual(w.shop.state.tags, ["VIP", "COD", "Campaign-Diwali", TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), ["VIP", "COD", "Campaign-Diwali", TAG_VINI]);
       assert.equal(r.order.confirmationTag, TAG_VINI);
     });
   });
@@ -120,11 +123,11 @@ describe("Shopify tags: preserved, idempotent, replaceable", () => {
       assert.equal((await recordConfirmation(tx as never, r.order.id, { id: w.vini.id, role: Role.SALESPERSON })).changed, false);
       await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id); // already linked -> re-checks the tag, still nothing to do
       assert.equal(w.shop.state.calls.length, before, "no extra Shopify calls");
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
       assert.equal((await tx.activity.count({ where: { orderId: r.order.id, type: "ORDER_CONFIRMED" } })), 1);
       // The manual retry re-checks Shopify (read) but still adds nothing.
       assert.equal((await w.svc.retryConfirmationTagSync(w.as(w.vini), r.order.id)).status, "synced");
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
     });
   });
   it("a different confirmer REPLACES the CRM tag (Shopify never ends up with both), other tags untouched, history keeps both", async () => {
@@ -135,7 +138,7 @@ describe("Shopify tags: preserved, idempotent, replaceable", () => {
       assert.deepEqual([change.changed, change.previousConfirmedByName, change.confirmedByName], [true, "Vini", "Rahul"]);
       const result = await syncConfirmationTag(tx as never, r.order.id, { getShopifyClient: () => w.shop.client });
       assert.deepEqual([result.status, result.tag], ["synced", "CRM Confirmed by Rahul"]);
-      assert.deepEqual(w.shop.state.tags, ["VIP", "CRM Confirmed by Rahul"]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), ["VIP", "CRM Confirmed by Rahul"]);
       const detail = await w.svc.getOrder({ id: w.rahul.id, username: w.rahul.username, role: Role.ADMIN }, r.order.id);
       assert.deepEqual([detail.confirmedBy?.name, detail.confirmationTag], ["Rahul", "CRM Confirmed by Rahul"]);
       const history = await tx.activity.findMany({ where: { orderId: r.order.id, type: "ORDER_CONFIRMED" }, orderBy: { createdAt: "asc" } });
@@ -150,17 +153,17 @@ describe("failure and retry; unsynced orders", () => {
     await inRollback(async (tx) => {
       const w = await world(tx, shopify(["VIP"]));
       const r = await w.create(w.vini);
-      assert.deepEqual(w.shop.state.tags, ["VIP", TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), ["VIP", TAG_VINI]);
       await recordConfirmation(tx as never, r.order.id, { id: w.rahul.id, role: Role.SALESPERSON });
       w.shop.state.rejectAdd = true;
       const failed = await syncConfirmationTag(tx as never, r.order.id, { getShopifyClient: () => w.shop.client });
       assert.equal(failed.status, "failed");
       assert.match(failed.reason ?? "", /Order tags is invalid/);
-      assert.deepEqual(w.shop.state.tags, ["VIP", TAG_VINI], "the order still carries a confirmation tag");
+      assert.deepEqual(confirmTags(w.shop.state.tags), ["VIP", TAG_VINI], "the order still carries a confirmation tag");
       assert.equal((await w.tagState(r.order.id)).status, "failed");
       w.shop.state.rejectAdd = false;
       assert.equal((await w.svc.retryConfirmationTagSync(w.as(w.vini), r.order.id)).status, "synced");
-      assert.deepEqual(w.shop.state.tags, ["VIP", "CRM Confirmed by Rahul"]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), ["VIP", "CRM Confirmed by Rahul"]);
     });
   });
   it("a Shopify tag failure never undoes the CRM confirmation; it is recorded, and a retry fixes it", async () => {
@@ -174,10 +177,10 @@ describe("failure and retry; unsynced orders", () => {
       assert.deepEqual([state.status, state.tag], ["failed", TAG_VINI]);
       assert.match(state.reason, /write_orders/);
       assert.equal(r.order.shopifyConfirmationTag?.status ?? "failed", "failed");
-      assert.deepEqual(w.shop.state.tags, []);
+      assert.deepEqual(confirmTags(w.shop.state.tags), []);
       w.shop.state.failTags = false;
       assert.equal((await w.svc.retryConfirmationTagSync(w.as(w.vini), r.order.id)).status, "synced");
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
       assert.equal((await w.tagState(r.order.id)).status, "synced");
     });
   });
@@ -195,7 +198,7 @@ describe("failure and retry; unsynced orders", () => {
       w.shop.state.failCreate = false;
       const push = await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id);
       assert.equal(push.status, "created");
-      assert.deepEqual(w.shop.state.tags, [TAG_VINI]);
+      assert.deepEqual(confirmTags(w.shop.state.tags), [TAG_VINI]);
       assert.equal((await w.tagState(r.order.id)).status, "synced");
     });
   });
@@ -215,6 +218,123 @@ describe("failure and retry; unsynced orders", () => {
       const r = await w.create(w.vini);
       await assert.rejects(() => w.svc.retryConfirmationTagSync(w.as(w.rahul), r.order.id), (e: any) => e.statusCode === 404);
       assert.equal((await w.svc.retryConfirmationTagSync(w.as(w.vini), r.order.id)).status, "synced");
+    });
+  });
+});
+
+const TAG_CREATED_VINI = "Order Created by Vini";
+const rawTags = (w: Awaited<ReturnType<typeof world>>) => w.shop.state.tags;
+const creatorState = async (w: Awaited<ReturnType<typeof world>>, orderId: string) => (((await w.row(orderId)).metadata ?? {}) as any).shopifyCreatorTag;
+
+describe("telecaller creates an order: creator identity and the 'Order Created by' tag", () => {
+  it("stores the authenticated creator on the order, shows the tag, and tags the Shopify order exactly once", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create(w.vini);
+      const meta = ((await w.row(r.order.id)).metadata ?? {}) as any;
+      assert.deepEqual([meta.createdBy.id, meta.createdBy.name, meta.createdBy.role], [w.vini.id, "Vini", "SALESPERSON"]);
+      assert.deepEqual([r.order.createdByUser, r.order.creatorTag], [{ id: w.vini.id, name: "Vini" }, TAG_CREATED_VINI]);
+      assert.equal(rawTags(w).filter((t) => t === TAG_CREATED_VINI).length, 1);
+      assert.equal((await creatorState(w, r.order.id)).status, "synced");
+      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { createdById: true } })).createdById, w.vini.id);
+    });
+  });
+
+  it("the creator cannot be supplied by the client: a name/user in the request is ignored", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create(w.vini, { createdByName: "Rahul", createdBy: { id: w.rahul.id, name: "Rahul" }, creatorTag: "Order Created by Rahul" });
+      assert.deepEqual([r.order.createdByUser?.name, r.order.creatorTag], ["Vini", TAG_CREATED_VINI]);
+      assert.ok(!rawTags(w).includes("Order Created by Rahul"));
+    });
+  });
+
+  it("every viewer sees the ORIGINAL creator's tag after reopening - a manager or another telecaller never sees their own name", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const manager = await tx.user.create({ data: { name: "Meera", username: `m-${uid()}`, role: Role.MANAGER } });
+      const r = await w.create(w.vini);
+      for (const viewer of [{ u: w.rahul, role: Role.SALESPERSON }, { u: manager, role: Role.MANAGER }, { u: w.vini, role: Role.SALESPERSON }] as const) {
+        const reopened = await w.svc.getOrder({ id: viewer.u.id, username: viewer.u.username, role: viewer.role } as never, r.order.id);
+        assert.deepEqual([reopened.createdByUser?.name, reopened.creatorTag], ["Vini", TAG_CREATED_VINI], `${viewer.role} sees Vini's tag`);
+      }
+    });
+  });
+
+  it("existing Shopify tags are preserved: only the missing creator tag is added, nothing is removed or rewritten", async () => {
+    await inRollback(async (tx) => {
+      const shop = shopify();
+      shop.state.tags = ["VIP", "COD", "Campaign-Diwali"];
+      const w = await world(tx, shop);
+      await w.create(w.vini);
+      assert.deepEqual(rawTags(w).filter((t) => !t.startsWith("CRM Confirmed by")), ["VIP", "COD", "Campaign-Diwali", TAG_CREATED_VINI]);
+      assert.ok(!shop.state.calls.includes("remove") || confirmTags(rawTags(w)).includes("VIP"), "no foreign tag was removed");
+    });
+  });
+
+  it("repeating the sync, the push or the retry never duplicates the tag or the order, and an already-present tag costs no Shopify write", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create(w.vini);
+      const before = { creates: w.shop.state.calls.filter((c) => c === "create").length, adds: w.shop.state.calls.filter((c) => c === "add").length };
+      await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id); // already linked
+      await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id);
+      const retry = await w.svc.retryConfirmationTagSync(w.as(w.vini), r.order.id); // forced re-check against Shopify
+      assert.equal(retry.creator?.status, "synced");
+      assert.equal(rawTags(w).filter((t) => t === TAG_CREATED_VINI).length, 1, "still exactly one creator tag");
+      assert.equal(w.shop.state.calls.filter((c) => c === "create").length, before.creates, "no second Shopify order");
+      assert.equal(w.shop.state.calls.filter((c) => c === "add").length, before.adds, "the tag was already there: no extra add");
+      assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1, "no second CRM order");
+    });
+  });
+
+  it("a Shopify tagging failure keeps the CRM order and its creator tag, records the failure, and a retry completes it without a second order", async () => {
+    await inRollback(async (tx) => {
+      const shop = shopify();
+      shop.state.failTags = true;
+      const w = await world(tx, shop);
+      const r = await w.create(w.vini);
+      const failed = await creatorState(w, r.order.id);
+      assert.equal(failed.status, "failed");
+      assert.match(failed.reason ?? "", /Access denied|write_orders/i);
+      assert.equal(r.order.creatorTag, TAG_CREATED_VINI, "the CRM still shows the creator tag");
+      assert.ok(r.order.id, "the order survived");
+      assert.ok(!rawTags(w).includes(TAG_CREATED_VINI));
+
+      shop.state.failTags = false;
+      const retry = await w.svc.retryConfirmationTagSync(w.as(w.vini), r.order.id);
+      assert.equal(retry.creator?.status, "synced");
+      assert.equal((await creatorState(w, r.order.id)).status, "synced");
+      assert.equal(rawTags(w).filter((t) => t === TAG_CREATED_VINI).length, 1);
+      assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1);
+    });
+  });
+
+  it("an order not yet on Shopify keeps its creator in the CRM with no tag call; when it is linked later the tag is delivered", async () => {
+    await inRollback(async (tx) => {
+      const shop = shopify();
+      shop.state.failCreate = true;
+      const w = await world(tx, shop);
+      const r = await w.create(w.vini);
+      assert.equal((await w.row(r.order.id)).externalId, null);
+      assert.equal(r.order.creatorTag, TAG_CREATED_VINI);
+      assert.deepEqual(shop.state.calls, [], "no Shopify call for an unlinked order");
+      shop.state.failCreate = false;
+      await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id);
+      assert.equal(rawTags(w).filter((t) => t === TAG_CREATED_VINI).length, 1);
+    });
+  });
+
+  it("when the creator cannot be established no creator is stored and no creator tag is ever made", async () => {
+    await inRollback(async (tx) => {
+      const { resolveCreatorSnapshot, syncCreatorTag, creatorOf } = await import("./orders.creator-tag.js");
+      assert.equal(await resolveCreatorSnapshot(tx as never, { id: uid(), role: Role.SALESPERSON }), null);
+      const w = await world(tx);
+      const order = await tx.order.create({ data: { orderNumber: `NC-${uid().slice(0, 8)}`, leadId: w.lead.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "10.00", externalSource: "SHOPIFY", externalId: "123456789" } });
+      assert.equal(creatorOf(order.metadata), null);
+      const res = await syncCreatorTag(tx as never, order.id, { getShopifyClient: () => w.shop.client });
+      assert.equal(res.status, "no_creator");
+      assert.deepEqual(w.shop.state.calls, []);
     });
   });
 });

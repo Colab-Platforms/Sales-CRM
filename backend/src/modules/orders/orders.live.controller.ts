@@ -111,15 +111,16 @@ export const getLiveOrderHistory = async (req: AuthRequest, res: Response): Prom
 // "exists but you can't see it" from "doesn't exist" - same probing protection scopedOrderWhere uses).
 export const getLiveOrderDetail = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // numeric id, "shopify:<id>" or the full GID - all name the same Shopify order (the service normalises them)
     const externalId = String(req.params.externalId ?? "");
-    if (!/^\d+$/.test(externalId)) {
-      sendResponse(res, false, null, "Order not found", STATUS_CODES.NOT_FOUND);
+    const result = await ordersLiveService.getLiveOrderDetail(req.user!, externalId);
+    if (result.crmOrderId) {
+      sendResponse(res, true, result, "OK", STATUS_CODES.OK);
       return;
     }
-
-    const result = await ordersLiveService.getLiveOrderDetail(req.user!, externalId);
     if (!result.order) {
-      sendResponse(res, false, null, result.error ?? "Order not found", STATUS_CODES.NOT_FOUND);
+      // Shopify/API failures are 503 with the real reason; only a genuinely missing/unreadable order is 404.
+      sendResponse(res, false, null, result.error ?? "Order not found", result.errorKind === "unavailable" ? STATUS_CODES.SERVICE_UNAVAILABLE : STATUS_CODES.NOT_FOUND);
       return;
     }
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);

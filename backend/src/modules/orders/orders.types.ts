@@ -239,6 +239,10 @@ export interface OrderDetail {
   confirmationTag: string | null;
   // Outcome of the last Shopify tag sync (Order.metadata); null when none was attempted (not linked / not confirmed).
   shopifyConfirmationTag: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  /** Who created the order in the CRM (snapshot taken at creation), the "Order Created by <name>" tag derived from it, and how its Shopify sync went. null when the creator was never established. */
+  createdByUser: { id: string; name: string } | null;
+  creatorTag: string | null;
+  shopifyCreatorTag: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // Null when nothing was ever sent/attempted. Only a safe reason is stored (never a URL or credential).
   whatsappNotification: OrderWhatsAppNotification | null;
   createdAt: Date;

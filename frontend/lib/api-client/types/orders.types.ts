@@ -411,6 +411,10 @@ export interface OrderDetail {
   confirmedBy?: { id: string; name: string } | null;
   confirmationTag?: string | null;
   shopifyConfirmationTag?: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // Who created the order (snapshot taken at creation), the "Order Created by <name>" tag derived from it and its Shopify sync state. The same for every viewer.
+  createdByUser?: { id: string; name: string } | null;
+  creatorTag?: string | null;
+  shopifyCreatorTag?: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // The last customer WhatsApp notification about this order as remembered by the backend (null = never attempted).
   whatsappNotification: (OrderNotifyResult & { at: string }) | null;
   createdAt: string;
@@ -525,7 +529,15 @@ export function parseLiveOrderId(id: string): string | null {
   } catch {
     // Malformed percent-encoding - fall through with the original string (won't match the prefix).
   }
-  return decoded.startsWith(LIVE_ORDER_ID_PREFIX) ? decoded.slice(LIVE_ORDER_ID_PREFIX.length) : null;
+  if (decoded.startsWith(LIVE_ORDER_ID_PREFIX)) return normalizeLiveExternalId(decoded.slice(LIVE_ORDER_ID_PREFIX.length));
+  // A bare Shopify order id (18933143797949) or the full GID (gid://shopify/Order/18933143797949) names the same order. A CRM order id is a UUID, which never matches either form.
+  const bare = /^\d+$/.test(decoded) ? decoded : /^gid:\/\/shopify\/Order\/(\d+)$/.exec(decoded)?.[1];
+  return bare ?? null;
+}
+
+function normalizeLiveExternalId(value: string): string {
+  const gid = /^gid:\/\/shopify\/Order\/(\d+)$/.exec(value.trim());
+  return gid ? gid[1]! : value.trim();
 }
 
 // If the Shopify customer can be matched (by phone) to an existing CRM lead - a pointer to the real
@@ -543,6 +555,8 @@ export interface LiveOrderDetailResult {
   liveTracking: Record<string, LiveTracking>;
   crmLink?: LiveOrderCrmLink | null;
   error?: string;
+  /** Set when the order is already synced into the CRM: open that CRM order instead of this Shopify-only view. */
+  crmOrderId?: string;
 }
 
 // GET /orders/live/customer/:customerId/history - "Previous Orders" on the live detail page, cursor-paginated.

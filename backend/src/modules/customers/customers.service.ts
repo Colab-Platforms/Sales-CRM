@@ -3,6 +3,7 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, InterestedPeriodStatus, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
+import { canViewAllWhatsAppConversations } from "../whatsapp/whatsapp.history.filters.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
@@ -244,9 +245,20 @@ const WHATSAPP_SELECT = {
 class CustomersService {
   constructor(private readonly db: DbClient = prisma) {}
 
-  async getCustomer360(user: AuthUser, leadId: string): Promise<Customer360> {
+  /**
+   * `inboxRead` is the WhatsApp Inbox's READ-ONLY view of a customer: ADMIN, MANAGER and SALESPERSON (telecaller) may read the details and orders of ANY customer that has a WhatsApp
+   * conversation, whichever team owns it (the same company-wide visibility the Inbox has). A customer outside the caller's normal scope comes back with `readOnly: true` so the UI offers
+   * no edit/order/delete actions - and every one of those actions still checks the caller's scope on the server, so reading never grants a write. Without `inboxRead` (Customer 360 page,
+   * everything else) nothing changes: out-of-scope customers look the same as missing ones.
+   */
+  async getCustomer360(user: AuthUser, leadId: string, opts: { inboxRead?: boolean } = {}): Promise<Customer360> {
     const leadScope = await getLeadScope(user, this.db);
-    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: PROFILE_SELECT });
+    let lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: PROFILE_SELECT });
+    let readOnly = false;
+    if (!lead && opts.inboxRead && canViewAllWhatsAppConversations(user.role)) {
+      lead = await this.db.lead.findFirst({ where: { id: leadId, whatsAppMessages: { some: {} } }, select: PROFILE_SELECT });
+      readOnly = Boolean(lead);
+    }
 
     // Out-of-scope customers look the same as missing ones so ids can't be probed.
     if (!lead) {
@@ -286,6 +298,7 @@ class CustomersService {
       orders: orderSummaries,
       shopifyCustomer: shopifyOverlay.customer,
       shopifyError: shopifyOverlay.error,
+      ...(readOnly ? { readOnly: true } : {}),
     };
   }
 

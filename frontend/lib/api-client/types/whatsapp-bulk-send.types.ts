@@ -1,6 +1,6 @@
 // Kept in sync with backend/src/modules/whatsapp/whatsapp.bulk-send.types.ts.
 
-export type BulkRecipientStatus = "READY" | "MISSING_VARIABLE" | "OPTED_OUT" | "INVALID_PHONE" | "TEMPLATE_NOT_SENDABLE" | "PROVIDER_ERROR" | "CUSTOMER_DEACTIVATED";
+export type BulkRecipientStatus = "READY" | "MISSING_VARIABLE" | "OPTED_OUT" | "INVALID_PHONE" | "TEMPLATE_NOT_SENDABLE" | "PROVIDER_ERROR" | "NOT_FOUND" | "NOT_ALLOWED" | "DUPLICATE_PHONE" | "CUSTOMER_DEACTIVATED";
 
 export interface BulkClassifyInput {
   leadIds: string[];

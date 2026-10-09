@@ -107,6 +107,24 @@ describe("Orders Tags: what a row shows", () => {
       assert.deepEqual(by["#T2"], ["CRM Confirmed by Vini", "COD"], "exactly one confirmation tag");
     });
   });
+  it("the creator tag ('Order Created by <name>') appears on the row from the stored creator, next to the confirmation tag, once - and not at all when no creator was stored", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, [
+        { numeric: N(1), name: "#T1", tags: ["COD", "VIP"] }, // created in the CRM by Vini, tag not on Shopify yet
+        { numeric: N(2), name: "#T2", tags: ["order created by vini", "COD"] }, // Shopify already holds it (other case)
+        { numeric: N(3), name: "#T3", tags: ["COD"] }, // no creator ever stored
+      ]);
+      const created = { createdBy: { id: "u-1", name: "Vini", role: "SALESPERSON" } };
+      await w.link(N(1), { confirmedByName: "Vini", metadata: created });
+      await w.link(N(2), { metadata: created });
+      await w.link(N(3));
+      const by = Object.fromEntries((await w.list({})).items.map((i) => [i.orderNumber, i.tags]));
+      assert.deepEqual(by["#T1"], ["CRM Confirmed by Vini", "Order Created by Vini", "COD", "VIP"]);
+      assert.deepEqual(by["#T2"], ["Order Created by Vini", "COD"], "exactly one creator tag");
+      assert.deepEqual(by["#T3"], ["COD"], "nothing invented when the creator is unknown");
+    });
+  });
+
   it("changing the confirmer: only the NEW confirmation tag is shown, other tags untouched, and the old tag no longer matches the row", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx, [{ numeric: N(1), name: "#T1", tags: ["VIP", "CRM Confirmed by Vini", "COD"] }]);

@@ -29,10 +29,14 @@ after(() => prisma.$disconnect());
 const uid = () => randomUUID();
 const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
+// Each lead gets its OWN phone by default: bulk send sends once per phone number, so fixtures that mean "different customers" must not share one.
+let phoneSeq = 0;
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
+  phoneSeq += 1;
+  const mobile = `98764${String(10000 + phoneSeq).padStart(5, "0")}`;
   return tx.lead.create({
-    data: { leadNumber: `L-${uid()}`, firstName: "Test", lastName: `C-${uid().slice(0, 6)}`, mobile: "9876543210", normalizedMobile: "+919876543210", ...overrides },
-    select: { id: true },
+    data: { leadNumber: `L-${uid()}`, firstName: "Test", lastName: `C-${uid().slice(0, 6)}`, mobile, normalizedMobile: `+91${mobile}`, ...overrides },
+    select: { id: true, mobile: true },
   });
 }
 
@@ -271,6 +275,118 @@ describe("Bulk/selected-chat sending: send (Parts 3-4)", () => {
       assert.equal(result.sent, 0);
       assert.equal(result.skipped, 1);
       assert.equal(await tx.whatsAppMessage.count({ where: { leadId: lead.id } }), 0);
+    });
+  });
+});
+
+// ---- The reported case: 9 chats selected, 1 Ready, 8 Excluded ("UnknownProvider issue - Customer not found or outside your access"). ----
+describe("Bulk send: cross-team recipients, duplicates, conversation ids and honest exclusion reasons", () => {
+  const webhook = { webinar_name: "Wellness Webinar" };
+
+  async function nineChats(tx: Prisma.TransactionClient) {
+    const mk = (role: Role, name: string) => tx.user.create({ data: { name, username: `u-${uid()}`, role }, select: { id: true, username: true } });
+    const manager = await mk(Role.MANAGER, "Manager B"); // the caller; none of the leads below belong to their team except A
+    const owner = await mk(Role.SALESPERSON, "Owner A");
+    const group = await tx.group.create({ data: { name: `G-${uid()}`, managerId: manager.id }, select: { id: true } });
+    const conversation = (leadId: string) => tx.whatsAppMessage.create({ data: { provider: "META", providerMessageId: `wamid-${uid()}`, direction: "INBOUND", messageType: "TEXT", status: "RECEIVED", leadId, body: "hi" } });
+    const A = await makeLead(tx, { ownerId: owner.id, groupId: group.id }); // in the caller's team
+    const B = await makeLead(tx, { ownerId: owner.id }); // another team's customer, has a WhatsApp conversation
+    const C = await makeLead(tx); // another team's customer, selected by its CONVERSATION id
+    const D = await makeLead(tx, { mobile: B.mobile!, normalizedMobile: `+91${B.mobile}` }); // duplicate lead: same phone as B
+    const E = await makeLead(tx); // another team's customer WITHOUT any WhatsApp conversation
+    const G = await makeLead(tx, { mobile: null, normalizedMobile: null }); // no phone
+    const H = await makeLead(tx); // opted out
+    const I = await makeLead(tx, { workingStatus: "DEACTIVATED" });
+    for (const l of [A, B, C, D, G, H, I]) await conversation(l.id);
+    await tx.communicationPreference.create({ data: { leadId: H.id, channel: "WHATSAPP", status: "OPTED_OUT" } });
+    const convC = await tx.whatsAppConversation.create({ data: { leadId: C.id, provider: "META" }, select: { id: true } });
+    const ghost = uid(); // not a lead and not a conversation
+    return { manager, A, B, C, D, E, G, H, I, convC, ghost, ids: [A.id, B.id, convC.id, D.id, E.id, ghost, G.id, H.id, I.id] };
+  }
+
+  it("classifies all nine selected chats individually: cross-team customers with a conversation are READY, and every exclusion has its own accurate reason", async () => {
+    await inRollback(async (tx) => {
+      const w = await nineChats(tx);
+      const template = await makeWebinarTemplate(tx);
+      const { bulk } = makeServices(tx);
+      const result = await bulk.classifyRecipients(as(w.manager, Role.MANAGER), { leadIds: w.ids, templateId: template.id, manualValues: webhook });
+
+      const by = (id: string) => result.recipients.find((r) => r.leadId === id)!;
+      assert.equal(result.recipients.length, 9);
+      assert.equal(by(w.A.id).status, "READY", "own team's customer");
+      assert.equal(by(w.B.id).status, "READY", "another team's customer, handled company-wide because it has a conversation");
+      assert.equal(by(w.C.id).status, "READY", "selected by CONVERSATION id: resolved to its customer, not reported as unknown");
+      assert.equal(by(w.D.id).status, "DUPLICATE_PHONE", "same phone as B: messaged once");
+      assert.match(by(w.D.id).reason ?? "", /Same phone number/);
+      assert.equal(by(w.E.id).status, "NOT_ALLOWED", "another team's customer with no WhatsApp conversation");
+      assert.equal(by(w.ghost).status, "NOT_FOUND", "an id that is neither a customer nor a conversation");
+      assert.equal(by(w.G.id).status, "INVALID_PHONE");
+      assert.equal(by(w.H.id).status, "OPTED_OUT");
+      assert.equal(by(w.I.id).status, "CUSTOMER_DEACTIVATED");
+      // the misleading catch-all text is gone, and the counts match the per-recipient results
+      assert.ok(result.recipients.every((r) => !/Customer not found or outside your access/.test(r.reason ?? "")));
+      assert.deepEqual(
+        [result.summary.READY, result.summary.DUPLICATE_PHONE, result.summary.NOT_ALLOWED, result.summary.NOT_FOUND, result.summary.INVALID_PHONE, result.summary.OPTED_OUT, result.summary.CUSTOMER_DEACTIVATED],
+        [3, 1, 1, 1, 1, 1, 1],
+      );
+      assert.equal(Object.values(result.summary).reduce((a, b) => a + b, 0), 9);
+    });
+  });
+
+  it("the send only goes to the eligible recipients - once per phone - and records one message per send", async () => {
+    await inRollback(async (tx) => {
+      const w = await nineChats(tx);
+      const template = await makeWebinarTemplate(tx);
+      const sentTo: string[] = [];
+      const { bulk } = makeServices(tx, fakeProvider({ sendTemplateMessage: async (input: any) => { sentTo.push(input.to); return { providerMessageId: `wamid-${uid()}`, raw: { ok: true } }; } }));
+      const result = await bulk.sendBulk(as(w.manager, Role.MANAGER), { leadIds: w.ids, templateId: template.id, manualValues: webhook });
+
+      assert.deepEqual([result.sent, result.failed, result.skipped], [3, 0, 6]);
+      assert.deepEqual(new Set(sentTo), new Set([`+91${w.A.mobile}`, `+91${w.B.mobile}`, `+91${w.C.mobile}`]), "exactly the three eligible phones");
+      assert.equal(sentTo.length, 3, "the duplicate lead of B did not cause a second send");
+      for (const excluded of [w.D, w.E, w.G, w.H, w.I]) {
+        assert.equal(await tx.whatsAppMessage.count({ where: { leadId: excluded.id, direction: "OUTBOUND" } }), 0, "no outbound message for an excluded recipient");
+      }
+      assert.equal(await tx.whatsAppMessage.count({ where: { leadId: { in: [w.A.id, w.B.id, w.C.id] }, direction: "OUTBOUND" } }), 3);
+      // re-running the same send inside the duplicate-guard window does not send again
+      const again = await bulk.sendBulk(as(w.manager, Role.MANAGER), { leadIds: w.ids, templateId: template.id, manualValues: webhook });
+      assert.equal(sentTo.length, 3, "the existing duplicate-send guard still holds");
+      assert.ok(again.sent <= 3);
+    });
+  });
+
+  it("a provider/template problem stays distinguishable from an authorization problem", async () => {
+    await inRollback(async (tx) => {
+      const w = await nineChats(tx);
+      const template = await makeWebinarTemplate(tx);
+      // no provider configured: eligible customers are PROVIDER_ERROR with the provider reason; NOT_ALLOWED / NOT_FOUND are unchanged
+      const messaging = new WhatsAppMessagingService(tx, () => null, async () => null);
+      const bulk = new WhatsAppBulkSendService(tx, messaging);
+      const r = await bulk.classifyRecipients(as(w.manager, Role.MANAGER), { leadIds: w.ids, templateId: template.id, manualValues: webhook });
+      const by = (id: string) => r.recipients.find((x) => x.leadId === id)!;
+      assert.equal(by(w.A.id).status, "PROVIDER_ERROR");
+      assert.match(by(w.A.id).reason ?? "", /Meta WhatsApp Cloud API is not configured/);
+      assert.equal(by(w.E.id).status, "NOT_ALLOWED");
+      assert.equal(by(w.ghost).status, "NOT_FOUND");
+      // a template that is not APPROVED: TEMPLATE_NOT_SENDABLE, not a provider or access error
+      const draft = await tx.whatsAppTemplate.create({ data: { name: `d_${uid()}`, provider: "META", language: "en", body: "Hi", variables: [], status: "DRAFT" }, select: { id: true } });
+      const t = await makeServices(tx).bulk.classifyRecipients(as(w.manager, Role.MANAGER), { leadIds: [w.A.id, w.E.id], templateId: draft.id });
+      assert.equal(t.recipients.find((x) => x.leadId === w.A.id)!.status, "TEMPLATE_NOT_SENDABLE");
+      assert.equal(t.recipients.find((x) => x.leadId === w.E.id)!.status, "NOT_ALLOWED");
+    });
+  });
+
+  it("unauthorized callers are still refused: HR can message nobody, and a salesperson still cannot message another team's customer that has no conversation", async () => {
+    await inRollback(async (tx) => {
+      const w = await nineChats(tx);
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON }, select: { id: true, username: true } });
+      const template = await makeWebinarTemplate(tx);
+      const { bulk } = makeServices(tx);
+      const hr = await bulk.classifyRecipients({ id: uid(), username: "hr", role: Role.HR } as never, { leadIds: [w.A.id, w.B.id], templateId: template.id, manualValues: webhook });
+      assert.ok(hr.recipients.every((r) => r.status !== "READY"), "HR is never allowed to message");
+      const asRep = await bulk.classifyRecipients(as(rep, Role.SALESPERSON), { leadIds: [w.B.id, w.E.id], templateId: template.id, manualValues: webhook });
+      assert.equal(asRep.recipients.find((r) => r.leadId === w.B.id)!.status, "READY", "company-wide Inbox: a conversation of another team can be messaged");
+      assert.equal(asRep.recipients.find((r) => r.leadId === w.E.id)!.status, "NOT_ALLOWED");
     });
   });
 });

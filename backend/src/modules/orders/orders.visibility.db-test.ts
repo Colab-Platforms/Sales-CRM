@@ -28,7 +28,7 @@ async function world(tx: Db) {
   const tag = `VIS${uid().slice(0, 8)}`;
   const mk = (role: Role, name: string) => tx.user.create({ data: { name, username: `u-${uid()}`, role }, select: { id: true, username: true } });
   const admin = await mk(Role.ADMIN, "Admin");
-  const hr = await mk(Role.HR, "Hr");
+  const hr = { id: uid(), username: "hr-synthetic" }; // no DB row needed: scope comes from the role alone
   const mgrA = await mk(Role.MANAGER, "MgrA");
   const mgrB = await mk(Role.MANAGER, "MgrB");
   const teleA = await mk(Role.SALESPERSON, "TeleA");

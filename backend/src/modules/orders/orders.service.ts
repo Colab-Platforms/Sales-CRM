@@ -22,6 +22,7 @@ import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
 import { getWhatsAppPaymentOptions, recordWhatsAppConsent, validateWhatsAppPaymentSend, type WhatsAppPaymentOptions } from "./orders.whatsapp-payment.js";
 import { confirmationTagFor, recordConfirmation, syncConfirmationTag, type ConfirmationTagSyncResult } from "./orders.confirmation.js";
+import { creatorOf, creatorTagFor, resolveCreatorSnapshot, syncCreatorTag, type CreatorTagSyncResult } from "./orders.creator-tag.js";
 import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 import { loadOrderRefundInfo } from "../refunds/refunds.service.js";
@@ -338,6 +339,10 @@ class OrdersService {
       confirmedBy: order.confirmedByUserId && order.confirmedByName ? { id: order.confirmedByUserId, name: order.confirmedByName } : null,
       confirmationTag: order.confirmedByUserId && order.confirmedByName ? confirmationTagFor(order.confirmedByName) : null,
       shopifyConfirmationTag: ((order.metadata as Record<string, unknown> | null)?.shopifyConfirmationTag as OrderDetail["shopifyConfirmationTag"] | undefined) ?? null,
+      // Who created the order (the snapshot stored at creation) and the matching "Order Created by <name>" tag - the same for every viewer, never the viewer's own name.
+      createdByUser: creatorOf(order.metadata) ? { id: creatorOf(order.metadata)!.id, name: creatorOf(order.metadata)!.name } : null,
+      creatorTag: creatorOf(order.metadata) ? creatorTagFor(creatorOf(order.metadata)!.name) : null,
+      shopifyCreatorTag: ((order.metadata as Record<string, unknown> | null)?.shopifyCreatorTag as OrderDetail["shopifyCreatorTag"] | undefined) ?? null,
       createdAt: order.createdAt,
       placedAt: order.placedAt,
       confirmedAt: order.confirmedAt,
@@ -526,6 +531,9 @@ class OrdersService {
 
     // Same "generate, try, retry on the rare collision" idiom as createLeadWithUniqueNumber -
     // orderNumber is @unique, so a clash (astronomically unlikely, but real) must never 500.
+    // Who creates this order: read from the authenticated user's own User row (never from the request) and stored on the order, so the "Order Created by <name>" tag and the
+    // audit of the creator do not depend on who is logged in later. null (user not found) -> no creator is stored and no creator tag is ever made.
+    const creator = await resolveCreatorSnapshot(this.db as never, { id: user.id, role: user.role });
     let createdOrderId: string | null = null;
     for (let attempt = 0; attempt < 5 && !createdOrderId; attempt++) {
       try {
@@ -552,6 +560,7 @@ class OrdersService {
               metadata: {
                 paymentMode: isCod ? "COD" : "PREPAID",
                 createdVia: "WHATSAPP_INBOX",
+                ...(creator ? { createdBy: creator as unknown as Prisma.InputJsonValue } : {}),
                 // The discount that was actually applied and why - kept on the order, so the reason for a reduced total never
                 // depends on a coupon row staying the same. originalSubtotal is the pre-discount item total.
                 ...(selected ? { discount: { originalSubtotal: fromCents(subtotalCents), discountType: selected.type, discountValue: selected.value, discountAmount: fromCents(itemDiscountCents + selected.amountCents), couponId: selected.couponId, couponCode: selected.couponCode, couponSource: selected.couponSource, source: selected.source, wasDefault: selected.wasDefault, finalTotal: fromCents(totalCents), appliedById: user.id } } : {}),
@@ -668,8 +677,20 @@ class OrdersService {
     const result = await this.linkOrderToShopify(user, orderId);
     // Once the order is linked to Shopify, its "CRM Confirmed by <name>" tag is brought in line (best-effort, idempotent). This is
     // also what delivers the tag for an order that was confirmed BEFORE it was linked, whenever the link finally succeeds.
-    if (result.status === "created" || result.status === "already_linked") await this.syncConfirmationTagSafely(orderId);
+    if (result.status === "created" || result.status === "already_linked") {
+      await this.syncConfirmationTagSafely(orderId);
+      await this.syncCreatorTagSafely(orderId);
+    }
     return result;
+  }
+
+  // Same contract as syncConfirmationTagSafely: never throws, never undoes the order; a Shopify failure is remembered on the order (Order.metadata.shopifyCreatorTag) for a retry.
+  private async syncCreatorTagSafely(orderId: string): Promise<CreatorTagSyncResult> {
+    try {
+      return await syncCreatorTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient });
+    } catch (error) {
+      return { status: "failed", reason: error instanceof Error ? error.message : "Shopify creator tag sync failed" };
+    }
   }
 
   // Never throws and never touches the confirmation itself: a Shopify failure is remembered on the order (see syncConfirmationTag)
@@ -683,15 +704,25 @@ class OrdersService {
   }
 
   // Manual "Retry Shopify tag sync" for the order page. Re-checks Shopify even when the CRM believes the tag is in place.
-  async retryConfirmationTagSync(user: AuthUser, orderId: string): Promise<ConfirmationTagSyncResult> {
+  async retryConfirmationTagSync(user: AuthUser, orderId: string): Promise<ConfirmationTagSyncResult & { creator?: CreatorTagSyncResult }> {
     const leadScope = await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    let confirmation: ConfirmationTagSyncResult;
     try {
-      return await syncConfirmationTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
+      confirmation = await syncConfirmationTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
     } catch (error) {
-      return { status: "failed", reason: error instanceof Error ? error.message : "Shopify tag sync failed" };
+      confirmation = { status: "failed", reason: error instanceof Error ? error.message : "Shopify tag sync failed" };
     }
+    // The same retry also re-syncs the creator tag (add-only, only if it is missing on Shopify), so one safe button repairs both tags.
+    let creatorResult: CreatorTagSyncResult;
+    try {
+      creatorResult = await syncCreatorTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
+    } catch (error) {
+      creatorResult = { status: "failed", reason: error instanceof Error ? error.message : "Shopify creator tag sync failed" };
+    }
+    const failed = confirmation.status === "failed" || creatorResult.status === "failed";
+    return { ...confirmation, ...(failed ? { status: "failed" as const, reason: confirmation.reason ?? creatorResult.reason } : {}), creator: creatorResult };
   }
 
   private async linkOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {

@@ -28,6 +28,7 @@ import { mapListOrderStatusAndPayments } from "../shopify/shopify.mapper.js";
 import { canViewAllOrders, derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
 import { matchesAnyTag, mergeOrderTags, tagSearchClause } from "./orders.tags.js";
 import { confirmationTagFor } from "./orders.confirmation.js";
+import { creatorOf } from "./orders.creator-tag.js";
 import {
   LIVE_ORDER_ID_PREFIX,
   type LiveOrderCancelResult,
@@ -323,6 +324,7 @@ class OrdersLiveService {
         source: true,
         payments: { select: { status: true, method: true } },
         confirmedByName: true,
+        metadata: true,
         createdBy: { select: { id: true, name: true } },
         _count: { select: { items: true } },
         lead: {
@@ -367,7 +369,7 @@ class OrdersLiveService {
       fulfillmentStatus: shopifyOrder.fulfillmentStatus,
       hasTracking: shopifyOrder.hasTracking,
       shippingMethod: shopifyOrder.shippingMethod,
-      tags: mergeOrderTags(shopifyOrder.tags, crm.confirmedByName),
+      tags: mergeOrderTags(shopifyOrder.tags, crm.confirmedByName, creatorOf(crm.metadata)?.name),
     };
   }
 
@@ -469,26 +471,36 @@ class OrdersLiveService {
   // list). Same ADMIN-only visibility rule as that row - a non-admin can't see a Shopify order with no
   // CRM lead to check scope against. Reuses fetchOrder() (the same full-order call orders.service.ts's
   // getOrder() already uses for its shopifyLive overlay) - no second Shopify client/query.
-  async getLiveOrderDetail(user: AuthUser, externalId: string): Promise<LiveOrderDetailResult> {
-    if (user.role !== Role.ADMIN) {
-      return { order: null, liveTracking: {}, error: "Not found" };
+  async getLiveOrderDetail(user: AuthUser, rawExternalId: string): Promise<LiveOrderDetailResult> {
+    // READ access, like the Orders list: ADMIN, MANAGER and SALESPERSON (telecaller) may open any order, whichever team's customer it belongs to. Every ACTION on the live page
+    // (cancel, sync, prepaid upgrade, ...) keeps its own server-side check and is not granted by being able to read the order.
+    if (!canViewAllOrders(user.role)) {
+      return { order: null, liveTracking: {}, error: "Not found", errorKind: "not_found" };
     }
+    // One canonical id whatever form the link used: 18933143797949, shopify:18933143797949 (stripped by the caller) or gid://shopify/Order/18933143797949.
+    const externalId = normalizeShopifyOrderId(rawExternalId.replace(/^shopify:/i, ""));
+    if (!/^\d+$/.test(externalId)) return { order: null, liveTracking: {}, error: "Order not found", errorKind: "not_found" };
+
+    // Already synced into the CRM: its CRM order is the source of truth - point at it instead of showing a second, Shopify-only copy.
+    const synced = await this.db.order.findFirst({ where: { externalSource: "SHOPIFY", externalId: { in: shopifyOrderIdVariants(externalId) } }, select: { id: true } });
+    if (synced) return { order: null, liveTracking: {}, crmOrderId: synced.id };
 
     let client: ShopifyClient;
     try {
       client = this.getShopifyClient();
     } catch (error) {
-      return { order: null, liveTracking: {}, error: error instanceof ShopifyConfigError ? error.message : "Shopify is not configured." };
+      return { order: null, liveTracking: {}, error: error instanceof ShopifyConfigError ? error.message : "Shopify is not configured.", errorKind: "unavailable" };
     }
 
     let order;
     try {
       order = await fetchOrder(client, `gid://shopify/Order/${externalId}`);
     } catch (error) {
-      return { order: null, liveTracking: {}, error: error instanceof ShopifyApiError ? error.message : "Could not reach Shopify - please try again." };
+      // A Shopify/API failure is NOT "order not found": it is reported as unavailable with the real reason.
+      return { order: null, liveTracking: {}, error: error instanceof ShopifyApiError ? error.message : "Could not reach Shopify - please try again.", errorKind: "unavailable" };
     }
     if (!order) {
-      return { order: null, liveTracking: {}, error: "Shopify no longer has this order." };
+      return { order: null, liveTracking: {}, error: "Order not found", errorKind: "not_found" };
     }
 
     // Independent of each other - fetch in parallel rather than sequentially.
@@ -524,7 +536,8 @@ class OrdersLiveService {
   // that already-gated page). Reuses listOrdersForDisplay (the Orders list's own call) with a
   // customer_id: search term instead of a second/new Shopify query.
   async getLiveOrderHistory(user: AuthUser, shopifyCustomerId: string, excludeExternalId: string, query: LiveOrderHistoryQuery): Promise<LiveOrderHistoryResult> {
-    if (user.role !== Role.ADMIN) {
+    // Read-only, so it follows the live detail page it is shown on: every role that may read the order may read the customer's other orders.
+    if (!canViewAllOrders(user.role)) {
       return { items: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, endCursor: null }, error: "Not found" };
     }
 

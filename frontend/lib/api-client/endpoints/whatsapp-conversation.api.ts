@@ -1,8 +1,14 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
+import type { Customer360 } from "../types/customers.types";
 import type { ConversationDetail, MessagingCapability, OrderDraftResult } from "../types/whatsapp-conversation.types";
 
 export const whatsappConversationApi = {
+  async getCustomer(leadId: string): Promise<Customer360> {
+    const res = await apiClient.get<ApiEnvelope<Customer360>>(`/whatsapp/conversations/${leadId}/customer`);
+    return res.data.data;
+  },
+
   async getDetail(leadId: string): Promise<ConversationDetail> {
     const res = await apiClient.get<ApiEnvelope<ConversationDetail>>(`/whatsapp/conversations/${leadId}`);
     return res.data.data;

@@ -3,7 +3,9 @@ import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
+import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { fullName } from "../orders/orders.filters.js";
+import { canViewAllWhatsAppConversations } from "./whatsapp.history.filters.js";
 import WhatsAppMessagingService, { TEMPLATE_STATUS_MESSAGES } from "./whatsapp.messaging.service.js";
 import type { BulkClassifyInput, BulkClassifyResult, BulkRecipient, BulkRecipientStatus, BulkSendInput, BulkSendRecipientResult, BulkSendResult } from "./whatsapp.bulk-send.types.js";
 
@@ -25,6 +27,9 @@ const EMPTY_SUMMARY: Record<BulkRecipientStatus, number> = {
   TEMPLATE_NOT_SENDABLE: 0,
   PROVIDER_ERROR: 0,
   CUSTOMER_DEACTIVATED: 0,
+  NOT_FOUND: 0,
+  NOT_ALLOWED: 0,
+  DUPLICATE_PHONE: 0,
 };
 
 class WhatsAppBulkSendService {
@@ -46,16 +51,28 @@ class WhatsAppBulkSendService {
     if (!template) throw new ApiError("Template not found", STATUS_CODES.NOT_FOUND);
 
     const leadScope = await getLeadScope(user, this.db);
-    const uniqueIds = Array.from(new Set(input.leadIds));
+    // A selected id is normally a lead id (the Inbox lists one conversation per customer, keyed by its lead). An id that is really a CONVERSATION id is resolved to its lead rather than
+    // being reported as an unknown customer.
+    const requested = Array.from(new Set(input.leadIds));
+    const asLeads = await this.db.lead.findMany({ where: { id: { in: requested } }, select: { id: true } });
+    const known = new Set(asLeads.map((l) => l.id));
+    const conversations = await this.db.whatsAppConversation.findMany({ where: { id: { in: requested.filter((id) => !known.has(id)) } }, select: { id: true, leadId: true } });
+    const resolvedId = new Map(requested.map((id) => [id, conversations.find((c) => c.id === id)?.leadId ?? id]));
+    const uniqueIds = Array.from(new Set(requested.map((id) => resolvedId.get(id)!)));
+
+    // Who may be messaged: the caller's own lead scope, plus - for ADMIN, MANAGER and SALESPERSON (telecaller), who share the company-wide Inbox - any customer that already HAS a WhatsApp
+    // conversation, whichever team owns it (the same rule a single template send applies). Everyone else keeps the normal scope only.
+    const selectFields = { id: true, firstName: true, lastName: true, mobile: true, normalizedMobile: true, workingStatus: true } as const;
     const leads = await this.db.lead.findMany({
-      where: { AND: [{ id: { in: uniqueIds } }, leadScope] },
-      select: { id: true, firstName: true, lastName: true, mobile: true, normalizedMobile: true, workingStatus: true },
+      // (an empty scope - ADMIN - already means "every lead"; it must not be put inside an OR, where Prisma does not read {} as match-all)
+      where: { AND: [{ id: { in: uniqueIds } }, Object.keys(leadScope).length === 0 || !canViewAllWhatsAppConversations(user.role) ? leadScope : { OR: [leadScope, { whatsAppMessages: { some: {} } }] }] },
+      select: selectFields,
     });
     const byId = new Map(leads.map((l) => [l.id, l]));
-
-    // A lead this caller cannot see (out of scope, or already deleted) never gets to see why - it is
-    // simply not theirs to act on - but it is still reported, never silently dropped from the list.
-    const notFoundReason = "Customer not found or outside your access";
+    // For an id that is not allowed, tell a record that does not exist apart from one the caller may not message - they need different fixes.
+    const existing = new Set((await this.db.lead.findMany({ where: { id: { in: uniqueIds.filter((id) => !byId.has(id)) } }, select: { id: true } })).map((l) => l.id));
+    const missingReason = "This chat is not linked to a customer record, so there is no phone number to message";
+    const notAllowedReason = "You do not have access to message this customer (it has no WhatsApp conversation and belongs to another team)";
 
     // A template that is not APPROVED can never send to anyone - one check, not one per recipient.
     const templateBlockedReason = template.status !== "APPROVED" ? (TEMPLATE_STATUS_MESSAGES[template.status] ?? "This template cannot be sent.") : null;
@@ -73,7 +90,8 @@ class WhatsAppBulkSendService {
     for (const leadId of uniqueIds) {
       const lead = byId.get(leadId);
       if (!lead) {
-        recipients.push({ leadId, name: "Unknown", mobile: null, status: "PROVIDER_ERROR", reason: notFoundReason, resolvedBody: null });
+        if (existing.has(leadId)) recipients.push({ leadId, name: "Unavailable customer", mobile: null, status: "NOT_ALLOWED", reason: notAllowedReason, resolvedBody: null });
+        else recipients.push({ leadId, name: "Unlinked chat", mobile: null, status: "NOT_FOUND", reason: missingReason, resolvedBody: null });
         continue;
       }
       const name = fullName(lead.firstName, lead.lastName);
@@ -129,6 +147,19 @@ class WhatsAppBulkSendService {
       } catch (error) {
         recipients.push({ leadId, name, mobile, status: "PROVIDER_ERROR", reason: error instanceof ApiError ? error.message : "Could not resolve this message", resolvedBody: null });
       }
+    }
+
+    // One customer = one message: leads that share a phone number (duplicates) are sent to ONCE - the first selected one is kept, the rest are excluded with that reason.
+    const sentTo = new Map<string, string>();
+    for (const r of recipients) {
+      if (r.status !== "READY" || !r.mobile) continue;
+      const phone = normalizeMobile(r.mobile) ?? r.mobile;
+      const first = sentTo.get(phone);
+      if (first) {
+        r.status = "DUPLICATE_PHONE";
+        r.reason = `Same phone number as ${first} - the message goes to that customer once`;
+        r.resolvedBody = null;
+      } else sentTo.set(phone, r.name);
     }
 
     const summary = { ...EMPTY_SUMMARY };

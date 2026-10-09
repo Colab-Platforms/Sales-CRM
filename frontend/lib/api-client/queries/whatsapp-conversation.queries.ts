@@ -8,6 +8,16 @@ export const whatsappConversationKeys = {
   draft: (leadId: string) => [...whatsappConversationKeys.all, "draft", leadId] as const,
 };
 
+/** The customer behind a conversation (read-only across teams). Keyed by the conversation's lead, so switching conversations never shows the previous customer's data. */
+export function conversationCustomerQueryOptions(leadId: string) {
+  return queryOptions({
+    queryKey: [...whatsappConversationKeys.all, "customer", leadId] as const,
+    queryFn: () => whatsappConversationApi.getCustomer(leadId),
+    staleTime: 15_000,
+    retry: false,
+  });
+}
+
 export function conversationDetailQueryOptions(leadId: string) {
   return queryOptions({
     queryKey: whatsappConversationKeys.detail(leadId),

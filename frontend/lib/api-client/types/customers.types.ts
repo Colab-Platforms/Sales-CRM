@@ -123,6 +123,8 @@ export interface Customer360 {
   // fields above. null when no Shopify customer matched, or Shopify was unreachable (see shopifyError).
   shopifyCustomer: LiveCustomerListItem | null;
   shopifyError?: string;
+  /** true on the Inbox's read-only view of another team's customer: no edit/order/delete action is offered. */
+  readOnly?: boolean;
 }
 
 // ---- Live Customers list (reads directly from Shopify - GET /customers/live) ----

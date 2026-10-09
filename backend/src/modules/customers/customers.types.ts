@@ -110,6 +110,8 @@ export interface Customer360 {
   // by it. null when no Shopify customer matched, or Shopify couldn't be reached (see shopifyError).
   shopifyCustomer: NormalizedCustomerListItem | null;
   shopifyError?: string;
+  /** Present (true) only on the WhatsApp Inbox's read-only view of another team's customer: details and orders are readable, but no edit/order/delete action is offered or allowed. */
+  readOnly?: boolean;
 }
 
 export type TimelineEventType =
