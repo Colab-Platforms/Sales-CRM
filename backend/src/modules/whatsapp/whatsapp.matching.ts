@@ -30,12 +30,9 @@ export interface MatchResult {
 // the reply landed in a separate Inbox conversation instead of the customer's real, existing one.
 // Matching against every plausible legacy shape makes this resilient regardless of which one a given
 // lead happens to have, without requiring every existing lead to be individually repaired first.
-<<<<<<< HEAD
 // Exported so other inbound-identity-matching code (webhooks/callerdesk, webhooks/website-chat) can
 // reuse the exact same legacy-shape tolerance rather than inventing a second, competing one - this
 // function's job (and the bug it fixes) is CRM-wide, not WhatsApp-specific.
-=======
->>>>>>> 6302af2df012cbdf150cfdb43da2f39204c360ce
 export function legacyMatchCandidates(normalized: string): string[] {
   const candidates = new Set<string>([normalized, normalized.replace(/^\+/, "")]);
   // India-specific extra legacy shapes - this CRM's only default country (see normalizeMobile's own
