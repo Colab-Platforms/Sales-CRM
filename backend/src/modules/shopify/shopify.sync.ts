@@ -13,6 +13,7 @@ import {
   DEFAULT_START_DATE, isValidTimeZone, resolveWindow, startOfDay, windowSearch, type SyncWindow, type WindowSpec,
 } from "./shopify.window.js";
 import { dispatchOrderLifecycleAutomation } from "../whatsapp/whatsapp.automation.triggers.js";
+import { logger } from "@/utils/logger.js";
 
 // Pipeline:  Shopify fetch  ->  map  ->  persist.
 // With dryRun the persist step is never reached and no TxRunner is needed, so a dry run cannot touch the database.
@@ -37,6 +38,11 @@ export interface SyncDeps {
   now?: () => Date;
   /** Called after each page, so a long backfill can show it is alive. */
   onProgress?: (event: ProgressEvent) => void;
+  /**
+   * Runs strictly AFTER an order's own transaction has committed (whether it was created, updated or found unchanged). Best effort: a failure is logged and never
+   * fails or undoes the sync. Used to read Shopify's refundable amount and verify the Cashfree payment (see refunds.autoverify.ts).
+   */
+  afterCommit?: (result: OrderResult) => Promise<void>;
 }
 
 export interface SyncOptions {
@@ -163,7 +169,7 @@ export interface OrderSyncOutcome {
 export async function syncOrderById(
   deps: SyncDeps,
   orderGid: string,
-  opts: { force?: boolean; notBefore?: Date; source?: ActivitySource } = {},
+  opts: { force?: boolean; notBefore?: Date; source?: ActivitySource; automation?: boolean } = {},
 ): Promise<OrderSyncOutcome> {
   const runner = requireRunner(deps);
   const raw = await fetchOrder(deps.client, toGid("Order", orderGid));
@@ -184,10 +190,18 @@ export async function syncOrderById(
   const result = await withConflictRetry(() =>
     runner.$transaction((tx) => upsertOrder(tx, mapped, { force: opts.force, source: opts.source }), TX_OPTIONS),
   );
+  if (deps.afterCommit) {
+    try {
+      await deps.afterCommit(result);
+    } catch (error) {
+      logger.error("Shopify post-sync step failed", error instanceof Error ? error.message.split("\n")[0] : "unknown error");
+    }
+  }
   // E7.6: strictly after the order transaction above has committed, so a WhatsApp automation
   // outcome can never affect (let alone roll back) the order sync itself - see the doc comment on
   // dispatchOrderLifecycleAutomation.
-  await dispatchOrderLifecycleAutomation(result);
+  // `automation: false` is for an operator-triggered catch-up of one order: bringing an older order into the CRM must not send a late lifecycle message.
+  if (opts.automation !== false) await dispatchOrderLifecycleAutomation(result);
   return { notFound: false, outOfWindow: false, mapped, result, productsSynced: productResults.length, productResults };
 }
 

@@ -14,13 +14,18 @@ import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { ShopifyClient, ShopifyApiError } from "../shopify/shopify.client.js";
+import { normalizeShopifyOrderId, shopifyOrderIdVariants } from "../shopify/shopify.money.js";
+import { syncOrderById, type SyncDeps } from "../shopify/shopify.sync.js";
+import { createCashfreeAutoVerifyHook } from "../refunds/refunds.autoverify.js";
+import type { TxRunner } from "../shopify/shopify.persist.js";
+import { ActivitySource } from "../../../generated/prisma/enums.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { checkConnection, fetchOrder, listOrdersForDisplay, type NormalizedOrderListItem } from "../shopify/shopify.orders.js";
 import { DEFAULT_START_DATE, resolveWindow, windowSearch, type WindowSpec } from "../shopify/shopify.window.js";
 import { cancelShopifyOrder, ShopifyOrderCancelError } from "../shopify/shopify.orders.write.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import { mapListOrderStatusAndPayments } from "../shopify/shopify.mapper.js";
-import { derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
+import { canViewAllOrders, derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
 import { matchesAnyTag, mergeOrderTags, tagSearchClause } from "./orders.tags.js";
 import { confirmationTagFor } from "./orders.confirmation.js";
 import {
@@ -32,6 +37,7 @@ import {
   type LiveOrderHistoryResult,
   type LiveOrderListItem,
   type LiveOrderListResult,
+  type LiveOrderSyncResult,
   type LiveOrdersQuery,
   type LiveOrderTagOptionsResult,
 } from "./orders.live.types.js";
@@ -126,12 +132,21 @@ export function applyOrderFilters(items: LiveOrderListItem[], filters: OverlayFi
   });
 }
 
+/** The total to show for a Shopify list row: the CRM's own total when the CRM created the order, Shopify's live total otherwise (or when there is no CRM row). */
+export function crmOwnedTotal(crm: { source: string; totalAmount: { toString(): string } } | undefined, shopifyTotal: string | null | undefined): string {
+  return crm && crm.source !== "SHOPIFY" ? crm.totalAmount.toString() : (shopifyTotal ?? "0");
+}
+
 class OrdersLiveService {
   // getShopifyClient is injectable so tests never construct a real client (same pattern OrdersService
   // itself already uses for pushOrderToShopify/cancelOrder).
   constructor(
     private readonly db: DbClient = prisma,
     private readonly getShopifyClient: () => ShopifyClient = () => new ShopifyClient(loadShopifyConfig()),
+    private readonly runner: TxRunner = prisma,
+    private readonly syncOrder: typeof syncOrderById = syncOrderById,
+    /** The post-sync step (read Shopify's refundable amount, verify the Cashfree payment). Injectable so tests never reach Shopify or Cashfree. */
+    private readonly makeAfterCommit: (client: ShopifyClient, runner: TxRunner) => SyncDeps["afterCommit"] = (client, runner) => createCashfreeAutoVerifyHook(client, runner),
   ) {}
 
   async listLiveOrders(user: AuthUser, query: LiveOrdersQuery): Promise<LiveOrderListResult> {
@@ -225,11 +240,8 @@ class OrdersLiveService {
   // anything: a purely read-only overlay for salesperson/lead-number/CRM order id.
   //
   // RBAC: Shopify has no concept of "which salesperson owns this customer" - only the CRM does, via
-  // Lead ownership. A live Shopify order that has NOT yet been synced into the CRM (no matching
-  // externalId - e.g. a webhook still in flight) has no lead to check scope against, so it is hidden
-  // entirely from non-ADMIN roles (never shown as "unowned" and never guessed at) and shown to ADMIN
-  // only, clearly flagged (linkedInCrm: false). A synced order whose lead falls outside the caller's
-  // scope is also excluded, exactly like the DB-backed listOrders already does via scopedOrderWhere.
+  // Visibility. ADMIN, MANAGER and SALESPERSON see every order, whatever team it belongs to; an order not yet synced into the CRM (no matching externalId - e.g. a
+  // webhook still in flight) is shown too, clearly flagged (linkedInCrm: false). Any other role (HR) sees none. This is read access only: actions keep their own RBAC.
   private async attachCrmOverlay(
     user: AuthUser,
     shopifyItems: NormalizedOrderListItem[],
@@ -244,7 +256,7 @@ class OrdersLiveService {
 
     let leadScope: Prisma.LeadWhereInput = {};
     try {
-      leadScope = await getLeadScope(user, this.db);
+      if (!canViewAllOrders(user.role)) leadScope = await getLeadScope(user, this.db);
     } catch {
       // getManagerTeam can only fail on a DB error - fail closed (no CRM overlay, and non-ADMIN sees
       // nothing) rather than silently granting unscoped access.
@@ -259,28 +271,30 @@ class OrdersLiveService {
     } catch {
       partialError = "Salesperson/lead details could not be loaded for this page - showing Shopify data only.";
     }
-    const byExternalId = new Map(crmRows.map((row) => [row.externalId!, row]));
+    // Keyed by the canonical numeric id, so a legacy row holding the GID form (an order the CRM pushed to Shopify) is still found.
+    const byExternalId = new Map(crmRows.map((row) => [normalizeShopifyOrderId(row.externalId!), row]));
 
     // For a MANAGER/SALESPERSON, an in-scope check needs to be evaluated per-lead - cheapest as a
     // second, tiny query for just the lead ids already found above, reusing the exact same leadScope
     // Prisma.LeadWhereInput every other RBAC-scoped read in this codebase already uses.
     const leadIds = [...new Set(crmRows.map((r) => r.lead.id))];
-    const inScopeLeadIds = user.role === Role.ADMIN || leadIds.length === 0
+    const seesAll = canViewAllOrders(user.role);
+    const inScopeLeadIds = seesAll || leadIds.length === 0
       ? new Set(leadIds)
       : new Set((await this.db.lead.findMany({ where: { id: { in: leadIds }, ...leadScope }, select: { id: true } })).map((l) => l.id));
 
     const items: LiveOrderListItem[] = [];
     for (const shopifyOrder of shopifyItems) {
-      const crm = byExternalId.get(shopifyOrder.externalId) ?? null;
+      const crm = byExternalId.get(normalizeShopifyOrderId(shopifyOrder.externalId)) ?? null;
       const linkedInCrm = Boolean(crm);
 
       if (!linkedInCrm) {
-        // Not yet synced into the CRM at all - only ADMIN can see it (see the RBAC note above).
-        if (user.role !== Role.ADMIN) continue;
+        // Not yet synced into the CRM at all - visible to every role that sees all orders (admin, manager, salesperson).
+        if (!seesAll) continue;
         items.push(this.mapUnlinked(shopifyOrder));
         continue;
       }
-      if (!inScopeLeadIds.has(crm!.lead.id) && user.role !== Role.ADMIN) continue; // out of this caller's scope
+      if (!inScopeLeadIds.has(crm!.lead.id) && !seesAll) continue; // out of this caller's scope
 
       items.push(this.mapLinked(shopifyOrder, crm!));
     }
@@ -300,10 +314,11 @@ class OrdersLiveService {
 
   private fetchCrmRows(externalIds: string[]) {
     return this.db.order.findMany({
-      where: { externalSource: "SHOPIFY", externalId: { in: externalIds } },
+      where: { externalSource: "SHOPIFY", externalId: { in: externalIds.flatMap(shopifyOrderIdVariants) } },
       select: {
         id: true,
         externalId: true,
+        totalAmount: true,
         status: true,
         source: true,
         payments: { select: { status: true, method: true } },
@@ -335,7 +350,9 @@ class OrdersLiveService {
       // distinction for every linked order once the list became Shopify-sourced.
       source: crm.source,
       currency: shopifyOrder.currency ?? "INR",
-      totalAmount: shopifyOrder.totalAmount ?? "0",
+      // An order the CRM created (salesperson / API / website, later pushed to Shopify) is priced by the CRM: its discount, shipping and tax live here, while the Shopify copy
+      // carries Shopify's own list price. The list therefore shows the same total as the order page. A Shopify-originated order keeps Shopify's live total.
+      totalAmount: crmOwnedTotal(crm, shopifyOrder.totalAmount),
       itemCount: crm._count.items,
       paymentStatus: derivePaymentStatus(crm.payments),
       paymentMode: derivePaymentMode(crm.payments),
@@ -539,18 +556,19 @@ class OrdersLiveService {
     // ADMIN-only, and ADMIN sees every CRM order regardless of lead ownership.
     const externalIds = others.map((i) => i.externalId);
     const crmRows = externalIds.length > 0
-      ? await this.db.order.findMany({ where: { externalSource: "SHOPIFY", externalId: { in: externalIds } }, select: { id: true, externalId: true } })
+      ? await this.db.order.findMany({ where: { externalSource: "SHOPIFY", externalId: { in: externalIds.flatMap(shopifyOrderIdVariants) } }, select: { id: true, externalId: true, source: true, totalAmount: true } })
       : [];
-    const crmIdByExternalId = new Map(crmRows.map((r) => [r.externalId!, r.id]));
+    const crmIdByExternalId = new Map(crmRows.map((r) => [normalizeShopifyOrderId(r.externalId!), r.id]));
+    const crmByExternalId = new Map(crmRows.map((r) => [normalizeShopifyOrderId(r.externalId!), r]));
 
     const result: LiveOrderHistoryResult = {
       items: others.map((i) => {
-        const crmId = crmIdByExternalId.get(i.externalId);
+        const crmId = crmIdByExternalId.get(normalizeShopifyOrderId(i.externalId));
         return {
           id: crmId ?? `${LIVE_ORDER_ID_PREFIX}${i.externalId}`,
           orderNumber: i.name,
           currency: i.currency ?? "INR",
-          totalAmount: i.totalAmount ?? "0",
+          totalAmount: crmOwnedTotal(crmByExternalId.get(normalizeShopifyOrderId(i.externalId)), i.totalAmount),
           financialStatus: i.financialStatus,
           fulfillmentStatus: i.fulfillmentStatus,
           createdAt: new Date(i.createdAt),
@@ -561,6 +579,32 @@ class OrdersLiveService {
     };
     historyCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
+  }
+
+  // Brings a Shopify order that has no CRM Order row into the CRM, through the SAME sync every webhook and `shopify:sync` run uses (upsertOrder:
+  // idempotent on the Shopify order id under an advisory lock + unique key, so repeating it - or racing a webhook - never creates a duplicate). Reads the
+  // order from Shopify (read-only) and writes the Order, items, lead link and payments; it never creates a refund and never contacts Cashfree. The
+  // lifecycle WhatsApp automation is skipped: catching an order up must not message the customer late. ADMIN only, like the live page it is offered on.
+  async syncLiveOrderToCrm(user: AuthUser, externalId: string): Promise<LiveOrderSyncResult> {
+    if (user.role !== Role.ADMIN) return { synced: false, reason: "Not found" };
+
+    let client: ShopifyClient;
+    try {
+      client = this.getShopifyClient();
+    } catch (error) {
+      return { synced: false, reason: error instanceof ShopifyConfigError ? error.message : "Shopify is not configured." };
+    }
+
+    try {
+      const outcome = await this.syncOrder({ client, runner: this.runner, afterCommit: this.makeAfterCommit(client, this.runner) }, `gid://shopify/Order/${externalId}`, { source: ActivitySource.SHOPIFY_SYNC, automation: false });
+      if (outcome.notFound || !outcome.result?.orderId) return { synced: false, reason: "Shopify no longer has this order." };
+      // The list/detail caches still describe this order as live-only.
+      listCache.clear();
+      historyCache.clear();
+      return { synced: true, orderId: outcome.result.orderId, action: outcome.result.action };
+    } catch (error) {
+      return { synced: false, reason: error instanceof ShopifyApiError ? error.message : "Could not sync the order - nothing was changed. Please try again." };
+    }
   }
 
   // Cancels a Shopify order the CRM has not synced yet. Shopify has no "delete order" mutation at
@@ -581,7 +625,7 @@ class OrdersLiveService {
     }
 
     try {
-      await cancelShopifyOrder(client, `gid://shopify/Order/${externalId}`);
+      await cancelShopifyOrder(client, externalId); // normalised to the GID inside cancelShopifyOrder
       // Any cached list/detail page may now show a stale (pre-cancellation) status - cheaper to drop
       // the whole small in-process cache than to track which keys this order could appear under.
       listCache.clear();

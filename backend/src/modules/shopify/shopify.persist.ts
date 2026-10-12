@@ -14,7 +14,7 @@ import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
 import { computePaymentBreakdown } from "../orders/orders.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
 import type { MappedFulfillment, MappedLeadIdentity, MappedOrder, MappedPayment, MappedProduct } from "./shopify.mapper.js";
-import { toCents } from "./shopify.money.js";
+import { toCents, toGid } from "./shopify.money.js";
 
 // Writes mapped Shopify data into the CRM. Every function takes a transaction from the caller and is safe to
 // run repeatedly: records are found by their Shopify id, so a second run updates or skips, never duplicates.
@@ -277,8 +277,11 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
     status: null,
   };
 
+  // A row the CRM itself pushed to Shopify before ids were canonicalised holds the GID form. It is the SAME order, so it is found (not duplicated)
+  // and moved to the canonical numeric form below.
+  const legacy = await tx.order.findUnique({ where: extKey(toGid("Order", mapped.externalId)), select: { id: true } });
   const existing = await tx.order.findUnique({
-    where: extKey(mapped.externalId),
+    where: legacy ? { id: legacy.id } : extKey(mapped.externalId),
     select: {
       id: true,
       status: true,
@@ -287,7 +290,7 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
       externalUpdatedAt: true,
       discountAmount: true,
       metadata: true,
-      payments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true, status: true } },
+      payments: { where: { externalSource: SOURCE }, select: { id: true, externalId: true, status: true, refundedAmount: true, refundedAt: true } },
       shipments: {
         where: { externalSource: SOURCE },
         select: { id: true, externalId: true, status: true, courier: true, trackingNumber: true, trackingUrl: true },
@@ -313,14 +316,20 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
   // discount and payment records are the truth (Shopify still shows the original COD figures), so those are kept too.
   const crmMeta = existing ? (existing.metadata as Record<string, unknown> | null) ?? {} : {};
   const upgraded = (crmMeta.prepaidUpgrade as { status?: string } | undefined)?.status === "UPGRADED";
-  const KEEP = ["prepaidUpgrade", "prepaidUpgradeHistory", "shopifyPaymentSync", "shopifyCancellation", "paymentLinkCancellation", "preCancelStatus", "cancellationReverted", "whatsappNotification", "paymentSuccessNotifiedAt", "paymentSuccessNotification", "customDiscount", "discount", "shopifyConfirmationTag"];
+  const KEEP = ["prepaidUpgrade", "prepaidUpgradeHistory", "shopifyPaymentSync", "shopifyCancellation", "paymentLinkCancellation", "preCancelStatus", "cancellationReverted", "whatsappNotification", "paymentSuccessNotifiedAt", "paymentSuccessNotification", "customDiscount", "discount", "shopifyConfirmationTag", "shopifyRefundable"];
   const keptMeta = Object.fromEntries(KEEP.filter((k) => k in crmMeta).map((k) => [k, crmMeta[k]]));
+  // A CRM-side discount (WhatsApp Inbox / manual order) is pushed to Shopify at LIST price and only reflected there once the payment is reconciled. Until then Shopify
+  // still shows the undiscounted total, which must not overwrite what the customer was actually asked to pay.
+  const crmDiscountNotYetOnShopify = !upgraded && Boolean(crmMeta.discount || crmMeta.customDiscount) && Number(existing?.discountAmount ?? 0) > 0 && Number(mapped.discountAmount) === 0 && (crmMeta.shopifyPaymentSync as { status?: string } | undefined)?.status !== "synced";
+  const crmOwnsTotals = upgraded || crmDiscountNotYetOnShopify;
 
   const fields = {
     status: mapped.status,
     currency: mapped.currency,
     subtotal: mapped.subtotal,
-    ...(upgraded ? {} : { discountAmount: mapped.discountAmount, totalAmount: mapped.totalAmount }),
+    ...(crmOwnsTotals ? {} : { discountAmount: mapped.discountAmount, totalAmount: mapped.totalAmount }),
+    // Moves a legacy GID-form id to the canonical numeric form (a no-op for a row that already has it).
+    ...(existing ? { externalId: mapped.externalId } : {}),
     taxAmount: mapped.taxAmount,
     shippingAmount: mapped.shippingAmount,
     discountReason: mapped.discountReason,
@@ -413,13 +422,13 @@ async function syncPayments(
   tx: Db,
   orderId: string,
   mapped: MappedOrder,
-  current: { id: string; externalId: string | null; status: PaymentStatus }[],
+  current: { id: string; externalId: string | null; status: PaymentStatus; refundedAmount?: { toString(): string } | null; refundedAt?: Date | null }[],
   result: OrderResult,
 ): Promise<PaymentEvent[]> {
   const events: PaymentEvent[] = [];
   const byExt = new Map(current.map((p) => [p.externalId, p]));
 
-  for (const payment of mapped.payments) {
+  for (let payment of mapped.payments) {
     const data = {
       status: payment.status,
       method: payment.method,
@@ -436,6 +445,16 @@ async function syncPayments(
     };
     const before = byExt.get(payment.externalId);
     if (before) {
+      // A refund the CRM itself executed and Cashfree confirmed (refund workflow) is not known to Shopify until a Shopify refund is made. A sync must never
+      // wipe it: while the CRM has recorded more refunded money than Shopify reports, the CRM's refunded amount / time / status stand.
+      const crmRefunded = before.refundedAmount ? toCents(before.refundedAmount.toString()) : 0;
+      const shopifyRefunded = payment.refundedAmount ? toCents(payment.refundedAmount) : 0;
+      if (crmRefunded > shopifyRefunded && (before.status === PaymentStatus.REFUNDED || before.status === PaymentStatus.PARTIALLY_REFUNDED) && (payment.status === PaymentStatus.SUCCESS || payment.status === PaymentStatus.PARTIALLY_REFUNDED)) {
+        data.refundedAmount = before.refundedAmount!.toString();
+        data.refundedAt = before.refundedAt ?? data.refundedAt;
+        data.status = before.status;
+        payment = { ...payment, status: before.status };
+      }
       await tx.payment.update({ where: { id: before.id }, data });
       result.payments.updated++;
       if (before.status !== payment.status) events.push({ payment, paymentId: before.id, from: before.status });

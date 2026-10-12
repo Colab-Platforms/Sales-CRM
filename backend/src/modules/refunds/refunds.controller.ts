@@ -3,9 +3,14 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import RefundsService from "./refunds.service.js";
-import { validateCreateBody, validateDecisionBody, validateIdParams, validateListQuery, validateOrderParams, validateRejectBody } from "./refunds.validators.js";
+import RefundExecutionService from "./refunds.execution.js";
+import CashfreeIdResolutionService from "./refunds.resolve.js";
+import { refreshShopifyRefundable } from "./refunds.autoverify.js";
+import { validateCreateBody, validateDecisionBody, validateIdParams, validateListQuery, validateOrderParams, validateOrderPaymentParams, validateRejectBody } from "./refunds.validators.js";
 
 const service = new RefundsService();
+const execution = new RefundExecutionService();
+const idResolution = new CashfreeIdResolutionService();
 const fail = (res: Response, error: any) => sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
 const bad = (res: Response, message: string) => sendResponse(res, false, null, message, STATUS_CODES.BAD_REQUEST);
 
@@ -59,6 +64,43 @@ export const rejectRefundRequest = async (req: AuthRequest, res: Response): Prom
     const body = validateRejectBody(req.body);
     if (body.error) return void bad(res, body.error.message);
     sendResponse(res, true, await service.reject(req.user!, params.value.id, body.value.note), "Refund request rejected", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+// Refund EXECUTION: sends an APPROVED request to Cashfree. Idempotent: a request already processing / completed is returned, never sent twice.
+export const executeRefundRequest = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateIdParams(req.params);
+    if (params.error) return void bad(res, params.error.message);
+    const result = await execution.execute(req.user!, params.value.id);
+    sendResponse(res, true, result.request, result.sentToProvider ? "Refund sent to Cashfree. It is processing until Cashfree confirms it." : "This refund is already in progress or completed.", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+// Reads the refund from Cashfree (read-only) and applies its status: this is what completes (or fails) a PROCESSING refund.
+export const refreshRefundExecution = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateIdParams(req.params);
+    if (params.error) return void bad(res, params.error.message);
+    sendResponse(res, true, await execution.refresh(req.user!, params.value.id), "Refund status refreshed from Cashfree", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+// Looks up and verifies the Cashfree references of a Shopify-synced Cashfree payment (read-only toward Shopify and Cashfree) so it can be refunded.
+export const resolveCashfreeReferences = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderPaymentParams(req.params);
+    if (params.error) return void bad(res, params.error.message);
+    const result = await idResolution.resolve(req.user!, params.value.orderId, params.value.paymentId);
+    // The same retry also re-reads Shopify's refundable amount (what a sync does), so an order synced earlier is not stuck on it. Best effort.
+    await refreshShopifyRefundable(params.value.orderId).catch(() => false);
+    sendResponse(res, true, result, result.resolved ? "Cashfree references verified" : "The Cashfree references could not be verified", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

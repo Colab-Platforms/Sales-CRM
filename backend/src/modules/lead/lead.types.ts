@@ -53,6 +53,13 @@ export interface BulkAssignSalespersonBody {
   salespersonIds?: string[];
 }
 
+export interface BulkUpdateStatusBody {
+  leadIds: string[];
+  workingStatus: "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED";
+  // Required when workingStatus is CALL_BACK or FOLLOW_UP: when to remind whoever owns each lead.
+  followUpAt?: string;
+}
+
 export interface ImportPreviewBody {
   columnMapping: Record<string, string>;
 }

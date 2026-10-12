@@ -6,9 +6,9 @@ import routes from "./routes.js";
 import { errorHandler } from "./middlewares/errorHandler.js";
 import { notFoundHandler } from "./middlewares/notFoundHandler.js";
 import sanitizeMiddleware from "./middlewares/sanitize.js";
-import shopifyWebhookRoutes, { startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
+import shopifyWebhookRoutes, { startShopifyCatchUp, startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
 import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
-import cashfreeWebhookRoutes, { startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
+import cashfreeWebhookRoutes, { startCashfreeReconciler, startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
 import shiprocketAbandonmentWebhookRoutes, { startAbandonmentWebhookWorker } from "./modules/shiprocket/shiprocket.abandonment.webhook.routes.js";
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
@@ -17,6 +17,7 @@ import legalRoutes from "./modules/legal/legal.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
+import { attendanceService } from "./modules/attendance/attendance.service.js";
 
 const app = express();
 
@@ -86,13 +87,16 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   startShopifyWebhookWorker();
+  startShopifyCatchUp();
   startWhatsAppWebhookWorker();
   startCashfreeWebhookWorker();
+  startCashfreeReconciler();
   startShiprocketWebhookWorker();
   startAbandonmentWebhookWorker();
   startAiSensyProjectWebhookWorker();
   startMetaWebhookWorker();
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
+  attendanceService.start();
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
 });

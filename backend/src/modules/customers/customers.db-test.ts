@@ -597,8 +597,9 @@ describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
     await inRollback(async (tx) => {
       const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
       const token = `Deact${uid().slice(0, 8)}`;
-      const active = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Active" } });
-      const deactivated = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Deactivated", workingStatus: "DEACTIVATED" } });
+      // Both are CUSTOMERs (the list only shows converted leads), so the deactivated one is excluded by workingStatus alone - not merely because it was never a customer.
+      const active = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Active", lifecycleStage: "CUSTOMER" } });
+      const deactivated = await tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: token, lastName: "Deactivated", lifecycleStage: "CUSTOMER", workingStatus: "DEACTIVATED" } });
 
       const svc = new CustomersService(tx);
       const list = await svc.listCustomers(as(admin, Role.ADMIN), { page: 1, pageSize: 20, search: token });

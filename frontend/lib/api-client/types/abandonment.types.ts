@@ -123,9 +123,22 @@ export interface BulkAssignSalespersonPayload {
   salespersonIds?: string[];
 }
 
+export interface BulkUpdateLeadStatusPayload {
+  abandonmentIds: string[];
+  workingStatus: LeadWorkingStatus;
+  /** Required when workingStatus is CALL_BACK or FOLLOW_UP; applied to every selected lead. */
+  followUpAt?: string;
+}
+
 // Auto-assignment toggles behind the manual bulk-assign flow above - see
 // backend/src/modules/lead/lead.service.ts's autoAssignAbandonedLead. The manager-stage toggle is
 // global (admin-controlled); the salesperson-stage toggle is scoped to the logged-in manager's own team.
 export interface AutoAssignConfig {
   enabled: boolean;
+}
+
+// Manager stage only: which managers are opted into the round robin. `managerIds` persists even
+// while `enabled` is false, so re-opening the picker shows the last selection.
+export interface ManagerAutoAssignConfig extends AutoAssignConfig {
+  managerIds: string[];
 }

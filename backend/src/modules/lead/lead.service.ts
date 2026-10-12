@@ -37,6 +37,7 @@ import type {
   ListLeadsQuery,
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
+  BulkUpdateStatusBody,
 } from "./lead.types.js";
 
 type TxClient = Prisma.TransactionClient;
@@ -724,15 +725,62 @@ class LeadService {
     );
   }
 
+  // Admin-only bulk status change (e.g. cleaning up test leads without touching the database
+  // directly). Unlike updateLead, this sets the real workingStatus unconditionally for every
+  // selected lead - there's no "shown status" role view to reconcile against since only ADMIN can
+  // call it. One followUpAt, if given, applies to every lead moved to CALL_BACK/FOLLOW_UP; each
+  // lead's own owner (falling back to the admin) gets the reminder, same as the single-lead path.
+  async bulkUpdateStatus(user: AuthUser, body: BulkUpdateStatusBody) {
+    const isFollowUpStatus = body.workingStatus === "CALL_BACK" || body.workingStatus === "FOLLOW_UP";
+    const followUpAt = isFollowUpStatus ? parseFollowUpAt(body.followUpAt, body.workingStatus === "CALL_BACK" ? "call back" : "follow up") : null;
+
+    return prisma.$transaction(
+      async (tx) => {
+        const leads = await this.fetchLeadsOrThrow(tx, body.leadIds);
+
+        await tx.lead.updateMany({ where: { id: { in: body.leadIds } }, data: { workingStatus: body.workingStatus } });
+
+        for (const lead of leads) {
+          if (followUpAt) {
+            await scheduleFollowUp(tx, {
+              leadId: lead.id,
+              leadName: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
+              assignedToId: lead.ownerId ?? user.id,
+              actor: { id: user.id, role: user.role },
+              type: body.workingStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
+              scheduledAt: followUpAt,
+            });
+          } else {
+            await completePendingFollowUps(tx, lead.id);
+          }
+        }
+
+        await tx.activity.createMany({
+          data: leads.map((lead) => ({
+            leadId: lead.id,
+            actorId: user.id,
+            type: ActivityType.STATUS_CHANGE,
+            title: `Status changed to ${body.workingStatus}`,
+          })),
+        });
+
+        return { updatedCount: leads.length };
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
+  }
+
   // ---------- Auto-assignment (abandoned leads) ----------
   // Same round-robin engine as bulkAssignManagers/bulkAssignSalespersons above, triggered by the
   // ingesting processor (e.g. shiprocket.abandonment.processor.ts) instead of an admin/manager
-  // request. The only differences: the participant pool is "every ACTIVE user of that role" rather
-  // than a caller-picked list, it acts on one lead at a time, and assignedById is null (system-
-  // triggered) rather than a real user id - LeadAssignment.assignedById/Activity.actorId are both
-  // nullable precisely for this. Each toggle (ManagerAutoAssignConfig, SalespersonAutoAssignConfig)
-  // is read fresh on every call - a single indexed row read costs nothing extra inside a transaction
-  // that's already doing real writes, so there's no need to cache or invalidate it.
+  // request. The only differences: the manager-stage pool is "every ACTIVE manager the admin has
+  // opted in via ManagerAutoAssignTarget" (the salesperson-stage pool is still "every ACTIVE
+  // salesperson under that manager" - no per-salesperson opt-in yet), it acts on one lead at a time,
+  // and assignedById is null (system-triggered) rather than a real user id -
+  // LeadAssignment.assignedById/Activity.actorId are both nullable precisely for this. Each toggle
+  // (ManagerAutoAssignConfig, SalespersonAutoAssignConfig) is read fresh on every call - a single
+  // indexed row read costs nothing extra inside a transaction that's already doing real writes, so
+  // there's no need to cache or invalidate it.
 
   /** No-ops (leaving the lead unassigned, same as if auto-assign were off) when the config row is
    *  missing/disabled, the lead already has a manager, or there are no active managers to pick from. */
@@ -743,7 +791,7 @@ class LeadService {
     if (!config?.enabled) return lead;
 
     const managers = await tx.user.findMany({
-      where: { role: Role.MANAGER, status: UserStatus.ACTIVE },
+      where: { role: Role.MANAGER, status: UserStatus.ACTIVE, managerAutoAssignTarget: { isNot: null } },
       orderBy: { id: "asc" },
     });
     if (managers.length === 0) return lead;

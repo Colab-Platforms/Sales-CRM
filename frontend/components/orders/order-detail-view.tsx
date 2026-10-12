@@ -23,7 +23,8 @@ import { OrderConfirmationTags } from "./order-confirmation-tags";
 import { OrderAuditHistory } from "./order-audit-history";
 import { customerDetailHref } from "./orders-table";
 import { OrderShipmentSection } from "./order-shipment-section";
-import { OrderRefundSection } from "@/components/refunds/order-refund-section";
+import { OrderRefundAction, OrderRefundSection } from "@/components/refunds/order-refund-section";
+import { paymentFigures } from "@/lib/payment-figures";
 import { goodsValue } from "@/lib/package-dimensions";
 import { ShipmentStatusBadge } from "./shipment-status-badge";
 import { CrmBadge, PaymentModeBadge, ShopifyStatusBadge, SourceBadge, ToneBadge } from "./shopify-status-badge";
@@ -94,6 +95,7 @@ function PaymentReconciliationCard({ order }: { order: OrderDetail }) {
   // convention as the reconciliation list (payments are already ordered most-recent-first).
   const latestPayment = order.payments[0] ?? null;
   const money = (v: string) => formatMoney(v, order.currency);
+  const figures = paymentFigures(order);
 
   return (
     <AccentCard accent="purple">
@@ -102,11 +104,18 @@ function PaymentReconciliationCard({ order }: { order: OrderDetail }) {
       </SectionTitle>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
-          <StatTile label="Order amount" value={money(order.totalAmount)} />
-          <StatTile label="Paid" value={money(order.paidAmount)} tone={Number(order.paidAmount) > 0 ? "success" : "neutral"} />
-          <StatTile label="Refunded" value={money(order.refundedAmount)} tone={Number(order.refundedAmount) > 0 ? "danger" : "neutral"} />
-          <StatTile label="Outstanding" value={money(order.outstandingAmount)} tone={Number(order.outstandingAmount) > 0 ? "warning" : "success"} />
+          <StatTile label="Order amount" value={money(figures.orderAmount)} />
+          <StatTile label="Original paid" value={money(figures.originalPaid)} tone={Number(figures.originalPaid) > 0 ? "success" : "neutral"} />
+          <StatTile label="Refunded" value={money(figures.refunded)} tone={Number(figures.refunded) > 0 ? "danger" : "neutral"} />
+          <StatTile label="Net paid (held)" value={money(figures.netPaid)} tone={Number(figures.netPaid) > 0 ? "success" : "neutral"} />
+          <StatTile label="Refundable now" value={money(figures.refundableNow)} tone="neutral" />
+          <StatTile label="Outstanding" value={money(figures.outstanding)} tone={Number(figures.outstanding) > 0 ? "warning" : "success"} />
         </div>
+        {Number(figures.refunded) > 0 ? (
+          <p className="text-xs text-muted-foreground" data-testid="net-paid-note">
+            Net paid = Original paid − Refunded: the money still held after refunds.
+          </p>
+        ) : null}
         <DetailGrid compact>
           <DetailField label="Discount">{money(order.discountAmount)}</DetailField>
           <DetailField label="Payment method">{latestPayment?.method ? PAYMENT_METHOD_LABELS[latestPayment.method] : "—"}</DetailField>
@@ -173,9 +182,10 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
       <div className="space-y-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <BackLink />
-          {/* The order's action area: Prepaid Upgrade (eligible COD orders only - decided by the backend) sits right next to Cancel Order. */}
+          {/* The order's action area: Prepaid Upgrade (eligible COD orders only - decided by the backend) and Refund (eligible prepaid Cashfree orders only - decided by the backend) sit right next to Cancel Order. */}
           <div className="flex flex-wrap items-start justify-end gap-2">
             <PrepaidUpgradeAction target={{ kind: "crm", orderId: order.id }} onOpen={() => setUpgradeOpen(true)} />
+            <OrderRefundAction orderId={order.id} orderNumber={order.orderNumber} customerName={order.customer.name} info={order.refunds} />
             <CancelOrderButton order={order} />
           </div>
         </div>
@@ -308,7 +318,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
       </div>
 
       {/* ---- Refund approval workflow (request / status only; no refund is executed here) ---- */}
-      <OrderRefundSection orderId={order.id} orderNumber={order.orderNumber} info={order.refunds} />
+      <OrderRefundSection orderId={order.id} orderNumber={order.orderNumber} customerName={order.customer.name} info={order.refunds} />
 
       {/* ---- Prepaid Upgrade (eligible COD orders only; renders nothing otherwise) ---- */}
       <PrepaidUpgradeCard target={{ kind: "crm", orderId: order.id }} open={upgradeOpen} onOpenChange={setUpgradeOpen} />

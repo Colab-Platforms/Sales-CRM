@@ -4,9 +4,11 @@ import { leadKeys } from "../queries/lead.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { tasksKeys } from "../queries/tasks.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
+import { abandonmentKeys } from "../queries/abandonment.queries";
 import type {
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
+  BulkUpdateStatusPayload,
   CreateLeadPayload,
   Lead,
   LeadListResult,
@@ -68,6 +70,9 @@ export function useUpdateLeadMutation() {
       // If this lead already has a real WhatsApp conversation, its row in the Inbox list shows the
       // lead's name - a rename must be reflected there too, without a manual page refresh.
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
+      // The Abandoned Leads table reads this lead's workingStatus off its own query (not leadKeys) -
+      // without this it only shows the update after a manual page refresh.
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
     },
   });
 }
@@ -105,6 +110,20 @@ export function useBulkAssignSalespersonMutation() {
     mutationFn: (payload) => leadApi.bulkAssignSalesperson(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });
+    },
+  });
+}
+
+export function useBulkUpdateStatusMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ updatedCount: number }, unknown, BulkUpdateStatusPayload>({
+    mutationFn: (payload) => leadApi.bulkUpdateStatus(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: leadKeys.all });
+      // A status change can schedule or close a follow-up reminder.
+      queryClient.invalidateQueries({ queryKey: tasksKeys.all });
+      queryClient.invalidateQueries({ queryKey: customersKeys.all });
     },
   });
 }

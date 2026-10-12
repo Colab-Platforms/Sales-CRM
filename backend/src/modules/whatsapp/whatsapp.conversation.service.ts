@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
+import { canViewAllWhatsAppConversations } from "./whatsapp.history.filters.js";
+import { siblingLeadIds } from "./whatsapp.matching.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -146,16 +148,48 @@ class WhatsAppConversationService {
     };
   }
 
+  /**
+   * READ-ONLY view of a conversation (what opening it in the Inbox shows): every ADMIN, MANAGER and SALESPERSON may open any conversation, whichever team owns the lead.
+   * getConversationDetail below stays the SCOPED check that actions (order-draft confirm, ...) rely on, so seeing a conversation never grants an action on it.
+   */
+  async viewConversationDetail(user: AuthUser, leadId: string): Promise<ConversationDetail> {
+    // A lead can have messages but no conversation row yet (history that predates the conversation model, or an outbound-only thread). That is still a conversation that must open: answer
+    // with the defaults a new row would get (human handling, nobody assigned) WITHOUT writing anything, as long as the lead really exists.
+    const existing = await this.db.whatsAppConversation.findUnique({ where: { leadId }, select: CONVERSATION_SELECT });
+    if (!existing && !(await this.db.lead.findUnique({ where: { id: leadId }, select: { id: true } }))) throw new ApiError("Conversation not found", STATUS_CODES.NOT_FOUND);
+    const row: ConversationRow = existing ?? { id: "", leadId, provider: "META", mode: "HUMAN", assignedToId: null, assignedTo: null, lastReadAt: null, orderState: "DISCOVERY", orderDraft: null, aiSuggestedReply: null, lastAiHandoffReason: null, createdOrderId: null };
+    if (!canViewAllWhatsAppConversations(user.role)) await this.assertAccess(user, leadId, row);
+    const detail = await this.toDetail(row);
+    // The contact the conversation is with, so the Inbox can render its header without the (team-scoped) Customer 360 lookup. Name and phone only - the same the list already shows.
+    const lead = await this.db.lead.findUnique({ where: { id: leadId }, select: { firstName: true, lastName: true, mobile: true, normalizedMobile: true, leadNumber: true } });
+    if (lead) detail.contact = { name: [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() || (lead.mobile ?? lead.normalizedMobile ?? "Unknown"), mobile: lead.mobile ?? lead.normalizedMobile, leadNumber: lead.leadNumber };
+    // One customer = one thread: unread covers every lead that shares this phone, and opening the conversation clears them together (see markRead).
+    if (canViewAllWhatsAppConversations(user.role)) {
+      const ids = await siblingLeadIds(this.db, leadId);
+      if (ids.length > 1) {
+        const rows = await this.db.whatsAppConversation.findMany({ where: { leadId: { in: ids } }, select: { leadId: true, lastReadAt: true } });
+        const counts = await Promise.all(ids.map((id) => this.db.whatsAppMessage.count({ where: { leadId: id, direction: "INBOUND", createdAt: { gt: rows.find((r) => r.leadId === id)?.lastReadAt ?? new Date(0) } } })));
+        detail.unreadCount = counts.reduce((a, b) => a + b, 0);
+      }
+    }
+    return detail;
+  }
+
   async getConversationDetail(user: AuthUser, leadId: string): Promise<ConversationDetail> {
     const row = await this.getRowOrThrow(leadId);
     await this.assertAccess(user, leadId, row);
     return this.toDetail(row);
   }
 
+  // Opening a conversation marks it read (the unread count is per conversation), so anyone who may VIEW it may mark it read.
   async markRead(user: AuthUser, leadId: string): Promise<void> {
-    const row = await this.getRowOrThrow(leadId);
-    await this.assertAccess(user, leadId, row);
-    await this.db.whatsAppConversation.update({ where: { leadId }, data: { lastReadAt: new Date() } });
+    // The conversation row is created on first read for a lead that has messages but no row yet, so opening such a conversation can be marked read too.
+    const row = canViewAllWhatsAppConversations(user.role) && (await this.db.lead.findUnique({ where: { id: leadId }, select: { id: true } })) ? ((await this.db.whatsAppConversation.findUnique({ where: { leadId }, select: CONVERSATION_SELECT })) ?? (await this.db.whatsAppConversation.create({ data: { leadId, provider: "META" }, select: CONVERSATION_SELECT }))) : await this.getRowOrThrow(leadId);
+    if (!canViewAllWhatsAppConversations(user.role)) await this.assertAccess(user, leadId, row);
+    const ids = canViewAllWhatsAppConversations(user.role) ? await siblingLeadIds(this.db, leadId) : [leadId];
+    // a duplicate lead of the same phone may have inbound messages but no conversation row yet; give it one so its unread count clears with the thread
+    await this.db.whatsAppConversation.createMany({ data: ids.filter((id) => id !== leadId).map((id) => ({ leadId: id, provider: "META" as const })), skipDuplicates: true });
+    await this.db.whatsAppConversation.updateMany({ where: { leadId: { in: ids } }, data: { lastReadAt: new Date() } });
   }
 
   async assignConversation(user: AuthUser, leadId: string, input: AssignConversationInput): Promise<ConversationDetail> {

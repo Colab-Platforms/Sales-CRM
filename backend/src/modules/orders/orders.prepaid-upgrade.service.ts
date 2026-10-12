@@ -21,7 +21,7 @@ import DiscountsService from "../discounts/discounts.service.js";
 import { loadDefaultDiscount } from "../discounts/discounts.config.js";
 import { computeUpgradeAmounts, type UpgradeDiscountType } from "./orders.prepaid-upgrade.calc.js";
 import { readHistory, readOffer, type PrepaidUpgradeOffer } from "./orders.prepaid-upgrade.hooks.js";
-import { derivePaymentMode, scopedOrderWhere } from "./orders.filters.js";
+import { derivePaymentMode, orderReadWhere, scopedOrderWhere } from "./orders.filters.js";
 
 // Telecaller "Prepaid Upgrade": offer a COD customer a discount to pay online instead. Domain/state flow only - the
 // payment itself is the EXISTING Cashfree payment-link infrastructure (CashfreePaymentsService), and the COD -> prepaid
@@ -76,9 +76,10 @@ class PrepaidUpgradeService {
     private readonly getShopifyClient: () => ShopifyClient = () => new ShopifyClient(loadShopifyConfig()),
   ) {}
 
-  private async loadOrder(tx: Db, user: AuthUser, orderId: string) {
+  private async loadOrder(tx: Db, user: AuthUser, orderId: string, opts: { forRead?: boolean } = {}) {
     const scope = await getLeadScope(user, tx as never);
-    const order = await tx.order.findFirst({ where: scopedOrderWhere(orderId, scope), select: ORDER_SELECT });
+    // forRead (the panel on the order page): a manager reviewing a refund request can read the order it is about; every action keeps the lead scope.
+    const order = await tx.order.findFirst({ where: opts.forRead ? orderReadWhere(user, orderId, scope) : scopedOrderWhere(orderId, scope), select: ORDER_SELECT });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     return order;
   }
@@ -105,7 +106,7 @@ class PrepaidUpgradeService {
   }
 
   async getUpgrade(user: AuthUser, orderId: string): Promise<UpgradeView> {
-    const order = await this.loadOrder(this.db as unknown as Db, user, orderId);
+    const order = await this.loadOrder(this.db as unknown as Db, user, orderId, { forRead: true });
     const { reused: _r, paymentId: _p, ...view } = this.view(order);
     return view;
   }

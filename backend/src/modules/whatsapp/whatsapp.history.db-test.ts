@@ -30,9 +30,13 @@ after(() => prisma.$disconnect());
 const uid = () => randomUUID();
 const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
 
+// Each lead gets its OWN phone by default: the Inbox treats leads with the same phone as one customer, so fixtures that mean "two different customers" must not share a number.
+let phoneSeq = 0;
 async function makeLead(tx: Prisma.TransactionClient, overrides: Partial<Prisma.LeadUncheckedCreateInput> = {}) {
+  phoneSeq += 1;
+  const mobile = `98765${String(10000 + phoneSeq).padStart(5, "0")}`;
   return tx.lead.create({
-    data: { leadNumber: `L-${uid()}`, firstName: "Mahadev", lastName: "Babar", mobile: "9876543210", normalizedMobile: "+919876543210", ...overrides },
+    data: { leadNumber: `L-${uid()}`, firstName: "Mahadev", lastName: "Babar", mobile, normalizedMobile: `+91${mobile}`, ...overrides },
     select: { id: true },
   });
 }
@@ -216,32 +220,32 @@ describe("listing WhatsApp message history", () => {
 });
 
 describe("RBAC / data scope", () => {
-  it("a salesperson only sees messages for their own leads", async () => {
+  it("a salesperson sees messages for ALL leads, their own and a colleague's (WhatsApp visibility is company-wide)", async () => {
     await inRollback(async (tx) => {
       const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
       const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const ownLead = await makeLead(tx, { ownerId: rep1.id });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
-      await makeMessage(tx, { leadId: ownLead.id });
-      await makeMessage(tx, { leadId: otherLead.id });
+      const ownMsg = await makeMessage(tx, { leadId: ownLead.id });
+      const otherMsg = await makeMessage(tx, { leadId: otherLead.id });
       const svc = new WhatsAppService(tx);
 
-      const result = await svc.listMessages(as(rep1, Role.SALESPERSON), { page: 1, pageSize: 20 });
-      assert.equal(result.items.length, 1);
-      assert.equal(result.items[0].customer?.leadId, ownLead.id);
+      const result = await svc.listMessages(as(rep1, Role.SALESPERSON), { page: 1, pageSize: 200 });
+      const ids = new Set(result.items.map((i) => i.id));
+      assert.ok(ids.has(ownMsg.id) && ids.has(otherMsg.id), "both the rep's own and the colleague's message are listed");
     });
   });
 
-  it("a leadId filter for another rep's customer returns an empty page, not an error or a leak", async () => {
+  it("a leadId filter for another rep's customer returns that customer's messages (visibility is company-wide)", async () => {
     await inRollback(async (tx) => {
       const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
       const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
       const otherLead = await makeLead(tx, { ownerId: rep2.id });
-      await makeMessage(tx, { leadId: otherLead.id });
+      const msg = await makeMessage(tx, { leadId: otherLead.id });
       const svc = new WhatsAppService(tx);
 
       const result = await svc.listMessages(as(rep1, Role.SALESPERSON), { page: 1, pageSize: 20, leadId: otherLead.id });
-      assert.deepEqual(result.items, []);
+      assert.deepEqual(result.items.map((i) => i.id), [msg.id]);
     });
   });
 
@@ -252,11 +256,12 @@ describe("RBAC / data scope", () => {
       const group = await tx.group.create({ data: { name: `G-${uid()}`, managerId: manager.id } });
       await tx.groupMember.create({ data: { groupId: group.id, userId: rep.id, joinedAt: new Date(), isActive: true } });
       const lead = await makeLead(tx, { ownerId: rep.id, groupId: group.id });
-      await makeMessage(tx, { leadId: lead.id });
+      const msg = await makeMessage(tx, { leadId: lead.id });
       const svc = new WhatsAppService(tx);
 
-      const result = await svc.listMessages(as(manager, Role.MANAGER), { page: 1, pageSize: 20 });
-      assert.equal(result.items.length, 1);
+      // Scoped to this lead: a manager now reads every conversation, so an unfiltered page also holds whatever else is in the database.
+      const result = await svc.listMessages(as(manager, Role.MANAGER), { page: 1, pageSize: 20, leadId: lead.id });
+      assert.deepEqual(result.items.map((i) => i.id), [msg.id]);
     });
   });
 
@@ -274,14 +279,14 @@ describe("RBAC / data scope", () => {
     });
   });
 
-  it("a salesperson never sees an unmatched-sender message (no lead to satisfy their scope)", async () => {
+  it("a salesperson also sees an unmatched-sender inbound message, like an admin (it is a customer message; there is no lead to scope it by)", async () => {
     await inRollback(async (tx) => {
       const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const unmatched = await makeMessage(tx, { leadId: null, direction: "INBOUND", status: "RECEIVED", fromNumber: "+910000000000" });
       const svc = new WhatsAppService(tx);
 
-      const result = await svc.listMessages(as(rep, Role.SALESPERSON), { page: 1, pageSize: 20 });
-      assert.equal(result.items.some((i) => i.id === unmatched.id), false);
+      const result = await svc.listMessages(as(rep, Role.SALESPERSON), { page: 1, pageSize: 200 });
+      assert.equal(result.items.some((i) => i.id === unmatched.id), true);
     });
   });
 });
@@ -312,7 +317,7 @@ describe("message detail", () => {
     });
   });
 
-  it("404s for an out-of-scope message, the same way an out-of-scope customer would", async () => {
+  it("a salesperson can open a message that belongs to a colleague's customer (visibility is company-wide)", async () => {
     await inRollback(async (tx) => {
       const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
       const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
@@ -320,7 +325,7 @@ describe("message detail", () => {
       const message = await makeMessage(tx, { leadId: otherLead.id });
       const svc = new WhatsAppService(tx);
 
-      await assert.rejects(() => svc.getMessage(as(rep1, Role.SALESPERSON), message.id), (e: any) => e.statusCode === 404);
+      assert.equal((await svc.getMessage(as(rep1, Role.SALESPERSON), message.id)).id, message.id);
     });
   });
 
@@ -389,7 +394,7 @@ describe("central WhatsApp inbox: listConversations", () => {
     });
   });
 
-  it("a salesperson only sees conversations for their own leads", async () => {
+  it("a salesperson sees conversations for ALL leads, their own and a colleague's (WhatsApp visibility is company-wide)", async () => {
     await inRollback(async (tx) => {
       const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
       const rep2 = await tx.user.create({ data: { name: "Rep2", username: `r2-${uid()}`, role: Role.SALESPERSON } });
@@ -399,9 +404,9 @@ describe("central WhatsApp inbox: listConversations", () => {
       await makeMessage(tx, { leadId: otherLead.id });
       const svc = new WhatsAppService(tx);
 
-      const result = await svc.listConversations(as(rep1, Role.SALESPERSON), { page: 1, pageSize: 20 });
-      assert.equal(result.items.length, 1);
-      assert.equal(result.items[0].leadId, ownLead.id);
+      const result = await svc.listConversations(as(rep1, Role.SALESPERSON), { page: 1, pageSize: 200 });
+      const leadIds = new Set(result.items.map((i) => i.leadId));
+      assert.ok(leadIds.has(ownLead.id) && leadIds.has(otherLead.id));
     });
   });
 

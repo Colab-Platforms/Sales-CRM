@@ -14,6 +14,7 @@ import { LeadStatusTabs, type LeadStatusTab } from "@/components/leads/lead-stat
 import { LeadSelectionToolbar } from "@/components/leads/lead-selection-toolbar";
 import { AssignManagerDialog } from "@/components/leads/assign-manager-dialog";
 import { AssignSalespersonDialog } from "@/components/leads/assign-salesperson-dialog";
+import { BulkUpdateStatusDialog } from "@/components/leads/bulk-update-status-dialog";
 import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
 
@@ -26,6 +27,7 @@ export default function LeadsPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [assignManagerOpen, setAssignManagerOpen] = useState(false);
   const [assignSalespersonOpen, setAssignSalespersonOpen] = useState(false);
+  const [updateStatusOpen, setUpdateStatusOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -108,6 +110,7 @@ export default function LeadsPage() {
           onClear={clearSelection}
           onAssignManager={isAdmin ? () => setAssignManagerOpen(true) : undefined}
           onAssignSalesperson={isManager ? () => setAssignSalespersonOpen(true) : undefined}
+          onUpdateStatus={isAdmin ? () => setUpdateStatusOpen(true) : undefined}
         />
       ) : null}
 
@@ -143,6 +146,15 @@ export default function LeadsPage() {
         leadIds={[...selectedIds]}
         onDone={() => {
           setAssignSalespersonOpen(false);
+          clearSelection();
+        }}
+      />
+      <BulkUpdateStatusDialog
+        open={updateStatusOpen}
+        onOpenChange={setUpdateStatusOpen}
+        leadIds={[...selectedIds]}
+        onDone={() => {
+          setUpdateStatusOpen(false);
           clearSelection();
         }}
       />

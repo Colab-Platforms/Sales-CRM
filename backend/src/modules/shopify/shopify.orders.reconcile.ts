@@ -100,6 +100,8 @@ export interface PrepaidUpgradeReconcileInput {
   currency: string;
   /** Free text recorded on the order edit and as the payment method name (customer-safe, no ids/secrets). */
   upgradeReference: string;
+  /** Wording for the order edit and the payment. Defaults describe a Prepaid Upgrade; a CRM order discount (WhatsApp Inbox) passes its own. */
+  labels?: { discount: string; payment: string; note: string };
 }
 
 export interface PrepaidUpgradeReconcileResult {
@@ -148,13 +150,13 @@ export async function reconcilePrepaidUpgrade(client: ShopifyClient, shopifyOrde
     const staged = await run<{ orderEditAddLineItemDiscount: { calculatedOrder: { totalPriceSet: Money; totalOutstandingSet: Money } | null; userErrors: UserErrors } }>(client, "edit_discount", EDIT_DISCOUNT, {
       id: calc.id,
       lineItemId: line.id,
-      discount: { description: `Prepaid upgrade discount (${input.upgradeReference})`.slice(0, 100), fixedValue: { amount: fromCents(discount), currencyCode: input.currency } },
+      discount: { description: (input.labels?.discount ?? `Prepaid upgrade discount (${input.upgradeReference})`).slice(0, 100), fixedValue: { amount: fromCents(discount), currencyCode: input.currency } },
     });
     failIfErrors("edit_discount", staged.orderEditAddLineItemDiscount.userErrors);
     const stagedTotal = staged.orderEditAddLineItemDiscount.calculatedOrder ? toCents(staged.orderEditAddLineItemDiscount.calculatedOrder.totalPriceSet.shopMoney.amount) : null;
     // Check BEFORE committing: an edit session that is never committed is simply discarded by Shopify.
     if (stagedTotal !== prepaid) throw new ShopifyReconcileError(`The edited Shopify order would total ${stagedTotal === null ? "an unknown amount" : fromCents(stagedTotal)}, not ${fromCents(prepaid)}; the edit was not committed.`, "edit_discount");
-    const commit = await run<{ orderEditCommit: { order: { id: string } | null; userErrors: UserErrors } }>(client, "edit_commit", EDIT_COMMIT, { id: calc.id, staffNote: `Prepaid upgrade ${input.upgradeReference}: original ${fromCents(original)}, discount ${fromCents(discount)}, pay ${fromCents(prepaid)}` });
+    const commit = await run<{ orderEditCommit: { order: { id: string } | null; userErrors: UserErrors } }>(client, "edit_commit", EDIT_COMMIT, { id: calc.id, staffNote: `${input.labels?.note ?? `Prepaid upgrade ${input.upgradeReference}`}: original ${fromCents(original)}, discount ${fromCents(discount)}, pay ${fromCents(prepaid)}` });
     failIfErrors("edit_commit", commit.orderEditCommit.userErrors);
     state = await readState(client, gid);
     if (state.total !== prepaid) throw new ShopifyReconcileError(`After the edit Shopify's order total is ${fromCents(state.total)}, expected ${fromCents(prepaid)}; no payment was recorded.`, "edit_commit");
@@ -162,7 +164,7 @@ export async function reconcilePrepaidUpgrade(client: ShopifyClient, shopifyOrde
 
   // The payment: no explicit amount, so Shopify records exactly the outstanding balance - which must be the prepaid amount.
   if (state.outstanding !== prepaid) throw new ShopifyReconcileError(`Shopify shows ${fromCents(state.outstanding)} outstanding, expected ${fromCents(prepaid)}; no payment was recorded.`, "payment");
-  const paid = await run<{ orderCreateManualPayment: { order: { id: string; displayFinancialStatus: string | null } | null; userErrors: UserErrors } }>(client, "payment", MANUAL_PAYMENT, { id: gid, paymentMethodName: `Cashfree (prepaid upgrade ${input.upgradeReference})`.slice(0, 100) });
+  const paid = await run<{ orderCreateManualPayment: { order: { id: string; displayFinancialStatus: string | null } | null; userErrors: UserErrors } }>(client, "payment", MANUAL_PAYMENT, { id: gid, paymentMethodName: (input.labels?.payment ?? `Cashfree (prepaid upgrade ${input.upgradeReference})`).slice(0, 100) });
   failIfErrors("payment", paid.orderCreateManualPayment.userErrors);
 
   const final = await readState(client, gid);

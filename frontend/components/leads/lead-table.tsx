@@ -53,6 +53,16 @@ import type { CallStatus } from "@/lib/api-client/types/calling.types";
 import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
 import { Badge } from "../ui/badge";
 
+// Every history-showing surface (this table's popup, the lead detail page) links back to a single
+// per-lead page, so a salesperson's "My Leads" list stops routing into the unrelated Customer 360
+// view and instead lands somewhere that actually shows this lead's own assignment/call history.
+export function leadDetailHref(leadId: string, options?: { from?: string }) {
+  if (options?.from) {
+    return `/dashboard/leads/${leadId}?from=${encodeURIComponent(options.from)}`;
+  }
+  return `/dashboard/leads/${leadId}`;
+}
+
 const CALL_HISTORY_PREVIEW_COUNT = 5;
 
 // Minimal shape this popup needs off a lead - satisfied structurally by both the full Lead type
@@ -306,8 +316,18 @@ function LeadReminderChip({ lead }: { lead: Lead }) {
   );
 }
 
+// Minimal shape this select needs off a lead - satisfied structurally by both the full Lead type
+// (leads pages) and AbandonmentListItem.lead (abandoned-leads pages), same pattern as CallableLead.
+export interface StatusEditableLead {
+  id: string;
+  firstName: string;
+  lastName?: string | null;
+  workingStatus: LeadWorkingStatus;
+  tasks: LeadFollowUp[];
+}
+
 // Exported so the Lead Details page reuses the exact same status-change control (and its mutation).
-export function LeadStatusSelect({ lead }: { lead: Lead }) {
+export function LeadStatusSelect({ lead }: { lead: StatusEditableLead }) {
   const updateLead = useUpdateLeadMutation();
   // Call back / follow up need a reminder time first, so they're held here until the dialog confirms.
   const [pendingFollowUp, setPendingFollowUp] = useState<
@@ -368,10 +388,6 @@ export function LeadStatusSelect({ lead }: { lead: Lead }) {
       ) : null}
     </>
   );
-}
-
-export function leadDetailHref(id: string) {
-  return `/dashboard/leads/${id}`;
 }
 
 interface LeadTableProps {

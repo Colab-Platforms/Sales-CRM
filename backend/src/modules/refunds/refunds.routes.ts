@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
-import { approveRefundRequest, getPendingRefundCount, listRefundRequests, rejectRefundRequest } from "./refunds.controller.js";
+import { approveRefundRequest, executeRefundRequest, getPendingRefundCount, listRefundRequests, refreshRefundExecution, rejectRefundRequest } from "./refunds.controller.js";
 
 const router = Router();
 
@@ -12,5 +12,8 @@ router.get("/", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), listRefundRe
 router.get("/pending-count", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), getPendingRefundCount);
 router.post("/:id/approve", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), approveRefundRequest);
 router.post("/:id/reject", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), rejectRefundRequest);
+// Execution (sends the approved refund to Cashfree) and its read-only status refresh: MANAGER / ADMIN only, enforced again in the service.
+router.post("/:id/execute", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), executeRefundRequest);
+router.post("/:id/refresh-execution", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), refreshRefundExecution);
 
 export default router;

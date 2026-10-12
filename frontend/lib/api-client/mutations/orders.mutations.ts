@@ -4,7 +4,7 @@ import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, ShopifyPushResult } from "../types/orders.types";
+import type { CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -50,6 +50,19 @@ export function useRevertCancellationMutation() {
       queryClient.invalidateQueries({ queryKey: ordersKeys.statusHistory(orderId) });
       queryClient.invalidateQueries({ queryKey: auditKeys.all });
       queryClient.invalidateQueries({ queryKey: customersKeys.detail(result.order.customer.leadId) });
+    },
+  });
+}
+
+/** Brings a live-only Shopify order into the CRM; afterwards the CRM order page replaces the live page. */
+export function useSyncLiveOrderMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<LiveOrderSyncResult, unknown, string>({
+    mutationFn: (externalId) => ordersApi.syncLive(externalId),
+    onSuccess: (_, externalId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveDetail(externalId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
     },
   });
 }

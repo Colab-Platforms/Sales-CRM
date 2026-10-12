@@ -62,7 +62,7 @@ async function world(tx: Db, payment: Partial<Prisma.PaymentUncheckedCreateInput
     select: { id: true },
   });
   const order = await tx.order.create({
-    data: { orderNumber: `RF-${uid().slice(0, 8)}`, leadId: lead.id, source: OrderSource.SALESPERSON, status: OrderStatus.CONFIRMED, subtotal: "1000.00", totalAmount: "1000.00", createdById: s.id },
+    data: { orderNumber: `RF-${uid().slice(0, 8)}`, leadId: lead.id, source: OrderSource.SALESPERSON, status: OrderStatus.CANCELLED, subtotal: "1000.00", totalAmount: "1000.00", createdById: s.id },
     select: { id: true },
   });
   const pay = await tx.payment.create({
@@ -160,13 +160,13 @@ describe("eligibility: only Cashfree-collected, settled payments with their Cash
         assert.match(info.payments[0]!.ineligibleReason ?? "", re);
       });
     });
-  refused("a Shopify-collected payment", { externalSource: "SHOPIFY", externalId: `shop_${uid().slice(0, 8)}` }, /not collected through Cashfree/);
-  refused("a COD payment", { externalSource: null, externalId: null, method: PaymentMethod.COD, providerPaymentId: null, metadata: undefined }, /not collected through Cashfree/);
+  refused("a Shopify-collected payment whose Cashfree references are not looked up yet", { externalSource: "SHOPIFY", externalId: `shop_${uid().slice(0, 8)}` }, /has not been verified yet/);
+  refused("a COD payment", { externalSource: null, externalId: null, method: PaymentMethod.COD, providerPaymentId: null, metadata: undefined }, /cash-on-delivery/);
   refused("a payment without the Cashfree payment id", { providerPaymentId: null }, /payment id is not recorded/);
   refused("a payment without the Cashfree order reference", { metadata: { cashfree: {} } }, /order reference is not recorded/);
   refused("a FAILED payment", { status: PaymentStatus.FAILED }, /Only a successful payment/);
   refused("a PENDING payment", { status: PaymentStatus.PENDING }, /Only a successful payment/);
-  refused("an already REFUNDED payment", { status: PaymentStatus.REFUNDED, refundedAmount: "1000.00" }, /Only a successful payment/);
+  refused("an already REFUNDED payment", { status: PaymentStatus.REFUNDED, refundedAmount: "1000.00" }, /already been fully refunded/);
 
   it("PARTIALLY_REFUNDED is allowed, limited to what is left; a null refundedAmount counts as zero", async () => {
     await inRollback(async (tx, svc) => {
@@ -231,8 +231,8 @@ describe("approval and rejection", () => {
       assert.ok(done.decisionAt);
       const act = await tx.activity.findFirstOrThrow({ where: { orderId: w.orderId, type: ActivityType.REFUND_APPROVED } });
       assert.deepEqual([act.actorId, act.actorRole, act.referenceType, act.referenceId], [w.manager.id, Role.MANAGER, "RefundRequest", r.id]);
-      assert.equal((await svc.list(w.manager, { status: "PENDING", page: 1, pageSize: 20 })).items.length, 0);
-      assert.equal((await svc.list(w.manager, { status: "APPROVED", page: 1, pageSize: 20 })).items.length, 1);
+      assert.equal((await svc.list(w.manager, { status: "PENDING", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 0);
+      assert.equal((await svc.list(w.manager, { status: "APPROVED", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 1);
     });
   });
 
@@ -262,16 +262,16 @@ describe("approval and rejection", () => {
     });
   });
 
-  it("a salesperson can not decide or list; a manager outside the team can not see or decide the request", async () => {
+  it("a salesperson can not decide or list; EVERY manager - whatever their team - sees the request and may decide it", async () => {
     await inRollback(async (tx, svc) => {
       const w = await world(tx);
       const r = await svc.createRequest(w.sales, w.orderId, body(w, "100"));
       await rejects(svc.approve(w.sales, r.id), 403);
       await rejects(svc.reject(w.sales, r.id, "x"), 403);
       await rejects(svc.list(w.sales, { status: "PENDING", page: 1, pageSize: 20 }), 403);
-      await rejects(svc.approve(w.outsiderManager, r.id), 404);
-      assert.equal((await svc.list(w.outsiderManager, { status: "PENDING", page: 1, pageSize: 20 })).items.length, 0);
-      assert.equal((await svc.list(w.manager, { status: "PENDING", page: 1, pageSize: 20 })).items.length, 1);
+      // approval is company-wide: a manager of another team sees it too (deciding is exercised in refunds.visibility.db-test.ts)
+      assert.equal((await svc.list(w.outsiderManager, { status: "PENDING", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 1);
+      assert.equal((await svc.list(w.manager, { status: "PENDING", orderId: w.orderId, page: 1, pageSize: 20 })).items.length, 1);
       assert.equal((await svc.list(w.admin, { status: "PENDING", page: 1, pageSize: 20 })).items.some((i) => i.id === r.id), true);
     });
   });
@@ -293,13 +293,14 @@ describe("approval and rejection", () => {
     });
   });
 
-  it("the pending badge counts only what this user could act on (in scope, not their own)", async () => {
+  it("the pending badge counts what this user could act on (any team, not their own)", async () => {
     await inRollback(async (tx, svc) => {
       const w = await world(tx);
       await svc.createRequest(w.sales, w.orderId, body(w, "100"));
       await svc.createRequest(w.manager, w.orderId, body(w, "100"));
-      assert.equal((await svc.pendingCount(w.manager)).count, 1);
-      assert.equal((await svc.pendingCount(w.outsiderManager)).count, 0);
+      const mine = (await svc.pendingCount(w.manager)).count; // the database may hold other pending requests; only the difference is ours
+      const outsider = (await svc.pendingCount(w.outsiderManager)).count;
+      assert.equal(outsider - mine, 1); // the outsider can act on both of the two new requests, the manager only on the one he did not raise
       assert.ok((await svc.pendingCount(w.admin)).count >= 2);
       await rejects(svc.pendingCount(w.sales), 403);
     });
@@ -351,10 +352,11 @@ describe("approval is only a decision: no money moves, no provider is contacted"
     });
   });
 
-  it("the refund module contains no Cashfree client, no refund endpoint and no network call", () => {
+  it("the approval path contains no Cashfree client, no refund endpoint and no network call", () => {
     const dir = path.dirname(new URL(import.meta.url).pathname).replace(/^\/([A-Za-z]:)/, "$1");
-    const sources = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith("test.ts") && !f.endsWith("db-test.ts"));
-    assert.ok(sources.length >= 6);
+    // The APPROVAL path (service, eligibility, validators, types). Provider execution lives in refunds.execution.ts (own tests); the controller/routes only wire it.
+    const sources = ["refunds.service.ts", "refunds.eligibility.ts", "refunds.validators.ts", "refunds.types.ts"].filter((f) => readdirSync(dir).includes(f));
+    assert.equal(sources.length, 4);
     for (const f of sources) {
       const code = readFileSync(path.join(dir, f), "utf8").replace(/\/\/.*$/gm, "");
       assert.doesNotMatch(code, /cashfree\.client|CashfreeClient|requestJson|\bfetch\s*\(|\/refunds(?![.\w-])|x-client-secret|axios/i, f);

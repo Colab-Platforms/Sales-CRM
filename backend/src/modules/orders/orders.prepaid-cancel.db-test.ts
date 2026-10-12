@@ -45,7 +45,10 @@ async function makeProduct(tx: Prisma.TransactionClient) {
 }
 
 function fakeShopifyClient(queryImpl?: (document: string, variables: Record<string, unknown>) => Promise<unknown>): ShopifyClient {
-  return { query: queryImpl ?? (async (doc: string) => (doc.includes("orderCancel") ? { orderCancel: { job: { id: "1", done: true }, orderCancelUserErrors: [] } } : { orderCreate: { order: { id: "gid://shopify/Order/1", name: "#TST1" }, userErrors: [] } })) } as unknown as ShopifyClient;
+  // The read-only "is it already cancelled?" pre-check is not a cancel attempt: answer it here so the counting fakes below count only real cancel mutations.
+  const answer = queryImpl;
+  const withStateRead = answer ? async (doc: string, vars: Record<string, unknown>) => (doc.includes("crmOrderCancelState") ? { order: { id: "gid://shopify/Order/1", cancelledAt: null } } : answer(doc, vars)) : undefined;
+  return { query: withStateRead ?? (async (doc: string) => (doc.includes("orderCancel") ? { orderCancel: { job: { id: "1", done: true }, orderCancelUserErrors: [] } } : { orderCreate: { order: { id: "gid://shopify/Order/1", name: "#TST1" }, userErrors: [] } })) } as unknown as ShopifyClient;
 }
 
 const NO_NOTIFY = { sent: false, via: null, provider: null } satisfies OrderNotifyResult;
@@ -297,7 +300,7 @@ describe("cancelOrder - Cashfree payment link", () => {
   async function prepaidOrder(tx: Prisma.TransactionClient, admin: { id: string }, opts: { paymentStatus: "PENDING" | "SUCCESS"; shopify?: boolean }) {
     const lead = await makeLead(tx);
     const order = await tx.order.create({
-      data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: admin.id, source: "SALESPERSON", status: opts.paymentStatus === "SUCCESS" ? "CONFIRMED" : "PENDING_PAYMENT", totalAmount: "699.00", ...(opts.shopify ? { externalSource: "SHOPIFY" as const, externalId: `gid://shopify/Order/${uid()}` } : {}) },
+      data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: admin.id, source: "SALESPERSON", status: opts.paymentStatus === "SUCCESS" ? "CONFIRMED" : "PENDING_PAYMENT", totalAmount: "699.00", ...(opts.shopify ? { externalSource: "SHOPIFY" as const, externalId: `gid://shopify/Order/${Date.now()}${Math.floor(Math.random() * 1000)}` } : {}) },
       select: { id: true },
     });
     const linkId = `crm_${uid().replace(/-/g, "")}`;

@@ -361,7 +361,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       assert.deepEqual(result.shopify, { status: "created", shopifyOrderId: "gid://shopify/Order/555", shopifyOrderName: "#TST555" });
       const stored = await tx.order.findUniqueOrThrow({ where: { id: result.order.id }, select: { externalSource: true, externalId: true, externalNumber: true } });
       assert.equal(stored.externalSource, "SHOPIFY");
-      assert.equal(stored.externalId, "gid://shopify/Order/555");
+      assert.equal(stored.externalId, "555"); // canonical numeric id
       assert.equal(stored.externalNumber, "#TST555");
     });
   });
@@ -424,7 +424,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       assert.equal(calls, 1);
 
       const again = await svc.pushOrderToShopify(as(admin, Role.ADMIN), created.order.id);
-      assert.deepEqual(again, { status: "already_linked", shopifyOrderId: "gid://shopify/Order/1", shopifyOrderName: "#TST1" });
+      assert.deepEqual(again, { status: "already_linked", shopifyOrderId: "1", shopifyOrderName: "#TST1" });
       assert.equal(calls, 1, "Shopify was never called a second time");
     });
   });

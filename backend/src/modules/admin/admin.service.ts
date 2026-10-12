@@ -2,12 +2,17 @@ import { prisma } from "@/lib/prisma.js";
 import { hashPassword } from "@/lib/password.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { Role, UserStatus } from "../../../generated/prisma/enums.js";
+import { Role, UserStatus, GroupStatus } from "../../../generated/prisma/enums.js";
 import type {
   CreateManagerBody,
   CreateSalespersonBody,
   UpdateManagerBody,
   UpdateSalespersonBody,
+  CreateHrBody,
+  CreateGroupBody,
+  UpdateGroupBody,
+  AddSalespersonBody,
+  AddExistingMemberBody,
 } from "./admin.types.js";
 
 function toPublicUser(user: { id: string; name: string; username: string; phone: string | null; role: string; status: string }) {
@@ -194,6 +199,206 @@ class AdminService {
     });
 
     return toPublicUser(salesperson);
+  }
+
+  async createHr(data: CreateHrBody) {
+    const existing = await prisma.user.findUnique({ where: { username: data.username } });
+    if (existing) {
+      throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+    }
+
+    const passwordHash = await hashPassword(data.password);
+
+    const hr = await prisma.user.create({
+      data: {
+        name: data.name,
+        username: data.username,
+        phone: data.phone,
+        passwordHash,
+        role: Role.HR,
+        status: UserStatus.ACTIVE,
+      },
+    });
+
+    return toPublicUser(hr);
+  }
+
+  async listHr() {
+    const hrUsers = await prisma.user.findMany({
+      where: { role: Role.HR },
+      orderBy: { createdAt: "desc" },
+    });
+    return hrUsers.map(toPublicUser);
+  }
+
+  // Org-wide group (team) management. Unlike manager.service's getOwnedGroup,
+  // this never checks who manages the group — admin/HR can act on any of them.
+  private async getGroupOrThrow(groupId: string) {
+    const group = await prisma.group.findUnique({ where: { id: groupId } });
+    if (!group) {
+      throw new ApiError("Group not found", STATUS_CODES.NOT_FOUND);
+    }
+    return group;
+  }
+
+  async createGroup(data: CreateGroupBody) {
+    const manager = await this.getManagerOrThrow(data.managerId);
+    if (manager.status !== UserStatus.ACTIVE) {
+      throw new ApiError("Manager is not active", STATUS_CODES.BAD_REQUEST);
+    }
+
+    return prisma.group.create({
+      data: {
+        name: data.name,
+        description: data.description,
+        managerId: data.managerId,
+        status: GroupStatus.ACTIVE,
+      },
+    });
+  }
+
+  async listGroups() {
+    return prisma.group.findMany({
+      include: {
+        manager: { select: { id: true, name: true, username: true } },
+        members: {
+          where: { isActive: true },
+          include: { user: { select: { id: true, name: true, username: true, phone: true, status: true } } },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  }
+
+  async getGroupById(groupId: string) {
+    await this.getGroupOrThrow(groupId);
+
+    return prisma.group.findUnique({
+      where: { id: groupId },
+      include: {
+        manager: { select: { id: true, name: true, username: true } },
+        members: {
+          where: { isActive: true },
+          include: { user: { select: { id: true, name: true, username: true, phone: true, status: true } } },
+        },
+      },
+    });
+  }
+
+  async updateGroup(groupId: string, data: UpdateGroupBody) {
+    await this.getGroupOrThrow(groupId);
+
+    if (data.managerId) {
+      const manager = await this.getManagerOrThrow(data.managerId);
+      if (manager.status !== UserStatus.ACTIVE) {
+        throw new ApiError("Manager is not active", STATUS_CODES.BAD_REQUEST);
+      }
+    }
+
+    return prisma.group.update({
+      where: { id: groupId },
+      data: {
+        name: data.name,
+        description: data.description,
+        status: data.status,
+        managerId: data.managerId,
+      },
+    });
+  }
+
+  async deleteGroup(groupId: string) {
+    await this.getGroupOrThrow(groupId);
+
+    return prisma.group.update({
+      where: { id: groupId },
+      data: { status: GroupStatus.INACTIVE },
+    });
+  }
+
+  async addNewSalesperson(groupId: string, adminId: string, data: AddSalespersonBody) {
+    const group = await this.getGroupOrThrow(groupId);
+
+    const existing = await prisma.user.findUnique({ where: { username: data.username } });
+    if (existing) {
+      throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+    }
+
+    const passwordHash = await hashPassword(data.password);
+
+    const salesperson = await prisma.user.create({
+      data: {
+        name: data.name,
+        username: data.username,
+        phone: data.phone,
+        passwordHash,
+        role: Role.SALESPERSON,
+        status: UserStatus.ACTIVE,
+        reportingManagerId: group.managerId,
+        createdById: adminId,
+      },
+    });
+
+    await prisma.groupMember.create({
+      data: { groupId: group.id, userId: salesperson.id, joinedAt: new Date(), isActive: true },
+    });
+
+    return toPublicUser(salesperson);
+  }
+
+  async addExistingSalesperson(groupId: string, data: AddExistingMemberBody) {
+    const group = await this.getGroupOrThrow(groupId);
+
+    const user = await this.getSalespersonOrThrow(data.userId);
+
+    const existingMembership = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId: group.id, userId: user.id } },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      if (existingMembership) {
+        if (existingMembership.isActive) {
+          throw new ApiError("Salesperson already in group", STATUS_CODES.CONFLICT);
+        }
+        await tx.groupMember.update({
+          where: { id: existingMembership.id },
+          data: { isActive: true, joinedAt: new Date() },
+        });
+      } else {
+        await tx.groupMember.create({
+          data: { groupId: group.id, userId: user.id, joinedAt: new Date(), isActive: true },
+        });
+      }
+
+      if (user.reportingManagerId !== group.managerId) {
+        // Moving a salesperson into a group owned by a different manager hands
+        // visibility to that manager — the old manager loses this salesperson
+        // entirely, including any group they'd already placed them in.
+        await tx.user.update({ where: { id: user.id }, data: { reportingManagerId: group.managerId } });
+        await tx.groupMember.updateMany({
+          where: { userId: user.id, isActive: true, group: { managerId: { not: group.managerId } } },
+          data: { isActive: false },
+        });
+      }
+    });
+
+    return toPublicUser(user);
+  }
+
+  async removeSalesperson(groupId: string, userId: string) {
+    const group = await this.getGroupOrThrow(groupId);
+
+    const membership = await prisma.groupMember.findUnique({
+      where: { groupId_userId: { groupId: group.id, userId } },
+    });
+
+    if (!membership || !membership.isActive) {
+      throw new ApiError("Salesperson not found in this group", STATUS_CODES.NOT_FOUND);
+    }
+
+    await prisma.groupMember.update({
+      where: { id: membership.id },
+      data: { isActive: false },
+    });
   }
 }
 

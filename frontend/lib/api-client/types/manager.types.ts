@@ -25,55 +25,6 @@ export interface Group {
   members: GroupMember[];
 }
 
-export interface CreateGroupPayload {
-  name: string;
-  description?: string;
-}
-
-export interface AddSalespersonPayload {
-  name: string;
-  username: string;
-  password: string;
-  phone: string;
-}
-
-export interface CreateSalespersonPayload extends AddSalespersonPayload {
-  groupId: string;
-}
-
-export interface SalespersonUser {
-  id: string;
-  name: string;
-  username: string;
-  phone: string | null;
-  role: "SALESPERSON";
-  status: string;
-}
-
-export interface AddExistingMemberPayload {
-  userId: string;
-}
-
-export interface UpdateGroupPayload {
-  name?: string;
-  description?: string;
-  status?: "ACTIVE" | "INACTIVE";
-}
-
-export interface UpdateSalespersonPayload {
-  name?: string;
-  phone?: string;
-  status?: "ACTIVE" | "INACTIVE";
-}
-
-export interface ResetPasswordPayload {
-  password: string;
-}
-
-export interface SalespersonWithGroup extends SalespersonUser {
-  currentGroup: { id: string; name: string } | null;
-}
-
 export interface MySalesperson {
   id: string;
   name: string;

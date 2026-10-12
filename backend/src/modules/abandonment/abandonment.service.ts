@@ -15,6 +15,7 @@ import type {
   AbandonmentListResult,
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
+  BulkUpdateLeadStatusBody,
   CreateRecoveryActionBody,
   ListAbandonmentsQuery,
   RecoveryActionItem,
@@ -84,7 +85,7 @@ class AbandonmentService {
   // `db` and `leadService` default to the real ones; tests pass a rolled-back transaction and a recording stub.
   constructor(
     private readonly db: DbClient = prisma,
-    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons"> = new LeadService(),
+    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons" | "bulkUpdateStatus"> = new LeadService(),
   ) {}
 
   // Same assignment-based scoping lead.service.ts's buildScopeWhere uses - a manager sees abandoned
@@ -351,6 +352,19 @@ class AbandonmentService {
       salespersonId: body.salespersonId,
       salespersonIds: body.salespersonIds,
     });
+  }
+
+  // Admin-only, no scope filter - same as bulkAssignManager above - since this route is ADMIN-only.
+  async bulkUpdateLeadStatus(user: AuthUser, body: BulkUpdateLeadStatusBody) {
+    const abandonments = await this.db.abandonment.findMany({
+      where: { id: { in: body.abandonmentIds } },
+      select: { id: true, leadId: true },
+    });
+    if (abandonments.length !== body.abandonmentIds.length) {
+      throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
+    }
+    const leadIds = [...new Set(abandonments.map((a) => a.leadId))];
+    return this.leadService.bulkUpdateStatus(user, { leadIds, workingStatus: body.workingStatus, followUpAt: body.followUpAt });
   }
 }
 

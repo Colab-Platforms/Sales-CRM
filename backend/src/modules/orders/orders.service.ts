@@ -10,7 +10,8 @@ import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
 import { ShopifyClient } from "../shopify/shopify.client.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
-import { fromCents, toCents } from "../shopify/shopify.money.js";
+import { fromCents, normalizeShopifyOrderId, toCents } from "../shopify/shopify.money.js";
+import { toShopifyOrderGid } from "../shopify/shopify.orders.write.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
 import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
@@ -30,6 +31,8 @@ import {
   derivePaymentMode,
   derivePaymentStatus,
   fullName,
+  orderReadWhere,
+  orderVisibilityScope,
   scopedOrderWhere,
 } from "./orders.filters.js";
 import {
@@ -76,13 +79,14 @@ const shopifyLiveOrderCache = new Map<string, { value: ShopifyLiveOrderResult; e
 async function fetchShopifyLiveOrder(externalSource: string | null, externalId: string | null): Promise<ShopifyLiveOrderResult> {
   if (externalSource !== "SHOPIFY" || !externalId) return { order: null };
 
-  const cached = shopifyLiveOrderCache.get(externalId);
+  const cacheKey = normalizeShopifyOrderId(externalId);
+  const cached = shopifyLiveOrderCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
   let result: ShopifyLiveOrderResult;
   try {
     const client = new ShopifyClient(loadShopifyConfig());
-    const order = await fetchShopifyOrder(client, `gid://shopify/Order/${externalId}`);
+    const order = await fetchShopifyOrder(client, toShopifyOrderGid(externalId));
     result = { order };
   } catch (error) {
     result = {
@@ -91,7 +95,7 @@ async function fetchShopifyLiveOrder(externalSource: string | null, externalId: 
     };
   }
 
-  shopifyLiveOrderCache.set(externalId, { value: result, expiresAt: Date.now() + SHOPIFY_LIVE_ORDER_TTL_MS });
+  shopifyLiveOrderCache.set(cacheKey, { value: result, expiresAt: Date.now() + SHOPIFY_LIVE_ORDER_TTL_MS });
   return result;
 }
 
@@ -225,7 +229,7 @@ class OrdersService {
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildOrderWhere(query, leadScope);
+    const where = buildOrderWhere(query, orderVisibilityScope(user.role, leadScope));
 
     const [totalItems, rows] = await Promise.all([
       this.db.order.count({ where }),
@@ -272,10 +276,11 @@ class OrdersService {
     };
   }
 
-  async getOrder(user: AuthUser, id: string): Promise<OrderDetail> {
-    const leadScope = await getLeadScope(user, this.db);
+  async getOrder(user: AuthUser, id: string, opts: { approverScope?: boolean } = {}): Promise<OrderDetail> {
+    const leadScope = opts.approverScope ? {} : await getLeadScope(user, this.db);
+    // orderReadWhere: every order is readable by admin, manager and salesperson, whichever team it belongs to (reading only; actions keep their own scope).
     const order = await this.db.order.findFirst({
-      where: scopedOrderWhere(id, leadScope),
+      where: orderReadWhere(user, id, leadScope),
       select: DETAIL_SELECT,
     });
 
@@ -774,7 +779,8 @@ class OrdersService {
       // pushes can never both win and create two Shopify orders for this one CRM order.
       const { count } = await this.db.order.updateMany({
         where: { id: orderId, externalId: null },
-        data: { externalSource: "SHOPIFY", externalId: result.shopifyOrderId, externalNumber: result.shopifyOrderName, externalUpdatedAt: new Date() },
+        // The canonical numeric id (what every Shopify-synced order holds), not the GID orderCreate returns - so the live views and the sync find this row.
+        data: { externalSource: "SHOPIFY", externalId: normalizeShopifyOrderId(result.shopifyOrderId), externalNumber: result.shopifyOrderName, externalUpdatedAt: new Date() },
       });
       if (count === 0) {
         // Lost a race to a concurrent push that already linked it - report that one, not a phantom second order.
@@ -816,8 +822,9 @@ class OrdersService {
   // real refund is actually performed - see cashfree.apply.ts).
   private static readonly retryingCancellations = new Set<string>();
 
-  async cancelOrder(user: AuthUser, orderId: string, input: CancelOrderInput): Promise<CancelOrderResult> {
-    const leadScope = await getLeadScope(user, this.db);
+  async cancelOrder(user: AuthUser, orderId: string, input: CancelOrderInput, opts: { approverScope?: boolean } = {}): Promise<CancelOrderResult> {
+    // approverScope: the refund approval (manager/admin only, decided in RefundsService.approve) cancels the order whichever team it belongs to.
+    const leadScope = opts.approverScope ? {} : await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({
       where: scopedOrderWhere(orderId, leadScope),
       select: { id: true, leadId: true, status: true, externalId: true, metadata: true, payments: { select: { id: true, status: true, externalSource: true, failureReason: true } } },
@@ -833,7 +840,7 @@ class OrdersService {
 
     // Nothing left to do: already cancelled, Shopify not in a failed state, and no Cashfree link still open.
     if (alreadyCancelled && priorCancellation?.status !== "failed" && openLinks.length === 0) {
-      return { order: await this.getOrder(user, orderId), shopify: priorShopify, paymentLink: summarizePaymentLink(order.payments, priorLinkCancellation), alreadyCancelled: true };
+      return { order: await this.getOrder(user, orderId, opts), shopify: priorShopify, paymentLink: summarizePaymentLink(order.payments, priorLinkCancellation), alreadyCancelled: true };
     }
 
     // A retry (the order is already cancelled) is not protected by the conditional status write below, so two
@@ -841,7 +848,7 @@ class OrdersService {
     if (alreadyCancelled) {
       if (OrdersService.retryingCancellations.has(orderId)) {
         return {
-          order: await this.getOrder(user, orderId),
+          order: await this.getOrder(user, orderId, opts),
           shopify: priorShopify,
           paymentLink: openLinks.length ? { status: "failed", reason: "Another cancellation of this order is already in progress." } : summarizePaymentLink(order.payments, priorLinkCancellation),
           alreadyCancelled: true,
@@ -867,7 +874,7 @@ class OrdersService {
         if (!cancelledNow) {
           // Lost the race to a concurrent cancel that is already handling Shopify, Cashfree and the audit event.
           return {
-            order: await this.getOrder(user, orderId),
+            order: await this.getOrder(user, orderId, opts),
             shopify: { status: order.externalId ? "failed" : "not_linked", reason: order.externalId ? "Another cancellation of this order is already in progress." : undefined },
             paymentLink: openLinks.length ? { status: "failed", reason: "Another cancellation of this order is already in progress." } : { status: "none" },
             alreadyCancelled: true,
@@ -941,7 +948,7 @@ class OrdersService {
         });
       }
 
-      return { order: await this.getOrder(user, orderId), shopify, paymentLink, alreadyCancelled };
+      return { order: await this.getOrder(user, orderId, opts), shopify, paymentLink, alreadyCancelled };
     } finally {
       if (alreadyCancelled) OrdersService.retryingCancellations.delete(orderId);
     }
@@ -958,6 +965,9 @@ class OrdersService {
     if (order.status !== "CANCELLED") {
       return { order: await this.getOrder(user, orderId), restoredStatus: order.status, alreadyActive: true };
     }
+    // A refund approved for this order is waiting for / going through execution on the premise that the order is cancelled: reactivating it would contradict that.
+    const approvedRefund = await this.db.refundRequest.findFirst({ where: { orderId, status: "APPROVED" }, select: { id: true } });
+    if (approvedRefund) throw new ApiError("A refund has been approved for this order, so its cancellation can not be reverted.", STATUS_CODES.CONFLICT);
 
     const meta = (order.metadata as Record<string, unknown> | null) ?? {};
     const previous = meta.preCancelStatus;
@@ -997,7 +1007,7 @@ class OrdersService {
   async getStatusHistory(user: AuthUser, id: string): Promise<OrderStatusHistory> {
     const leadScope = await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({
-      where: scopedOrderWhere(id, leadScope),
+      where: orderReadWhere(user, id, leadScope),
       select: {
         id: true,
         orderNumber: true,

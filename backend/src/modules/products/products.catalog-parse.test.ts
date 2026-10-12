@@ -72,3 +72,23 @@ describe("Shiprocket catalog parsing", () => {
     assert.equal(csv, 'row,sku,product_name,status,reason\n3,A,"Tea, ""Big""",error,"bad, value"\n');
   });
 });
+
+// Rows copied verbatim from the real Shiprocket export (export_product2026_10_06_17_46_01230): what the CRM may and may not take from them.
+describe("real catalog export rows", () => {
+  const rec = (sku: string, weight: string, dims: string, name: string) => ({ masterskucode: sku, skucode: sku, channelskucode: sku, weight, dimensions: dims, productname: name, channelname: "Aayush Wellness (Shopify)" });
+  const ok = (r: Record<string, string>) => { const x = parseCatalogRow(r); assert.equal(x.ok, true); return (x as { ok: true; row: { weightKg: number | null; dimensions: unknown } }).row; };
+  it("a recorded variant weight is kept per variant (0.120 kg for Calcium+ Pack Of 1, with its 20x15x2 cm)", () => {
+    const row = ok(rec("AW-CV-TB-30", "0.120", "20.000x15.000x2.000", "Calcium+ Vitamins Tablets - Pack Of 1"));
+    assert.equal(row.weightKg, 0.12);
+    assert.deepEqual(row.dimensions, { lengthCm: 20, widthCm: 15, heightCm: 2 });
+  });
+  it("0.000 and a blank weight mean NOT RECORDED - never a weightless parcel, never a guess from the Pack Of 1 row", () => {
+    assert.equal(ok(rec("AW-BF-CP-60", "0.000", "0.000x0.000x0.000", "Brain Fuel Capsules - Pack Of 2")).weightKg, null);
+    assert.equal(ok(rec("AW-BF-CP-90", "", "0.000x0.000x0.000", "Brain Fuel Capsules - Pack Of 3")).weightKg, null);
+  });
+  it("a row can carry dimensions without a weight (Calcium+ Pack Of 2): only the dimensions are taken", () => {
+    const row = ok(rec("AW-CV-TB-60", "0.000", "20.000x15.000x2.000", "Calcium+ Vitamins Tablets - Pack Of 2"));
+    assert.equal(row.weightKg, null);
+    assert.deepEqual(row.dimensions, { lengthCm: 20, widthCm: 15, heightCm: 2 });
+  });
+});

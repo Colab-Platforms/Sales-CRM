@@ -22,9 +22,11 @@ import {
   Truck,
   Plug,
   Phone,
+  Timer,
   Settings,
   AlertTriangle,
   RotateCcw,
+  LifeBuoy,
   ChevronRight,
   MessagesSquare,
   PhoneIncoming,
@@ -47,6 +49,7 @@ import {
 } from "@/components/ui/sidebar";
 import { NavUser } from "@/components/nav-user";
 import { PendingRefundBadge } from "@/components/refunds/pending-refund-badge";
+import { OpenTicketBadge } from "@/components/tickets/open-ticket-badge";
 import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
@@ -241,6 +244,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Administration",
       items: [
+        { title: "Support Tickets", href: "/dashboard/tickets", icon: LifeBuoy },
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
       ],
     },
@@ -262,6 +266,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/salespersons",
           icon: Contact,
         },
+        { title: "Attendance", href: "/dashboard/attendance", icon: Timer },
       ],
     },
     {
@@ -346,6 +351,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Administration",
       items: [
+        { title: "Support Tickets", href: "/dashboard/tickets", icon: LifeBuoy },
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
       ],
     },
@@ -362,7 +368,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Organization",
       items: [
         { title: "Users", href: "/dashboard/users", icon: UserCog },
-        { title: "Groups", icon: Building2 },
+        { title: "Groups", href: "/dashboard/groups", icon: Building2 },
+        { title: "Attendance", href: "/dashboard/attendance", icon: Timer },
         { title: "Sources", href: "/dashboard/sources", icon: Plug },
         {
           title: "Virtual Numbers",
@@ -453,7 +460,25 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Administration",
       items: [
+        { title: "Support Tickets", href: "/dashboard/tickets", icon: LifeBuoy },
         { title: "Audit Trail", href: "/dashboard/audit", icon: History },
+      ],
+    },
+  ],
+
+  // HR only handles team/salesperson management — nothing else is exposed.
+  HR: [
+    {
+      label: "Overview",
+      items: [
+        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "Organization",
+      items: [
+        { title: "Users", href: "/dashboard/staff", icon: UserCog },
+        { title: "Teams", href: "/dashboard/groups", icon: Building2 },
       ],
     },
   ],
@@ -469,9 +494,17 @@ function isActivePath(pathname: string, href: string, exact = false) {
  *  automatically whenever the current route is one of its children (covers both a fresh page load/
  *  refresh on a child route, and a client-side navigation into one while the sidebar stays mounted),
  *  and otherwise freely toggled by clicking the parent row. */
-function CollapsibleNavItem({ item, pathname }: { item: NavItem; pathname: string }) {
+function CollapsibleNavItem({
+  item,
+  pathname,
+}: {
+  item: NavItem;
+  pathname: string;
+}) {
   const children = item.children ?? [];
-  const hasActiveChild = children.some((child) => child.href && isActivePath(pathname, child.href, child.exact));
+  const hasActiveChild = children.some(
+    (child) => child.href && isActivePath(pathname, child.href, child.exact),
+  );
   const [open, setOpen] = useState(hasActiveChild);
 
   useEffect(() => {
@@ -491,14 +524,22 @@ function CollapsibleNavItem({ item, pathname }: { item: NavItem; pathname: strin
       >
         <item.icon />
         <span>{item.title}</span>
-        <ChevronRight className={cn("ml-auto transition-transform duration-200", open && "rotate-90")} />
+        <ChevronRight
+          className={cn(
+            "ml-auto transition-transform duration-200",
+            open && "rotate-90",
+          )}
+        />
       </SidebarMenuButton>
       {open ? (
         <SidebarMenuSub>
           {children.map((child) =>
             child.href ? (
               <SidebarMenuSubItem key={child.title}>
-                <SidebarMenuSubButton render={<Link href={child.href} />} isActive={isActivePath(pathname, child.href, child.exact)}>
+                <SidebarMenuSubButton
+                  render={<Link href={child.href} />}
+                  isActive={isActivePath(pathname, child.href, child.exact)}
+                >
                   <child.icon />
                   <span>{child.title}</span>
                 </SidebarMenuSubButton>
@@ -547,7 +588,11 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
               <SidebarMenu>
                 {section.items.map((item) =>
                   item.children ? (
-                    <CollapsibleNavItem key={item.title} item={item} pathname={pathname} />
+                    <CollapsibleNavItem
+                      key={item.title}
+                      item={item}
+                      pathname={pathname}
+                    />
                   ) : (
                     <SidebarMenuItem key={item.title}>
                       {item.href ? (
@@ -560,7 +605,12 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
                             <item.icon />
                             <span>{item.title}</span>
                           </SidebarMenuButton>
-                          {item.href === "/dashboard/refunds" ? <PendingRefundBadge /> : null}
+                          {item.href === "/dashboard/refunds" ? (
+                            <PendingRefundBadge />
+                          ) : null}
+                          {item.href === "/dashboard/tickets" ? (
+                            <OpenTicketBadge />
+                          ) : null}
                         </>
                       ) : (
                         <>

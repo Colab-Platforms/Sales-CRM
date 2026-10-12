@@ -6,6 +6,7 @@ import AbandonmentService from "./abandonment.service.js";
 import {
   validateBulkAssignManager,
   validateBulkAssignSalesperson,
+  validateBulkUpdateLeadStatus,
   validateCreateRecoveryAction,
   validateIdParams,
   validateLeadIdParams,
@@ -106,6 +107,16 @@ export const bulkAssignSalesperson = async (req: AuthRequest, res: Response): Pr
     const { error, value } = validateBulkAssignSalesperson(req.body);
     if (error) return void bad(res, error.message);
     sendResponse(res, true, await service.bulkAssignSalesperson(req.user!, value), "Abandoned leads assigned to salesperson successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const bulkUpdateLeadStatus = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateBulkUpdateLeadStatus(req.body);
+    if (error) return void bad(res, error.message);
+    sendResponse(res, true, await service.bulkUpdateLeadStatus(req.user!, value), "Lead status updated successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

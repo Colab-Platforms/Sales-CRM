@@ -1,15 +1,24 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useDashboard } from "@/hooks/useDashboard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SalespersonDashboardView } from "@/components/dashboard/salesperson-dashboard";
-import { ManagerDashboardView } from "@/components/dashboard/manager-dashboard";
+import { ManagerSalesDashboard } from "@/components/manager-dashboard/manager-sales-dashboard";
 import { AdminDashboardView } from "@/components/dashboard/admin-dashboard";
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboard();
+  const router = useRouter();
 
-  if (isLoading) {
+  useEffect(() => {
+    if (data?.role === "HR") {
+      router.replace("/dashboard/groups");
+    }
+  }, [data, router]);
+
+  if (isLoading || data?.role === "HR") {
     return (
       <div className="space-y-6">
         <div className="space-y-2">
@@ -37,7 +46,7 @@ export default function DashboardPage() {
   return (
     <>
       {data.role === "SALESPERSON" && <SalespersonDashboardView data={data} />}
-      {data.role === "MANAGER" && <ManagerDashboardView data={data} />}
+      {data.role === "MANAGER" && <ManagerSalesDashboard />}
       {data.role === "ADMIN" && <AdminDashboardView data={data} />}
     </>
   );

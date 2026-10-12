@@ -261,12 +261,12 @@ describe("payment link and conversion", () => {
 });
 
 describe("permissions", () => {
-  it("a salesperson cannot touch another salesperson's order (404, nothing changed); an admin can", async () => {
+  it("a salesperson can READ another salesperson's upgrade panel but cannot ACT on the order (404, nothing changed); an admin can", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner);
       const stranger = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.SALESPERSON } });
       const s = as(stranger, Role.SALESPERSON);
-      await assert.rejects(() => t.svc.getUpgrade(s, t.order.id), (e: any) => e.statusCode === 404);
+      assert.equal((await t.svc.getUpgrade(s, t.order.id)).offer, null); // reading is company-wide
       await assert.rejects(() => t.svc.createOffer(s, t.order.id, { discountType: "FIXED", discountValue: "100" }), (e: any) => e.statusCode === 404);
       assert.equal((await t.svc.getUpgrade(t.user, t.order.id)).offer, null);
       const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });

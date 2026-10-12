@@ -1,18 +1,7 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type {
-  CreateGroupPayload,
-  AddSalespersonPayload,
-  CreateSalespersonPayload,
-  AddExistingMemberPayload,
-  Group,
-  MySalesperson,
-  ResetPasswordPayload,
-  SalespersonUser,
-  SalespersonWithGroup,
-  UpdateGroupPayload,
-  UpdateSalespersonPayload,
-} from "../types/manager.types";
+import type { Group, MySalesperson } from "../types/manager.types";
+import type { AnalyticsQuery, ManagerAnalytics, SalespersonAnalytics } from "../types/manager-analytics.types";
 
 export const managerApi = {
   async listGroups(): Promise<Group[]> {
@@ -20,70 +9,33 @@ export const managerApi = {
     return res.data.data;
   },
 
-  async listSalespersons(): Promise<SalespersonWithGroup[]> {
-    const res = await apiClient.get<ApiEnvelope<SalespersonWithGroup[]>>("/manager/salespersons");
-    return res.data.data;
-  },
-
   async listMySalespersons(): Promise<MySalesperson[]> {
     const res = await apiClient.get<ApiEnvelope<MySalesperson[]>>("/manager/salespersons/mine");
     return res.data.data;
   },
+};
 
-  async createSalesperson(payload: CreateSalespersonPayload): Promise<SalespersonUser> {
-    const res = await apiClient.post<ApiEnvelope<SalespersonUser>>("/manager/salespersons", payload);
+function analyticsParams(q: AnalyticsQuery) {
+  return {
+    from: q.from,
+    to: q.to,
+    callStatus: q.callStatus,
+    leadStatus: q.leadStatus,
+    tzOffsetMinutes: q.tzOffsetMinutes,
+    ...(q.salespersonId ? { salespersonId: q.salespersonId } : {}),
+  };
+}
+
+export const managerAnalyticsApi = {
+  async overview(q: AnalyticsQuery): Promise<ManagerAnalytics> {
+    const res = await apiClient.get<ApiEnvelope<ManagerAnalytics>>("/manager/analytics", { params: analyticsParams(q) });
     return res.data.data;
   },
 
-  async createGroup(payload: CreateGroupPayload): Promise<Group> {
-    const res = await apiClient.post<ApiEnvelope<Group>>("/manager/groups", payload);
+  async salesperson(id: string, q: AnalyticsQuery): Promise<SalespersonAnalytics> {
+    const res = await apiClient.get<ApiEnvelope<SalespersonAnalytics>>(`/manager/analytics/salespersons/${id}`, {
+      params: analyticsParams({ ...q, salespersonId: undefined }),
+    });
     return res.data.data;
-  },
-
-  async updateGroup(groupId: string, payload: UpdateGroupPayload): Promise<Group> {
-    const res = await apiClient.patch<ApiEnvelope<Group>>(`/manager/groups/${groupId}`, payload);
-    return res.data.data;
-  },
-
-  async deleteGroup(groupId: string): Promise<Group> {
-    const res = await apiClient.delete<ApiEnvelope<Group>>(`/manager/groups/${groupId}`);
-    return res.data.data;
-  },
-
-  async addSalesperson(groupId: string, payload: AddSalespersonPayload): Promise<SalespersonUser> {
-    const res = await apiClient.post<ApiEnvelope<SalespersonUser>>(`/manager/groups/${groupId}/members`, payload);
-    return res.data.data;
-  },
-
-  async addExistingSalesperson(groupId: string, payload: AddExistingMemberPayload): Promise<SalespersonUser> {
-    const res = await apiClient.post<ApiEnvelope<SalespersonUser>>(
-      `/manager/groups/${groupId}/members/existing`,
-      payload,
-    );
-    return res.data.data;
-  },
-
-  async updateSalesperson(groupId: string, userId: string, payload: UpdateSalespersonPayload): Promise<SalespersonUser> {
-    const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(
-      `/manager/groups/${groupId}/members/${userId}`,
-      payload,
-    );
-    return res.data.data;
-  },
-
-  async resetSalespersonPassword(
-    groupId: string,
-    userId: string,
-    payload: ResetPasswordPayload,
-  ): Promise<SalespersonUser> {
-    const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(
-      `/manager/groups/${groupId}/members/${userId}/password`,
-      payload,
-    );
-    return res.data.data;
-  },
-
-  async removeSalesperson(groupId: string, userId: string): Promise<void> {
-    await apiClient.delete(`/manager/groups/${groupId}/members/${userId}`);
   },
 };

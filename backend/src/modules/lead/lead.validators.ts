@@ -6,6 +6,7 @@ import type {
   ListLeadsQuery,
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
+  BulkUpdateStatusBody,
   ImportPreviewBody,
 } from "./lead.types.js";
 
@@ -82,6 +83,12 @@ const bulkAssignSalespersonSchema = z
     message: "salespersonId is required for manual assignment, salespersonIds is required for round robin",
   });
 
+const bulkUpdateStatusSchema = z.object({
+  leadIds: z.array(z.string().guid()).min(1, "No leads selected"),
+  workingStatus: workingStatusEnum,
+  followUpAt: z.string().datetime({ offset: true }).optional(),
+});
+
 const importPreviewSchema = z.object({
   columnMapping: z.record(z.string(), z.string()),
 });
@@ -98,6 +105,9 @@ export const validateBulkAssignManagerSchema = (body: unknown) =>
 
 export const validateBulkAssignSalespersonSchema = (body: unknown) =>
   validateSchema<BulkAssignSalespersonBody>(bulkAssignSalespersonSchema, body);
+
+export const validateBulkUpdateStatusSchema = (body: unknown) =>
+  validateSchema<BulkUpdateStatusBody>(bulkUpdateStatusSchema, body);
 
 export const validateImportPreviewSchema = (body: unknown) =>
   validateSchema<ImportPreviewBody>(importPreviewSchema, body);

@@ -10,6 +10,8 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { logger } from "@/utils/logger.js";
 import { advisoryLock, asRecord, safeMessage, type Db } from "../integrations/integrations.common.js";
 import { ShopifyClient } from "../shopify/shopify.client.js";
+import { fromCents, toCents } from "../shopify/shopify.money.js";
+import { computePaymentBreakdown } from "../orders/orders.filters.js";
 import { ShopifyConfigError, loadShopifyConfig } from "../shopify/shopify.config.js";
 import { markShopifyOrderPaid, ShopifyOrderMarkAsPaidError } from "../shopify/shopify.orders.write.js";
 import { reconcilePrepaidUpgrade, ShopifyReconcileError } from "../shopify/shopify.orders.reconcile.js";
@@ -19,6 +21,19 @@ import type { MessageItem } from "../whatsapp/whatsapp.order-message.js";
 
 const messageItems = (items: { productNameSnapshot: string; variantNameSnapshot: string | null; quantity: number }[]): MessageItem[] =>
   items.map((i) => ({ name: i.productNameSnapshot, variant: i.variantNameSnapshot, quantity: i.quantity }));
+
+/** What the CRM charged and collected for a CRM-discounted order, in the shape the Shopify reconciliation wants - or why that cannot be mirrored safely (Shopify is then left untouched). */
+export function crmDiscountFigures(order: { currency: string; subtotal: { toString(): string }; discountAmount: { toString(): string }; totalAmount: { toString(): string }; payments: { status: string; amount: { toString(): string }; refundedAmount: { toString(): string } | null }[] }):
+  | { originalAmount: string; discountAmount: string; prepaidAmount: string; currency: string }
+  | { problem: string } {
+  const subtotal = toCents(order.subtotal.toString());
+  const discount = toCents(order.discountAmount.toString());
+  const total = toCents(order.totalAmount.toString());
+  if (subtotal - discount !== total) return { problem: "The CRM total includes shipping, tax or other adjustments that Shopify was not sent, so the discount and payment were not mirrored to Shopify. Shopify was left unchanged." };
+  const breakdown = computePaymentBreakdown(order.payments.map((p) => ({ status: p.status as never, amount: p.amount.toString(), refundedAmount: p.refundedAmount ? p.refundedAmount.toString() : null })));
+  if (breakdown.paidCents !== total) return { problem: `The CRM collected ${fromCents(breakdown.paidCents)} but the order total is ${fromCents(total)}, so Shopify was left unchanged.` };
+  return { originalAmount: fromCents(subtotal), discountAmount: fromCents(discount), prepaidAmount: fromCents(total), currency: order.currency };
+}
 
 export const shopifyPaymentSyncLockKey = (orderId: string) => `shopify:payment-sync:${orderId}`;
 
@@ -42,7 +57,7 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
   const now = ctx.now ?? new Date();
   await advisoryLock(tx, shopifyPaymentSyncLockKey(orderId));
 
-  const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, leadId: true, orderNumber: true, externalSource: true, externalId: true, metadata: true } });
+  const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, leadId: true, orderNumber: true, currency: true, subtotal: true, discountAmount: true, totalAmount: true, externalSource: true, externalId: true, metadata: true, payments: { select: { status: true, amount: true, refundedAmount: true } } } });
   if (!order) return { status: "not_linked", reason: "Order not found" };
   if (order.externalSource !== "SHOPIFY" || !order.externalId) return { status: "not_linked", reason: "This order is not linked to a Shopify order." };
 
@@ -72,13 +87,24 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
     return { status: "failed", reason: "A prepaid upgrade is not completed for this order, so Shopify was left unchanged." };
   }
 
+  // An order the CRM itself discounted (WhatsApp Inbox / manual order: Order.metadata.discount | customDiscount) reaches Shopify at LIST price. Marking it paid would record
+  // the whole list price as received for a smaller collection, so it gets the same edit-then-pay reconciliation, for exactly what the CRM charged and collected.
+  const crmDiscount = !offer && Boolean(meta.discount || meta.customDiscount) && toCents(order.discountAmount.toString()) > 0 ? crmDiscountFigures(order) : null;
+  if (crmDiscount && "problem" in crmDiscount) {
+    await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "failed", failedAt: now.toISOString(), reason: crmDiscount.problem } } as Prisma.InputJsonValue } });
+    await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment sync failed (order ${order.orderNumber})`, description: crmDiscount.problem, metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNC_FAILED" } } });
+    return { status: "failed", reason: crmDiscount.problem };
+  }
+
   try {
     const result = upgrade
       ? await reconcilePrepaidUpgrade(client, order.externalId, { originalAmount: upgrade.originalAmount, discountAmount: upgrade.discountAmount, prepaidAmount: upgrade.prepaidAmount, currency: upgrade.currency, upgradeReference: order.orderNumber })
-      : await markShopifyOrderPaid(client, order.externalId);
-    const detail = upgrade ? { mode: "PREPAID_UPGRADE", upgradeId: upgrade.id, originalAmount: upgrade.originalAmount, discountAmount: upgrade.discountAmount, collectedAmount: upgrade.prepaidAmount, performed: (result as { performed?: string }).performed } : {};
+      : crmDiscount
+        ? await reconcilePrepaidUpgrade(client, order.externalId, { ...crmDiscount, upgradeReference: order.orderNumber, labels: { discount: `CRM discount (${order.orderNumber})`, payment: `Cashfree (CRM ${order.orderNumber})`, note: `CRM order ${order.orderNumber}` } })
+        : await markShopifyOrderPaid(client, order.externalId);
+    const detail = crmDiscount ? { mode: "CRM_DISCOUNT", originalAmount: crmDiscount.originalAmount, discountAmount: crmDiscount.discountAmount, collectedAmount: crmDiscount.prepaidAmount, performed: (result as { performed?: string }).performed } : upgrade ? { mode: "PREPAID_UPGRADE", upgradeId: upgrade.id, originalAmount: upgrade.originalAmount, discountAmount: upgrade.discountAmount, collectedAmount: upgrade.prepaidAmount, performed: (result as { performed?: string }).performed } : {};
     await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "synced", syncedAt: now.toISOString(), financialStatus: result.financialStatus, ...detail } } as Prisma.InputJsonValue } });
-    await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment synced (order ${order.orderNumber})`, description: upgrade ? `Shopify order edited for the ${upgrade.discountAmount} prepaid discount and ${upgrade.prepaidAmount} recorded as paid` : "Shopify order marked as paid", metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNCED", financialStatus: result.financialStatus, ...detail } } });
+    await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment synced (order ${order.orderNumber})`, description: crmDiscount ? `Shopify order edited for the ${crmDiscount.discountAmount} CRM discount and ${crmDiscount.prepaidAmount} recorded as paid` : upgrade ? `Shopify order edited for the ${upgrade.discountAmount} prepaid discount and ${upgrade.prepaidAmount} recorded as paid` : "Shopify order marked as paid", metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNCED", financialStatus: result.financialStatus, ...detail } } });
     return { status: "synced" };
   } catch (error) {
     const reason = error instanceof ShopifyOrderMarkAsPaidError || error instanceof ShopifyReconcileError ? safeMessage(error.message) : safeMessage(error instanceof Error ? error.message : String(error));

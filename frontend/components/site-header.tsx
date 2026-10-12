@@ -4,6 +4,10 @@ import { usePathname } from "next/navigation";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import { FollowUpBell } from "@/components/follow-ups/follow-up-bell";
+import {
+  ShiftTimer,
+  WorkStatusMenu,
+} from "@/components/attendance/work-status-widget";
 
 const SEGMENT_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
@@ -22,7 +26,11 @@ function labelFor(segment: string) {
  * The title used to be hardcoded, so every page read "Dashboard". It now
  * tracks the route and shows the trail for nested pages.
  */
-export function SiteHeader() {
+export function SiteHeader({
+  showFollowUps = true,
+}: {
+  showFollowUps?: boolean;
+}) {
   const pathname = usePathname();
   const segments = pathname.split("/").filter(Boolean);
   const trail = segments.map(labelFor);
@@ -42,8 +50,19 @@ export function SiteHeader() {
         ))}
         <span className="truncate font-bold capitalize">{current}</span>
       </nav>
-      <div className="ml-auto">
-        <FollowUpBell />
+      {/* Dead centre of the header on large screens; smaller screens get the compact timer on the right. */}
+      <div className="pointer-events-none absolute inset-x-0 top-1/2 hidden -translate-y-1/2 justify-center lg:flex">
+        <div className="pointer-events-auto flex items-center gap-3">
+          <WorkStatusMenu />
+          <ShiftTimer variant="center" />
+        </div>
+      </div>
+      <div className="ml-auto flex items-center gap-3">
+        <div className="flex items-center gap-3 lg:hidden">
+          <WorkStatusMenu />
+          <ShiftTimer variant="inline" />
+        </div>
+        {showFollowUps ? <FollowUpBell /> : null}
       </div>
     </header>
   );

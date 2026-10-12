@@ -3,10 +3,12 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import { triggerClickToCall } from "./callerdesk.client.js";
-import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType } from "../../../generated/prisma/enums.js";
+import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType, WorkStatus } from "../../../generated/prisma/enums.js";
 import { OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
 import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { enqueueTranscription } from "./calling.transcription.js";
+import { attendanceService } from "../attendance/attendance.service.js";
+import { ENDED_CALL_STATUSES } from "../attendance/attendance.constants.js";
 import type {
   CallerDeskWebhookPayload,
   ClickToCallResult,
@@ -32,7 +34,24 @@ const STATUS_MAP: Record<string, CallStatus> = {
   busy: CallStatus.BUSY,
   abandonment: CallStatus.NO_ANSWER,
   cancel: CallStatus.FAILED,
+  // Hangup-style values a live_call ping may carry when either side cuts the call. Unconfirmed
+  // guesses - the warn log in mapWebhookStatus prints the real string if one still slips through.
+  hangup: CallStatus.COMPLETED,
+  "customer hangup": CallStatus.COMPLETED,
+  "agent hangup": CallStatus.COMPLETED,
+  completed: CallStatus.COMPLETED,
+  disconnected: CallStatus.COMPLETED,
+  "no answer": CallStatus.NO_ANSWER,
+  noanswer: CallStatus.NO_ANSWER,
 };
+
+const TERMINAL_STATUSES: ReadonlySet<CallStatus> = new Set([
+  CallStatus.COMPLETED,
+  CallStatus.NO_ANSWER,
+  CallStatus.BUSY,
+  CallStatus.NOT_REACHABLE,
+  CallStatus.FAILED,
+]);
 
 // Fallback when the raw Status string doesn't match anything in STATUS_MAP. Only ever guesses a
 // *terminal* status (COMPLETED/FAILED) for the final call_report — never for a mid-call `live_call`
@@ -44,8 +63,14 @@ const STATUS_MAP: Record<string, CallStatus> = {
 // the update rather than guess.
 function mapWebhookStatus(status: string | undefined, isFinalReport: boolean, hasSignalOfConnection: boolean): CallStatus | null {
   if (status) {
-    const mapped = STATUS_MAP[status.trim().toLowerCase()];
+    const normalized = status.trim().toLowerCase();
+    const mapped = STATUS_MAP[normalized];
     if (mapped) return mapped;
+    // Real final-report values look like "cancel-Customer" (customer cut/never picked up).
+    // "cancel-Customer" / "cancel-Agent": someone hung up before any conversation - no answer either way.
+    if (isFinalReport && normalized.startsWith("cancel")) {
+      return hasSignalOfConnection ? CallStatus.COMPLETED : CallStatus.NO_ANSWER;
+    }
     logger.warn(`[callerdesk] unrecognized webhook Status="${status}" (${isFinalReport ? "call_report" : "live_call"})`);
   }
   if (!isFinalReport) return null;
@@ -175,6 +200,11 @@ class CallingService {
           description: `${agent.name} called ${lead.mobile} via ${virtualNumber.displayName ?? virtualNumber.number}`,
         },
       });
+
+      // Shift tracking must never break calling.
+      attendanceService
+        .setSystemStatus(agent.id, WorkStatus.ON_CALL)
+        .catch((e) => logger.error("[attendance] could not set ON_CALL", e));
 
       return { callId: updated.id, status: updated.status };
     } catch (error: any) {
@@ -319,11 +349,36 @@ class CallingService {
     return provided === expected;
   }
 
+  private async autoLogNoAnswer(callId: string, leadId: string, agentId: string): Promise<void> {
+    const outcome = await prisma.callOutcome.findFirst({ where: { code: "RINGING_NO_ANSWER", isActive: true } });
+    if (!outcome) return;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.call.update({ where: { id: callId }, data: { outcomeId: outcome.id } });
+      const newStatus = OUTCOME_LEAD_STATUS[outcome.code];
+      if (newStatus) await tx.lead.update({ where: { id: leadId }, data: { workingStatus: newStatus } });
+      await tx.activity.create({
+        data: {
+          leadId,
+          actorId: agentId,
+          type: ActivityType.STATUS_CHANGE,
+          referenceType: "CALL",
+          referenceId: callId,
+          title: `Call outcome: ${outcome.name}`,
+          description: "Logged automatically - call was not answered",
+        },
+      });
+    });
+  }
+
   async handleCallWebhook(payload: CallerDeskWebhookPayload): Promise<void> {
     // triggerClickToCall only gets `campid` back at dial time (no CallSid), so that's what
     // we stored as providerCallId — match on it first, falling back to CallSid in case a
     // future trigger response starts returning one instead.
-    const providerCallId = payload.campid ?? payload.CallSid;
+    // A live_call ping with an empty campid is the early "ringing the agent" event (it fires before
+    // the agent's leg picks up), so it must not match a call by CallSid and claim we're already
+    // dialing the customer. Only the final report may fall back to CallSid.
+    const providerCallId = payload.campid || (payload.type === "live_call" ? undefined : payload.CallSid);
     if (!providerCallId) {
       // Seen in real traffic for an early, pre-dial event that isn't about a call we've created yet -
       // harmless (the controller acks CallerDesk regardless), just not something to act on.
@@ -343,9 +398,20 @@ class CallingService {
     // on an older payload shape) is a mid-call ping and must never be allowed to guess COMPLETED/FAILED.
     const isFinalReport = payload.type !== "live_call";
     const durationSeconds = toSeconds(payload.CallDuration ?? payload.TalkDuration);
-    const status = mapWebhookStatus(payload.Status, isFinalReport, Boolean(durationSeconds) || Boolean(payload.CallRecordingUrl));
+    // CallDuration includes ring time (58s on a call nobody picked up); only TalkDuration proves the
+    // customer actually spoke. Recording URL is present even on unanswered calls, so it's no signal.
+    const talkSeconds = toSeconds(payload.TalkDuration);
+    const status = mapWebhookStatus(payload.Status, isFinalReport, Boolean(talkSeconds));
     if (status === null) {
       // An unrecognized live_call ping - nothing safe to record yet, wait for the next update.
+      return;
+    }
+
+    // Webhooks can arrive out of order: a late live_call "Picked" must never drag an already-ended
+    // call back to CONNECTED (the UI would show "On call…" forever). Only the final report may
+    // revise a terminal call, e.g. to attach the recording and duration.
+    if (!isFinalReport && TERMINAL_STATUSES.has(call.status)) {
+      logger.info(`[callerdesk] ignoring late live_call ${status} for already-ended call=${call.id} (${call.status})`);
       return;
     }
 
@@ -363,6 +429,19 @@ class CallingService {
         durationSeconds: durationSeconds ?? call.durationSeconds,
       },
     });
+
+    if (ENDED_CALL_STATUSES.has(status)) {
+      attendanceService
+        .restoreFromCall(call.agentId)
+        .catch((e) => logger.error("[attendance] could not restore status after call", e));
+    }
+
+    // Nobody spoke, so there's nothing for the salesperson to log: record "Ringing / no answer" for them.
+    if (isFinalReport && status === CallStatus.NO_ANSWER && !call.outcomeId) {
+      await this.autoLogNoAnswer(call.id, call.leadId, call.agentId).catch((e) =>
+        logger.error("[callerdesk] could not auto-log no-answer outcome", e)
+      );
+    }
 
     if (payload.CallRecordingUrl) {
       await prisma.callRecording.upsert({

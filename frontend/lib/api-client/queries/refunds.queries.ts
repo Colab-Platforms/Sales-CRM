@@ -9,7 +9,9 @@ export const refundsKeys = {
 };
 
 export const refundQueueQueryOptions = (params: RefundQueueParams) =>
-  queryOptions({ queryKey: refundsKeys.queue(params), queryFn: () => refundsApi.queue(params), staleTime: 10_000, placeholderData: keepPreviousData });
+  queryOptions({ queryKey: refundsKeys.queue(params), queryFn: () => refundsApi.queue(params), staleTime: 10_000, placeholderData: keepPreviousData,
+    // The approval queue is a live inbox: a request a telecaller submits while a manager/admin already has this page open must appear without a manual reload.
+    refetchInterval: 20_000, refetchOnWindowFocus: true });
 
 /** The sidebar badge: how many pending requests this approver could act on. Polled, since there is no push notification system. */
 export const pendingRefundCountQueryOptions = () =>

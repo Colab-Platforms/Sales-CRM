@@ -1,0 +1,1077 @@
+"use client";
+
+import { useState, type FormEvent } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { FolderPlus, KeyRound, UserPlus, Users } from "lucide-react";
+import { adminSalespersonsQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
+import {
+  useCreateAdminGroupMutation,
+  useCreateManagerMutation,
+  useCreateSalespersonMutation,
+  useDeactivateManagerMutation,
+  useResetManagerPasswordMutation,
+  useResetSalespersonPasswordMutation,
+  useUpdateManagerMutation,
+  useUpdateSalespersonMutation,
+} from "@/lib/api-client/mutations/admin.mutations";
+import { getErrorMessage } from "@/lib/api-client/client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { PasswordInput } from "@/components/ui/password-input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/page-header";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Skeleton } from "@/components/ui/skeleton";
+import type { ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
+
+interface AccountFieldErrors {
+  name?: string;
+  username?: string;
+  password?: string;
+  reportingManagerId?: string;
+}
+
+const USERNAME_PATTERN = /^[a-z0-9._-]{3,50}$/i;
+
+function validateAccountFields(
+  fields: { name: string; username: string; password: string; reportingManagerId?: string },
+  opts: { requireReportingManager: boolean },
+): AccountFieldErrors {
+  const errors: AccountFieldErrors = {};
+  if (fields.name.trim().length < 2) errors.name = "Name must be at least 2 characters.";
+  if (!USERNAME_PATTERN.test(fields.username.trim())) errors.username = "Use 3-50 letters, numbers, dots, underscores or hyphens.";
+  if (fields.password.length < 6) errors.password = "Password must be at least 6 characters.";
+  if (opts.requireReportingManager && !fields.reportingManagerId) {
+    errors.reportingManagerId = "Select a reporting manager.";
+  }
+  return errors;
+}
+
+function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
+  const createManager = useCreateManagerMutation();
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors = validateAccountFields({ name, username, password }, { requireReportingManager: false });
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    createManager.mutate(
+      { name, username, password, phone },
+      {
+        onSuccess: () => {
+          toast.success("Manager added successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Add New Manager</DialogTitle>
+        <DialogDescription>
+          Create a new manager account. They will be granted permissions to oversee sales teams and reps.
+        </DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-mgr-name">Full Name</Label>
+          <Input
+            id="staff-create-mgr-name"
+            placeholder="e.g. Sarah Connor"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, name: undefined }));
+            }}
+            required
+            autoFocus
+          />
+          {fieldErrors.name ? <p className="text-xs text-destructive">{fieldErrors.name}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-mgr-username">Username</Label>
+          <Input
+            id="staff-create-mgr-username"
+            type="text"
+            placeholder="sarah.connor_avatar"
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, username: undefined }));
+            }}
+            required
+          />
+          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-mgr-password">Password</Label>
+          <PasswordInput
+            id="staff-create-mgr-password"
+            placeholder="Enter a secure password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? <p className="text-xs text-destructive">{fieldErrors.password}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-mgr-phone">Phone Number</Label>
+          <Input
+            id="staff-create-mgr-phone"
+            type="tel"
+            required
+            placeholder="+1 (555) 000-0000"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </div>
+
+        {createManager.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createManager.error, "Failed to create manager.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={createManager.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createManager.isPending}>
+            {createManager.isPending ? "Adding Manager..." : "Add Manager"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function CreateSalespersonModalContent({ managers, onDone }: { managers: ManagerUser[]; onDone: () => void }) {
+  const createSalesperson = useCreateSalespersonMutation();
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [reportingManagerId, setReportingManagerId] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({});
+
+  const activeManagers = managers.filter((m) => m.status === "ACTIVE");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors = validateAccountFields(
+      { name, username, password, reportingManagerId },
+      { requireReportingManager: true },
+    );
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    createSalesperson.mutate(
+      { name, username, password, phone, reportingManagerId },
+      {
+        onSuccess: () => {
+          toast.success("Salesperson added successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Add New Salesperson</DialogTitle>
+        <DialogDescription>
+          Create a salesperson account and assign the manager they&apos;ll report to. Only that manager will be able
+          to see and add them to a team.
+        </DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-sp-name">Full Name</Label>
+          <Input
+            id="staff-create-sp-name"
+            placeholder="e.g. John Doe"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, name: undefined }));
+            }}
+            required
+            autoFocus
+          />
+          {fieldErrors.name ? <p className="text-xs text-destructive">{fieldErrors.name}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-sp-username">Username</Label>
+          <Input
+            id="staff-create-sp-username"
+            type="text"
+            placeholder="john.doe@company.com"
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, username: undefined }));
+            }}
+            required
+          />
+          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-sp-password">Password</Label>
+          <PasswordInput
+            id="staff-create-sp-password"
+            placeholder="Enter a secure password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? (
+            <p className="text-xs text-destructive">{fieldErrors.password}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">At least 6 characters.</p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-sp-phone">Phone Number</Label>
+          <Input
+            id="staff-create-sp-phone"
+            type="tel"
+            required
+            placeholder="+1 (555) 000-0000"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-create-sp-manager">Reporting Manager</Label>
+          <NativeSelect
+            id="staff-create-sp-manager"
+            value={reportingManagerId}
+            onChange={(e) => {
+              setReportingManagerId(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, reportingManagerId: undefined }));
+            }}
+            required
+          >
+            <option value="" disabled>
+              Select a manager
+            </option>
+            {activeManagers.map((manager) => (
+              <option key={manager.id} value={manager.id}>
+                {manager.name} ({manager.username})
+              </option>
+            ))}
+          </NativeSelect>
+          {fieldErrors.reportingManagerId ? (
+            <p className="text-xs text-destructive">{fieldErrors.reportingManagerId}</p>
+          ) : activeManagers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Add an active manager first.</p>
+          ) : null}
+        </div>
+
+        {createSalesperson.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createSalesperson.error, "Failed to create salesperson.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={createSalesperson.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createSalesperson.isPending || !reportingManagerId}>
+            {createSalesperson.isPending ? "Adding Salesperson..." : "Add Salesperson"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function CreateGroupModalContent({ managers, onDone }: { managers: ManagerUser[]; onDone: () => void }) {
+  const createGroup = useCreateAdminGroupMutation();
+  const activeManagers = managers.filter((m) => m.status === "ACTIVE");
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [managerId, setManagerId] = useState("");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    createGroup.mutate(
+      { name, description: description || undefined, managerId },
+      {
+        onSuccess: () => {
+          toast.success("Group created successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Create Group</DialogTitle>
+        <DialogDescription>Create a new team and assign the manager who will own it.</DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-group-name">Group Name</Label>
+          <Input
+            id="staff-group-name"
+            placeholder="e.g. North Region Sales"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="staff-group-description">Description</Label>
+            <span className="text-xs text-muted-foreground">Optional</span>
+          </div>
+          <Input
+            id="staff-group-description"
+            placeholder="e.g. Handles inbound leads for the north region"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+          />
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-group-manager">Manager</Label>
+          <NativeSelect
+            id="staff-group-manager"
+            value={managerId}
+            onChange={(e) => setManagerId(e.target.value)}
+            required
+          >
+            <option value="" disabled>
+              Select a manager
+            </option>
+            {activeManagers.map((manager) => (
+              <option key={manager.id} value={manager.id}>
+                {manager.name} ({manager.username})
+              </option>
+            ))}
+          </NativeSelect>
+          {activeManagers.length === 0 ? (
+            <p className="text-xs text-muted-foreground">Add an active manager first.</p>
+          ) : null}
+        </div>
+
+        {createGroup.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createGroup.error, "Failed to create group.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={createGroup.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createGroup.isPending || !managerId}>
+            {createGroup.isPending ? "Creating..." : "Create Group"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+interface PasswordFieldErrors {
+  password?: string;
+  confirmPassword?: string;
+}
+
+function ChangePasswordModalContent({
+  title,
+  description,
+  isPending,
+  error,
+  onSubmit,
+  onDone,
+}: {
+  title: string;
+  description: string;
+  isPending: boolean;
+  error: unknown;
+  onSubmit: (password: string, onSuccess: () => void) => void;
+  onDone: () => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<PasswordFieldErrors>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors: PasswordFieldErrors = {};
+    if (password.length < 6) errors.password = "Password must be at least 6 characters.";
+    if (password !== confirmPassword) errors.confirmPassword = "Passwords do not match.";
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    onSubmit(password, onDone);
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[420px]">
+      <DialogHeader>
+        <DialogTitle>{title}</DialogTitle>
+        <DialogDescription>{description}</DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-change-password-new">New Password</Label>
+          <PasswordInput
+            id="staff-change-password-new"
+            placeholder="Enter a new password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            required
+            autoFocus
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? (
+            <p className="text-xs text-destructive">{fieldErrors.password}</p>
+          ) : (
+            <p className="text-xs text-muted-foreground">At least 6 characters.</p>
+          )}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="staff-change-password-confirm">Confirm Password</Label>
+          <PasswordInput
+            id="staff-change-password-confirm"
+            placeholder="Re-enter the new password"
+            value={confirmPassword}
+            onChange={(e) => {
+              setConfirmPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.confirmPassword ? <p className="text-xs text-destructive">{fieldErrors.confirmPassword}</p> : null}
+        </div>
+
+        {error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(error, "Failed to update password.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isPending}>
+            {isPending ? "Updating..." : "Update Password"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function EditSalespersonModalContent({
+  salesperson,
+  managers,
+  onDone,
+}: {
+  salesperson: SalespersonUser;
+  managers: ManagerUser[];
+  onDone: () => void;
+}) {
+  const updateSalesperson = useUpdateSalespersonMutation();
+  const [name, setName] = useState(salesperson.name);
+  const [phone, setPhone] = useState(salesperson.phone ?? "");
+  const [reportingManagerId, setReportingManagerId] = useState(salesperson.reportingManager?.id ?? "");
+  const [nameError, setNameError] = useState<string | undefined>();
+
+  const activeManagers = managers.filter(
+    (m) => m.status === "ACTIVE" || m.id === salesperson.reportingManager?.id,
+  );
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (name.trim().length < 2) {
+      setNameError("Name must be at least 2 characters.");
+      return;
+    }
+    if (!reportingManagerId) return;
+
+    updateSalesperson.mutate(
+      { id: salesperson.id, payload: { name, phone: phone || undefined, reportingManagerId } },
+      {
+        onSuccess: () => {
+          toast.success("Salesperson updated successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[440px]">
+      <DialogHeader>
+        <DialogTitle>Edit Salesperson</DialogTitle>
+        <DialogDescription>Update profile information and reporting manager for {salesperson.name}.</DialogDescription>
+      </DialogHeader>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor={`staff-edit-sp-name-${salesperson.id}`}>Name</Label>
+          <Input
+            id={`staff-edit-sp-name-${salesperson.id}`}
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setNameError(undefined);
+            }}
+            required
+            autoFocus
+          />
+          {nameError ? <p className="text-xs text-destructive">{nameError}</p> : null}
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`staff-edit-sp-username-${salesperson.id}`}>Username</Label>
+          <Input
+            id={`staff-edit-sp-username-${salesperson.id}`}
+            value={salesperson.username}
+            disabled
+            className="bg-muted/50 text-muted-foreground cursor-not-allowed"
+          />
+          <p className="text-xs text-muted-foreground">Username cannot be changed.</p>
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor={`staff-edit-sp-phone-${salesperson.id}`}>Phone</Label>
+            <span className="text-xs text-muted-foreground">Optional</span>
+          </div>
+          <Input
+            id={`staff-edit-sp-phone-${salesperson.id}`}
+            value={phone}
+            placeholder="+1 (555) 000-0000"
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`staff-edit-sp-manager-${salesperson.id}`}>Reporting Manager</Label>
+          <NativeSelect
+            id={`staff-edit-sp-manager-${salesperson.id}`}
+            value={reportingManagerId}
+            onChange={(e) => setReportingManagerId(e.target.value)}
+            required
+          >
+            <option value="" disabled>
+              Select a manager
+            </option>
+            {activeManagers.map((manager) => (
+              <option key={manager.id} value={manager.id}>
+                {manager.name} ({manager.username})
+              </option>
+            ))}
+          </NativeSelect>
+          {reportingManagerId !== (salesperson.reportingManager?.id ?? "") ? (
+            <p className="text-xs text-muted-foreground">
+              Reassigning removes this salesperson from their current manager&apos;s team.
+            </p>
+          ) : null}
+        </div>
+        {updateSalesperson.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(updateSalesperson.error, "Failed to update salesperson.")}
+          </div>
+        ) : null}
+        <DialogFooter className="pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={updateSalesperson.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={updateSalesperson.isPending || !reportingManagerId}>
+            {updateSalesperson.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function SalespersonRow({ salesperson, managers }: { salesperson: SalespersonUser; managers: ManagerUser[] }) {
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const updateSalesperson = useUpdateSalespersonMutation();
+  const resetSalespersonPassword = useResetSalespersonPasswordMutation();
+  const isActive = salesperson.status === "ACTIVE";
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="pl-5 font-semibold">{salesperson.name}</TableCell>
+        <TableCell className="text-muted-foreground">{salesperson.username}</TableCell>
+        <TableCell>{salesperson.phone ?? "—"}</TableCell>
+        <TableCell>{salesperson.reportingManager?.name ?? "—"}</TableCell>
+        <TableCell>
+          <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
+        </TableCell>
+        <TableCell className="pr-5 text-right">
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setIsEditDialogOpen(true)}>
+              Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+              <KeyRound />
+              Change Password
+            </Button>
+            {isActive ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={updateSalesperson.isPending}
+                onClick={() =>
+                  updateSalesperson.mutate(
+                    { id: salesperson.id, payload: { status: "INACTIVE" } },
+                    { onSuccess: () => toast.success(`${salesperson.name} deactivated`) },
+                  )
+                }
+              >
+                {updateSalesperson.isPending ? "Deactivating..." : "Deactivate"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={updateSalesperson.isPending}
+                onClick={() =>
+                  updateSalesperson.mutate(
+                    { id: salesperson.id, payload: { status: "ACTIVE" } },
+                    { onSuccess: () => toast.success(`${salesperson.name} reactivated`) },
+                  )
+                }
+              >
+                {updateSalesperson.isPending ? "Reactivating..." : "Reactivate"}
+              </Button>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        {isEditDialogOpen ? (
+          <EditSalespersonModalContent
+            salesperson={salesperson}
+            managers={managers}
+            onDone={() => setIsEditDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            title="Change Password"
+            description={`Set a new password for ${salesperson.name}.`}
+            isPending={resetSalespersonPassword.isPending}
+            error={resetSalespersonPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetSalespersonPassword.mutate(
+                { id: salesperson.id, payload: { password } },
+                {
+                  onSuccess: () => {
+                    toast.success("Salesperson password updated successfully.");
+                    onSuccess();
+                  },
+                },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+    </>
+  );
+}
+
+function EditManagerModalContent({ manager, onDone }: { manager: ManagerUser; onDone: () => void }) {
+  const updateManager = useUpdateManagerMutation();
+  const [name, setName] = useState(manager.name);
+  const [phone, setPhone] = useState(manager.phone ?? "");
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    updateManager.mutate(
+      { id: manager.id, payload: { name, phone: phone || undefined } },
+      {
+        onSuccess: () => {
+          toast.success("Manager updated successfully");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[440px]">
+      <DialogHeader>
+        <DialogTitle>Edit Manager</DialogTitle>
+        <DialogDescription>Update profile information for {manager.name}.</DialogDescription>
+      </DialogHeader>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor={`staff-edit-name-${manager.id}`}>Name</Label>
+          <Input
+            id={`staff-edit-name-${manager.id}`}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            required
+            autoFocus
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor={`staff-edit-username-${manager.id}`}>Username</Label>
+          <Input
+            id={`staff-edit-username-${manager.id}`}
+            value={manager.username}
+            disabled
+            className="bg-muted/50 text-muted-foreground cursor-not-allowed"
+          />
+          <p className="text-xs text-muted-foreground">Username cannot be changed.</p>
+        </div>
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <Label htmlFor={`staff-edit-phone-${manager.id}`}>Phone</Label>
+            <span className="text-xs text-muted-foreground">Optional</span>
+          </div>
+          <Input
+            id={`staff-edit-phone-${manager.id}`}
+            value={phone}
+            placeholder="+1 (555) 000-0000"
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </div>
+        {updateManager.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(updateManager.error, "Failed to update manager.")}
+          </div>
+        ) : null}
+        <DialogFooter className="pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={updateManager.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={updateManager.isPending}>
+            {updateManager.isPending ? "Saving..." : "Save Changes"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function ManagerRow({ manager }: { manager: ManagerUser }) {
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const deactivateManager = useDeactivateManagerMutation();
+  const updateManager = useUpdateManagerMutation();
+  const resetManagerPassword = useResetManagerPasswordMutation();
+
+  const isActive = manager.status === "ACTIVE";
+
+  return (
+    <>
+      <TableRow>
+        <TableCell className="pl-5 font-semibold">{manager.name}</TableCell>
+        <TableCell className="text-muted-foreground">{manager.username}</TableCell>
+        <TableCell>{manager.phone ?? "—"}</TableCell>
+        <TableCell>
+          <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
+        </TableCell>
+        <TableCell className="pr-5 text-right">
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="outline" onClick={() => setIsEditDialogOpen(true)}>
+              Edit
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+              <KeyRound />
+              Change Password
+            </Button>
+            {isActive ? (
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={deactivateManager.isPending}
+                onClick={() =>
+                  deactivateManager.mutate(manager.id, {
+                    onSuccess: () => toast.success(`${manager.name} deactivated`),
+                  })
+                }
+              >
+                {deactivateManager.isPending ? "Deactivating..." : "Deactivate"}
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={updateManager.isPending}
+                onClick={() =>
+                  updateManager.mutate(
+                    { id: manager.id, payload: { status: "ACTIVE" } },
+                    {
+                      onSuccess: () => toast.success(`${manager.name} reactivated`),
+                    },
+                  )
+                }
+              >
+                {updateManager.isPending ? "Reactivating..." : "Reactivate"}
+              </Button>
+            )}
+          </div>
+        </TableCell>
+      </TableRow>
+
+      <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+        {isEditDialogOpen ? (
+          <EditManagerModalContent manager={manager} onDone={() => setIsEditDialogOpen(false)} />
+        ) : null}
+      </Dialog>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            title="Change Password"
+            description={`Set a new password for ${manager.name}.`}
+            isPending={resetManagerPassword.isPending}
+            error={resetManagerPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetManagerPassword.mutate(
+                { id: manager.id, payload: { password } },
+                {
+                  onSuccess: () => {
+                    toast.success("Manager password updated successfully.");
+                    onSuccess();
+                  },
+                },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+    </>
+  );
+}
+
+export default function StaffPage() {
+  const { data: managers, isPending, error } = useQuery(managersQueryOptions());
+  const { data: salespersons, isPending: isSalespersonsPending, error: salespersonsError } = useQuery(
+    adminSalespersonsQueryOptions(),
+  );
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
+  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Users"
+        description="All managers and salespersons across the organization."
+        actions={
+          <>
+            <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)}>
+              <UserPlus />
+              Add Salesperson
+            </Button>
+            <Button variant="outline" onClick={() => setIsAddOpen(true)}>
+              <UserPlus />
+              Add Manager
+            </Button>
+            <Button onClick={() => setIsCreateGroupOpen(true)}>
+              <FolderPlus />
+              Create Group
+            </Button>
+          </>
+        }
+      />
+
+      {/* Add Manager Dialog */}
+      <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
+        {isAddOpen ? <CreateManagerModalContent onDone={() => setIsAddOpen(false)} /> : null}
+      </Dialog>
+
+      {/* Add Salesperson Dialog */}
+      <Dialog open={isAddSalespersonOpen} onOpenChange={setIsAddSalespersonOpen}>
+        {isAddSalespersonOpen ? (
+          <CreateSalespersonModalContent managers={managers ?? []} onDone={() => setIsAddSalespersonOpen(false)} />
+        ) : null}
+      </Dialog>
+
+      {/* Create Group Dialog */}
+      <Dialog open={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen}>
+        {isCreateGroupOpen ? (
+          <CreateGroupModalContent managers={managers ?? []} onDone={() => setIsCreateGroupOpen(false)} />
+        ) : null}
+      </Dialog>
+
+      {/* Managers Table Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>All Managers</CardTitle>
+          <CardDescription>
+            {managers
+              ? `${managers.length} manager${managers.length === 1 ? "" : "s"} listed`
+              : "Loading managers..."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0">
+          {isPending ? (
+            <div className="space-y-3 px-5">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : error ? (
+            <div className="sketch-outline mx-5 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {getErrorMessage(error, "Failed to load managers.")}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Name</TableHead>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {managers && managers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-14 text-center">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Users className="size-9 text-muted-foreground/40" />
+                        <p className="font-heading text-lg font-bold">No managers yet</p>
+                        <p className="font-hand text-base text-muted-foreground">
+                          Get started by adding your first manager to the platform.
+                        </p>
+                        <Button className="mt-3" onClick={() => setIsAddOpen(true)}>
+                          <UserPlus />
+                          Add Manager
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  managers?.map((manager) => <ManagerRow key={manager.id} manager={manager} />)
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Salespersons Table Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>All Salespersons</CardTitle>
+          <CardDescription>
+            {salespersons
+              ? `${salespersons.length} salesperson${salespersons.length === 1 ? "" : "s"} listed`
+              : "Loading salespersons..."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0">
+          {isSalespersonsPending ? (
+            <div className="space-y-3 px-5">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : salespersonsError ? (
+            <div className="sketch-outline mx-5 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {getErrorMessage(salespersonsError, "Failed to load salespersons.")}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Name</TableHead>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead>Reporting Manager</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {salespersons && salespersons.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-14 text-center">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Users className="size-9 text-muted-foreground/40" />
+                        <p className="font-heading text-lg font-bold">No salespersons yet</p>
+                        <p className="font-hand text-base text-muted-foreground">
+                          Add a salesperson and assign the manager they&apos;ll report to.
+                        </p>
+                        <Button className="mt-3" onClick={() => setIsAddSalespersonOpen(true)}>
+                          <UserPlus />
+                          Add Salesperson
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  salespersons?.map((salesperson) => (
+                    <SalespersonRow key={salesperson.id} salesperson={salesperson} managers={managers ?? []} />
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

@@ -349,3 +349,124 @@ describe("Cashfree webhook handler", () => {
     assert.ok(!crashing.rows[0].errorMessage!.includes("z".repeat(40)));
   });
 });
+
+import { parseLinkOrders, parseOrderPayments } from "./cashfree.client.js";
+import { resolveCashfreeIds, type CashfreeApi } from "./cashfree.payments.service.js";
+
+// The three ids a refund needs are DIFFERENT things and must never be mixed up:
+//   link id (crm_...) / cf_link_id  -> the payment link,   order_id (CFPay_...) / cf_order_id -> the order behind it,   cf_payment_id -> the payment.
+const LINK_ID = "crm_link_1";
+const ORDER = { order_id: "CFPay_order_1", cf_order_id: "9001", link_id: LINK_ID, order_status: "PAID", order_amount: 100 };
+const PAYMENT = { cf_payment_id: "7777", payment_status: "SUCCESS", payment_amount: 100, bank_reference: "BANKREF-1", payment_group: "credit_card" };
+
+const apiWith = (orders: unknown[] | Error, payments: unknown[] | Error, calls: string[] = []): CashfreeApi =>
+  ({
+    createLink: async () => { throw new Error("no create"); },
+    getLink: async () => { throw new Error("no getLink"); },
+    cancelLink: async () => { throw new Error("no cancel"); },
+    getLinkOrders: async (id: string) => { calls.push(`orders:${id}`); if (orders instanceof Error) throw orders; return parseLinkOrders(orders)!; },
+    getOrderPayments: async (id: string) => { calls.push(`payments:${id}`); if (payments instanceof Error) throw payments; return parseOrderPayments(payments)!; },
+  }) as CashfreeApi;
+
+describe("Cashfree identifier lookups (read-only)", () => {
+  it("parses the orders of a link and the payments of an order, keeping every id as its own string", () => {
+    assert.deepEqual(parseLinkOrders([ORDER]), [{ orderId: "CFPay_order_1", cfOrderId: "9001", linkId: LINK_ID, orderStatus: "PAID", orderAmount: "100" }]);
+    assert.deepEqual(parseOrderPayments([PAYMENT]), [{ cfPaymentId: "7777", paymentStatus: "SUCCESS", paymentAmount: "100", bankReference: "BANKREF-1", paymentGroup: "credit_card", paymentTime: null }]);
+    assert.equal(parseLinkOrders({ not: "a list" }), null);
+    assert.deepEqual(parseOrderPayments([{ payment_status: "SUCCESS" }]), [], "an entry without cf_payment_id is dropped, never invented");
+  });
+
+  it("the client asks only GET endpoints: /links/{id}/orders and /orders/{id}/payments - no refund endpoint", async () => {
+    const seen: { method: string; url: string }[] = [];
+    const f = (async (url: string, init: RequestInit) => { seen.push({ method: String(init.method), url }); return new Response(JSON.stringify(url.includes("/payments") ? [PAYMENT] : [ORDER]), { status: 200 }); }) as unknown as typeof fetch;
+    const client = new CashfreeClient(loadCashfreeConfig({ ...ENV, CASHFREE_ENV: "sandbox" }), f);
+    await client.getLinkOrders(LINK_ID);
+    await client.getOrderPayments("CFPay_order_1");
+    assert.deepEqual(seen.map((s) => `${s.method} ${s.url}`), ["GET https://sandbox.cashfree.com/pg/links/crm_link_1/orders?status=ALL", "GET https://sandbox.cashfree.com/pg/orders/CFPay_order_1/payments"]);
+    assert.ok(seen.every((s) => !/refund/i.test(s.url)));
+  });
+
+  it("resolves the order_id and the cf_payment_id from their own fields (not the link id, cf_order_id or bank reference)", async () => {
+    const calls: string[] = [];
+    const ids = await resolveCashfreeIds(apiWith([ORDER], [PAYMENT], calls), LINK_ID);
+    assert.equal(ids.cashfreeOrderId, "CFPay_order_1");
+    assert.equal(ids.cfPaymentId, "7777");
+    assert.notEqual(ids.cfPaymentId, ids.cfOrderId);
+    assert.notEqual(ids.cfPaymentId, LINK_ID);
+    assert.equal(ids.bankReference, "BANKREF-1");
+    assert.deepEqual(calls, [`orders:${LINK_ID}`, "payments:CFPay_order_1"]);
+  });
+
+  it("a cf_payment_id is taken from cf_payment_id even when bank_reference holds a different (hosted-page style) number", async () => {
+    const ids = await resolveCashfreeIds(apiWith([ORDER], [{ ...PAYMENT, cf_payment_id: "111", bank_reference: "222" }]), LINK_ID);
+    assert.equal(ids.cfPaymentId, "111");
+  });
+
+  it("no order yet: nothing is invented and the payments lookup is not made", async () => {
+    const calls: string[] = [];
+    const ids = await resolveCashfreeIds(apiWith([], [PAYMENT], calls), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfPaymentId], [null, null]);
+    assert.match(ids.note!, /no paid order/);
+    assert.deepEqual(calls, [`orders:${LINK_ID}`]);
+  });
+
+  it("an order but no successful payment: the order id is kept, the payment id stays empty", async () => {
+    const ids = await resolveCashfreeIds(apiWith([ORDER], [{ ...PAYMENT, payment_status: "FAILED" }, { ...PAYMENT, cf_payment_id: "8", payment_status: "USER_DROPPED" }]), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfPaymentId], ["CFPay_order_1", null]);
+    assert.match(ids.note!, /no successful payment/);
+  });
+
+  it("ambiguity is never guessed: two paid orders -> neither id; two successful payments -> no payment id", async () => {
+    const two = await resolveCashfreeIds(apiWith([ORDER, { ...ORDER, order_id: "CFPay_order_2" }], [PAYMENT]), LINK_ID);
+    assert.deepEqual([two.cashfreeOrderId, two.cfPaymentId], [null, null]);
+    const dup = await resolveCashfreeIds(apiWith([ORDER], [PAYMENT, { ...PAYMENT, cf_payment_id: "7778" }]), LINK_ID);
+    assert.deepEqual([dup.cashfreeOrderId, dup.cfPaymentId], ["CFPay_order_1", null]);
+    assert.match(dup.note!, /not unique/);
+  });
+
+  it("an API error or an odd response never throws and never fabricates an id", async () => {
+    const err = await resolveCashfreeIds(apiWith(new ProviderHttpError("CASHFREE", 500, "boom", true), []), LINK_ID);
+    assert.deepEqual([err.cashfreeOrderId, err.cfPaymentId], [null, null]);
+    assert.match(err.note!, /HTTP 500/);
+    const odd = await resolveCashfreeIds(apiWith([{ order_status: "PAID" }], []), LINK_ID);
+    assert.equal(odd.cashfreeOrderId, null);
+  });
+
+  it("an API without the lookups simply skips them", async () => {
+    const api = { createLink: async () => { throw new Error("x"); }, getLink: async () => { throw new Error("x"); }, cancelLink: async () => null } as unknown as CashfreeApi;
+    assert.equal((await resolveCashfreeIds(api, LINK_ID)).cfPaymentId, null);
+  });
+});
+
+describe("duplicate checkout sessions are one order / one payment (distinct ids still must be unique)", () => {
+  it("one order and one payment returned once -> resolved", async () => {
+    const ids = await resolveCashfreeIds(apiWith([ORDER], [PAYMENT]), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfPaymentId, ids.note], ["CFPay_order_1", "7777", null]);
+  });
+  it("the SAME order listed once per checkout session (6 times) is ONE order; the same payment listed repeatedly is ONE payment", async () => {
+    const calls: string[] = [];
+    const ids = await resolveCashfreeIds(apiWith(Array(6).fill(ORDER), [PAYMENT, { ...PAYMENT }, PAYMENT, { ...PAYMENT, payment_status: "PENDING", cf_payment_id: "6666" }], calls), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfOrderId, ids.cfPaymentId, ids.note], ["CFPay_order_1", "9001", "7777", null]);
+    assert.deepEqual(calls, [`orders:${LINK_ID}`, "payments:CFPay_order_1"], "a single lookup of each, not one per duplicate");
+  });
+  it("genuinely different order ids are still rejected (not merged), even when each is duplicated", async () => {
+    const ids = await resolveCashfreeIds(apiWith([ORDER, ORDER, { ...ORDER, order_id: "CFPay_order_2", cf_order_id: "9002" }, { ...ORDER, order_id: "CFPay_order_2", cf_order_id: "9002" }], [PAYMENT]), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfPaymentId], [null, null]);
+    assert.match(ids.note!, /2 different paid orders/);
+  });
+  it("genuinely different successful payment ids are still rejected, even when duplicated", async () => {
+    const ids = await resolveCashfreeIds(apiWith([ORDER, ORDER], [PAYMENT, PAYMENT, { ...PAYMENT, cf_payment_id: "7778" }, { ...PAYMENT, cf_payment_id: "7778" }]), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfPaymentId], ["CFPay_order_1", null]);
+    assert.match(ids.note!, /2 different successful payments/);
+  });
+  it("one order_id returned with conflicting cf_order_ids is ambiguous, never silently merged", async () => {
+    const ids = await resolveCashfreeIds(apiWith([ORDER, { ...ORDER, cf_order_id: "9999" }], [PAYMENT]), LINK_ID);
+    assert.deepEqual([ids.cashfreeOrderId, ids.cfPaymentId], [null, null]);
+    assert.match(ids.note!, /different cf_order_ids/);
+  });
+  it("missing / unusable identifiers keep the existing safe behaviour (nothing invented)", async () => {
+    assert.equal((await resolveCashfreeIds(apiWith([{ order_status: "PAID" }, { order_id: "", order_status: "PAID" }], [PAYMENT]), LINK_ID)).cashfreeOrderId, null);
+    const noPay = await resolveCashfreeIds(apiWith([ORDER, ORDER], [{ payment_status: "SUCCESS" }, { ...PAYMENT, payment_status: "FAILED" }]), LINK_ID);
+    assert.deepEqual([noPay.cashfreeOrderId, noPay.cfPaymentId], ["CFPay_order_1", null]);
+  });
+});

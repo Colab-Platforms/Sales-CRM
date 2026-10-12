@@ -1,4 +1,4 @@
-export type Role = "ADMIN" | "MANAGER" | "SALESPERSON";
+export type Role = "ADMIN" | "HR" | "MANAGER" | "SALESPERSON";
 
 export interface CurrentUser {
   id: string;
@@ -74,4 +74,13 @@ export interface AdminProfile extends ProfileBase {
   };
 }
 
-export type UserProfile = SalespersonProfile | ManagerProfile | AdminProfile;
+export interface HrProfile extends ProfileBase {
+  role: "HR";
+  orgOverview: {
+    totalManagers: number;
+    totalSalespersons: number;
+    totalGroups: number;
+  };
+}
+
+export type UserProfile = SalespersonProfile | ManagerProfile | AdminProfile | HrProfile;

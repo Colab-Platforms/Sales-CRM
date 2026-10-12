@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { SalespersonProfileView } from "@/components/profile/salesperson-profile-view";
 import { ManagerProfileView } from "@/components/profile/manager-profile-view";
 import { AdminProfileView } from "@/components/profile/admin-profile-view";
+import { HrProfileView } from "@/components/profile/hr-profile-view";
 
 export default function ProfilePage() {
   const { data: profile, isPending, error } = useQuery(profileQueryOptions());
@@ -35,6 +36,7 @@ export default function ProfilePage() {
           {profile.role === "SALESPERSON" && <SalespersonProfileView profile={profile} />}
           {profile.role === "MANAGER" && <ManagerProfileView profile={profile} />}
           {profile.role === "ADMIN" && <AdminProfileView profile={profile} />}
+          {profile.role === "HR" && <HrProfileView profile={profile} />}
         </>
       )}
     </div>

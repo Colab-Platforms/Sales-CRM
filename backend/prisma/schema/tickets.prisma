@@ -1,0 +1,74 @@
+// Support tickets a SALESPERSON raises for any difficulty or problem they hit. Visible to the raiser, their reporting manager and admins.
+model Ticket {
+  id String @id @default(uuid()) @db.Uuid
+
+  ticketNumber Int @unique @default(autoincrement()) @map("ticket_number")
+
+  raisedById String @map("raised_by_id") @db.Uuid
+  raisedBy   User   @relation("TicketRaisedBy", fields: [raisedById], references: [id])
+
+  category    TicketCategory @map("category")
+  priority    TicketPriority @default(MEDIUM) @map("priority")
+  status      TicketStatus   @default(OPEN) @map("status")
+  subject     String         @map("subject") @db.VarChar(200)
+  description String         @map("description") @db.VarChar(5000)
+
+  resolvedById String?   @map("resolved_by_id") @db.Uuid
+  resolvedBy   User?     @relation("TicketResolvedBy", fields: [resolvedById], references: [id])
+  resolvedAt   DateTime? @map("resolved_at")
+
+  comments TicketComment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([raisedById, createdAt])
+  @@index([status, createdAt])
+  @@map("tickets")
+}
+
+model TicketComment {
+  id String @id @default(uuid()) @db.Uuid
+
+  ticketId String @map("ticket_id") @db.Uuid
+  ticket   Ticket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+
+  authorId String @map("author_id") @db.Uuid
+  author   User   @relation("TicketCommentAuthor", fields: [authorId], references: [id])
+
+  body String @map("body") @db.VarChar(2000)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([ticketId, createdAt])
+  @@map("ticket_comments")
+}
+
+enum TicketCategory {
+  LEAD_ISSUE
+  ORDER_PAYMENT
+  WHATSAPP_CALLING
+  LOGIN_ACCESS
+  TECHNICAL_BUG
+  OTHER
+
+  @@map("ticket_category")
+}
+
+enum TicketPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+
+  @@map("ticket_priority")
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+
+  @@map("ticket_status")
+}

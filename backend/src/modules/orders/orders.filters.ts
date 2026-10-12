@@ -1,4 +1,4 @@
-import { PaymentMethod, PaymentStatus } from "../../../generated/prisma/enums.js";
+import { PaymentMethod, PaymentStatus, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { toCents } from "../shopify/shopify.money.js";
 import { NO_PAYMENT, type ListOrdersQuery, type PaymentMode, type PaymentStatusFilter } from "./orders.types.js";
@@ -90,6 +90,25 @@ export function buildOrderWhere(query: ListOrdersQuery, leadScope: Prisma.LeadWh
 // One order, but only if the user's lead scope allows it.
 export function scopedOrderWhere(id: string, leadScope: Prisma.LeadWhereInput): Prisma.OrderWhereInput {
   return Object.keys(leadScope).length > 0 ? { AND: [{ id }, { lead: leadScope }] } : { id };
+}
+
+/**
+ * Order VISIBILITY is company-wide for ADMIN, MANAGER and SALESPERSON (telecaller): the Orders list, search, filters, counts and the order page are not narrowed by
+ * team, group or lead owner. HR still sees no orders. This is read access only - every ACTION on an order (cancel, refund, edit, prepaid upgrade, Shopify
+ * operations) keeps using scopedOrderWhere / its own role check, so seeing an order never lets someone act on it.
+ */
+export function canViewAllOrders(role: string): boolean {
+  return role === Role.ADMIN || role === Role.MANAGER || role === Role.SALESPERSON;
+}
+
+/** The lead scope that applies to READING orders: none for the roles above, the normal lead scope otherwise (HR: matches nothing). */
+export function orderVisibilityScope(role: string, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
+  return canViewAllOrders(role) ? {} : leadScope;
+}
+
+/** One order for READING (order page, timeline, audit history, prepaid-upgrade panel). Actions use scopedOrderWhere instead. */
+export function orderReadWhere(user: { role: string }, id: string, leadScope: Prisma.LeadWhereInput): Prisma.OrderWhereInput {
+  return scopedOrderWhere(id, orderVisibilityScope(user.role, leadScope));
 }
 
 export function fullName(firstName: string, lastName: string | null): string {

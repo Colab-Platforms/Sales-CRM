@@ -32,8 +32,13 @@ model User {
 
   groupsManaged Group[] @relation("GroupManager")
 
+  ticketsRaised   Ticket[]        @relation("TicketRaisedBy")
+  ticketsResolved Ticket[]        @relation("TicketResolvedBy")
+  ticketComments  TicketComment[] @relation("TicketCommentAuthor")
+
   refundRequestsMade    RefundRequest[] @relation("RefundRequestedBy")
   refundRequestsDecided RefundRequest[] @relation("RefundDecidedBy")
+  refundRequestsExecuted RefundRequest[] @relation("RefundExecutedBy")
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
@@ -53,8 +58,12 @@ model User {
 
   managerAutoAssignConfigsUpdated      ManagerAutoAssignConfig[]    @relation("ManagerAutoAssignConfigUpdatedBy")
   salespersonAutoAssignConfigAsManager SalespersonAutoAssignConfig? @relation("SalespersonAutoAssignConfigManager")
+  managerAutoAssignTarget               ManagerAutoAssignTarget?     @relation("ManagerAutoAssignTargetManager")
 
   callsAsAgent Call[] @relation("CallAgent")
+
+  workSessions WorkSession[] @relation("WorkSessionUser")
+  statusLogs   StatusLog[]   @relation("StatusLogUser")
 
   tasksAssignedToMe Task[] @relation("TaskAssignedTo")
   tasksCreatedByMe  Task[] @relation("TaskCreatedBy")

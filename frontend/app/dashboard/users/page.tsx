@@ -4,8 +4,9 @@ import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { KeyRound, UserPlus, Users } from "lucide-react";
-import { adminSalespersonsQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
+import { adminSalespersonsQueryOptions, hrQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
 import {
+  useCreateHrMutation,
   useCreateManagerMutation,
   useCreateSalespersonMutation,
   useDeactivateManagerMutation,
@@ -33,7 +34,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
+import type { HrUser, ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
 
 interface AccountFieldErrors {
   name?: string;
@@ -180,6 +181,135 @@ function CreateManagerModalContent({ onDone }: { onDone: () => void }) {
         </DialogFooter>
       </form>
     </DialogContent>
+  );
+}
+
+function CreateHrModalContent({ onDone }: { onDone: () => void }) {
+  const createHr = useCreateHrMutation();
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors = validateAccountFields({ name, username, password }, { requireReportingManager: false });
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    createHr.mutate(
+      { name, username, password, phone },
+      {
+        onSuccess: () => {
+          toast.success("HR user added successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Add HR User</DialogTitle>
+        <DialogDescription>
+          Create an HR account. HR can create/edit/deactivate teams and salespersons, but nothing else.
+        </DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="create-hr-name">Full Name</Label>
+          <Input
+            id="create-hr-name"
+            placeholder="e.g. Priya Sharma"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, name: undefined }));
+            }}
+            required
+            autoFocus
+          />
+          {fieldErrors.name ? <p className="text-xs text-destructive">{fieldErrors.name}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-hr-username">Username</Label>
+          <Input
+            id="create-hr-username"
+            type="text"
+            placeholder="priya.sharma_avatar"
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, username: undefined }));
+            }}
+            required
+          />
+          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-hr-password">Password</Label>
+          <PasswordInput
+            id="create-hr-password"
+            placeholder="Enter a secure password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              setFieldErrors((prev) => ({ ...prev, password: undefined }));
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? <p className="text-xs text-destructive">{fieldErrors.password}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-hr-phone">Phone Number</Label>
+          <Input
+            id="create-hr-phone"
+            type="tel"
+            required
+            placeholder="+1 (555) 000-0000"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+          />
+        </div>
+
+        {createHr.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createHr.error, "Failed to create HR user.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={createHr.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createHr.isPending}>
+            {createHr.isPending ? "Adding HR User..." : "Add HR User"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function HrRow({ hr }: { hr: HrUser }) {
+  const isActive = hr.status === "ACTIVE";
+
+  return (
+    <TableRow>
+      <TableCell className="pl-5 font-semibold">{hr.name}</TableCell>
+      <TableCell className="text-muted-foreground">{hr.username}</TableCell>
+      <TableCell>{hr.phone ?? "—"}</TableCell>
+      <TableCell className="pr-5">
+        <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -849,19 +979,25 @@ export default function UsersPage() {
   const { data: salespersons, isPending: isSalespersonsPending, error: salespersonsError } = useQuery(
     adminSalespersonsQueryOptions(),
   );
+  const { data: hrUsers, isPending: isHrPending, error: hrError } = useQuery(hrQueryOptions());
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
+  const [isAddHrOpen, setIsAddHrOpen] = useState(false);
 
   return (
     <div className="space-y-6">
       <PageHeader
         title="Users"
-        description="Manage manager and salesperson accounts. Salespersons are visible only to the manager they report to."
+        description="Manage manager, HR, and salesperson accounts. Salespersons are visible only to the manager they report to."
         actions={
           <>
             <Button variant="outline" onClick={() => setIsAddSalespersonOpen(true)}>
               <UserPlus />
               Add Salesperson
+            </Button>
+            <Button variant="outline" onClick={() => setIsAddHrOpen(true)}>
+              <UserPlus />
+              Add HR
             </Button>
             <Button onClick={() => setIsAddOpen(true)}>
               <UserPlus />
@@ -876,6 +1012,11 @@ export default function UsersPage() {
         {isAddOpen ? (
           <CreateManagerModalContent onDone={() => setIsAddOpen(false)} />
         ) : null}
+      </Dialog>
+
+      {/* Add HR Dialog */}
+      <Dialog open={isAddHrOpen} onOpenChange={setIsAddHrOpen}>
+        {isAddHrOpen ? <CreateHrModalContent onDone={() => setIsAddHrOpen(false)} /> : null}
       </Dialog>
 
       {/* Add Salesperson Dialog */}
@@ -936,6 +1077,60 @@ export default function UsersPage() {
                   </TableRow>
                 ) : (
                   managers?.map((manager) => <ManagerRow key={manager.id} manager={manager} />)
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* HR Table Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>All HR</CardTitle>
+          <CardDescription>
+            {hrUsers ? `${hrUsers.length} HR user${hrUsers.length === 1 ? "" : "s"} listed` : "Loading HR users..."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0">
+          {isHrPending ? (
+            <div className="space-y-3 px-5">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : hrError ? (
+            <div className="sketch-outline mx-5 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {getErrorMessage(hrError, "Failed to load HR users.")}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Name</TableHead>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead className="pr-5">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {hrUsers && hrUsers.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-14 text-center">
+                      <div className="flex flex-col items-center justify-center gap-2">
+                        <Users className="size-9 text-muted-foreground/40" />
+                        <p className="font-heading text-lg font-bold">No HR users yet</p>
+                        <p className="font-hand text-base text-muted-foreground">
+                          Add an HR user to manage teams and salespersons.
+                        </p>
+                        <Button className="mt-3" onClick={() => setIsAddHrOpen(true)}>
+                          <UserPlus />
+                          Add HR
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  hrUsers?.map((hr) => <HrRow key={hr.id} hr={hr} />)
                 )}
               </TableBody>
             </Table>

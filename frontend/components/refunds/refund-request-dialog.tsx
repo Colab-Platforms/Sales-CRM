@@ -19,6 +19,7 @@ export interface RefundFormValues {
 /** The form itself (no dialog chrome), so it renders and tests on its own. */
 export function RefundRequestForm({
   orderNumber,
+  customerName,
   payment,
   values,
   errors,
@@ -28,6 +29,8 @@ export function RefundRequestForm({
   onCancel,
 }: {
   orderNumber: string;
+  /** Shown so the person confirming knows whose refund this is. */
+  customerName?: string;
   payment: RefundablePaymentView;
   values: RefundFormValues;
   errors: RefundFormErrors;
@@ -48,7 +51,15 @@ export function RefundRequestForm({
       <dl className="grid grid-cols-2 gap-x-6 gap-y-1 rounded-md bg-muted/40 p-3 text-sm" data-testid="refund-balances">
         <dt className="text-muted-foreground">Order</dt>
         <dd className="text-right font-medium">{orderNumber}</dd>
-        <dt className="text-muted-foreground">Payment amount</dt>
+        {customerName ? (
+          <>
+            <dt className="text-muted-foreground">Customer</dt>
+            <dd className="text-right font-medium" data-testid="refund-customer">
+              {customerName}
+            </dd>
+          </>
+        ) : null}
+        <dt className="text-muted-foreground">Original paid amount</dt>
         <dd className="text-right tabular-nums">{money(payment.amount)}</dd>
         <dt className="text-muted-foreground">Already refunded</dt>
         <dd className="text-right tabular-nums">{money(payment.refundedAmount)}</dd>
@@ -96,7 +107,7 @@ export function RefundRequestForm({
       </div>
 
       <p className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs" data-testid="refund-approval-warning">
-        This only submits a request. A manager or admin must approve it before a refund can be executed — no money is returned now. {APPROVAL_DISCLAIMER}
+        This only submits a request: the order is NOT cancelled and no money is returned now. If a manager approves it, the order is cancelled automatically and the refund can then be executed. {APPROVAL_DISCLAIMER}
       </p>
 
       <DialogFooter>
@@ -111,7 +122,7 @@ export function RefundRequestForm({
   );
 }
 
-export function RefundRequestDialog({ open, onOpenChange, orderId, orderNumber, payment }: { open: boolean; onOpenChange: (open: boolean) => void; orderId: string; orderNumber: string; payment: RefundablePaymentView }) {
+export function RefundRequestDialog({ open, onOpenChange, orderId, orderNumber, customerName, payment }: { open: boolean; onOpenChange: (open: boolean) => void; orderId: string; orderNumber: string; customerName?: string; payment: RefundablePaymentView }) {
   const [values, setValues] = useState<RefundFormValues>({ amount: "", reason: "" });
   const [errors, setErrors] = useState<RefundFormErrors>({});
   // One key per dialog opening: a double click or a retry after a slow response returns the SAME request instead of creating another.
@@ -153,7 +164,7 @@ export function RefundRequestDialog({ open, onOpenChange, orderId, orderNumber, 
           <DialogTitle>Request Refund</DialogTitle>
           <DialogDescription>Ask for part or all of this payment to be refunded to the customer.</DialogDescription>
         </DialogHeader>
-        <RefundRequestForm orderNumber={orderNumber} payment={payment} values={values} errors={errors} submitting={create.isPending} onChange={(patch) => setValues((v) => ({ ...v, ...patch }))} onSubmit={submit} onCancel={() => close(false)} />
+        <RefundRequestForm orderNumber={orderNumber} customerName={customerName} payment={payment} values={values} errors={errors} submitting={create.isPending} onChange={(patch) => setValues((v) => ({ ...v, ...patch }))} onSubmit={submit} onCancel={() => close(false)} />
       </DialogContent>
     </Dialog>
   );

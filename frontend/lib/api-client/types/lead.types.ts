@@ -121,6 +121,13 @@ export interface BulkAssignSalespersonPayload {
   salespersonIds?: string[];
 }
 
+export interface BulkUpdateStatusPayload {
+  leadIds: string[];
+  workingStatus: LeadWorkingStatus;
+  /** Required when workingStatus is CALL_BACK or FOLLOW_UP; applied to every selected lead. */
+  followUpAt?: string;
+}
+
 export interface ImportPreviewResult {
   batchId: string;
   totalRows: number;

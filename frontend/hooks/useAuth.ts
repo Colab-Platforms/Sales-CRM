@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLoginMutation } from "@/lib/api-client/mutations/auth.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
+import { attendanceApi } from "@/lib/api-client/endpoints/attendance.api";
 import type { LoginPayload } from "@/lib/api-client/types/auth.types";
 
 export function useAuth() {
@@ -34,7 +35,12 @@ export function useAuth() {
     [loginMutation, setSession, router, queryClient],
   );
 
-  const logout = useCallback(() => {
+  const logout = useCallback(async () => {
+    // Close the salesperson's shift while the token still works. Best effort: a failure must never
+    // trap someone in a logged-in state (the server also closes abandoned shifts on its own).
+    if (useAuthStore.getState().user?.role === "SALESPERSON") {
+      await attendanceApi.end().catch(() => {});
+    }
     queryClient.clear();
     clearSession();
     router.push("/login");

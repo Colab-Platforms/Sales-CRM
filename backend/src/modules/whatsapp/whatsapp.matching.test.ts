@@ -83,3 +83,27 @@ describe("matchSenderToLead", () => {
     assert.deepEqual(result, { leadId: null, normalizedContact: null });
   });
 });
+
+describe("matchSenderToLead: thread affinity with duplicate leads", () => {
+  const leads: FakeLead[] = [
+    { id: "lead-old", normalizedMobile: "+919812377001", createdAt: new Date("2026-09-29") },
+    { id: "lead-new", normalizedMobile: "+919812377001", createdAt: new Date("2026-10-08") },
+  ];
+  const withSent = (sentFrom: string | null): MatchDeps["db"] => ({
+    ...fakeDb(leads),
+    whatsAppMessage: {
+      async findFirst({ where }: any) {
+        assert.equal(where.direction, "OUTBOUND");
+        assert.ok(where.normalizedContact.in.includes("+919812377001") && where.normalizedContact.in.includes("9812377001"), "looked up with every legacy shape");
+        return sentFrom ? { leadId: sentFrom } : null;
+      },
+    } as unknown as MatchDeps["db"]["whatsAppMessage"],
+  });
+
+  it("the lead the CRM last messaged wins over the oldest lead with that number", async () => {
+    assert.equal((await matchSenderToLead("919812377001", { db: withSent("lead-new") })).leadId, "lead-new");
+  });
+  it("no outbound history -> the oldest lead, exactly as before", async () => {
+    assert.equal((await matchSenderToLead("919812377001", { db: withSent(null) })).leadId, "lead-old");
+  });
+});

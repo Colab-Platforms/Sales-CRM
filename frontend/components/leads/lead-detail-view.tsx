@@ -1,9 +1,9 @@
 "use client";
 
 import axios from "axios";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowLeft,
@@ -53,16 +53,25 @@ import type { Lead } from "@/lib/api-client/types/lead.types";
 import type { Call } from "@/lib/api-client/types/calling.types";
 import type { ActivityType, AuditEntry } from "@/lib/api-client/types/audit.types";
 
-const LEADS_HREF = "/dashboard/leads";
+function BackLink({ from }: { from?: string | null }) {
+  const router = useRouter();
+  const isFromAbandoned = from === "abandoned-leads";
+  const defaultHref = isFromAbandoned ? "/dashboard/abandoned-leads" : "/dashboard/leads";
+  const label = isFromAbandoned ? "Back to abandoned leads" : "Back to leads";
 
-function BackLink() {
   return (
     <Link
-      href={LEADS_HREF}
+      href={defaultHref}
+      onClick={(e) => {
+        if (typeof window !== "undefined" && window.history.length > 1 && document.referrer.includes(defaultHref)) {
+          e.preventDefault();
+          router.back();
+        }
+      }}
       className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
     >
       <ArrowLeft className="size-3.5" />
-      <span>Back to leads</span>
+      <span>{label}</span>
     </Link>
   );
 }
@@ -72,9 +81,9 @@ function DetailSkeleton() {
     <div className="space-y-6" aria-busy="true" aria-label="Loading lead dossier">
       <Skeleton className="h-9 w-44 rounded-xl" />
       <Skeleton className="h-44 rounded-2xl" />
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-12">
-        <Skeleton className="h-80 rounded-2xl lg:col-span-5" />
-        <Skeleton className="h-80 rounded-2xl lg:col-span-7" />
+      <div className="grid grid-cols-1 gap-6 @4xl:grid-cols-12">
+        <Skeleton className="h-80 rounded-2xl @4xl:col-span-4" />
+        <Skeleton className="h-80 rounded-2xl @4xl:col-span-8" />
       </div>
     </div>
   );
@@ -270,6 +279,18 @@ function AuditLogTab({ leadId }: { leadId: string }) {
 
 export function LeadDetailView({ leadId }: { leadId: string }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromParam = searchParams.get("from");
+  const [from, setFrom] = useState<string | null>(fromParam);
+
+  useEffect(() => {
+    if (fromParam) {
+      setFrom(fromParam);
+    } else if (typeof document !== "undefined" && document.referrer.includes("/dashboard/abandoned-leads")) {
+      setFrom("abandoned-leads");
+    }
+  }, [fromParam]);
+
   const currentUser = useAuthStore((s) => s.user);
   const role = currentUser?.role;
 
@@ -303,10 +324,10 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const name = `${lead.firstName} ${lead.lastName ?? ""}`.trim();
 
   return (
-    <div className="space-y-5">
+    <div className="@container space-y-5">
       {/* Top Bar: Back Link & Doodle Action Buttons */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <BackLink />
+        <BackLink from={from} />
 
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -430,8 +451,8 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           </div>
 
           {/* Compact Quick-Stats Ribbon */}
-          <div className="grid grid-cols-2 gap-3 border-t-[1.5px] border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 md:grid-cols-6">
-            <div className="space-y-0.5">
+          <div className="grid grid-cols-2 gap-3 border-t-[1.5px] border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 @6xl:grid-cols-6">
+            <div className="min-w-0 space-y-0.5">
               <p className="text-[11px] font-medium text-muted-foreground">Phone</p>
               <p className="truncate text-xs font-bold">{lead.mobile ?? "—"}</p>
             </div>
@@ -474,9 +495,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
       </div>
 
       {/* Main Two-Column Compact Dossier Workspace */}
-      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-12">
+      <div className="grid grid-cols-1 items-start gap-5 @4xl:grid-cols-12">
         {/* Left Column (5 cols): Requirement Brief & Lead Info */}
-        <div className="space-y-4 lg:col-span-5">
+        <div className="min-w-0 space-y-4 @4xl:col-span-4">
           <div className="sketch-panel space-y-3 bg-card p-4.5">
             <div className="flex items-center justify-between border-b-[1.5px] border-ink-line-soft pb-2">
               <div className="flex items-center gap-2">
@@ -487,7 +508,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             </div>
 
             <div className="rounded-lg border border-border/70 bg-muted/20 p-3.5">
-              <p className="text-sm leading-relaxed text-foreground">
+              <p className="break-words text-sm leading-relaxed text-foreground">
                 {lead.requirement?.trim() ? lead.requirement.trim() : "No specific customer requirement noted yet."}
               </p>
             </div>
@@ -510,12 +531,13 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         </div>
 
         {/* Right Column (7 cols): Doodle Binder Workspace with Tabs */}
-        <div className="space-y-0 lg:col-span-7">
-          <div className="flex items-center gap-1.5 border-b-[2px] border-ink-line px-2">
+        <div className="min-w-0 space-y-0 @4xl:col-span-8">
+          {/* Doodle Binder Tabs Bar */}
+          <div className="flex items-center gap-1.5 overflow-x-auto border-b-[2px] border-ink-line px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <button
               type="button"
               onClick={() => setActiveTab("calls")}
-              className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "calls"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -531,7 +553,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("timeline")}
-              className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "timeline"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -544,7 +566,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("assignments")}
-              className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "assignments"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -570,7 +592,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <button
                 type="button"
                 onClick={() => setActiveTab("abandonment")}
-                className={`sketch-press flex items-center gap-1.5 rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+                className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                   activeTab === "abandonment"
                     ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                     : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -681,7 +703,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         lead={{ id: lead.id, name }}
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
-        onDeleted={() => router.push(LEADS_HREF)}
+        onDeleted={() => router.push(from === "abandoned-leads" ? "/dashboard/abandoned-leads" : "/dashboard/leads")}
       />
       {/* No order list loaded on this page - the dialog's own order-selection step is already
           optional and stays hidden whenever there are none, exactly as it does for a customer with

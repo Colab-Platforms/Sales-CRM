@@ -3,6 +3,7 @@ import type { ApiEnvelope } from "../types/common.types";
 import type {
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
+  BulkUpdateStatusPayload,
   CreateLeadPayload,
   ImportBatchSummary,
   ImportPreviewResult,
@@ -55,6 +56,14 @@ export const leadApi = {
   async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number }> {
     const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>(
       "/lead/leads/bulk/assign-salesperson",
+      payload,
+    );
+    return res.data.data;
+  },
+
+  async bulkUpdateStatus(payload: BulkUpdateStatusPayload): Promise<{ updatedCount: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ updatedCount: number }>>(
+      "/lead/leads/bulk/update-status",
       payload,
     );
     return res.data.data;

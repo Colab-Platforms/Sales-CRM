@@ -166,6 +166,16 @@ export interface LiveOrderHistoryResult {
 // (orderCancel), so this is the one and only destructive action available for an unsynced order -
 // same ADMIN-only visibility as the detail page itself, same cancelShopifyOrder() mutation the
 // CRM-linked order's own cancel button already uses (see orders.service.ts's cancelOrder).
+/** POST /orders/live/:externalId/sync - brings one Shopify order into the CRM through the normal Shopify sync (same upsert as webhooks / the sync command). */
+export interface LiveOrderSyncResult {
+  synced: boolean;
+  /** The CRM Order id (the order page to open instead of the live view). Set only when synced. */
+  orderId?: string;
+  action?: "created" | "updated" | "skipped";
+  /** Set only when synced is false. */
+  reason?: string;
+}
+
 export interface LiveOrderCancelResult {
   cancelled: boolean;
   /** Set only when cancelled is false - Shopify's own rejection reason. */

@@ -17,6 +17,7 @@ import type { CurrentUser } from "@/lib/api-client/types/auth.types";
 
 const ROLE_LABELS: Record<CurrentUser["role"], string> = {
   ADMIN: "Admin",
+  HR: "HR",
   MANAGER: "Manager",
   SALESPERSON: "Salesperson",
 };

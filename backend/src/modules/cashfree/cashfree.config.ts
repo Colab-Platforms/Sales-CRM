@@ -46,6 +46,30 @@ function hide(config: object, key: string, value: string) {
 }
 
 // Problems are reported by variable NAME and rule only; a rejected value is never echoed.
+/** Hosts a payment provider can never reach: loopback, link-local, private ranges and bare/internal names. */
+const UNREACHABLE_HOST = /^(localhost|0\.0\.0\.0|127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|\[?::1\]?$|[^.]+$|.*\.(local|internal|localhost)$)/i;
+
+/**
+ * The public https base URL Cashfree should call back, or null (links then work, but only update through Refresh / the scheduled reconciliation).
+ * PUBLIC_BACKEND_URL is the setting for this; RENDER_EXTERNAL_URL (set by Render itself for the service) is only a fallback. Nothing is hard-coded, and only a
+ * public https URL is accepted - http, localhost and private addresses are ignored, so a local/test environment can never register an unreachable webhook.
+ */
+export function resolvePublicBackendUrl(env: Env = process.env): string | null {
+  for (const raw of [env.PUBLIC_BACKEND_URL, env.RENDER_EXTERNAL_URL]) {
+    const value = (raw ?? "").trim().replace(/\/+$/, "");
+    if (!/^https:\/\/[^\s/]+/i.test(value)) continue;
+    let host: string;
+    try {
+      host = new URL(value).hostname;
+    } catch {
+      continue;
+    }
+    if (UNREACHABLE_HOST.test(host)) continue;
+    return value;
+  }
+  return null;
+}
+
 export function loadCashfreeConfig(env: Env = process.env): CashfreeConfig {
   if (!flag(env)) throw new CashfreeConfigError("Cashfree is not enabled (CASHFREE_ENABLED is not true)");
   const problems: string[] = [];
@@ -68,8 +92,8 @@ export function loadCashfreeConfig(env: Env = process.env): CashfreeConfig {
   const linkExpiryHours = Number(hoursText);
   if (!Number.isInteger(linkExpiryHours) || linkExpiryHours < 1 || linkExpiryHours > 720) problems.push("CASHFREE_LINK_EXPIRY_HOURS must be a whole number from 1 to 720");
 
-  const publicUrl = (env.PUBLIC_BACKEND_URL ?? "").trim().replace(/\/+$/, "");
-  const notifyUrl = /^https:\/\/[^\s/]+/i.test(publicUrl) ? `${publicUrl}/api/webhooks/cashfree` : null;
+  const publicUrl = resolvePublicBackendUrl(env);
+  const notifyUrl = publicUrl ? `${publicUrl}/api/webhooks/cashfree` : null;
 
   const returnUrl = (env.CASHFREE_RETURN_URL ?? "").trim() || null;
   if (returnUrl && (!/^https:\/\//i.test(returnUrl) || returnUrl.length > 250)) problems.push("CASHFREE_RETURN_URL must be an https URL of at most 250 characters");
