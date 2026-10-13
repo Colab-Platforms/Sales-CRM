@@ -16,7 +16,7 @@ import type { WhatsAppMessageSummary } from "../whatsapp/whatsapp.types.js";
 import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { readOffer } from "../orders/orders.prepaid-upgrade.hooks.js";
 import { reconcileCashfreePayment } from "./cashfree.reconcile.js";
-import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE } from "./cashfree.apply.js";
+import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE, recordAmountMismatch } from "./cashfree.apply.js";
 import { CashfreeClient, type CashfreeLink, type CashfreeLinkOrder, type CashfreeOrderPayment, type CreateLinkRequest } from "./cashfree.client.js";
 import { CashfreeConfigError, isCashfreeEnabled, loadCashfreeConfig, type CashfreeConfig } from "./cashfree.config.js";
 
@@ -450,6 +450,8 @@ class CashfreePaymentsService {
     if (update.status === "SUCCESS" && toCents(link.linkAmountPaid) !== toCents(payment.amount.toString())) {
       update.status = null;
       update.meta = { ...update.meta, amountMismatch: { expected: payment.amount.toString(), paid: link.linkAmountPaid } };
+      // not applied as paid, but visible to admins in the order's audit trail (once per distinct reported amount)
+      if (link.linkAmountPaid) await this.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount.toString(), reported: link.linkAmountPaid!, via: "refresh", source: ctx.source, now: this.now() }));
     }
     return reconcileCashfreePayment({ runner: this.runner, now: () => this.now(), getShopifyClient: this.deps.getShopifyClient, notifyDeps: this.deps.notifyDeps }, paymentId, update, ctx);
   }

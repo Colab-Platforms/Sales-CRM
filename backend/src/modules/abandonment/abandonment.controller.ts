@@ -8,6 +8,7 @@ import {
   validateBulkAssignSalesperson,
   validateBulkUpdateLeadStatus,
   validateCreateRecoveryAction,
+  validateDistributionQuery,
   validateIdParams,
   validateLeadIdParams,
   validateListAbandonmentsQuery,
@@ -63,6 +64,42 @@ export const getAbandonmentByLead = async (req: AuthRequest, res: Response): Pro
     const params = validateLeadIdParams(req.params);
     if (params.error) return void bad(res, params.error.message);
     sendResponse(res, true, await service.getAbandonmentByLead(req.user!, params.value.leadId), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getAbandonmentOrderPrefill = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateIdParams(req.params);
+    if (params.error) return void bad(res, params.error.message);
+    sendResponse(res, true, await service.getOrderPrefill(req.user!, params.value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getAbandonmentDistribution = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateDistributionQuery(req.query);
+    if (error) return void bad(res, error.message);
+    sendResponse(res, true, await service.getDistribution(req.user!, value.dateRange), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getMyAbandonmentSummary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await service.getMySummary(req.user!), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const listAssignableTelecallers = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, { telecallers: await service.listAssignableTelecallers(req.user!) }, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

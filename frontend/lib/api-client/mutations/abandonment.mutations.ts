@@ -25,7 +25,7 @@ export function useBulkAssignManagerMutation() {
 
 export function useBulkAssignSalespersonMutation() {
   const queryClient = useQueryClient();
-  return useMutation<{ assignedCount: number }, unknown, BulkAssignSalespersonPayload>({
+  return useMutation<{ assignedCount: number; unchangedCount?: number }, unknown, BulkAssignSalespersonPayload>({
     mutationFn: (payload) => abandonmentApi.bulkAssignSalesperson(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });

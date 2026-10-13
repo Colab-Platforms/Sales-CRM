@@ -24,11 +24,15 @@ const uid = () => randomUUID();
 const fakeNotify = { confirmation: async () => ({ sent: false, via: null, provider: null }), paymentLink: async () => ({ sent: false, via: null, provider: null }) } as never;
 
 function shopify(initialTags: string[] = []) {
-  const state = { tags: [...initialTags], calls: [] as string[], failTags: false, failCreate: false, rejectAdd: false };
+  const state = { tags: [...initialTags], calls: [] as string[], failTags: false, failCreate: false, rejectAdd: false, rejectExtras: false, created: [] as any[] };
   const client = {
     query: async (doc: string, vars: { id?: string; tags?: string[] }) => {
       if (doc.includes("orderCreate")) {
         if (state.failCreate) throw new ShopifyGraphQLError("Shopify is down", []);
+        const sent = (vars as any).order ?? {};
+        // test switch: Shopify refuses the discount / shipping fields (nothing is created)
+        if (state.rejectExtras && (sent.discountCode || sent.shippingLines)) return { orderCreate: { order: null, userErrors: [{ field: ["discountCode"], message: "Discount code is not supported (test)" }] } };
+        state.created.push(sent);
         state.calls.push("create");
         return { orderCreate: { order: { id: `gid://shopify/Order/${Math.floor(Math.random() * 1e9)}`, name: "#T1" }, userErrors: [] } };
       }
@@ -335,6 +339,67 @@ describe("telecaller creates an order: creator identity and the 'Order Created b
       const res = await syncCreatorTag(tx as never, order.id, { getShopifyClient: () => w.shop.client });
       assert.equal(res.status, "no_creator");
       assert.deepEqual(w.shop.state.calls, []);
+    });
+  });
+});
+
+describe("CRM discount + shipping reach Shopify at creation, so Shopify's total is the CRM total", () => {
+  const meta = async (w: Awaited<ReturnType<typeof world>>, orderId: string) => (((await w.row(orderId)).metadata ?? {}) as any);
+
+  it("a discounted order with shipping (499 - 100 + 66.72 = 465.72): Shopify receives the discount and the shipping line, and the order records that its totals are mirrored", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create(w.vini, { discount: { type: "FIXED", value: "100" }, shippingAmount: "66.72" });
+      const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { subtotal: true, discountAmount: true, shippingAmount: true, totalAmount: true } });
+      assert.deepEqual([row.subtotal.toString(), row.discountAmount.toString(), row.shippingAmount.toString(), row.totalAmount.toString()], ["499", "100", "66.72", "465.72"]);
+      const sent = w.shop.state.created.at(-1);
+      assert.equal(sent.discountCode.itemFixedDiscountCode.amountSet.shopMoney.amount, "100.00");
+      assert.equal(sent.shippingLines[0].priceSet.shopMoney.amount, "66.72");
+      const m = await meta(w, r.order.id);
+      assert.deepEqual([m.shopifyTotals.mirrored, m.shopifyTotals.total], [true, "465.72"]);
+    });
+  });
+
+  it("no discount and no shipping: nothing extra is sent, exactly as before", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create(w.vini);
+      const sent = w.shop.state.created.at(-1);
+      assert.equal("discountCode" in sent, false);
+      assert.equal("shippingLines" in sent, false);
+      assert.equal((await meta(w, r.order.id)).shopifyTotals.mirrored, true, "trivially equal: items = total");
+    });
+  });
+
+  it("if Shopify REFUSES the discount/shipping fields, the order is created once without them and is NOT claimed to match (the safe reconciliation then applies)", async () => {
+    await inRollback(async (tx) => {
+      const shop = shopify();
+      shop.state.rejectExtras = true;
+      const w = await world(tx, shop);
+      const r = await w.create(w.vini, { discount: { type: "FIXED", value: "100" }, shippingAmount: "66.72" });
+      assert.equal(shop.state.calls.filter((c) => c === "create").length, 1, "exactly one Shopify order");
+      const sent = shop.state.created.at(-1);
+      assert.equal("discountCode" in sent, false);
+      assert.equal("shippingLines" in sent, false);
+      assert.equal((await w.row(r.order.id)).externalId !== null, true);
+      assert.equal((await meta(w, r.order.id)).shopifyTotals.mirrored, false);
+      assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1, "one CRM order");
+    });
+  });
+
+  it("a push that fails outright keeps the CRM order, creates no Shopify order, and a retry links it once", async () => {
+    await inRollback(async (tx) => {
+      const shop = shopify();
+      shop.state.failCreate = true;
+      const w = await world(tx, shop);
+      const r = await w.create(w.vini, { discount: { type: "FIXED", value: "100" }, shippingAmount: "66.72" });
+      assert.equal((await w.row(r.order.id)).externalId, null);
+      assert.equal(shop.state.calls.filter((c) => c === "create").length, 0);
+      shop.state.failCreate = false;
+      await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id);
+      await w.svc.pushOrderToShopify(w.as(w.vini), r.order.id);
+      assert.equal(shop.state.calls.filter((c) => c === "create").length, 1, "linked once");
+      assert.equal((await meta(w, r.order.id)).shopifyTotals.mirrored, true);
     });
   });
 });

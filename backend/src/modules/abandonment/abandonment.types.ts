@@ -5,7 +5,11 @@ import type { Pagination } from "../orders/orders.types.js";
 // E6's Customer 360 timeline already renders (customers.timeline.ts) - this is the first module that
 // writes and lists them directly, rather than only rendering them inside one lead's history.
 
-export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
+/** UNASSIGNED = no manager yet; ASSIGNED_TO_MANAGER = a manager but no telecaller; ASSIGNED_TO_SALESPERSON = has a telecaller; UNASSIGNED_TELECALLER = no telecaller yet (with or without a manager) - the distribution backlog. */
+export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON" | "UNASSIGNED_TELECALLER";
+
+/** Which day(s) of abandoned checkouts to list, by when the checkout was abandoned (Abandonment.detectedAt), in the reporting timezone (IST). Absent / "all" = no restriction. */
+export type AbandonmentDateRange = "today" | "yesterday" | "all";
 
 export interface ListAbandonmentsQuery {
   page: number;
@@ -15,6 +19,7 @@ export interface ListAbandonmentsQuery {
   type?: AbandonmentType;
   dateFrom?: Date;
   dateTo?: Date;
+  dateRange?: AbandonmentDateRange;
   assignment?: AbandonmentAssignmentFilter;
   managerId?: string;
   salespersonId?: string;

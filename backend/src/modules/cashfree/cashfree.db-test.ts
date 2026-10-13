@@ -367,7 +367,13 @@ describe("Cashfree webhooks", () => {
       const [payment] = await cashfreePayments(tx, order.id);
       assert.equal(payment.status, PaymentStatus.PENDING);
       assert.equal(payment.amount.toString(), "649");
-      assert.ok(!(await activityTypes(tx, order.id)).includes(ActivityType.PAYMENT_MISMATCH_DETECTED));
+      // not applied (no status change, no "payment success" row) - but the refusal is surfaced to admins as a single "not applied as paid" audit row, not lost in a log line
+      const types = await activityTypes(tx, order.id);
+      assert.ok(!types.includes(ActivityType.PAYMENT_STATUS_CHANGED), "nothing was applied");
+      const rows = await tx.activity.findMany({ where: { orderId: order.id, type: ActivityType.PAYMENT_MISMATCH_DETECTED }, select: { title: true, metadata: true } });
+      assert.equal(rows.length, 1);
+      assert.match(rows[0]!.title ?? "", /not applied as paid/);
+      assert.equal((rows[0]!.metadata as any).applied, false);
     });
   });
 

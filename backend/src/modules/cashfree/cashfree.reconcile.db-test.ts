@@ -158,6 +158,11 @@ describe("WhatsApp Inbox order: 1199 - 1198 = 1, paid 1", () => {
       cf.pay(link.linkId, "0.50");
       await svc.reconcileOpenPayment(link.paymentId);
       assert.deepEqual((await final(tx, order.id)).payments, ["PENDING:1"]);
+      // Refresh does not apply it as paid, but records the mismatch for admins - once, however often Refresh is pressed
+      await svc.reconcileOpenPayment(link.paymentId);
+      const mismatches = await tx.activity.findMany({ where: { orderId: order.id, type: "PAYMENT_MISMATCH_DETECTED", referenceId: link.paymentId }, select: { metadata: true } });
+      assert.equal(mismatches.length, 1);
+      assert.equal((mismatches[0]!.metadata as any).via, "refresh");
       cf.setStatus(link.linkId, "EXPIRED");
       assert.equal(await svc.reconcileOpenPayment(link.paymentId), "updated");
       assert.deepEqual((await final(tx, order.id)).payments, ["FAILED:1"]);

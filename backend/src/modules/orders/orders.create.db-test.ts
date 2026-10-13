@@ -164,6 +164,27 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
     });
   });
 
+  it("order lines come back in the order they were entered, every time (lines inserted together must not tie and be shuffled by their random ids)", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const products = [];
+      for (let i = 0; i < 10; i++) products.push(await makeProduct(tx, { name: `Line product ${i}` }));
+      let n = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => ({ orderCreate: { order: { id: `gid://shopify/Order/${Date.now()}${++n}`, name: "#TST" }, userErrors: [] } })));
+      for (let round = 0; round < 5; round++) {
+        const { order } = await svc.createManualOrder(as(admin, Role.ADMIN), {
+          leadId: lead.id,
+          items: products.map((p, i) => ({ productId: p.id, quantity: 1, unitPrice: `${100 + i}.00` })),
+          paymentMethod: "COD",
+          shippingAddress: { line1: "123 Main St", city: "Mumbai", state: "Maharashtra", pincode: "400001" },
+        });
+        const fetched = await svc.getOrder(as(admin, Role.ADMIN), order.id);
+        assert.deepEqual(fetched.items.map((i) => i.productName), products.map((_, i) => `Line product ${i}`), `round ${round}`);
+      }
+    });
+  });
+
   it("a prepaid (non-COD) order starts PENDING_PAYMENT, not CONFIRMED", async () => {
     await inRollback(async (tx) => {
       const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });

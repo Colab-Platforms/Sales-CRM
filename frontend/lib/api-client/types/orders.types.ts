@@ -106,6 +106,8 @@ export interface CreateManualOrderItemInput {
 
 export interface CreateManualOrderInput {
   leadId: string;
+  /** The abandoned checkout the form was prefilled from (the server checks it belongs to this customer and records it on the order). */
+  abandonmentId?: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
   // One per order ATTEMPT (reused across retries of that same attempt) - the backend collapses a double submit with the same key into one order.

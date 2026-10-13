@@ -21,7 +21,11 @@ const leadIdParams = z.object({ leadId: z.uuid({ error: "Invalid lead id" }) });
 // `?status=` from an unset filter is treated the same as absent - same convention as shiprocket.validators.ts.
 const optional = <T extends z.ZodType>(schema: T) => z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
 
-const assignmentEnum = z.enum(["UNASSIGNED", "ASSIGNED_TO_MANAGER", "ASSIGNED_TO_SALESPERSON"]);
+const assignmentEnum = z.enum(["UNASSIGNED", "ASSIGNED_TO_MANAGER", "ASSIGNED_TO_SALESPERSON", "UNASSIGNED_TELECALLER"]);
+
+// The distribution dashboard: the period defaults to today.
+const distributionQuerySchema = z.object({ dateRange: optional(z.enum(["today", "yesterday", "all"], { error: "dateRange must be today, yesterday or all" })).default("today") });
+export const validateDistributionQuery = (query: unknown) => validateSchema<{ dateRange: "today" | "yesterday" | "all" }>(distributionQuerySchema, query);
 
 const listQuerySchema = z
   .object({
@@ -32,6 +36,8 @@ const listQuerySchema = z
     type: optional(z.enum(AbandonmentType, { error: "Invalid abandonment type" })),
     dateFrom: optional(z.iso.datetime({ offset: true, error: "dateFrom must be an ISO date-time" }).transform((v) => new Date(v))),
     dateTo: optional(z.iso.datetime({ offset: true, error: "dateTo must be an ISO date-time" }).transform((v) => new Date(v))),
+    // Calendar-day shortcut computed by the SERVER in the reporting timezone (IST), so the browser's own clock/zone never decides which day is "today".
+    dateRange: optional(z.enum(["today", "yesterday", "all"], { error: "dateRange must be today, yesterday or all" })),
     assignment: optional(assignmentEnum),
     managerId: optional(z.uuid()),
     salespersonId: optional(z.uuid()),

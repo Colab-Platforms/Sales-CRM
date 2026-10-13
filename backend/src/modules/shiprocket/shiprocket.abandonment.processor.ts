@@ -3,6 +3,7 @@ import LeadService from "../lead/lead.service.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
 import { safeMessage, type TxRunner } from "../integrations/integrations.common.js";
 import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
+import type { Prisma } from "../../../generated/prisma/client.js";
 import { parseAbandonmentEvent, summarize, type ParsedAbandonment } from "./shiprocket.abandonment.mapper.js";
 
 // Turns a stored "Abandon Cart" delivery into a Lead + Abandonment row. Mirrors
@@ -40,8 +41,33 @@ function priorityFromCartValue(cartValue: string | null): { score: number | null
 
 /** Structured cart detail stored on Abandonment.cartSnapshot, so the UI can render real list items,
  *  a formatted price and a clickable resume link instead of one flattened text blob. */
-function buildCartSnapshot(event: ParsedAbandonment) {
+export function buildCartSnapshot(event: ParsedAbandonment, previous?: unknown): Record<string, unknown> {
+  const before = (previous && typeof previous === "object" ? previous : {}) as Record<string, unknown>;
+  const hasLines = event.lines.length > 0;
+  // Deliveries can arrive out of order (a retry of an older one after a newer one). An OLDER delivery never overwrites what a newer one saved; it only
+  // supplies what the saved snapshot does not have yet.
+  const savedAt = typeof before.capturedAt === "string" ? new Date(before.capturedAt) : null;
+  const olderThanSaved = Boolean(event.abandonedAt && savedAt && !Number.isNaN(savedAt.getTime()) && event.abandonedAt.getTime() < savedAt.getTime());
+  if (olderThanSaved) {
+    const have = (k: string) => (Array.isArray(before[k]) ? (before[k] as unknown[]).length > 0 : before[k] !== undefined && before[k] !== null);
+    return {
+      ...before,
+      ...(have("lines") ? {} : { lines: event.lines }),
+      ...(have("shippingAddress") ? {} : { shippingAddress: event.shippingAddress }),
+      ...(have("billingAddress") ? {} : { billingAddress: event.billingAddress }),
+    };
+  }
   return {
+    // Prefill data for the Create Order form (read by the order-prefill endpoint only; the list/detail APIs whitelist their own fields).
+    // A repeat delivery for the same cart refreshes what it carries and KEEPS what it does not: a customer who typed an address
+    // and then stalled before the next webhook must not lose it just because that delivery had none.
+    lines: hasLines ? event.lines : before.lines ?? [],
+    totals: event.totals.total || event.totals.shipping || event.totals.discount ? event.totals : before.totals ?? event.totals,
+    shippingAddress: event.shippingAddress ?? before.shippingAddress ?? null,
+    billingAddress: event.billingAddress ?? before.billingAddress ?? null,
+    customer: { firstName: event.firstName, lastName: event.lastName, phone: event.phone, email: event.email },
+    capturedAt: (event.abandonedAt ?? new Date()).toISOString(),
+    sourceName: event.sourceName ?? (before.sourceName as string | null | undefined) ?? null,
     cartValue: event.cartValue,
     currency: event.currency,
     itemCount: event.itemCount,
@@ -66,12 +92,15 @@ async function resolveLead(tx: import("../integrations/integrations.common.js").
   const normalizedMobile = normalizeMobile(event.phone);
   const normalizedEmail = normalizeEmail(event.email);
 
-  if (normalizedMobile || normalizedEmail) {
-    const existing = await tx.lead.findFirst({
-      where: { OR: [...(normalizedMobile ? [{ normalizedMobile }] : []), ...(normalizedEmail ? [{ normalizedEmail }] : [])] },
-      select: { id: true },
-    });
-    if (existing) return existing;
+  // The phone number identifies the customer first, the email second - never "whichever row the database returns first", so a cart whose phone and
+  // email belong to two different leads is attached to the phone's lead every time.
+  if (normalizedMobile) {
+    const byPhone = await tx.lead.findFirst({ where: { normalizedMobile }, select: { id: true }, orderBy: { createdAt: "asc" } });
+    if (byPhone) return byPhone;
+  }
+  if (normalizedEmail) {
+    const byEmail = await tx.lead.findFirst({ where: { normalizedEmail }, select: { id: true }, orderBy: { createdAt: "asc" } });
+    if (byEmail) return byEmail;
   }
 
   const sourceId = await ensureCheckoutSource(tx);
@@ -113,16 +142,19 @@ export async function processAbandonmentEvent(eventId: string, deps: Abandonment
       const existing = event.externalId
         ? await tx.abandonment.findFirst({
             where: { leadId: lead.id, type: AbandonmentType.CHECKOUT, referenceId: event.externalId, status: { in: [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS] } },
-            select: { id: true },
+            select: { id: true, detectedAt: true },
           })
         : null;
 
-      const cartSnapshot = buildCartSnapshot(event);
+      const previousSnapshot = existing
+        ? (await tx.abandonment.findUnique({ where: { id: existing.id }, select: { cartSnapshot: true } }))?.cartSnapshot
+        : undefined;
+      const cartSnapshot = buildCartSnapshot(event, previousSnapshot) as Prisma.InputJsonObject;
 
       const abandonment = existing
         ? await tx.abandonment.update({
             where: { id: existing.id },
-            data: { detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
+            data: { detectedAt: detectedAt.getTime() >= existing.detectedAt.getTime() ? detectedAt : existing.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
           })
         : await tx.abandonment.create({
             data: {

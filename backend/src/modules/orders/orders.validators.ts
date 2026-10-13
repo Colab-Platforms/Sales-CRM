@@ -81,6 +81,7 @@ const shippingAddressSchema = z
 
 const createManualOrderSchema = z.object({
   leadId: z.uuid({ error: "Invalid customer id" }),
+  abandonmentId: optional(z.uuid({ error: "Invalid abandoned checkout id" })),
   items: z.array(createManualOrderItemSchema).min(1, "At least one item is required").max(50, "Too many items"),
   paymentMethod: z.enum(PaymentMethod, { error: "Invalid payment method" }),
   shippingAddress: optional(shippingAddressSchema),

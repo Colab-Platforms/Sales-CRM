@@ -14,7 +14,7 @@ import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { computePaymentBreakdown } from "../orders/orders.filters.js";
 import { ShopifyConfigError, loadShopifyConfig } from "../shopify/shopify.config.js";
 import { markShopifyOrderPaid, ShopifyOrderMarkAsPaidError } from "../shopify/shopify.orders.write.js";
-import { reconcilePrepaidUpgrade, ShopifyReconcileError } from "../shopify/shopify.orders.reconcile.js";
+import { reconcilePrepaidUpgrade, readShopifyOrderTotals, ShopifyReconcileError } from "../shopify/shopify.orders.reconcile.js";
 import { readOffer } from "../orders/orders.prepaid-upgrade.hooks.js";
 import { notifyPaymentSuccess, type OrderNotifyDeps } from "../whatsapp/whatsapp.order-notify.service.js";
 import type { MessageItem } from "../whatsapp/whatsapp.order-message.js";
@@ -89,11 +89,24 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
 
   // An order the CRM itself discounted (WhatsApp Inbox / manual order: Order.metadata.discount | customDiscount) reaches Shopify at LIST price. Marking it paid would record
   // the whole list price as received for a smaller collection, so it gets the same edit-then-pay reconciliation, for exactly what the CRM charged and collected.
-  const crmDiscount = !offer && Boolean(meta.discount || meta.customDiscount) && toCents(order.discountAmount.toString()) > 0 ? crmDiscountFigures(order) : null;
+  // A CRM-discounted order whose Shopify order was CREATED with the same discount and shipping (Order.metadata.shopifyTotals.mirrored) needs no discount reconciliation at all - see below.
+  const mirrored = !offer && asRecord(meta.shopifyTotals).mirrored === true;
+  const crmDiscount = !offer && !mirrored && Boolean(meta.discount || meta.customDiscount) && toCents(order.discountAmount.toString()) > 0 ? crmDiscountFigures(order) : null;
   if (crmDiscount && "problem" in crmDiscount) {
     await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "failed", failedAt: now.toISOString(), reason: crmDiscount.problem } } as Prisma.InputJsonValue } });
     await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment sync failed (order ${order.orderNumber})`, description: crmDiscount.problem, metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNC_FAILED" } } });
     return { status: "failed", reason: crmDiscount.problem };
+  }
+
+  // Mirrored order: Shopify's total must STILL be the CRM total (someone may have edited the Shopify order since) and the CRM must have collected exactly that. Otherwise nothing is written and the
+  // reason is recorded for the retry - the payment is never forced onto a Shopify order that disagrees.
+  if (mirrored) {
+    const problem = await mirroredTotalsProblem(tx, orderId, order.externalId, client, toCents(order.totalAmount.toString()));
+    if (problem) {
+      await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "failed", failedAt: now.toISOString(), reason: problem } } as Prisma.InputJsonValue } });
+      await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment sync failed (order ${order.orderNumber})`, description: problem, metadata: { provider: "SHOPIFY" } as Prisma.InputJsonValue } });
+      return { status: "failed", reason: problem };
+    }
   }
 
   try {
@@ -113,6 +126,22 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
     logger.warn(`Shopify payment sync failed for order ${orderId}: ${reason}`);
     return { status: "failed", reason };
   }
+}
+
+/** Why a mirrored order cannot be marked paid on Shopify right now (a read-only check), or null when it can. Never writes. */
+async function mirroredTotalsProblem(tx: Db, orderId: string, shopifyOrderId: string, client: ShopifyClient, crmTotalCents: number): Promise<string | null> {
+  let state;
+  try {
+    state = await readShopifyOrderTotals(client, shopifyOrderId);
+  } catch (error) {
+    return `Shopify could not be read to confirm the order total: ${safeMessage(error instanceof Error ? error.message : String(error))}`;
+  }
+  if (state.cancelled) return "The Shopify order is cancelled; it was not changed.";
+  if (state.total !== crmTotalCents) return `Shopify's order total (${fromCents(state.total)}) differs from the CRM total (${fromCents(crmTotalCents)}), so Shopify was left unchanged. Correct the Shopify order (price, discount and shipping) to match, then use "Retry Shopify payment sync".`;
+  const payments = await tx.payment.findMany({ where: { orderId }, select: { status: true, amount: true, refundedAmount: true } });
+  const collected = computePaymentBreakdown(payments.map((p) => ({ status: p.status, amount: p.amount.toString(), refundedAmount: p.refundedAmount ? p.refundedAmount.toString() : null }))).paidCents;
+  if (collected !== crmTotalCents) return `The CRM collected ${fromCents(collected)} but the order total is ${fromCents(crmTotalCents)}, so Shopify was left unchanged.`;
+  return null;
 }
 
 /** Sends "payment received" exactly once per order (a `paymentSuccessNotifiedAt` stamp on Order.metadata guards a

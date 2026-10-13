@@ -28,6 +28,8 @@ export interface CreateManualOrderItemInput {
 
 export interface CreateManualOrderInput {
   leadId: string;
+  /** The abandoned checkout this order was created from (the Create Order form was prefilled from it). Must belong to `leadId`; recorded on the order for traceability. */
+  abandonmentId?: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
   // Frontend-generated (e.g. crypto.randomUUID(), one per order attempt, reused across retries of that
