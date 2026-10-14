@@ -10,6 +10,9 @@ import { useCreateOrderMutation, usePushOrderToShopifyMutation } from "@/lib/api
 import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
 import { productsApi } from "@/lib/api-client/endpoints/products.api";
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
+import { abandonmentOrderPrefillQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import type { LastShippingAddress } from "@/lib/api-client/types/delivery.types";
+import { AbandonedCheckoutPrefill, prefillDraftItems } from "./abandoned-checkout-prefill";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useCourierRates } from "@/hooks/useCourierRates";
 import { chargeText, shippingChargeState } from "@/lib/shipping-charge";
@@ -66,6 +69,8 @@ interface CreateOrderDialogProps {
   leadId: string;
   customerName: string;
   customerMobile: string | null;
+  /** Set when the form is opened from ONE abandoned checkout: its saved cart and address prefill the form (all editable), and the order is tied to it. */
+  abandonmentId?: string;
   /** Test seams: render the same content inline (no portal) from a given order type / step. Not used by the app. */
   inline?: boolean;
   initialOrderType?: OrderType;
@@ -78,7 +83,7 @@ interface CreateOrderDialogProps {
 
 type Step = "form" | "review" | "done";
 
-export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, customerMobile, inline, initialOrderType, initialStep, initialSendViaWhatsApp, initialWeight, initialItems, initialDimensions }: CreateOrderDialogProps) {
+export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, customerMobile, abandonmentId, inline, initialOrderType, initialStep, initialSendViaWhatsApp, initialWeight, initialItems, initialDimensions }: CreateOrderDialogProps) {
   const [step, setStep] = useState<Step>(initialStep ?? "form");
   const [items, setItems] = useState<DraftItem[]>(initialItems ? initialItems.map((i) => ({ ...emptyItem(), ...i })) : [emptyItem()]);
   const [orderType, setOrderType] = useState<OrderType>(initialOrderType ?? "COD");
@@ -124,7 +129,16 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const products = useMemo(() => productsQuery.data?.items ?? [], [productsQuery.data]);
 
   const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open });
-  const last = lastAddressQuery.data ?? null;
+  // The abandoned checkout this form was opened from (its OWN cart, by id). Read fresh on every open. Without it the form behaves exactly as before.
+  const prefillQuery = useQuery({ ...abandonmentOrderPrefillQueryOptions(abandonmentId ?? ""), enabled: open && Boolean(abandonmentId) });
+  const prefill = prefillQuery.data ?? null;
+  // The address the customer typed at checkout wins over the address of an earlier order (it is the one they just asked to be delivered to); nothing typed here is ever overwritten.
+  const checkoutAddress: LastShippingAddress | null = useMemo(() => {
+    const a = prefill?.address;
+    if (!a) return null;
+    return { name: a.name ?? prefill.customer.name ?? "", line1: a.line1 ?? "", line2: a.line2 ?? "", city: a.city ?? "", state: a.state ?? "", pincode: a.pincode ?? "", phone: a.phone ?? prefill.customer.phone ?? "", houseNumber: a.line1 ?? "", building: "", area: a.line2 ?? "", street: "", landmark: a.landmark ?? "", addressType: "" };
+  }, [prefill]);
+  const last = checkoutAddress ?? lastAddressQuery.data ?? null;
 
   const waOptionsQuery = useQuery({ ...whatsAppPaymentOptionsQueryOptions(leadId), enabled: open && orderType !== "COD" });
   const waOptions = waOptionsQuery.data ?? null;
@@ -218,6 +232,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
       setShipmentOpen(false);
       setWhatsapp(NO_WHATSAPP);
       setStepIndex(0);
+      appliedPrefill.current = null;
       createOrder.reset();
       idempotencyKey.current = crypto.randomUUID();
     }
@@ -267,6 +282,18 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productsQuery.dataUpdatedAt]);
+
+  // The checkout's product lines are applied ONCE per open (once the catalogue is known, so each matched line is priced by the CRM catalogue, as every line is),
+  // and only onto a form the salesperson has not started. Re-renders, refetches and re-opens never add them a second time.
+  const appliedPrefill = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prefill || appliedPrefill.current === prefill.abandonmentId) return;
+    if (!productsQuery.data && !productsQuery.isError) return;
+    appliedPrefill.current = prefill.abandonmentId;
+    if (prefill.lines.length === 0) return;
+    setItems((prev) => prefillDraftItems(prev, prefill.lines, (id) => productsQuery.data?.items.find((p) => p.id === id), (product, variantId) => catalogPrice(product as never, variantId)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill, productsQuery.data, productsQuery.isError]);
 
   const itemValid = (i: DraftItem) => {
     const product = products.find((p) => p.id === i.productId);
@@ -354,6 +381,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     createOrder.mutate(
       {
         leadId,
+        // Only a checkout that actually loaded for this customer is referenced; the server re-checks that it is theirs.
+        ...(prefill ? { abandonmentId: prefill.abandonmentId } : {}),
         items: validItems,
         paymentMethod: orderType,
         shippingAddress: {
@@ -487,6 +516,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
             className="grid gap-4 lg:grid-cols-[1fr_340px]"
           >
             <div className="grid min-w-0 content-start gap-4">
+              {abandonmentId ? <AbandonedCheckoutPrefill prefill={prefill} loading={prefillQuery.isPending && prefillQuery.fetchStatus !== "idle"} failed={prefillQuery.isError} /> : null}
               <ItemsSection onAdd={() => setItems((prev) => [...prev, emptyItem()])}>
                 {items.map((item, index) => (
                   <ItemCard

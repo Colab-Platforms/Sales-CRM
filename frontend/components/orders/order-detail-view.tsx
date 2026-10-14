@@ -248,7 +248,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
               {order.cancelReason ? <DetailField label="Cancel reason">{order.cancelReason}</DetailField> : null}
             </DetailGrid>
             <div className="mt-4 border-t pt-3">
-              <OrderConfirmationTags id={order.id} confirmedBy={order.confirmedBy} confirmationTag={order.confirmationTag} shopifyConfirmationTag={order.shopifyConfirmationTag} confirmedAt={order.confirmedAt} externalNumber={order.externalNumber} />
+              <OrderConfirmationTags id={order.id} confirmedBy={order.confirmedBy} confirmationTag={order.confirmationTag} shopifyConfirmationTag={order.shopifyConfirmationTag} confirmedAt={order.confirmedAt} externalNumber={order.externalNumber} createdByUser={order.createdByUser} creatorTag={order.creatorTag} shopifyCreatorTag={order.shopifyCreatorTag} />
             </div>
           </CardContent>
         </AccentCard>

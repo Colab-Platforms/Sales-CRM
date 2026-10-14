@@ -32,12 +32,31 @@ describe("Order Detail: Tags", () => {
     const t = text(render({ confirmedBy: { id: "u1", name: "Vini" }, confirmationTag: "CRM Confirmed by Vini", shopifyConfirmationTag: { status: "failed", reason: "Access denied. Required access: write_orders" } }));
     assert.match(t, /CRM Confirmed by Vini/);
     assert.match(t, /The Shopify tag could not be updated: Access denied/);
-    assert.match(t, /The CRM confirmation is saved/);
+    assert.match(t, /The CRM order and its tags are saved/);
     assert.match(t, /Retry Shopify tag/);
   });
   it("a different confirmer shows only the current one", () => {
     const t = text(render({ confirmedBy: { id: "u2", name: "Rahul" }, confirmationTag: "CRM Confirmed by Rahul" }));
     assert.match(t, /CRM Confirmed by Rahul/);
     assert.doesNotMatch(t, /Vini/);
+  });
+
+  it("creator tag: 'Order Created by Vini' and 'Created by: Vini' are shown, for any viewer, next to the confirmation tag", () => {
+    const t = text(render({ createdByUser: { id: "u1", name: "Vini" }, creatorTag: "Order Created by Vini", confirmedBy: { id: "u1", name: "Vini" }, confirmationTag: "CRM Confirmed by Vini", shopifyCreatorTag: { status: "synced", tag: "Order Created by Vini" }, externalNumber: "#1042" }));
+    assert.match(t, /Order Created by Vini/);
+    assert.match(t, /Created by: Vini/);
+    assert.match(t, /CRM Confirmed by Vini/);
+    assert.match(t, /Also on Shopify #1042/);
+    assert.doesNotMatch(t, /Retry Shopify tag/);
+  });
+  it("a creator-tag Shopify failure keeps the tag visible in the CRM, says so, and offers the retry", () => {
+    const t = text(render({ createdByUser: { id: "u1", name: "Vini" }, creatorTag: "Order Created by Vini", shopifyCreatorTag: { status: "failed", reason: "Access denied. Required access: write_orders" } }));
+    assert.match(t, /Order Created by Vini/);
+    assert.match(t, /The Shopify tag could not be updated: Access denied/);
+    assert.match(t, /Retry Shopify tag/);
+  });
+  it("no creator established: no creator tag and no 'Created by' line is shown", () => {
+    const t = text(render({ createdByUser: null, creatorTag: null }));
+    assert.doesNotMatch(t, /Order Created by|Created by:/);
   });
 });

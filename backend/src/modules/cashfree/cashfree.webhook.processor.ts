@@ -4,7 +4,7 @@ import { logger } from "@/utils/logger.js";
 import { toCents } from "../shopify/shopify.money.js";
 import { UUID_PATTERN, safeMessage, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
-import { linkToUpdate, type PaymentUpdate } from "./cashfree.apply.js";
+import { linkToUpdate, recordAmountMismatch, type PaymentUpdate } from "./cashfree.apply.js";
 import { parseEvent, type CashfreeEvent } from "./cashfree.events.js";
 import { reconcileCashfreePayment } from "./cashfree.reconcile.js";
 import type { CashfreeLink, CashfreeRefund } from "./cashfree.client.js";
@@ -130,6 +130,7 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
     // The amount the delivery itself reports must also be the amount the CRM expects.
     if (update.status === "SUCCESS" && update.paidAmount && toCents(update.paidAmount) !== toCents(payment.amount)) {
       logger.warn(`Cashfree webhook reported ${update.paidAmount} for a payment expecting ${payment.amount}; not applied`);
+      await deps.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount, reported: update.paidAmount!, via: "webhook", source: ActivitySource.CASHFREE_WEBHOOK, now: now() }));
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }
@@ -137,6 +138,10 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
       const link = await deps.verifyLink(payment.externalId);
       if (link.linkStatus !== "PAID" || toCents(link.linkAmountPaid) !== toCents(payment.amount)) {
         logger.warn(`Cashfree webhook claimed payment for ${payment.externalId}, but Cashfree reports ${link.linkStatus} (${link.linkAmountPaid ?? "no amount"} of ${payment.amount}); not applied`);
+        // Cashfree itself says PAID, but for a different amount: surface it to admins (a link that is simply not paid yet is not a mismatch).
+        if (link.linkStatus === "PAID" && link.linkAmountPaid) {
+          await deps.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount, reported: link.linkAmountPaid!, via: "webhook", source: ActivitySource.CASHFREE_WEBHOOK, now: now() }));
+        }
         await deps.store.complete(eventId, "IGNORED", now());
         return "ignored";
       }

@@ -1,0 +1,35 @@
+// Durable, cross-process duplicate protection for operations a client may retry (today: manual order creation).
+// One row per (actor, operation, client key). The row is written INSIDE the same transaction that creates the order, so the
+// database's unique index - not process memory - is what makes two simultaneous requests (any process, any worker) produce one order.
+// No foreign keys by design: this is a ledger, and it must never block deleting a user or an order.
+model IdempotencyKey {
+  id String @id @default(uuid()) @db.Uuid
+
+  /// The authenticated actor - a key can never be reused by, or reveal an order to, anyone else.
+  userId String @map("user_id") @db.Uuid
+
+  /// What the key protects, e.g. "ORDER_CREATE".
+  operation String @map("operation") @db.VarChar(60)
+
+  /// The client's key (one per order attempt, reused by every retry of that attempt).
+  key String @map("key") @db.VarChar(100)
+
+  /// SHA-256 of the canonical request body (without the key): the same key with a different request is refused, never answered with the wrong order.
+  requestHash String @map("request_hash") @db.VarChar(64)
+
+  /// The order this key created (committed atomically with this row).
+  orderId String? @map("order_id") @db.Uuid
+
+  /// ORDER_CREATED = the order exists but the follow-up steps (Shopify, payment link, notification) may not have finished; COMPLETED = they did.
+  status String @default("ORDER_CREATED") @map("status") @db.VarChar(30)
+
+  /// What the original request answered besides the order itself (Shopify / payment-link / notification outcome), for a faithful replay.
+  result Json? @map("result")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, operation, key])
+  @@index([createdAt])
+  @@map("idempotency_keys")
+}

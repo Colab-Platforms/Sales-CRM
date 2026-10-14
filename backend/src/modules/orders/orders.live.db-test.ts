@@ -185,14 +185,16 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
     });
   });
 
-  it("a non-admin gets a not-found result, never the order data, for an unsynced Shopify order", async () => {
+  it("a salesperson (telecaller) can read an unsynced Shopify order too; HR still gets a plain not-found and never the order data", async () => {
     await inRollback(async (tx) => {
       const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const client = fakeShopifyDetailClient(orderByIdBody({ id: "gid://shopify/Order/556", name: "#4002" }));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(rep, Role.SALESPERSON), "556");
-      assert.equal(result.order, null);
-      assert.ok(result.error);
+      assert.equal(result.order?.name, "#4002");
+      const hr = await new OrdersLiveService(tx, () => client).getLiveOrderDetail({ id: uid(), username: "hr", role: Role.HR } as never, "556");
+      assert.equal(hr.order, null);
+      assert.equal(hr.errorKind, "not_found");
     });
   });
 
@@ -240,6 +242,70 @@ describe("OrdersLiveService.getLiveOrderDetail", () => {
   });
 });
 
+describe("Order Detail for a Shopify order id: the shopify:<id> / numeric / GID forms, synced or not, and real errors", () => {
+  const ID = "18933143797949";
+
+  it("the numeric id, the shopify:<id> form and the full GID all open the SAME unsynced order, for admin, manager and salesperson (another team's customer included)", async () => {
+    await inRollback(async (tx) => {
+      const mk = (role: Role, name: string) => tx.user.create({ data: { name, username: `u-${uid()}`, role } });
+      const [admin, manager, rep] = [await mk(Role.ADMIN, "Admin"), await mk(Role.MANAGER, "Mgr"), await mk(Role.SALESPERSON, "Rep")];
+      for (const [user, role] of [[admin, Role.ADMIN], [manager, Role.MANAGER], [rep, Role.SALESPERSON]] as const) {
+        for (const form of [ID, `shopify:${ID}`, `gid://shopify/Order/${ID}`]) {
+          const client = fakeShopifyDetailClient(orderByIdBody({ id: `gid://shopify/Order/${ID}`, name: "#9001" }));
+          const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(user, role), form);
+          assert.equal(result.order?.name, "#9001", `${role} / ${form}`);
+          assert.equal(result.errorKind, undefined);
+        }
+      }
+    });
+  });
+
+  it("an order that is already synced into the CRM points at the CRM order (no duplicate Shopify-only copy), in numeric and GID form", async () => {
+    await inRollback(async (tx) => {
+      const manager = await tx.user.create({ data: { name: "Mgr", username: `m-${uid()}`, role: Role.MANAGER } });
+      const lead = await makeLead(tx); // belongs to some other team
+      const crm = await makeShopifyOrder(tx, lead.id, ID);
+      const client = fakeShopifyDetailClient(orderByIdBody({ id: `gid://shopify/Order/${ID}`, name: "#9001" }));
+      for (const form of [ID, `gid://shopify/Order/${ID}`, `shopify:${ID}`]) {
+        const result = await new OrdersLiveService(tx, () => client).getLiveOrderDetail(as(manager, Role.MANAGER), form);
+        assert.equal(result.crmOrderId, crm.id, form);
+        assert.equal(result.order, null);
+      }
+      assert.equal(await tx.order.count({ where: { externalId: ID } }), 1, "nothing was created");
+    });
+  });
+
+  it("a genuinely missing order is not_found; a Shopify/API failure is reported as unavailable with the real reason - never masked as 'not found'", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const missing = await new OrdersLiveService(tx, () => fakeShopifyDetailClient(orderByIdBody(null))).getLiveOrderDetail(as(admin, Role.ADMIN), "424242");
+      assert.deepEqual([missing.order, missing.errorKind], [null, "not_found"]);
+      const junk = await new OrdersLiveService(tx, () => fakeShopifyDetailClient(orderByIdBody(null))).getLiveOrderDetail(as(admin, Role.ADMIN), "not-an-order");
+      assert.equal(junk.errorKind, "not_found");
+
+      const down = new ShopifyClient(loadShopifyConfig(ENV), { fetchImpl: (async () => { throw new Error("network down"); }) as unknown as typeof fetch });
+      const failed = await new OrdersLiveService(tx, () => down).getLiveOrderDetail(as(admin, Role.ADMIN), "424243");
+      assert.equal(failed.order, null);
+      assert.equal(failed.errorKind, "unavailable");
+      assert.ok(failed.error && !/not found/i.test(failed.error), "the real reason is shown");
+    });
+  });
+
+  it("reading grants no action: the live cancel and sync actions stay admin-only", async () => {
+    await inRollback(async (tx) => {
+      const mk = (role: Role) => tx.user.create({ data: { name: role, username: `u-${uid()}`, role } });
+      const svc = new OrdersLiveService(tx, () => fakeShopifyDetailClient(orderByIdBody({ id: `gid://shopify/Order/${ID}`, name: "#9001" })));
+      for (const role of [Role.MANAGER, Role.SALESPERSON] as const) {
+        const u = await mk(role);
+        const cancel = await svc.cancelLiveOrder(as(u, role), ID);
+        assert.equal(cancel.cancelled, false);
+        const sync = await svc.syncLiveOrderToCrm(as(u, role), ID);
+        assert.equal(sync.synced, false);
+      }
+    });
+  });
+});
+
 describe("OrdersLiveService.getLiveOrderHistory", () => {
   it("returns the customer's other Shopify orders, excluding the current one, with a ready-to-navigate id", async () => {
     await inRollback(async (tx) => {
@@ -270,14 +336,16 @@ describe("OrdersLiveService.getLiveOrderHistory", () => {
     });
   });
 
-  it("a non-admin gets a not-found result, never the history data", async () => {
+  it("a salesperson may read the customer's other orders (read-only, like the detail page); HR gets a plain not-found and no data", async () => {
     await inRollback(async (tx) => {
       const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
       const { client } = fakeShopifyClient(orderListBody([]));
 
       const result = await new OrdersLiveService(tx, () => client).getLiveOrderHistory(as(rep, Role.SALESPERSON), "1", "current", { first: 10 });
-      assert.equal(result.items.length, 0);
-      assert.ok(result.error);
+      assert.equal(result.error, undefined);
+      const hr = await new OrdersLiveService(tx, () => client).getLiveOrderHistory({ id: uid(), username: "hr", role: Role.HR } as never, "1", "current", { first: 10 });
+      assert.equal(hr.items.length, 0);
+      assert.ok(hr.error);
     });
   });
 
@@ -344,7 +412,7 @@ describe("OrdersLiveService.listLiveOrders", () => {
       assert.equal(repResult.items.length, 1, "every order is visible to a salesperson, synced or not");
       assert.equal(repResult.items[0]!.linkedInCrm, false);
       const manager = await tx.user.create({ data: { name: "Mgr", username: `m-${uid()}`, role: Role.MANAGER } });
-      const hr = await tx.user.create({ data: { name: "HR", username: `h-${uid()}`, role: Role.HR } });
+      const hr = { id: uid(), username: "hr-synthetic" }; // no DB row needed: scope comes from the role alone
       const { client: mgrClient } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1002" }]));
       assert.equal((await new OrdersLiveService(tx, () => mgrClient).listLiveOrders(as(manager, Role.MANAGER), { first: 25 })).items.length, 1);
       const { client: hrClient } = fakeShopifyClient(orderListBody([{ id: `gid://shopify/Order/${extId}`, name: "#1002" }]));

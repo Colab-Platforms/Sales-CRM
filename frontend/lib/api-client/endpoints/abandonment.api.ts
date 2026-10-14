@@ -10,7 +10,14 @@ import type {
   CreateRecoveryActionInput,
   ListAbandonmentsParams,
   ListAbandonmentsResult,
+  AbandonmentDateRange,
+  AbandonmentDistribution,
+  AssignableTelecaller,
+  IngestionReconcileResult,
+  IngestionStatus,
   ManagerAutoAssignConfig,
+  OrderPrefill,
+  TelecallerSummary,
 } from "../types/abandonment.types";
 
 // `items` travels as one comma list of URL-encoded keys (a product name may itself contain commas); axios drops undefined params,
@@ -35,6 +42,12 @@ export const abandonmentApi = {
     return res.data.data;
   },
 
+  /** The saved cart + address of this one abandoned checkout, for the Create Order form. */
+  async orderPrefill(id: string): Promise<OrderPrefill> {
+    const res = await apiClient.get<ApiEnvelope<OrderPrefill>>(`/abandonments/${id}/order-prefill`);
+    return res.data.data;
+  },
+
   async get(id: string): Promise<AbandonmentDetail> {
     const res = await apiClient.get<ApiEnvelope<AbandonmentDetail>>(`/abandonments/${id}`);
     return res.data.data;
@@ -54,9 +67,39 @@ export const abandonmentApi = {
     return res.data.data;
   },
 
-  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number }> {
-    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>("/abandonments/bulk/assign-salesperson", payload);
+  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number; unchangedCount?: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number; unchangedCount?: number }>>("/abandonments/bulk/assign-salesperson", payload);
     return res.data.data;
+  },
+
+  /** Lead distribution by telecaller for a period (admin / manager / HR). */
+  async distribution(range: AbandonmentDateRange): Promise<AbandonmentDistribution> {
+    const res = await apiClient.get<ApiEnvelope<AbandonmentDistribution>>("/abandonments/distribution", { params: { dateRange: range } });
+    return res.data.data;
+  },
+
+  /** The signed-in telecaller's own workload (the server derives who that is). */
+  async mySummary(): Promise<TelecallerSummary> {
+    const res = await apiClient.get<ApiEnvelope<TelecallerSummary>>("/abandonments/my-summary");
+    return res.data.data;
+  },
+
+  /** Health of the Fastrr ingestion (admin / manager / HR). */
+  async ingestionStatus(period: AbandonmentDateRange): Promise<IngestionStatus> {
+    const res = await apiClient.get<ApiEnvelope<IngestionStatus>>("/abandonments/ingestion/status", { params: { period } });
+    return res.data.data;
+  },
+
+  /** Re-process deliveries that failed for good (admin only; bounded; recovered leads are never auto-assigned). */
+  async reconcileIngestion(): Promise<IngestionReconcileResult> {
+    const res = await apiClient.post<ApiEnvelope<IngestionReconcileResult>>("/abandonments/ingestion/reconcile", {});
+    return res.data.data;
+  },
+
+  /** Telecallers the viewer may assign leads to (everyone for admin / HR, the team for a manager). */
+  async telecallers(): Promise<AssignableTelecaller[]> {
+    const res = await apiClient.get<ApiEnvelope<{ telecallers: AssignableTelecaller[] }>>("/abandonments/telecallers");
+    return res.data.data.telecallers;
   },
 
   async bulkUpdateLeadStatus(payload: BulkUpdateLeadStatusPayload): Promise<{ updatedCount: number }> {

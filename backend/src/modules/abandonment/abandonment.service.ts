@@ -9,6 +9,11 @@ import { statusForRole } from "@/lib/leadStatusView.js";
 import { FOLLOW_UP_TASK_TYPES } from "../tasks/tasks.followup.js";
 import LeadService from "../lead/lead.service.js";
 import { aggregateItemOptions, type ItemOption } from "./abandonment.items.js";
+import { buildOrderPrefill, type OrderPrefill } from "./abandonment.order-prefill.js";
+import { getDistribution, getTelecallerSummary, listTelecallers, type Distribution, type TelecallerSummary } from "./abandonment.distribution.js";
+import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
+import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
+import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
 import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow } from "./abandonment.filters.js";
 import type {
   AbandonmentDetail,
@@ -85,16 +90,34 @@ class AbandonmentService {
   // `db` and `leadService` default to the real ones; tests pass a rolled-back transaction and a recording stub.
   constructor(
     private readonly db: DbClient = prisma,
-    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons" | "bulkUpdateStatus"> = new LeadService(),
+    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons" | "bulkAssignSalespersonsByStaff" | "bulkUpdateStatus"> = new LeadService(),
   ) {}
 
   // Same assignment-based scoping lead.service.ts's buildScopeWhere uses - a manager sees abandoned
   // leads assigned to them, a salesperson sees the ones assigned to them, so "assign to manager/
   // salesperson" on an abandoned lead moves it in and out of view exactly like a normal lead.
+  // ADMIN and HR see every abandoned lead (HR deliberately, for lead distribution only: the global lead scope in lib/leadScope.ts still gives HR no
+  // access to leads, orders or customers - HR gets this module's list and distribution, nothing else). A role this module does not know sees nothing.
   private scopeWhere(user: AuthUser): Prisma.LeadWhereInput {
     if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
     if (user.role === Role.SALESPERSON) return { ownerId: user.id };
-    return {};
+    if (user.role === Role.ADMIN || user.role === Role.HR) return {};
+    return { id: { in: [] } };
+  }
+
+  // HR may LIST abandoned leads and distribute them, but never open or work one (detail, cart/address prefill, recovery actions, status changes).
+  private assertWorkRole(user: AuthUser): void {
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.SALESPERSON) throw new ApiError("You do not have permission to work abandoned leads", STATUS_CODES.FORBIDDEN);
+  }
+
+  // A telecaller can only ever ask about their own leads: naming another telecaller is refused outright (not merely answered with an empty list).
+  private assertOwnTelecallerFilter(user: AuthUser, query: ListAbandonmentsQuery): void {
+    if (user.role === Role.SALESPERSON && query.salespersonId && query.salespersonId !== user.id) {
+      throw new ApiError("You can only view your own leads", STATUS_CODES.FORBIDDEN);
+    }
+    if (user.role === Role.SALESPERSON && query.managerId) {
+      throw new ApiError("You can only view your own leads", STATUS_CODES.FORBIDDEN);
+    }
   }
 
   /** Every list/detail row's human summary lives on the Activity row the webhook processor wrote (same
@@ -115,6 +138,7 @@ class AbandonmentService {
   }
 
   async listAbandonments(user: AuthUser, query: ListAbandonmentsQuery): Promise<AbandonmentListResult> {
+    this.assertOwnTelecallerFilter(user, query);
     const leadScope = this.scopeWhere(user);
     const where = buildAbandonmentListWhere(query, leadScope, user.role);
 
@@ -165,6 +189,7 @@ class AbandonmentService {
 
   /** Ids of EVERY abandonment matching the filters (not just the current page), so "Select all N" can feed the existing bulk-assign. */
   async listMatchingIds(user: AuthUser, query: ListAbandonmentsQuery): Promise<{ ids: string[]; total: number; capped: boolean }> {
+    this.assertOwnTelecallerFilter(user, query);
     const where = buildAbandonmentListWhere(query, this.scopeWhere(user), user.role);
     const [rows, total] = await Promise.all([
       this.db.abandonment.findMany({ where, select: { id: true }, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], take: MAX_SELECT_ALL }),
@@ -204,7 +229,7 @@ class AbandonmentService {
     }));
 
     row.lead.workingStatus = statusForRole(row.lead.workingStatus, user.role);
-    if (user.role === Role.SALESPERSON) {
+    if (user.role === Role.SALESPERSON || user.role === Role.HR) {
       row.lead.calls = row.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
     }
 
@@ -216,6 +241,7 @@ class AbandonmentService {
   }
 
   async getAbandonment(user: AuthUser, id: string): Promise<AbandonmentDetail> {
+    this.assertWorkRole(user);
     const leadScope = this.scopeWhere(user);
     const row = await this.db.abandonment.findFirst({
       where: scopedAbandonmentWhere(id, leadScope),
@@ -229,6 +255,7 @@ class AbandonmentService {
   // rather than sending the salesperson/manager to a separate queue - so it looks up by leadId, not
   // abandonmentId, and returns null (not 404) when this lead never had one.
   async getAbandonmentByLead(user: AuthUser, leadId: string): Promise<AbandonmentDetail | null> {
+    this.assertWorkRole(user);
     const leadScope = this.scopeWhere(user);
     const row = await this.db.abandonment.findFirst({
       where: { leadId, lead: Object.keys(leadScope).length > 0 ? leadScope : undefined },
@@ -238,7 +265,20 @@ class AbandonmentService {
     return this.detailFromRow(user, row);
   }
 
+  /** The saved cart + address of ONE abandoned checkout, shaped for the Create Order form. Same visibility rule as the abandonment itself. */
+  async getOrderPrefill(user: AuthUser, id: string): Promise<OrderPrefill> {
+    this.assertWorkRole(user);
+    const leadScope = this.scopeWhere(user);
+    const row = await this.db.abandonment.findFirst({
+      where: scopedAbandonmentWhere(id, leadScope),
+      select: { id: true, leadId: true, referenceId: true, cartSnapshot: true, lead: { select: { firstName: true, lastName: true, mobile: true, email: true, normalizedMobile: true, normalizedEmail: true } } },
+    });
+    if (!row) throw new ApiError("Abandonment not found", STATUS_CODES.NOT_FOUND);
+    return buildOrderPrefill(this.db as never, row);
+  }
+
   async createRecoveryAction(user: AuthUser, abandonmentId: string, body: CreateRecoveryActionBody) {
+    this.assertWorkRole(user);
     const leadScope = this.scopeWhere(user);
     const abandonment = await this.db.abandonment.findFirst({ where: scopedAbandonmentWhere(abandonmentId, leadScope), select: { id: true, leadId: true, status: true } });
     if (!abandonment) throw new ApiError("Abandonment not found", STATUS_CODES.NOT_FOUND);
@@ -288,6 +328,7 @@ class AbandonmentService {
   }
 
   async updateStatus(user: AuthUser, abandonmentId: string, body: UpdateAbandonmentStatusBody) {
+    this.assertWorkRole(user);
     const leadScope = this.scopeWhere(user);
     const abandonment = await this.db.abandonment.findFirst({ where: scopedAbandonmentWhere(abandonmentId, leadScope), select: { id: true, leadId: true } });
     if (!abandonment) throw new ApiError("Abandonment not found", STATUS_CODES.NOT_FOUND);
@@ -336,7 +377,42 @@ class AbandonmentService {
     });
   }
 
+  /** Health of the Fastrr ingestion (admin / manager / HR): counts and times only. */
+  getIngestionStatus(user: AuthUser, period: "today" | "yesterday" | "all"): Promise<IngestionStatus> {
+    return getIngestionStatus(this.db, user, period);
+  }
+
+  /** Re-drive stored deliveries that failed for good (admin only; bounded; never auto-assigns). */
+  async reconcileIngestion(user: AuthUser, options: { sinceHours?: number; limit?: number }): Promise<ReconcileResult> {
+    if (user.role !== Role.ADMIN) throw new ApiError("Only an admin can re-process failed deliveries", STATUS_CODES.FORBIDDEN);
+    return reconcileFailedAbandonmentEvents({ db: this.db, runner: this.db as never, store: abandonmentStore, provider: FASTRR_PROVIDER }, options);
+  }
+
+  /** Distribution dashboard (admin / manager / HR): counts by telecaller for a period, inside the viewer's own scope. */
+  getDistribution(user: AuthUser, range: "today" | "yesterday" | "all"): Promise<Distribution> {
+    return getDistribution(this.db, user, range);
+  }
+
+  /** A telecaller's own workload (derived from the authenticated user only). */
+  getMySummary(user: AuthUser): Promise<TelecallerSummary> {
+    return getTelecallerSummary(this.db, user);
+  }
+
+  /** Who can be assigned: every active telecaller for admin / HR, the team for a manager. Never available to a telecaller. */
+  async listAssignableTelecallers(user: AuthUser): Promise<{ id: string; name: string }[]> {
+    if (user.role !== Role.ADMIN && user.role !== Role.HR && user.role !== Role.MANAGER) throw new ApiError("You cannot assign leads", STATUS_CODES.FORBIDDEN);
+    return listTelecallers(this.db, user);
+  }
+
   async bulkAssignSalesperson(user: AuthUser, body: BulkAssignSalespersonBody) {
+    // Enforced here as well as on the route: only admin, manager and HR assign. A telecaller (or any other role) is refused whatever route is used.
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.HR) throw new ApiError("You do not have permission to assign leads", STATUS_CODES.FORBIDDEN);
+    if (user.role === Role.ADMIN || user.role === Role.HR) {
+      if (body.method !== "MANUAL" || !body.salespersonId) throw new ApiError("Choose one telecaller to assign these leads to", STATUS_CODES.BAD_REQUEST);
+      const found = await this.db.abandonment.findMany({ where: { id: { in: body.abandonmentIds } }, select: { leadId: true } });
+      if (found.length !== new Set(body.abandonmentIds).size) throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
+      return this.leadService.bulkAssignSalespersonsByStaff(user.id, { leadIds: [...new Set(found.map((a) => a.leadId))], salespersonId: body.salespersonId }, this.db as never);
+    }
     const scope = this.scopeWhere(user);
     const abandonments = await this.db.abandonment.findMany({
       where: { id: { in: body.abandonmentIds }, lead: scope },

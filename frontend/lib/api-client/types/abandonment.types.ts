@@ -12,7 +12,10 @@ export type AbandonmentStatus = "ACTIVE" | "IN_PROGRESS" | "RECOVERED" | "NOT_RE
 export type RecoveryActionType = "CALL" | "CALLBACK" | "CONTINUE_ORDER";
 export type RecoveryActionStatus = "PENDING" | "IN_PROGRESS" | "SUCCESS" | "FAILED";
 
-export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
+/** Which day(s) of abandoned checkouts to list - by when each was abandoned, days in IST (computed by the server). */
+export type AbandonmentDateRange = "today" | "yesterday" | "all";
+
+export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON" | "UNASSIGNED_TELECALLER";
 
 export interface ListAbandonmentsParams {
   page: number;
@@ -22,6 +25,7 @@ export interface ListAbandonmentsParams {
   type?: AbandonmentType;
   dateFrom?: string;
   dateTo?: string;
+  dateRange?: AbandonmentDateRange;
   assignment?: AbandonmentAssignmentFilter;
   managerId?: string;
   salespersonId?: string;
@@ -142,3 +146,126 @@ export interface AutoAssignConfig {
 export interface ManagerAutoAssignConfig extends AutoAssignConfig {
   managerIds: string[];
 }
+
+/** The saved cart + address of ONE abandoned checkout, shaped for the Create Order form (GET /abandonments/:id/order-prefill). */
+export interface OrderPrefillLine {
+  key: string;
+  productId: string | null;
+  variantId: string | null;
+  matched: boolean;
+  name: string;
+  variantTitle: string | null;
+  sku: string | null;
+  imageUrl: string | null;
+  quantity: number;
+  websiteUnitPrice: string | null;
+}
+
+export interface OrderPrefillAddress {
+  name: string | null;
+  phone: string | null;
+  line1: string | null;
+  line2: string | null;
+  landmark: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+  country: string | null;
+  company: string | null;
+}
+
+export interface OrderPrefill {
+  abandonmentId: string;
+  leadId: string;
+  dataFrom: "saved_cart" | "checkout_delivery" | "none";
+  sourceName: string | null;
+  capturedAt: string | null;
+  stale: boolean;
+  refreshSupported: false;
+  currency: string;
+  customer: { name: string | null; phone: string | null; email: string | null };
+  addressKind: "shipping" | "billing" | null;
+  address: OrderPrefillAddress | null;
+  lines: OrderPrefillLine[];
+  totals: { total: string | null; shipping: string | null; tax: string | null; discount: string | null; discountCodes: string[] };
+  notes: string[];
+}
+
+/** One telecaller's row of the distribution dashboard. "Abandoned" counts follow when the checkout was abandoned; "assigned" counts follow when the CURRENT assignment was made. */
+export interface DistributionTelecaller {
+  userId: string;
+  name: string;
+  /** Currently assigned to this telecaller (all time). */
+  totalAssigned: number;
+  /** Currently assigned AND abandoned inside the selected period. */
+  inPeriod: number;
+  todayAbandoned: number;
+  yesterdayAbandoned: number;
+  /** Currently assigned and the assignment was made today / inside the selected period. */
+  assignedToday: number;
+  assignedInPeriod: number;
+}
+
+export interface AbandonmentDistribution {
+  range: AbandonmentDateRange;
+  timezone: string;
+  summary: {
+    total: number;
+    assigned: number;
+    unassigned: number;
+    telecallersWithLeads: number;
+    todayTotal: number;
+    yesterdayTotal: number;
+    unassignedAllTime: number;
+  };
+  telecallers: DistributionTelecaller[];
+}
+
+export interface TelecallerSummary {
+  timezone: string;
+  totalAssigned: number;
+  today: number;
+  yesterday: number;
+  all: number;
+  newlyAssignedToday: number;
+}
+
+export interface AssignableTelecaller {
+  id: string;
+  name: string;
+  groupName?: string | null;
+}
+
+/** Fastrr ingestion health: counts and times only (the API never returns customer data or secrets). */
+export interface IngestionStatus {
+  period: AbandonmentDateRange;
+  timezone: string;
+  now: string;
+  lastReceivedAt: string | null;
+  lastProcessedAt: string | null;
+  lastFailedAt: string | null;
+  secondsSinceLastReceived: number | null;
+  received: { events: number; distinctCarts: number };
+  byStatus: { processed: number; ignoredNoContact: number; failed: number; pending: number };
+  failed: { retryable: number; exhausted: number };
+  processedAfterRetry: number;
+  carts: { received: number; saved: number; notSaved: number; ignoredNoContact: number };
+  latency: {
+    providerToReceipt: { samples: number; p50: number | null; p90: number | null; max: number | null };
+    receiptToSaved: { samples: number; p50: number | null; p90: number | null; max: number | null };
+  };
+  backlog: { pending: number; retryable: number; exhausted7d: number; oldestPendingAgeSeconds: number | null };
+  process: { since: string; received: number; duplicates: number; unauthorized: number; invalidBody: number; notConfigured: number; unusableNoContact: number; processed: number; failedAttempts: number; exhausted: number; autoAssignFailed: number; recoveredByReconcile: number };
+  lastReconcile: { at: string; examined: number; recovered: number; failedAgain: number; skipped: number } | null;
+}
+
+export interface IngestionReconcileResult {
+  at: string;
+  examined: number;
+  recovered: number;
+  failedAgain: number;
+  skipped: number;
+  remaining: number;
+  timedOut: boolean;
+}
+

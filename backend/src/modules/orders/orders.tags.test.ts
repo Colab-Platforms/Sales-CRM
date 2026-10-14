@@ -47,3 +47,18 @@ describe("tagSearchClause (Shopify search syntax)", () => {
     assert.equal(tagSearchClause(["COD", "cod ", "COD"]), '(tag:"COD" OR tag:"cod")');
   });
 });
+
+describe("mergeOrderTags: the creator tag", () => {
+  it("adds 'Order Created by <name>' once, keeps every Shopify tag, and leads with the confirmation tag", () => {
+    assert.deepEqual(mergeOrderTags(["COD", "VIP"], "Vini", "Vini"), ["CRM Confirmed by Vini", "Order Created by Vini", "COD", "VIP"]);
+    assert.deepEqual(mergeOrderTags(["COD"], null, "Vini"), ["Order Created by Vini", "COD"]);
+  });
+  it("never duplicates it when Shopify already holds it (any case), and does not touch other creator-style tags", () => {
+    assert.deepEqual(mergeOrderTags(["order created by vini", "COD"], null, "Vini"), ["Order Created by Vini", "COD"]);
+    assert.deepEqual(mergeOrderTags(["Order Created by Rahul"], null, "Vini"), ["Order Created by Vini", "Order Created by Rahul"]);
+  });
+  it("no creator -> no creator tag (nothing misleading is invented)", () => {
+    assert.deepEqual(mergeOrderTags(["COD"], null, null), ["COD"]);
+    assert.deepEqual(mergeOrderTags(["COD"], null, "   "), ["COD"]);
+  });
+});

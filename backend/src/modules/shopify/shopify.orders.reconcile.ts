@@ -120,6 +120,12 @@ async function readState(client: ShopifyClient, gid: string) {
   return { status: o.displayFinancialStatus, cancelled: Boolean(o.cancelledAt), total: toCents(o.currentTotalPriceSet.shopMoney.amount), outstanding: toCents(o.totalOutstandingSet.shopMoney.amount), received: o.totalReceivedSet ? toCents(o.totalReceivedSet.shopMoney.amount) : 0 };
 }
 
+/** READ-ONLY: the Shopify order's current total / outstanding / received, in cents. Never writes. */
+export async function readShopifyOrderTotals(client: ShopifyClient, shopifyOrderId: string): Promise<{ cancelled: boolean; status: string | null; total: number; outstanding: number; received: number | null }> {
+  const s = await readState(client, toShopifyOrderGid(shopifyOrderId));
+  return { cancelled: s.cancelled, status: s.status, total: s.total, outstanding: s.outstanding, received: s.received };
+}
+
 export async function reconcilePrepaidUpgrade(client: ShopifyClient, shopifyOrderId: string, input: PrepaidUpgradeReconcileInput): Promise<PrepaidUpgradeReconcileResult> {
   const gid = toShopifyOrderGid(shopifyOrderId);
   const original = toCents(input.originalAmount);
@@ -136,7 +142,7 @@ export async function reconcilePrepaidUpgrade(client: ShopifyClient, shopifyOrde
   }
   // Anything else that is not exactly one of the two expected starting points is refused rather than forced.
   const needsEdit = state.total === original;
-  if (!needsEdit && state.total !== prepaid) throw new ShopifyReconcileError(`Shopify's order total (${fromCents(state.total)}) is neither the original (${fromCents(original)}) nor the prepaid amount (${fromCents(prepaid)}); it was not changed.`, "read_order");
+  if (!needsEdit && state.total !== prepaid) throw new ShopifyReconcileError(`Shopify's order total (${fromCents(state.total)}) is neither the original (${fromCents(original)}) nor the prepaid amount (${fromCents(prepaid)}); it was not changed. Make the Shopify total match the CRM total (${fromCents(original)}) or record the payment in Shopify yourself, then use Retry Shopify payment sync.`, "read_order");
   if (needsEdit && state.outstanding !== original) throw new ShopifyReconcileError("The Shopify order already has a payment recorded, so the discount can not be applied cleanly; it was not changed.", "read_order");
 
   if (needsEdit) {

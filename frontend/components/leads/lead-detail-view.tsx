@@ -76,6 +76,8 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromParam = searchParams.get("from");
+  // Which abandoned checkout the salesperson opened (from the abandoned-leads queue); otherwise this lead's own latest one.
+  const abandonmentParam = searchParams.get("abandonmentId");
   const [from, setFrom] = useState<string | null>(fromParam);
 
   useEffect(() => {
@@ -91,6 +93,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
   const { data: lead, isLoading, error, refetch } = useQuery(leadDetailQueryOptions(leadId));
   const { data: abandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  const checkoutForOrder = abandonmentParam ?? (abandonment && (abandonment.status === "ACTIVE" || abandonment.status === "IN_PROGRESS") ? abandonment.id : undefined);
   // Dedicated calls query, not `lead.calls` - it's the endpoint that already selects `transcript` and
   // polls while one is still transcribing (leadCallsQueryOptions), same one the table's call-history
   // popup uses. `lead.calls` (from the Lead fetch above) never carried transcript data at all.
@@ -473,7 +476,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           optional and stays hidden whenever there are none, exactly as it does for a customer with
           no orders yet on Customer 360. */}
       <SendWhatsAppDialog open={sendWhatsAppOpen} onOpenChange={setSendWhatsAppOpen} leadId={lead.id} customerName={name} orders={[]} />
-      <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={lead.id} customerName={name} customerMobile={lead.mobile} />
+      <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={lead.id} customerName={name} customerMobile={lead.mobile} abandonmentId={checkoutForOrder} />
     </div>
   );
 }

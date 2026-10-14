@@ -24,6 +24,43 @@ export interface ParsedCartItem {
   quantity: number | null;
 }
 
+/** One cart line with what the checkout order form needs: unit price, variant label, picture. Anything Fastrr did not send is null - nothing is invented. */
+export interface ParsedCheckoutLine {
+  productId: string | null;
+  variantId: string | null;
+  sku: string | null;
+  name: string;
+  variantTitle: string | null;
+  imageUrl: string | null;
+  quantity: number | null;
+  /** The unit price Fastrr reported (a decimal string). A hint for the salesperson - the CRM re-prices every line itself. */
+  unitPrice: string | null;
+}
+
+/** A shipping / billing address exactly as the customer entered it at checkout (every field optional). */
+export interface ParsedAddress {
+  firstName: string | null;
+  lastName: string | null;
+  name: string | null;
+  phone: string | null;
+  line1: string | null;
+  line2: string | null;
+  landmark: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+  country: string | null;
+  company: string | null;
+}
+
+export interface ParsedCheckoutTotals {
+  total: string | null;
+  shipping: string | null;
+  tax: string | null;
+  discount: string | null;
+  discountCodes: string[];
+}
+
 export interface ParsedAbandonment {
   /** Cart id - used both to dedupe repeat deliveries for the same cart and as the lead's externalId. */
   externalId: string | null;
@@ -46,6 +83,13 @@ export interface ParsedAbandonment {
   checkoutUrl: string | null;
   /** City/state from the shipping (or billing) address, for the Lead's location field. */
   location: string | null;
+  /** Everything the Create Order form can prefill from this checkout. Null / empty when the customer had not got that far. */
+  lines: ParsedCheckoutLine[];
+  totals: ParsedCheckoutTotals;
+  shippingAddress: ParsedAddress | null;
+  billingAddress: ParsedAddress | null;
+  /** The platform that sent the cart (Fastrr reports source_name). */
+  sourceName: string | null;
 }
 
 function pick(body: Record<string, unknown>, keys: string[]): unknown {
@@ -101,7 +145,7 @@ function parseItems(body: Record<string, unknown>): { itemCount: number | null; 
   const raw = pick(body, ["items", "cart_items", "line_items", "products"]);
   if (!Array.isArray(raw)) return { itemCount: null, itemNames: [], items: [] };
   const items: ParsedCartItem[] = [];
-  for (const entry of raw) {
+  for (const entry of raw.slice(0, MAX_CART_LINES)) {
     const r = asRecord(entry);
     const name = asString(r.name) ?? asString(r.title) ?? asString(r.product_name);
     if (!name) continue;
@@ -124,6 +168,66 @@ function parseLocation(body: Record<string, unknown>): string | null {
   const city = asString(address.city) ?? asString(fallback.city);
   const state = asString(address.state) ?? asString(fallback.state);
   return [city, state].filter(Boolean).join(", ") || null;
+}
+
+/** Fastrr's own address object -> one tolerant shape. Only fields the customer actually supplied are set; an object with nothing usable is null. */
+export function parseAddress(value: unknown): ParsedAddress | null {
+  const r = asRecord(value);
+  const address: ParsedAddress = {
+    firstName: asString(r.first_name) ?? asString(r.firstName),
+    lastName: asString(r.last_name) ?? asString(r.lastName),
+    name: asString(r.name) ?? asString(r.full_name),
+    phone: asString(r.phone) ?? asString(r.phone_number) ?? asString(r.mobile),
+    line1: asString(r.address1) ?? asString(r.line_1) ?? asString(r.address_line_1) ?? asString(r.line1) ?? asString(r.address),
+    line2: asString(r.address2) ?? asString(r.line_2) ?? asString(r.address_line_2) ?? asString(r.line2),
+    landmark: asString(r.landmark),
+    city: asString(r.city),
+    state: asString(r.state) ?? asString(r.province),
+    pincode: asString(r.zip) ?? asString(r.pincode) ?? asString(r.postal_code) ?? asString(r.postcode),
+    country: asString(r.country) ?? asString(r.country_code),
+    company: asString(r.company),
+  };
+  return Object.values(address).some((v) => v !== null) ? address : null;
+}
+
+/** A cart is a handful of lines; anything beyond this is not a real cart and is not stored. */
+export const MAX_CART_LINES = 100;
+const DECIMAL = /^\d{1,9}(\.\d{1,4})?$/;
+
+function parseLines(body: Record<string, unknown>): ParsedCheckoutLine[] {
+  const raw = pick(body, ["items", "cart_items", "line_items", "products"]);
+  if (!Array.isArray(raw)) return [];
+  const lines: ParsedCheckoutLine[] = [];
+  for (const entry of raw.slice(0, MAX_CART_LINES)) {
+    const r = asRecord(entry);
+    const name = asString(r.name) ?? asString(r.title) ?? asString(r.product_name);
+    if (!name) continue;
+    const qty = Number(r.quantity);
+    const price = asString(r.price) ?? asString(r.unit_price);
+    const title = asString(r.title);
+    lines.push({
+      productId: asString(r.product_id) ?? asString(r.productId),
+      variantId: asString(r.variant_id) ?? asString(r.variantId),
+      sku: asString(r.sku),
+      name,
+      variantTitle: title && title !== name ? title : asString(r.variant_title),
+      imageUrl: asString(r.img_url) ?? asString(r.image_url) ?? asString(r.image),
+      quantity: Number.isInteger(qty) && qty > 0 && qty <= 10_000 ? qty : null,
+      unitPrice: price && DECIMAL.test(price) ? price : null,
+    });
+  }
+  return lines;
+}
+
+function parseTotals(body: Record<string, unknown>): ParsedCheckoutTotals {
+  const codes = body.discount_codes;
+  return {
+    total: asString(pick(body, ["total_price", "cart_value", "total", "amount", "order_value"])),
+    shipping: asString(body.shipping_price),
+    tax: asString(body.tax),
+    discount: asString(body.total_discount),
+    discountCodes: Array.isArray(codes) ? codes.map((c) => asString(c) ?? asString(asRecord(c).code)).filter((c): c is string => !!c).slice(0, 5) : [],
+  };
 }
 
 export function parseAbandonmentEvent(payload: unknown): ParsedAbandonment | null {
@@ -151,6 +255,11 @@ export function parseAbandonmentEvent(payload: unknown): ParsedAbandonment | nul
     abandonedAt: parseTimestamp(pick(body, ["updated_at", "created_at", "abandoned_at", "timestamp"])),
     checkoutUrl: asString(pick(body, ["checkout_url", "cart_url", "resume_url"])),
     location: parseLocation(body),
+    lines: parseLines(body),
+    totals: parseTotals(body),
+    shippingAddress: parseAddress(body.shipping_address),
+    billingAddress: parseAddress(body.billing_address),
+    sourceName: asString(body.source_name),
   };
 }
 

@@ -4,7 +4,9 @@ import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../lib/prisma.js";
-import { OrderSource, OrderStatus, PaymentMethod, PaymentStatus, RefundExecutionStatus, RefundRequestStatus, Role } from "../../../generated/prisma/enums.js";
+import { ActivitySource, OrderSource, OrderStatus, PaymentMethod, PaymentStatus, RefundExecutionStatus, RefundRequestStatus, Role } from "../../../generated/prisma/enums.js";
+import { reconcilePrepaidUpgrade } from "../shopify/shopify.orders.reconcile.js";
+import { syncShopifyPayment } from "./cashfree.payment-success.js";
 import type { Db, TxRunner } from "../integrations/integrations.common.js";
 import { memoryStore } from "../integrations/integrations.testutil.js";
 import { ENV as SHOPIFY_ENV } from "../shopify/shopify.fixtures.js";
@@ -34,7 +36,7 @@ const CF_ORDER = `CFPay_${LINK_CODE}_b3ea_1791374485548`;
 /** A stateful fake of the Shopify order (list price 1199, unpaid); counts its writes. */
 function fakeShopify() {
   const s = { total: 119900, received: 0, staged: 0, writes: { edit: 0, payment: 0, markPaid: 0 } };
-  const money = (c: number) => ({ shopMoney: { amount: (c / 100).toFixed(1) } });
+  const money = (c: number) => ({ shopMoney: { amount: (c / 100).toFixed(2) } });
   const fetchImpl = (async (_u: unknown, init: { body: string }) => {
     const { query, variables } = JSON.parse(init.body) as { query: string; variables: Record<string, unknown> };
     let data: unknown;
@@ -121,6 +123,17 @@ describe("payment-link success webhook", () => {
       assert.equal(await deliver(runner, successBody(CF_ORDER, "1.00"), { getShopifyClient: shop.client, verifyLink: async () => link("ACTIVE", "0") }), "ignored");
       await check();
       assert.equal(await deliver(runner, successBody(CF_ORDER, "1.00"), { getShopifyClient: shop.client, verifyLink: async () => link("PAID", "0.50") }), "ignored");
+      await check();
+
+      // The refusal is not silent: an admin sees ONE audit row per distinct reported amount (2.00 from the delivery, 0.50 from Cashfree's own answer) - and none for the link that was simply not paid.
+      const rows = async () => tx.activity.findMany({ where: { referenceId: w.paymentId, type: "PAYMENT_MISMATCH_DETECTED" }, select: { metadata: true, title: true } });
+      const reported = (await rows()).map((r) => (r.metadata as any).reportedAmount).sort();
+      assert.deepEqual(reported, ["0.50", "2.00"]);
+      assert.match((await rows())[0]!.title ?? "", /not applied as paid/);
+      // the same wrong reports arriving again (retries, duplicates) add nothing
+      await deliver(runner, successBody(CF_ORDER, "2.00"), { getShopifyClient: shop.client, verifyLink: async () => link("PAID", "1.00") });
+      await deliver(runner, successBody(CF_ORDER, "1.00"), { getShopifyClient: shop.client, verifyLink: async () => link("PAID", "0.50") });
+      assert.equal((await rows()).length, 2, "idempotent: still one row per distinct amount");
       await check();
     });
   });
@@ -241,5 +254,108 @@ describe("refund status webhook", () => {
         assert.equal(await acts(tx, w.orderId, "REFUND_COMPLETED"), 0);
       }
     });
+  });
+});
+
+// ---- The reported case: CRM total 67.72 (649 - 648 discount + 66.72 shipping) vs a Shopify order that held the list price 649. ----
+describe("Shopify payment sync when the CRM order carries a discount AND shipping", () => {
+  async function seedOrder(tx: Db, opts: { mirrored: boolean | null }) {
+    const { lead } = await seedBase(tx);
+    const order = await tx.order.create({
+      data: {
+        orderNumber: `FAKE-${uid()}`, leadId: lead.id, source: OrderSource.SALESPERSON, status: OrderStatus.CONFIRMED, currency: "INR",
+        subtotal: "649.00", discountAmount: "648.00", shippingAmount: "66.72", taxAmount: "0.00", totalAmount: "67.72",
+        externalSource: "SHOPIFY", externalId: `9${Date.now()}${Math.floor(Math.random() * 1000)}`,
+        metadata: { createdVia: "WHATSAPP_INBOX", paymentMode: "PREPAID", discount: { originalSubtotal: "649.00", discountAmount: "648.00" }, ...(opts.mirrored === null ? {} : { shopifyTotals: { mirrored: opts.mirrored, total: "67.72" } }) },
+      },
+      select: { id: true },
+    });
+    const linkId = `crm_${uid().replace(/-/g, "")}`;
+    const payment = await tx.payment.create({
+      data: { orderId: order.id, amount: "67.72", method: PaymentMethod.PAYMENT_LINK, status: PaymentStatus.PENDING, provider: "Cashfree", externalSource: "CASHFREE", externalId: linkId, providerOrderId: linkId, paymentUrl: `https://payments.cashfree.com/links/${LINK_CODE}` },
+      select: { id: true },
+    });
+    return { orderId: order.id, paymentId: payment.id };
+  }
+  const orderMeta = async (tx: Db, orderId: string) => ((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true } })).metadata ?? {}) as any;
+
+  it("mirrored order (Shopify total = CRM total): verified payment marks Shopify paid ONCE for exactly the order total - no edit - and a duplicate delivery changes nothing", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await seedOrder(tx, { mirrored: true });
+      const shop = fakeShopify();
+      shop.state.total = 6772; // Shopify was created WITH the discount and shipping
+      const deps = { getShopifyClient: shop.client, verifyLink: async () => link("PAID", "67.72") };
+      assert.equal(await deliver(runner, successBody(CF_ORDER, "67.72"), deps), "processed");
+      const dup = await deliver(runner, successBody(CF_ORDER, "67.72"), deps);
+      assert.ok(["processed", "ignored"].includes(dup));
+      assert.deepEqual(shop.state.writes, { edit: 0, payment: 0, markPaid: 1 });
+      const p = await tx.payment.findUniqueOrThrow({ where: { id: w.paymentId }, select: { status: true, amount: true } });
+      assert.deepEqual([p.status, p.amount.toString()], [PaymentStatus.SUCCESS, "67.72"]);
+      assert.equal((await orderMeta(tx, w.orderId)).shopifyPaymentSync.status, "synced");
+      assert.equal(await tx.payment.count({ where: { orderId: w.orderId } }), 1, "no second payment");
+      assert.equal(await acts(tx, w.orderId, "PAYMENT_STATUS_CHANGED"), 2, "payment success + Shopify synced, each once");
+    });
+  });
+
+  it("mirrored order whose Shopify total no longer matches: the CRM keeps the verified payment, Shopify is NOT written, the failure is recorded - and after the Shopify order is corrected a retry succeeds once", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await seedOrder(tx, { mirrored: true });
+      const shop = fakeShopify();
+      shop.state.total = 64900; // someone changed it back to the list price
+      const deps = { getShopifyClient: shop.client, verifyLink: async () => link("PAID", "67.72") };
+      assert.equal(await deliver(runner, successBody(CF_ORDER, "67.72"), deps), "processed");
+      assert.equal((await tx.payment.findUniqueOrThrow({ where: { id: w.paymentId }, select: { status: true } })).status, PaymentStatus.SUCCESS, "payment evidence is retained in the CRM");
+      assert.deepEqual(shop.state.writes, { edit: 0, payment: 0, markPaid: 0 }, "nothing written to Shopify");
+      const failed = (await orderMeta(tx, w.orderId)).shopifyPaymentSync;
+      assert.equal(failed.status, "failed");
+      assert.match(failed.reason, /differs from the CRM total/);
+      assert.match(failed.reason, /Retry Shopify payment sync/);
+
+      // authorised correction done by a person in Shopify, then the safe retry
+      shop.state.total = 6772;
+      const retry = await syncShopifyPayment(tx, w.orderId, { source: ActivitySource.USER, getShopifyClient: shop.client });
+      assert.equal(retry.status, "synced");
+      const again = await syncShopifyPayment(tx, w.orderId, { source: ActivitySource.USER, getShopifyClient: shop.client });
+      assert.equal(again.status, "synced");
+      assert.deepEqual(shop.state.writes, { edit: 0, payment: 0, markPaid: 1 }, "marked paid once, however often it is retried");
+    });
+  });
+
+  it("an OLDER order (no mirrored flag) with shipping keeps the safe behaviour: payment recorded, Shopify untouched, an actionable failure is shown - nothing is forced", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await seedOrder(tx, { mirrored: null });
+      const shop = fakeShopify();
+      shop.state.total = 64900; // the AWL102844 shape: Shopify holds the list price
+      assert.equal(await deliver(runner, successBody(CF_ORDER, "67.72"), { getShopifyClient: shop.client, verifyLink: async () => link("PAID", "67.72") }), "processed");
+      assert.equal((await tx.payment.findUniqueOrThrow({ where: { id: w.paymentId }, select: { status: true } })).status, PaymentStatus.SUCCESS);
+      assert.deepEqual(shop.state.writes, { edit: 0, payment: 0, markPaid: 0 });
+      const meta = await orderMeta(tx, w.orderId);
+      assert.equal(meta.shopifyPaymentSync.status, "failed");
+      assert.ok(meta.shopifyPaymentSync.reason.length > 20);
+    });
+  });
+});
+
+describe("Prepaid upgrade reconciliation against a Shopify order that does / does not match the CRM total", () => {
+  const input = { originalAmount: "67.72", discountAmount: "50.00", prepaidAmount: "17.72", currency: "INR", upgradeReference: "CRM-TEST" };
+
+  it("Shopify total = CRM total (67.72): ONE discount edit to 17.72 and ONE payment of exactly 17.72; running it again does nothing more", async () => {
+    const shop = fakeShopify();
+    shop.state.total = 6772;
+    const first = await reconcilePrepaidUpgrade(shop.client(), "gid://shopify/Order/1", input);
+    assert.equal(first.performed, "edit_and_payment");
+    assert.deepEqual(shop.state.writes, { edit: 1, payment: 1, markPaid: 0 });
+    assert.equal(shop.state.total, 1772);
+    const second = await reconcilePrepaidUpgrade(shop.client(), "gid://shopify/Order/1", input);
+    assert.equal(second.performed, "already_reconciled");
+    assert.deepEqual(shop.state.writes, { edit: 1, payment: 1, markPaid: 0 });
+  });
+
+  it("Shopify total 649.00 (the list price) vs CRM 67.72: refused with an actionable message and NOTHING is changed - the order's price, discount, shipping and payment are never forced", async () => {
+    const shop = fakeShopify();
+    shop.state.total = 64900;
+    await assert.rejects(() => reconcilePrepaidUpgrade(shop.client(), "gid://shopify/Order/1", input), (e: Error) => /neither the original \(67\.72\)/.test(e.message) && /Make the Shopify total match/.test(e.message) && /Retry Shopify payment sync/.test(e.message));
+    assert.deepEqual(shop.state.writes, { edit: 0, payment: 0, markPaid: 0 });
+    assert.equal(shop.state.total, 64900);
   });
 });

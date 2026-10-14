@@ -116,6 +116,8 @@ interface AbandonmentTableProps {
 }
 
 export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, onToggleOne, onToggleAll, role }: AbandonmentTableProps) {
+  // HR distributes leads but cannot open them (lead pages, carts and addresses are not HR's to see).
+  const canOpenLead = role !== "HR";
   const router = useRouter();
   const sortedItems = useMemo(() => {
     return [...items].sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
@@ -149,14 +151,15 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
       <TableBody>
         {sortedItems.map((item) => {
           const cart = parseAbandonmentCart(item);
-          const assignee = item.lead.owner?.name ?? item.lead.assignedManager?.name ?? null;
+          const telecaller = item.lead.owner?.name ?? null;
+          const manager = item.lead.assignedManager?.name ?? null;
 
           return (
             <TableRow
               key={item.id}
-              className="cursor-pointer"
+              className={canOpenLead ? "cursor-pointer" : undefined}
               data-state={withSelection && selectedIds!.has(item.id) ? "selected" : undefined}
-              onClick={() => router.push(leadDetailHref(item.lead.id, { from: "abandoned-leads" }))}
+              onClick={canOpenLead ? () => router.push(leadDetailHref(item.lead.id, { from: "abandoned-leads", abandonmentId: item.id })) : undefined}
             >
               {withSelection ? (
                 <TableCell onClick={(e) => e.stopPropagation()}>
@@ -176,8 +179,12 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
               <TableCell className="w-[180px] min-w-[160px]" onClick={(e) => e.stopPropagation()}>
                 <div className="flex items-center gap-1">
                   <span className="font-medium text-foreground">{item.lead.mobile ?? "—"}</span>
-                  <ClickToCallButton lead={item.lead} />
-                  <CallHistoryButton lead={item.lead} />
+                  {canOpenLead ? (
+                    <>
+                      <ClickToCallButton lead={item.lead} />
+                      <CallHistoryButton lead={item.lead} />
+                    </>
+                  ) : null}
                 </div>
                 {item.lead.email ? (
                   <div className="truncate max-w-[160px] text-xs text-muted-foreground" title={item.lead.email}>
@@ -217,21 +224,32 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
               </TableCell>
 
               <TableCell className="w-[160px] whitespace-nowrap text-sm">
-                {assignee ? <span className="text-foreground">{assignee}</span> : <span className="text-muted-foreground">Unassigned</span>}
+                {telecaller ? (
+                  <span className="text-foreground" data-testid="assignee-telecaller">{telecaller}</span>
+                ) : manager ? (
+                  <span className="flex flex-col" data-testid="assignee-manager-only">
+                    <span className="text-foreground">{manager}</span>
+                    <span className="text-xs text-muted-foreground">no telecaller yet</span>
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground" data-testid="assignee-none">Unassigned</span>
+                )}
               </TableCell>
 
               <TableCell className="w-[50px] text-right">
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  aria-label="View lead"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    router.push(leadDetailHref(item.lead.id, { from: "abandoned-leads" }));
-                  }}
-                >
-                  <Eye className="size-4" />
-                </Button>
+                {canOpenLead ? (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="View lead"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      router.push(leadDetailHref(item.lead.id, { from: "abandoned-leads", abandonmentId: item.id }));
+                    }}
+                  >
+                    <Eye className="size-4" />
+                  </Button>
+                ) : null}
               </TableCell>
             </TableRow>
           );

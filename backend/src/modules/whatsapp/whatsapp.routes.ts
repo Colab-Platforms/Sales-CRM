@@ -49,6 +49,7 @@ import {
   assignConversation,
   confirmOrderDraft,
   getConversationDetail,
+  getConversationCustomer,
   getOrderDraft,
   handoffConversation,
   markConversationRead,
@@ -126,6 +127,8 @@ router.get("/conversations", requireAuth, listWhatsAppConversations);
 // see whatsapp.conversation.service.ts's assertAccess). Registered right after the list route above
 // they all extend.
 router.get("/conversations/:leadId", requireAuth, getConversationDetail);
+// The customer behind the conversation (Customer 360 data), read-only across teams for admin/manager/salesperson - see getConversationCustomer.
+router.get("/conversations/:leadId/customer", requireAuth, getConversationCustomer);
 router.post("/conversations/:leadId/read", requireAuth, markConversationRead);
 router.post("/conversations/:leadId/assign", requireAuth, assignConversation);
 router.post("/conversations/:leadId/handoff", requireAuth, handoffConversation);

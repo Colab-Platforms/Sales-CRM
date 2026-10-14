@@ -12,6 +12,11 @@
 // this repo had no prior order-write code to mirror, since the sync path never writes to Shopify.
 import { ShopifyGraphQLError, type ShopifyClient } from "./shopify.client.js";
 
+/** True when Shopify itself REFUSED an orderCreate (a GraphQL validation error or userErrors) - so nothing was created and a corrected request is safe to send. A timeout / transport failure is never this. */
+export function isShopifyRejection(error: unknown): boolean {
+  return error instanceof ShopifyOrderCreateError && (Array.isArray(error.raw) || error.raw instanceof ShopifyGraphQLError);
+}
+
 export class ShopifyOrderCreateError extends Error {
   constructor(
     message: string,
@@ -71,6 +76,15 @@ export interface ShopifyOrderCreateInput {
   financialStatus: "PENDING" | "PAID";
   note?: string;
   shippingAddress?: ShopifyOrderCreateShippingAddress;
+  /**
+   * The CRM's order-level discount, as ONE fixed amount off the items. Sent so the Shopify order total is the CRM total (items - discount + shipping); without it Shopify holds the list
+   * price and the two systems disagree about what the customer owes. Omitted (or 0) = no discount.
+   */
+  discount?: { amount: string; description: string };
+  /** The CRM's shipping charge as a Shopify shipping line. Omitted (or 0) = none. */
+  shippingAmount?: string;
+  /** Shopify's own `sourceIdentifier` (the CRM order number): lets a retry find an order whose creation answer was lost instead of creating a second one. */
+  sourceIdentifier?: string;
 }
 
 export interface ShopifyOrderCreateResult {
@@ -110,7 +124,12 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
   const order = {
     lineItems: input.lineItems.map((item) =>
       item.variantId
-        ? { variantId: toShopifyProductVariantGid(item.variantId), quantity: item.quantity }
+        ? {
+            variantId: toShopifyProductVariantGid(item.variantId),
+            quantity: item.quantity,
+            // OrderCreateLineItemInput.priceSet (price before discounts) is accepted together with variantId: when the CRM states the unit price it is sent, so Shopify's item subtotal is the CRM's even if the catalog price has changed.
+            ...(item.priceAmount ? { priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } } } : {}),
+          }
         : { title: item.title, quantity: item.quantity, priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } } },
     ),
     email: input.email,
@@ -118,7 +137,13 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
     currency: input.currency,
     financialStatus: input.financialStatus,
     note: input.note,
+    ...(input.sourceIdentifier ? { sourceIdentifier: input.sourceIdentifier } : {}),
     shippingAddress: input.shippingAddress,
+    // Shopify's documented OrderCreateOrderInput fields: discountCode.itemFixedDiscountCode (a fixed amount across the items) and shippingLines.
+    ...(input.discount && Number(input.discount.amount) > 0
+      ? { discountCode: { itemFixedDiscountCode: { code: input.discount.description.slice(0, 100), amountSet: { shopMoney: { amount: input.discount.amount, currencyCode: input.currency } } } } }
+      : {}),
+    ...(input.shippingAmount && Number(input.shippingAmount) > 0 ? { shippingLines: [{ title: "Shipping", priceSet: { shopMoney: { amount: input.shippingAmount, currencyCode: input.currency } } }] } : {}),
   };
 
   let data: OrderCreateResponse;
@@ -347,3 +372,20 @@ export async function removeShopifyOrderTags(client: ShopifyClient, shopifyOrder
   const data = await runTagCall<{ tagsRemove: { userErrors: { message: string }[] } }>(client, TAGS_REMOVE_MUTATION, { id: orderGid(shopifyOrderId), tags });
   if (data.tagsRemove.userErrors.length > 0) throw new ShopifyOrderTagError(data.tagsRemove.userErrors.map((e) => e.message).join("; "), data.tagsRemove.userErrors);
 }
+
+const ORDER_BY_SOURCE_QUERY = `
+  query crmOrderBySource($query: String!) {
+    orders(first: 2, query: $query) {
+      nodes { id name }
+    }
+  }
+`;
+
+/** The Shopify order previously created for this CRM order number (by sourceIdentifier), or null. Used only after an attempt whose answer was lost. More than one hit is refused: never guess. */
+export async function findShopifyOrderBySourceIdentifier(client: ShopifyClient, sourceIdentifier: string): Promise<{ shopifyOrderId: string; shopifyOrderName: string } | null> {
+  const data = await client.query<{ orders: { nodes: { id: string; name: string }[] } }>(ORDER_BY_SOURCE_QUERY, { query: `source_identifier:${JSON.stringify(sourceIdentifier)}` });
+  const nodes = data.orders?.nodes ?? [];
+  if (nodes.length > 1) throw new ShopifyOrderCreateError(`More than one Shopify order carries the CRM reference ${sourceIdentifier}; resolve it in Shopify before retrying.`);
+  return nodes[0] ? { shopifyOrderId: nodes[0].id, shopifyOrderName: nodes[0].name } : null;
+}
+

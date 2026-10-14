@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Activity, ArrowLeft, Ban, CreditCard, Hash, Mail, Phone, RefreshCw, ScrollText, ShoppingBag, Truck, User, Wallet } from "lucide-react";
@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { WhatsAppConversation } from "@/components/whatsapp/conversation/whatsapp-conversation";
 import { useLiveOrderDetail } from "@/hooks/useOrders";
+import { useAuthStore } from "@/stores/auth-store";
 import { useCancelLiveOrderMutation, useSyncLiveOrderMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { DetailField, DetailGrid } from "./detail-field";
@@ -157,10 +158,18 @@ function lineFigures(item: LiveItem, taxesIncluded: boolean | null) {
 // payments/audit exist for an order that was never synced). Every value is Shopify's own or "Not available".
 export function LiveOrderDetailView({ externalId }: { externalId: string }) {
   const { data, isLoading, error, refetch } = useLiveOrderDetail(externalId);
+  const router = useRouter();
+  // Reading this page is open to admin, manager and salesperson; the live ACTIONS below are admin-only on the server, so only admins are offered them.
+  const isAdmin = useAuthStore((s) => s.user?.role) === "ADMIN";
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  // Already synced into the CRM: open the CRM order (the single source of truth) instead of a Shopify-only copy.
+  const crmOrderId = data?.crmOrderId;
+  useEffect(() => {
+    if (crmOrderId) router.replace(`${ORDERS_HREF}/${crmOrderId}`);
+  }, [crmOrderId, router]);
   const upgradeTarget = { kind: "live", externalId } as const;
 
-  if (isLoading) {
+  if (isLoading || crmOrderId) {
     return (
       <div className="space-y-6" aria-busy="true" aria-label="Loading order">
         <Skeleton className="h-8 w-56" />
@@ -240,9 +249,9 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <BackLink />
           <div className="flex flex-wrap items-start justify-end gap-2">
-            <SyncOrderToCrmButton externalId={externalId} />
+            {isAdmin ? <SyncOrderToCrmButton externalId={externalId} /> : null}
             <PrepaidUpgradeAction target={upgradeTarget} onOpen={() => setUpgradeOpen(true)} />
-            <CancelLiveOrderButton externalId={externalId} orderName={order.name} alreadyCancelled={isCancelled} />
+            {isAdmin ? <CancelLiveOrderButton externalId={externalId} orderName={order.name} alreadyCancelled={isCancelled} /> : null}
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">

@@ -427,12 +427,18 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     },
   ],
 
-  // HR only handles team/salesperson management — nothing else is exposed.
+  // HR handles team/salesperson management, and distributes abandoned leads to telecallers - nothing else is exposed.
   HR: [
     {
       label: "Overview",
       items: [
         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+      ],
+    },
+    {
+      label: "Pipeline",
+      items: [
+        { title: "Abandoned Leads", href: "/dashboard/abandoned-leads", icon: AlertTriangle },
       ],
     },
     {

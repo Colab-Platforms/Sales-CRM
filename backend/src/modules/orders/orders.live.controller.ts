@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
+import { respondIfDatabaseUnavailable } from "@/utils/databaseErrors.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import OrdersLiveService from "./orders.live.service.js";
 import { validateLiveOrderHistoryQuery, validateLiveOrdersQuery } from "./orders.live.validators.js";
@@ -20,6 +21,8 @@ export const listLiveOrders = async (req: AuthRequest, res: Response): Promise<v
     const result = await ordersLiveService.listLiveOrders(req.user!, value);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
+    // A database that is down / over quota gets a safe 503, not the raw Prisma text (Shopify failures come back as results, not exceptions).
+    if (respondIfDatabaseUnavailable(res, error)) return;
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
@@ -31,6 +34,8 @@ export const getLiveTagOptions = async (_req: AuthRequest, res: Response): Promi
   try {
     sendResponse(res, true, await ordersLiveService.listTagOptions(), "OK", STATUS_CODES.OK);
   } catch (error: any) {
+    // A database that is down / over quota gets a safe 503, not the raw Prisma text (Shopify failures come back as results, not exceptions).
+    if (respondIfDatabaseUnavailable(res, error)) return;
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
@@ -56,6 +61,8 @@ export const makeSyncLiveOrder =
       }
       sendResponse(res, true, result, "OK", STATUS_CODES.OK);
     } catch (error: any) {
+      // A database that is down / over quota gets a safe 503, not the raw Prisma text (Shopify failures come back as results, not exceptions).
+      if (respondIfDatabaseUnavailable(res, error)) return;
       sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
     }
   };
@@ -78,6 +85,8 @@ export const cancelLiveOrder = async (req: AuthRequest, res: Response): Promise<
     }
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
+    // A database that is down / over quota gets a safe 503, not the raw Prisma text (Shopify failures come back as results, not exceptions).
+    if (respondIfDatabaseUnavailable(res, error)) return;
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
@@ -102,6 +111,8 @@ export const getLiveOrderHistory = async (req: AuthRequest, res: Response): Prom
     const result = await ordersLiveService.getLiveOrderHistory(req.user!, shopifyCustomerId, excludeExternalId, value);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
+    // A database that is down / over quota gets a safe 503, not the raw Prisma text (Shopify failures come back as results, not exceptions).
+    if (respondIfDatabaseUnavailable(res, error)) return;
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
@@ -111,19 +122,22 @@ export const getLiveOrderHistory = async (req: AuthRequest, res: Response): Prom
 // "exists but you can't see it" from "doesn't exist" - same probing protection scopedOrderWhere uses).
 export const getLiveOrderDetail = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // numeric id, "shopify:<id>" or the full GID - all name the same Shopify order (the service normalises them)
     const externalId = String(req.params.externalId ?? "");
-    if (!/^\d+$/.test(externalId)) {
-      sendResponse(res, false, null, "Order not found", STATUS_CODES.NOT_FOUND);
+    const result = await ordersLiveService.getLiveOrderDetail(req.user!, externalId);
+    if (result.crmOrderId) {
+      sendResponse(res, true, result, "OK", STATUS_CODES.OK);
       return;
     }
-
-    const result = await ordersLiveService.getLiveOrderDetail(req.user!, externalId);
     if (!result.order) {
-      sendResponse(res, false, null, result.error ?? "Order not found", STATUS_CODES.NOT_FOUND);
+      // Shopify/API failures are 503 with the real reason; only a genuinely missing/unreadable order is 404.
+      sendResponse(res, false, null, result.error ?? "Order not found", result.errorKind === "unavailable" ? STATUS_CODES.SERVICE_UNAVAILABLE : STATUS_CODES.NOT_FOUND);
       return;
     }
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
+    // A database that is down / over quota gets a safe 503, not the raw Prisma text (Shopify failures come back as results, not exceptions).
+    if (respondIfDatabaseUnavailable(res, error)) return;
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
