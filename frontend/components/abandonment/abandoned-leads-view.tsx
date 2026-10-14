@@ -24,6 +24,7 @@ import type { AbandonmentDateRange, ListAbandonmentsParams } from "@/lib/api-cli
 import { parseAbandonedLeadsUrl } from "@/lib/abandoned-leads-href";
 import { assignableTelecallersQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { X } from "lucide-react";
+import { IngestionHealthPanel } from "@/components/abandonment/ingestion-health";
 
 const PAGE_SIZE = 20;
 
@@ -174,6 +175,8 @@ export function AbandonedLeadsView() {
 
       {isAdmin ? <ManagerAutoAssignToggle /> : null}
       {isManager ? <SalespersonAutoAssignToggle /> : null}
+
+      {isStaff ? <IngestionHealthPanel canReconcile={isAdmin} /> : null}
 
       <AbandonmentDateRangeFilter value={range} onChange={selectRange} total={error ? undefined : data?.pagination.totalItems} />
 

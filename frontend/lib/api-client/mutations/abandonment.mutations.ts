@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { abandonmentApi } from "../endpoints/abandonment.api";
 import { abandonmentKeys } from "../queries/abandonment.queries";
+import type { IngestionReconcileResult } from "../types/abandonment.types";
 import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, BulkUpdateLeadStatusPayload, CreateRecoveryActionInput, ManagerAutoAssignConfig } from "../types/abandonment.types";
 
 export function useLogRecoveryActionMutation(abandonmentId: string) {
@@ -62,3 +63,15 @@ export function useSetSalespersonAutoAssignMutation() {
     },
   });
 }
+
+export function useReconcileIngestionMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<IngestionReconcileResult, unknown, Record<string, never>>({
+    mutationFn: () => abandonmentApi.reconcileIngestion(),
+    onSuccess: () => {
+      // the recovered leads appear in the lists, the distribution and the health numbers
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
+    },
+  });
+}
+

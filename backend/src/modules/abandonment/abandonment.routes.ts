@@ -9,6 +9,8 @@ import {
   getAbandonment,
   getAbandonmentByLead,
   getAbandonmentDistribution,
+  getIngestionStatusHandler,
+  reconcileIngestionHandler,
   getMyAbandonmentSummary,
   listAssignableTelecallers,
   getAbandonmentOrderPrefill,
@@ -43,6 +45,9 @@ router.get("/ids", requireAuth, listRoles, listAbandonmentIds);
 router.get("/distribution", requireAuth, assignRoles, getAbandonmentDistribution);
 router.get("/my-summary", requireAuth, requireRole(Role.SALESPERSON), getMyAbandonmentSummary);
 router.get("/telecallers", requireAuth, assignRoles, listAssignableTelecallers);
+// Fastrr ingestion health (admin / manager / HR; counts and times only) and the admin-only, bounded re-processing of deliveries that failed for good.
+router.get("/ingestion/status", requireAuth, assignRoles, getIngestionStatusHandler);
+router.post("/ingestion/reconcile", requireAuth, requireRole(Role.ADMIN), reconcileIngestionHandler);
 // Backs the "Abandoned Checkout" panel embedded on the normal lead-detail page - looked up by leadId.
 router.get("/by-lead/:leadId", requireAuth, allRoles, getAbandonmentByLead);
 

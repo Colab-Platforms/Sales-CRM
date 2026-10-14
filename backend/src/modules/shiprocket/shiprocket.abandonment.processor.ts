@@ -2,7 +2,9 @@ import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType } from
 import LeadService from "../lead/lead.service.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
 import { safeMessage, type TxRunner } from "../integrations/integrations.common.js";
-import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
+import type { WebhookStore } from "../shopify/shopify.webhook.store.js";
+import { logger } from "@/utils/logger.js";
+import { ingestionMetrics } from "./shiprocket.abandonment.metrics.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { parseAbandonmentEvent, summarize, type ParsedAbandonment } from "./shiprocket.abandonment.mapper.js";
 
@@ -23,7 +25,19 @@ export interface AbandonmentProcessorDeps {
   store: WebhookStore;
   runner: TxRunner;
   now?: () => Date;
+  /** false = a recovery / reconciliation pass: the abandonment is saved but NEVER auto-assigned. Default true (live deliveries). */
+  autoAssign?: boolean;
 }
+
+// Why these numbers exist (measured on live data, 2026-10-13): saving one delivery takes ~4.4 s of database round trips. Prisma's interactive-transaction default is 5 s, so the
+// work sat on the edge of its limit all day and, once the database got slightly slower (~10:18 IST), most deliveries timed out and - after the shared 8 attempts - were dropped.
+//  - the SAVE (lead, abandonment, activity) now has an explicit, generous timeout and is committed on its own;
+//  - auto-assignment (round-robin cursor locks, assignment history) is a SECOND, separate transaction: a slow or failed assignment can no longer fail or roll back the save;
+//  - a failed delivery is retried for ~11 hours (24 attempts, backoff capped at 30 min) instead of ~2 hours, and can be re-driven by a bounded recovery pass.
+export const SAVE_TX_OPTIONS = { timeout: 30_000, maxWait: 10_000 } as const;
+export const ASSIGN_TX_OPTIONS = { timeout: 20_000, maxWait: 10_000 } as const;
+export const ABANDONMENT_MAX_ATTEMPTS = 24;
+export const abandonmentBackoffMs = (attempts: number): number => Math.min(60_000 * 2 ** Math.max(attempts - 1, 0), 30 * 60_000);
 
 export const SHIPROCKET_CHECKOUT_SOURCE_NAME = "Shiprocket Checkout";
 export const SHIPROCKET_CHECKOUT_SOURCE_CODE = "SHIPROCKET_CHECKOUT";
@@ -123,15 +137,25 @@ export async function processAbandonmentEvent(eventId: string, deps: Abandonment
   const now = deps.now ?? (() => new Date());
   const stored = await deps.store.claim(eventId, now());
   if (!stored) return "skipped";
+  return processClaimedAbandonmentEvent(stored, deps);
+}
+
+/** Processes an event the caller has ALREADY claimed (the live path claims through the store; the recovery pass claims dead events itself). */
+export async function processClaimedAbandonmentEvent(stored: { id: string; payload: unknown; attempts: number }, deps: AbandonmentProcessorDeps): Promise<AbandonmentProcessOutcome> {
+  const now = deps.now ?? (() => new Date());
+  const eventId = stored.id;
+  const started = Date.now();
 
   try {
     const event = parseAbandonmentEvent(stored.payload);
     if (!event) {
+      ingestionMetrics.inc("unusableNoContact");
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }
 
-    await deps.runner.$transaction(async (tx) => {
+    // 1) THE SAVE - its own transaction, committed before anything else is attempted.
+    const saved = await deps.runner.$transaction(async (tx) => {
       const lead = await resolveLead(tx, event);
       const { score, reason } = priorityFromCartValue(event.cartValue);
       const detectedAt = event.abandonedAt ?? now();
@@ -184,21 +208,35 @@ export async function processAbandonmentEvent(eventId: string, deps: Abandonment
       });
 
       await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
+      return { leadId: lead.id, created: !existing };
+    }, SAVE_TX_OPTIONS);
 
-      // Only a genuinely new abandonment tries auto-assignment - a repeat delivery for the same cart
-      // (the `existing` branch above) never re-triggers it, matching manual assignment's own "don't
-      // clobber an existing owner" behavior. Each stage's toggle decides whether anything happens.
-      if (!existing) {
-        const fullLead = await tx.lead.findUniqueOrThrow({ where: { id: lead.id } });
-        await leadService.autoAssignAbandonedLead(tx, fullLead);
+    // 2) AUTO-ASSIGNMENT - separate and best-effort. Only a genuinely new abandonment tries it (a repeat delivery for the same cart never re-triggers it, matching manual assignment's own
+    //    "don't clobber an existing owner" behaviour), and never during a recovery pass. If it fails the checkout is already saved: the lead simply stays unassigned (visible on the
+    //    distribution dashboard) rather than the whole delivery failing and, eventually, being lost.
+    if (saved.created && deps.autoAssign !== false) {
+      try {
+        await deps.runner.$transaction(async (tx) => {
+          const fullLead = await tx.lead.findUniqueOrThrow({ where: { id: saved.leadId } });
+          await leadService.autoAssignAbandonedLead(tx, fullLead);
+        }, ASSIGN_TX_OPTIONS);
+      } catch (error) {
+        ingestionMetrics.inc("autoAssignFailed");
+        logger.warn(`fastrr.ingest auto_assign_failed event=${eventId} reason=${safeMessage(error instanceof Error ? error.message : String(error)).slice(0, 120)}`);
       }
-    });
+    }
 
     await deps.store.complete(eventId, "PROCESSED", now());
+    ingestionMetrics.inc("processed");
+    logger.info(`fastrr.ingest processed event=${eventId} attempts=${stored.attempts} created=${saved.created} ms=${Date.now() - started}`);
     return "processed";
   } catch (error) {
-    const exhausted = stored.attempts >= MAX_ATTEMPTS;
-    await deps.store.fail(eventId, safeMessage(error instanceof Error ? error.message : String(error)), exhausted ? null : new Date(now().getTime() + backoffMs(stored.attempts)));
+    ingestionMetrics.inc("failedAttempts");
+    const exhausted = stored.attempts >= ABANDONMENT_MAX_ATTEMPTS;
+    if (exhausted) ingestionMetrics.inc("exhausted");
+    const message = safeMessage(error instanceof Error ? error.message : String(error));
+    await deps.store.fail(eventId, message, exhausted ? null : new Date(now().getTime() + abandonmentBackoffMs(stored.attempts)));
+    logger.warn(`fastrr.ingest failed event=${eventId} attempts=${stored.attempts} exhausted=${exhausted} ms=${Date.now() - started} reason=${message.slice(0, 120)}`);
     return exhausted ? "failed" : "retry";
   }
 }

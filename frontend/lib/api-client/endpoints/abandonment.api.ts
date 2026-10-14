@@ -13,6 +13,8 @@ import type {
   AbandonmentDateRange,
   AbandonmentDistribution,
   AssignableTelecaller,
+  IngestionReconcileResult,
+  IngestionStatus,
   ManagerAutoAssignConfig,
   OrderPrefill,
   TelecallerSummary,
@@ -79,6 +81,18 @@ export const abandonmentApi = {
   /** The signed-in telecaller's own workload (the server derives who that is). */
   async mySummary(): Promise<TelecallerSummary> {
     const res = await apiClient.get<ApiEnvelope<TelecallerSummary>>("/abandonments/my-summary");
+    return res.data.data;
+  },
+
+  /** Health of the Fastrr ingestion (admin / manager / HR). */
+  async ingestionStatus(period: AbandonmentDateRange): Promise<IngestionStatus> {
+    const res = await apiClient.get<ApiEnvelope<IngestionStatus>>("/abandonments/ingestion/status", { params: { period } });
+    return res.data.data;
+  },
+
+  /** Re-process deliveries that failed for good (admin only; bounded; recovered leads are never auto-assigned). */
+  async reconcileIngestion(): Promise<IngestionReconcileResult> {
+    const res = await apiClient.post<ApiEnvelope<IngestionReconcileResult>>("/abandonments/ingestion/reconcile", {});
     return res.data.data;
   },
 

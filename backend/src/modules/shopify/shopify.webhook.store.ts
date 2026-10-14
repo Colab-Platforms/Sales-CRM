@@ -36,7 +36,8 @@ export function backoffMs(attempts: number): number {
 }
 
 // `provider` defaults to Shopify; the Cashfree and Shiprocket webhooks reuse this same store (and the same table) under their own name.
-export function createPrismaWebhookStore(db: Prisma.TransactionClient, provider: string = PROVIDER): WebhookStore {
+export function createPrismaWebhookStore(db: Prisma.TransactionClient, provider: string = PROVIDER, options: { maxAttempts?: number } = {}): WebhookStore {
+  const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
   return {
     async record({ eventType, externalEventId, payload, ignored }) {
       // One atomic INSERT ... ON CONFLICT DO NOTHING on (provider, external_event_id): a repeat delivery inserts
@@ -102,7 +103,7 @@ export function createPrismaWebhookStore(db: Prisma.TransactionClient, provider:
           provider,
           OR: [
             { status: WebhookStatus.RECEIVED, receivedAt: { lte: new Date(now.getTime() - STALE_RECEIVED_MS) } },
-            { status: WebhookStatus.FAILED, nextAttemptAt: { lte: now }, attempts: { lt: MAX_ATTEMPTS } },
+            { status: WebhookStatus.FAILED, nextAttemptAt: { lte: now }, attempts: { lt: maxAttempts } },
             { status: WebhookStatus.PROCESSING, nextAttemptAt: { lte: now } },
           ],
         },

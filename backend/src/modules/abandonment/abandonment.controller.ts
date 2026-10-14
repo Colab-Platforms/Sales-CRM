@@ -9,6 +9,8 @@ import {
   validateBulkUpdateLeadStatus,
   validateCreateRecoveryAction,
   validateDistributionQuery,
+  validateIngestionQuery,
+  validateReconcileBody,
   validateIdParams,
   validateLeadIdParams,
   validateListAbandonmentsQuery,
@@ -84,6 +86,26 @@ export const getAbandonmentDistribution = async (req: AuthRequest, res: Response
     const { error, value } = validateDistributionQuery(req.query);
     if (error) return void bad(res, error.message);
     sendResponse(res, true, await service.getDistribution(req.user!, value.dateRange), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getIngestionStatusHandler = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateIngestionQuery(req.query);
+    if (error) return void bad(res, error.message);
+    sendResponse(res, true, await service.getIngestionStatus(req.user!, value.period), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const reconcileIngestionHandler = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateReconcileBody(req.body);
+    if (error) return void bad(res, error.message);
+    sendResponse(res, true, await service.reconcileIngestion(req.user!, value), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

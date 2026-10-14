@@ -236,3 +236,36 @@ export interface AssignableTelecaller {
   groupName?: string | null;
 }
 
+/** Fastrr ingestion health: counts and times only (the API never returns customer data or secrets). */
+export interface IngestionStatus {
+  period: AbandonmentDateRange;
+  timezone: string;
+  now: string;
+  lastReceivedAt: string | null;
+  lastProcessedAt: string | null;
+  lastFailedAt: string | null;
+  secondsSinceLastReceived: number | null;
+  received: { events: number; distinctCarts: number };
+  byStatus: { processed: number; ignoredNoContact: number; failed: number; pending: number };
+  failed: { retryable: number; exhausted: number };
+  processedAfterRetry: number;
+  carts: { received: number; saved: number; notSaved: number; ignoredNoContact: number };
+  latency: {
+    providerToReceipt: { samples: number; p50: number | null; p90: number | null; max: number | null };
+    receiptToSaved: { samples: number; p50: number | null; p90: number | null; max: number | null };
+  };
+  backlog: { pending: number; retryable: number; exhausted7d: number; oldestPendingAgeSeconds: number | null };
+  process: { since: string; received: number; duplicates: number; unauthorized: number; invalidBody: number; notConfigured: number; unusableNoContact: number; processed: number; failedAttempts: number; exhausted: number; autoAssignFailed: number; recoveredByReconcile: number };
+  lastReconcile: { at: string; examined: number; recovered: number; failedAgain: number; skipped: number } | null;
+}
+
+export interface IngestionReconcileResult {
+  at: string;
+  examined: number;
+  recovered: number;
+  failedAgain: number;
+  skipped: number;
+  remaining: number;
+  timedOut: boolean;
+}
+

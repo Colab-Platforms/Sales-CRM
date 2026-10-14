@@ -10,7 +10,7 @@ import shopifyWebhookRoutes, { startShopifyCatchUp, startShopifyWebhookWorker } 
 import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
 import cashfreeWebhookRoutes, { startCashfreeReconciler, startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
-import shiprocketAbandonmentWebhookRoutes, { startAbandonmentWebhookWorker } from "./modules/shiprocket/shiprocket.abandonment.webhook.routes.js";
+import shiprocketAbandonmentWebhookRoutes, { startAbandonmentReconcileJob, startAbandonmentWebhookWorker } from "./modules/shiprocket/shiprocket.abandonment.webhook.routes.js";
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
 import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/whatsapp/whatsapp.meta.webhook.routes.js";
 import legalRoutes from "./modules/legal/legal.routes.js";
@@ -95,6 +95,7 @@ app.listen(PORT, () => {
   startIdempotencyPruneJob(); // opt-in (IDEMPOTENCY_PRUNE_HOURS); off by default
   startShiprocketWebhookWorker();
   startAbandonmentWebhookWorker();
+  startAbandonmentReconcileJob(); // opt-in (ABANDONMENT_RECONCILE_MINUTES); off by default
   startAiSensyProjectWebhookWorker();
   startMetaWebhookWorker();
   startLifecycleAutomationScheduler();

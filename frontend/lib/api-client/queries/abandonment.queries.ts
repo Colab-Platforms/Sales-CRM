@@ -10,6 +10,7 @@ export const abandonmentKeys = {
   distribution: (range: AbandonmentDateRange) => [...abandonmentKeys.all, "distribution", range] as const,
   mySummary: () => [...abandonmentKeys.all, "mySummary"] as const,
   telecallers: () => [...abandonmentKeys.all, "telecallers"] as const,
+  ingestion: (period: AbandonmentDateRange) => [...abandonmentKeys.all, "ingestion", period] as const,
   detail: (id: string) => [...abandonmentKeys.all, "detail", id] as const,
   orderPrefill: (id: string) => [...abandonmentKeys.all, "orderPrefill", id] as const,
   byLead: (leadId: string) => [...abandonmentKeys.all, "byLead", leadId] as const,
@@ -81,5 +82,9 @@ export function myAbandonmentSummaryQueryOptions() {
 
 export function assignableTelecallersQueryOptions() {
   return queryOptions({ queryKey: abandonmentKeys.telecallers(), queryFn: () => abandonmentApi.telecallers(), staleTime: 60 * 1000 });
+}
+
+export function ingestionStatusQueryOptions(period: AbandonmentDateRange) {
+  return queryOptions({ queryKey: abandonmentKeys.ingestion(period), queryFn: () => abandonmentApi.ingestionStatus(period), staleTime: 15 * 1000, refetchInterval: 60 * 1000 });
 }
 

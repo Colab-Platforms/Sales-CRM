@@ -1,4 +1,5 @@
 import { logger } from "@/utils/logger.js";
+import { ingestionMetrics } from "./shiprocket.abandonment.metrics.js";
 import type { WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { deliveryId, parseAbandonmentEvent, verifyAbandonmentSecret } from "./shiprocket.abandonment.mapper.js";
 
@@ -28,13 +29,22 @@ export const EVENT_TYPE = "checkout.abandoned";
 
 export async function handleAbandonmentWebhook(req: AbandonmentWebhookRequest, deps: AbandonmentHandlerDeps): Promise<AbandonmentWebhookResponse> {
   const { config, store, schedule } = deps;
-  if (!config) return { status: 503, message: "Shiprocket Checkout abandonment webhook is not configured" };
-  if (!verifyAbandonmentSecret(req.headers, config.secret)) return { status: 401, message: "Invalid or missing webhook secret" };
+  if (!config) {
+    ingestionMetrics.inc("notConfigured");
+    return { status: 503, message: "Shiprocket Checkout abandonment webhook is not configured" };
+  }
+  if (!verifyAbandonmentSecret(req.headers, config.secret)) {
+    ingestionMetrics.inc("unauthorized");
+    logger.warn("fastrr.ingest rejected reason=unauthorized");
+    return { status: 401, message: "Invalid or missing webhook secret" };
+  }
 
   let payload: unknown;
   try {
     payload = JSON.parse(req.rawBody.toString("utf8"));
   } catch {
+    ingestionMetrics.inc("invalidBody");
+    logger.warn("fastrr.ingest rejected reason=invalid_json");
     return { status: 400, message: "Body is not valid JSON" };
   }
 
@@ -44,8 +54,15 @@ export async function handleAbandonmentWebhook(req: AbandonmentWebhookRequest, d
   // inspecting) and no personal data at all: no name, phone, email or address.
   logger.info(parsed ? `Shiprocket abandon-cart: ${parsed.itemCount ?? 0} item(s)${parsed.cartValue ? `, cart value ${parsed.currency ?? "INR"} ${parsed.cartValue}` : ""}${parsed.stage ? `, stage ${parsed.stage}` : ""}` : "Shiprocket abandon-cart delivery ignored (no usable phone/email)");
   const { id, duplicate } = await store.record({ eventType: EVENT_TYPE, externalEventId: deliveryId(req.rawBody), payload, ignored: !usable });
-  if (duplicate) return { status: 200, message: "Duplicate delivery ignored" };
-  if (!usable) return { status: 200, message: "Delivery has no usable contact (phone/email)" };
+  if (duplicate) {
+    ingestionMetrics.inc("duplicates");
+    return { status: 200, message: "Duplicate delivery ignored" };
+  }
+  ingestionMetrics.inc("received");
+  if (!usable) {
+    ingestionMetrics.inc("unusableNoContact");
+    return { status: 200, message: "Delivery has no usable contact (phone/email)" };
+  }
 
   schedule(id);
   return { status: 200, message: "Received" };

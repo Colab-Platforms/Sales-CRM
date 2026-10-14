@@ -21,11 +21,24 @@ import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
 import refundRoutes from "@modules/refunds/refunds.routes.js";
 import attendanceRoutes from "@modules/attendance/attendance.routes.js";
 import ticketsRoutes from "@modules/tickets/tickets.routes.js";
+import { prisma } from "@/lib/prisma.js";
+import { createCachedDatabaseCheck } from "@/lib/dbHealth.js";
+import { requireAuth, requireRole } from "@/middlewares/auth.js";
+import { Role } from "../generated/prisma/enums.js";
 
 const router = Router();
 
 router.get("/health", (_req, res) => {
   res.status(200).json({ success: true, message: "ok" });
+});
+
+// Readiness: actually reaches the database (this wakes a suspended Neon compute), so it is admin-only and cached for 30 s - an open endpoint would let anyone keep the database awake
+// and burn the compute quota. Deliberately separate from /health so uptime monitors never touch the database. Do NOT point a monitor at this route.
+const checkDb = createCachedDatabaseCheck(prisma);
+router.get("/health/db", requireAuth, requireRole(Role.ADMIN), async (_req, res) => {
+  const health = await checkDb();
+  res.setHeader("Cache-Control", "no-store");
+  res.status(health.ok ? 200 : 503).json({ success: health.ok, message: health.ok ? "database reachable" : "database unavailable", data: health });
 });
 
 router.use("/auth", authRoutes);

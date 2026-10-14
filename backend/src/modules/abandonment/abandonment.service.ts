@@ -11,6 +11,9 @@ import LeadService from "../lead/lead.service.js";
 import { aggregateItemOptions, type ItemOption } from "./abandonment.items.js";
 import { buildOrderPrefill, type OrderPrefill } from "./abandonment.order-prefill.js";
 import { getDistribution, getTelecallerSummary, listTelecallers, type Distribution, type TelecallerSummary } from "./abandonment.distribution.js";
+import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
+import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
+import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
 import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow } from "./abandonment.filters.js";
 import type {
   AbandonmentDetail,
@@ -372,6 +375,17 @@ class AbandonmentService {
       managerId: body.managerId,
       managerIds: body.managerIds,
     });
+  }
+
+  /** Health of the Fastrr ingestion (admin / manager / HR): counts and times only. */
+  getIngestionStatus(user: AuthUser, period: "today" | "yesterday" | "all"): Promise<IngestionStatus> {
+    return getIngestionStatus(this.db, user, period);
+  }
+
+  /** Re-drive stored deliveries that failed for good (admin only; bounded; never auto-assigns). */
+  async reconcileIngestion(user: AuthUser, options: { sinceHours?: number; limit?: number }): Promise<ReconcileResult> {
+    if (user.role !== Role.ADMIN) throw new ApiError("Only an admin can re-process failed deliveries", STATUS_CODES.FORBIDDEN);
+    return reconcileFailedAbandonmentEvents({ db: this.db, runner: this.db as never, store: abandonmentStore, provider: FASTRR_PROVIDER }, options);
   }
 
   /** Distribution dashboard (admin / manager / HR): counts by telecaller for a period, inside the viewer's own scope. */
