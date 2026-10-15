@@ -122,3 +122,47 @@ export interface AddSalespersonPayload {
 export interface AddExistingMemberPayload {
   userId: string;
 }
+
+export interface RecruiterUser {
+  id: string;
+  name: string;
+  username: string;
+  phone: string | null;
+  role: "RECRUITER";
+  status: string;
+}
+
+export interface CreateRecruiterPayload {
+  name: string;
+  username: string;
+  password: string;
+  phone: string;
+}
+
+export interface UpdateRecruiterPayload {
+  name?: string;
+  phone?: string;
+  status?: "ACTIVE" | "INACTIVE";
+}
+
+export interface RecruiterUser {
+  id: string;
+  name: string;
+  username: string;
+  phone: string | null;
+  role: "RECRUITER";
+  status: string;
+}
+
+export interface CreateRecruiterPayload {
+  name: string;
+  username: string;
+  password: string;
+  phone: string;
+}
+
+export interface UpdateRecruiterPayload {
+  name?: string;
+  phone?: string;
+  status?: "ACTIVE" | "INACTIVE";
+}

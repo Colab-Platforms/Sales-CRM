@@ -37,6 +37,19 @@ export interface CreateHrBody {
   phone: string;
 }
 
+export interface CreateRecruiterBody {
+  name: string;
+  username: string;
+  password: string;
+  phone: string;
+}
+
+export interface UpdateRecruiterBody {
+  name?: string;
+  phone?: string;
+  status?: "ACTIVE" | "INACTIVE";
+}
+
 export interface CreateGroupBody {
   name: string;
   description?: string;

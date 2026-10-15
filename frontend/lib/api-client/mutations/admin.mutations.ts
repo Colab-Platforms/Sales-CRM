@@ -10,6 +10,9 @@ import type {
   UpdateManagerPayload,
   UpdateSalespersonPayload,
   HrUser,
+  RecruiterUser,
+  CreateRecruiterPayload,
+  UpdateRecruiterPayload,
   CreateHrPayload,
   Group,
   CreateGroupPayload,
@@ -162,5 +165,33 @@ export function useRemoveSalespersonFromGroupMutation() {
       queryClient.invalidateQueries({ queryKey: adminKeys.groups() });
       queryClient.invalidateQueries({ queryKey: adminKeys.salespersons() });
     },
+  });
+}
+
+export function useCreateRecruiterMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<RecruiterUser, unknown, CreateRecruiterPayload>({
+    mutationFn: (payload) => adminApi.createRecruiter(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminKeys.recruiters() });
+    },
+  });
+}
+
+export function useUpdateRecruiterMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<RecruiterUser, unknown, { id: string; payload: UpdateRecruiterPayload }>({
+    mutationFn: ({ id, payload }) => adminApi.updateRecruiter(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminKeys.recruiters() });
+    },
+  });
+}
+
+export function useResetRecruiterPasswordMutation() {
+  return useMutation<RecruiterUser, unknown, { id: string; payload: ResetPasswordPayload }>({
+    mutationFn: ({ id, payload }) => adminApi.resetRecruiterPassword(id, payload),
   });
 }

@@ -51,6 +51,9 @@ class DashboardService {
         // HR only works within Team management — no dashboard widgets of its
         // own; the frontend redirects straight to /dashboard/groups.
         return { role: Role.HR };
+      case Role.RECRUITER:
+        // Recruiters work straight from their application queue; no dashboard widgets of their own.
+        return { role: Role.RECRUITER };
     }
   }
 

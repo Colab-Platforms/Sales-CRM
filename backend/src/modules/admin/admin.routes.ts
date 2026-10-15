@@ -12,6 +12,10 @@ import {
   resetSalespersonPassword,
   createHr,
   listHr,
+  createRecruiter,
+  listRecruiters,
+  updateRecruiter,
+  resetRecruiterPassword,
   createGroup,
   listGroups,
   getGroup,
@@ -43,6 +47,12 @@ router.patch("/managers/:id/password", adminOnly, resetManagerPassword);
 // HR accounts: ADMIN only.
 router.post("/hr", adminOnly, createHr);
 router.get("/hr", adminOnly, listHr);
+
+// Recruiters (they call job applicants): ADMIN + HR.
+router.post("/recruiters", adminOrHr, createRecruiter);
+router.get("/recruiters", adminOrHr, listRecruiters);
+router.patch("/recruiters/:id", adminOrHr, updateRecruiter);
+router.patch("/recruiters/:id/password", adminOrHr, resetRecruiterPassword);
 
 // Salespersons: ADMIN + HR.
 router.post("/salespersons", adminOrHr, createSalesperson);

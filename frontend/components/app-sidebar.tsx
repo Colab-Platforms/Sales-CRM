@@ -28,6 +28,8 @@ import {
   RotateCcw,
   LifeBuoy,
   ChevronRight,
+  Briefcase,
+  ClipboardList,
 } from "lucide-react";
 import {
   Sidebar,
@@ -427,20 +429,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     },
   ],
 
-  // HR handles team/salesperson management, and distributes abandoned leads to telecallers - nothing else is exposed.
+  // HR handles team/salesperson management - nothing else is exposed.
   HR: [
-    {
-      label: "Overview",
-      items: [
-        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      ],
-    },
-    {
-      label: "Pipeline",
-      items: [
-        { title: "Abandoned Leads", href: "/dashboard/abandoned-leads", icon: AlertTriangle },
-      ],
-    },
     {
       label: "Organization",
       items: [
@@ -448,7 +438,28 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         { title: "Teams", href: "/dashboard/groups", icon: Building2 },
       ],
     },
+    {
+      label: "Recruitment",
+      items: [
+        { title: "Jobs", href: "/dashboard/jobs", icon: Briefcase },
+        { title: "Recruiters", href: "/dashboard/recruiters", icon: Contact },
+      ],
+    },
   ],
+
+  // Recruiters only work the job applications assigned to them.
+  RECRUITER: [
+    {
+      label: "Recruitment",
+      items: [{ title: "My Applications", href: "/dashboard/applications", icon: ClipboardList }],
+    },
+  ],
+};
+
+// Roles without a dashboard land on their main work page instead.
+export const HOME_BY_ROLE: Partial<Record<CurrentUser["role"], string>> = {
+  HR: "/dashboard/staff",
+  RECRUITER: "/dashboard/applications",
 };
 
 function isActivePath(pathname: string, href: string, exact = false) {
@@ -522,6 +533,7 @@ function CollapsibleNavItem({
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
   const sections = NAV_BY_ROLE[user.role];
+  const homeHref = HOME_BY_ROLE[user.role] ?? "/dashboard";
 
   return (
     <Sidebar collapsible="icon">
@@ -531,7 +543,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
             <SidebarMenuButton
               size="lg"
               className="hover:bg-transparent"
-              render={<Link href="/dashboard" />}
+              render={<Link href={homeHref} />}
             >
               {/* <BrandMark className="size-8 shrink-0" /> */}
               <div className="flex min-w-0 flex-col leading-tight">

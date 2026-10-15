@@ -5,6 +5,7 @@ export const adminKeys = {
   all: ["admin"] as const,
   managers: () => [...adminKeys.all, "managers"] as const,
   salespersons: () => [...adminKeys.all, "salespersons"] as const,
+  recruiters: () => [...adminKeys.all, "recruiters"] as const,
   hr: () => [...adminKeys.all, "hr"] as const,
   groups: () => [...adminKeys.all, "groups"] as const,
   group: (groupId: string) => [...adminKeys.all, "groups", groupId] as const,
@@ -21,6 +22,13 @@ export function adminSalespersonsQueryOptions() {
   return queryOptions({
     queryKey: adminKeys.salespersons(),
     queryFn: adminApi.listSalespersons,
+  });
+}
+
+export function recruitersQueryOptions() {
+  return queryOptions({
+    queryKey: adminKeys.recruiters(),
+    queryFn: adminApi.listRecruiters,
   });
 }
 

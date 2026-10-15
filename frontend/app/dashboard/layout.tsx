@@ -36,10 +36,10 @@ function DashboardShell({ children }: { children: ReactNode }) {
       {/* <div className="flex flex-1 flex-col gap-6 p-6">{children}</div> */}
       {/* Transparent so the paper dot-grid painted on <body> shows in the gutters. */}
       <SidebarInset className="bg-transparent">
-        <SiteHeader showFollowUps={user.role !== "HR"} />
+        <SiteHeader showFollowUps={user.role !== "HR" && user.role !== "RECRUITER"} />
         {/* Global: call back / follow-up reminders fire on any dashboard page -
             except HR, who has no leads and isn't allowed to hit this endpoint. */}
-        {user.role !== "HR" ? <FollowUpReminders /> : null}
+        {user.role !== "HR" && user.role !== "RECRUITER" ? <FollowUpReminders /> : null}
         {/* Global: starts the salesperson's shift and holds their presence stream open on any page. */}
         <AttendanceProvider />
         <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">

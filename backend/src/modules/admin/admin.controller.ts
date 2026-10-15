@@ -10,6 +10,8 @@ import {
   validateUpdateManagerSchema,
   validateUpdateSalespersonSchema,
   validateCreateHrSchema,
+  validateCreateRecruiterSchema,
+  validateUpdateRecruiterSchema,
   validateCreateGroupSchema,
   validateUpdateGroupSchema,
   validateAddSalespersonSchema,
@@ -154,6 +156,57 @@ export const createHr = async (req: AuthRequest, res: Response): Promise<void> =
 
     const result = await adminService.createHr(value);
     sendResponse(res, true, result, "HR user created successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const createRecruiter = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCreateRecruiterSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await adminService.createRecruiter(req.user!.id, value);
+    sendResponse(res, true, result, "Recruiter created successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listRecruiters = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await adminService.listRecruiters();
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const updateRecruiter = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateUpdateRecruiterSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await adminService.updateRecruiter(req.params.id as string, value);
+    sendResponse(res, true, result, "Recruiter updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const resetRecruiterPassword = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateResetPasswordSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await adminService.resetRecruiterPassword(req.params.id as string, value.password);
+    sendResponse(res, true, result, "Recruiter password updated successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

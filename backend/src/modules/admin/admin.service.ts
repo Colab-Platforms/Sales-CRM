@@ -9,6 +9,8 @@ import type {
   UpdateManagerBody,
   UpdateSalespersonBody,
   CreateHrBody,
+  CreateRecruiterBody,
+  UpdateRecruiterBody,
   CreateGroupBody,
   UpdateGroupBody,
   AddSalespersonBody,
@@ -229,6 +231,52 @@ class AdminService {
       orderBy: { createdAt: "desc" },
     });
     return hrUsers.map(toPublicUser);
+  }
+
+  async createRecruiter(creatorId: string, data: CreateRecruiterBody) {
+    const existing = await prisma.user.findUnique({ where: { username: data.username } });
+    if (existing) throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+
+    const passwordHash = await hashPassword(data.password);
+    const recruiter = await prisma.user.create({
+      data: {
+        name: data.name,
+        username: data.username,
+        phone: data.phone,
+        passwordHash,
+        role: Role.RECRUITER,
+        status: UserStatus.ACTIVE,
+        createdById: creatorId,
+      },
+    });
+    return toPublicUser(recruiter);
+  }
+
+  async listRecruiters() {
+    const recruiters = await prisma.user.findMany({ where: { role: Role.RECRUITER }, orderBy: { createdAt: "desc" } });
+    return recruiters.map(toPublicUser);
+  }
+
+  private async getRecruiterOrThrow(id: string) {
+    const recruiter = await prisma.user.findUnique({ where: { id } });
+    if (!recruiter || recruiter.role !== Role.RECRUITER) throw new ApiError("Recruiter not found", STATUS_CODES.NOT_FOUND);
+    return recruiter;
+  }
+
+  async updateRecruiter(id: string, data: UpdateRecruiterBody) {
+    await this.getRecruiterOrThrow(id);
+    const recruiter = await prisma.user.update({
+      where: { id },
+      data: { name: data.name, phone: data.phone, status: data.status },
+    });
+    return toPublicUser(recruiter);
+  }
+
+  async resetRecruiterPassword(id: string, password: string) {
+    await this.getRecruiterOrThrow(id);
+    const passwordHash = await hashPassword(password);
+    const recruiter = await prisma.user.update({ where: { id }, data: { passwordHash } });
+    return toPublicUser(recruiter);
   }
 
   // Org-wide group (team) management. Unlike manager.service's getOwnedGroup,

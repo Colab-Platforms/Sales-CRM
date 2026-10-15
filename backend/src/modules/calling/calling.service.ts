@@ -3,8 +3,8 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import { triggerClickToCall } from "./callerdesk.client.js";
-import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType, WorkStatus } from "../../../generated/prisma/enums.js";
-import { OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
+import { ApplicationStatus, CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, TaskType, WorkStatus } from "../../../generated/prisma/enums.js";
+import { OUTCOME_APPLICATION_STATUS, OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
 import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { enqueueTranscription } from "./calling.transcription.js";
 import { attendanceService } from "../attendance/attendance.service.js";
@@ -253,11 +253,12 @@ class CallingService {
   // transcript SSE stream's initial check and its authorization (a call this user can't see a
   // transcript for also isn't one they should be allowed to open a stream for).
   async getTranscriptForCall(user: AuthUser, callId: string) {
-    if (user.role === Role.SALESPERSON) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
+    if (user.role === Role.SALESPERSON || user.role === Role.RECRUITER) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
 
     const call = await prisma.call.findUnique({ where: { id: callId }, include: { lead: true, transcript: true } });
     if (!call) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
-    if (user.role === Role.MANAGER && call.lead.assignedManagerId !== user.id) {
+    // A recruiter call (no lead) is only visible to admin/HR.
+    if (user.role === Role.MANAGER && (!call.lead || call.lead.assignedManagerId !== user.id)) {
       throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
     }
 
@@ -276,12 +277,17 @@ class CallingService {
   // actually over - this never runs off the CallerDesk webhook, which only knows connection state,
   // never what was actually said.
   async submitCallOutcome(user: AuthUser, callId: string, data: SubmitCallOutcomeBody) {
-    const call = await prisma.call.findUnique({ where: { id: callId }, include: { lead: true } });
+    const call = await prisma.call.findUnique({ where: { id: callId }, include: { lead: true, application: true } });
     if (!call) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
-    if (user.role === Role.MANAGER && call.lead.assignedManagerId !== user.id) {
+
+    if (call.application) return this.submitApplicationCallOutcome(user, call, call.application, data);
+
+    const lead = call.lead;
+    if (!lead || user.role === Role.RECRUITER || user.role === Role.HR) throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
+    if (user.role === Role.MANAGER && lead.assignedManagerId !== user.id) {
       throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
     }
-    if (user.role === Role.SALESPERSON && call.lead.ownerId !== user.id) {
+    if (user.role === Role.SALESPERSON && lead.ownerId !== user.id) {
       throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
     }
     if (user.role === Role.SALESPERSON && call.agentId !== user.id) {
@@ -305,12 +311,12 @@ class CallingService {
       await tx.call.update({ where: { id: callId }, data: { outcomeId: outcome.id, notes: data.notes?.trim() || null } });
 
       // This call answers whatever reminder was pending on the lead; a new one replaces it if needed.
-      await completePendingFollowUps(tx, call.lead.id);
+      await completePendingFollowUps(tx, lead.id);
       if (followUpAt) {
         await scheduleFollowUp(tx, {
-          leadId: call.lead.id,
-          leadName: [call.lead.firstName, call.lead.lastName].filter(Boolean).join(" "),
-          assignedToId: call.lead.ownerId ?? user.id,
+          leadId: lead.id,
+          leadName: [lead.firstName, lead.lastName].filter(Boolean).join(" "),
+          assignedToId: lead.ownerId ?? user.id,
           actor: { id: user.id, role: user.role },
           type: newStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
           scheduledAt: followUpAt,
@@ -318,13 +324,13 @@ class CallingService {
         });
       }
 
-      if (newStatus && newStatus !== call.lead.workingStatus) {
-        await tx.lead.update({ where: { id: call.lead.id }, data: { workingStatus: newStatus } });
+      if (newStatus && newStatus !== lead.workingStatus) {
+        await tx.lead.update({ where: { id: lead.id }, data: { workingStatus: newStatus } });
       }
 
       await tx.activity.create({
         data: {
-          leadId: call.lead.id,
+          leadId: lead.id,
           actorId: user.id,
           actorRole: user.role,
           type: ActivityType.STATUS_CHANGE,
@@ -342,6 +348,124 @@ class CallingService {
     });
   }
 
+  // ---- Recruitment: calls on a job application (the recruiter equivalent of a lead call) ----
+
+  private async getApplicationForUserOrThrow(user: AuthUser, applicationId: string) {
+    const application = await prisma.application.findUnique({ where: { id: applicationId } });
+    // 404 rather than 403 so an application someone else holds is indistinguishable from a missing one.
+    if (!application) throw new ApiError("Application not found", STATUS_CODES.NOT_FOUND);
+    if (user.role === Role.RECRUITER && application.recruiterId !== user.id) {
+      throw new ApiError("Application not found", STATUS_CODES.NOT_FOUND);
+    }
+    return application;
+  }
+
+  async initiateApplicationCall(user: AuthUser, applicationId: string, virtualNumberId: string): Promise<ClickToCallResult> {
+    const application = await this.getApplicationForUserOrThrow(user, applicationId);
+    if (user.role !== Role.RECRUITER) throw new ApiError("Only the assigned recruiter can call an applicant", STATUS_CODES.FORBIDDEN);
+
+    const agent = await prisma.user.findUnique({ where: { id: user.id } });
+    if (!agent?.phone) {
+      throw new ApiError("Your profile has no phone number configured", STATUS_CODES.BAD_REQUEST);
+    }
+
+    const virtualNumber = await prisma.virtualNumber.findUnique({ where: { id: virtualNumberId } });
+    if (!virtualNumber || virtualNumber.status !== VirtualNumberStatus.ACTIVE) {
+      throw new ApiError("Virtual number not found or inactive", STATUS_CODES.BAD_REQUEST);
+    }
+
+    const call = await prisma.call.create({
+      data: {
+        applicationId: application.id,
+        agentId: agent.id,
+        virtualNumberId: virtualNumber.id,
+        provider: PROVIDER,
+        direction: CallDirection.OUTBOUND,
+        status: CallStatus.INITIATED,
+        agentNumber: agent.phone,
+        customerNumber: application.mobile,
+        startedAt: new Date(),
+      },
+    });
+
+    try {
+      const { providerCallId } = await triggerClickToCall({
+        agentNumber: agent.phone,
+        customerNumber: application.mobile,
+        callerId: virtualNumber.number,
+        leadId: application.id,
+      });
+
+      const updated = await prisma.call.update({
+        where: { id: call.id },
+        data: { providerCallId, status: CallStatus.RINGING_AGENT },
+      });
+
+      attendanceService
+        .setSystemStatus(agent.id, WorkStatus.ON_CALL)
+        .catch((e) => logger.error("[attendance] could not set ON_CALL", e));
+
+      return { callId: updated.id, status: updated.status };
+    } catch (error: any) {
+      await prisma.call.update({
+        where: { id: call.id },
+        data: { status: CallStatus.FAILED, notes: error.message ?? "Failed to initiate call" },
+      });
+      throw error;
+    }
+  }
+
+  async listCallsForApplication(user: AuthUser, applicationId: string) {
+    await this.getApplicationForUserOrThrow(user, applicationId);
+    const calls = await prisma.call.findMany({
+      where: { applicationId },
+      include: {
+        agent: { select: { id: true, name: true } },
+        recording: true,
+        outcome: { select: { id: true, name: true, code: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    // Recruiters see their call log but, like salespersons, can't play the recording back.
+    if (user.role === Role.RECRUITER) {
+      return calls.map((call) => ({ ...call, recording: call.recording ? { ...call.recording, recordingUrl: null } : null }));
+    }
+    return calls;
+  }
+
+  private async submitApplicationCallOutcome(
+    user: AuthUser,
+    call: { id: string; agentId: string },
+    application: { id: string; status: ApplicationStatus; recruiterId: string | null },
+    data: SubmitCallOutcomeBody,
+  ) {
+    if (user.role !== Role.RECRUITER || application.recruiterId !== user.id || call.agentId !== user.id) {
+      throw new ApiError("Call not found", STATUS_CODES.NOT_FOUND);
+    }
+
+    const outcome = await prisma.callOutcome.findUnique({ where: { id: data.outcomeId } });
+    if (!outcome || !outcome.isActive) throw new ApiError("Unknown call outcome", STATUS_CODES.BAD_REQUEST);
+    if (outcome.requiresNote && !data.notes?.trim()) {
+      throw new ApiError(`A note is required for "${outcome.name}"`, STATUS_CODES.BAD_REQUEST);
+    }
+
+    const newStatus = OUTCOME_APPLICATION_STATUS[outcome.code];
+    const note = data.notes?.trim() || null;
+
+    await prisma.$transaction(async (tx) => {
+      await tx.call.update({ where: { id: call.id }, data: { outcomeId: outcome.id, notes: note } });
+      await tx.application.update({
+        where: { id: application.id },
+        data: { ...(newStatus ? { status: newStatus } : {}), ...(note ? { notes: note } : {}) },
+      });
+    });
+
+    return prisma.call.findUnique({
+      where: { id: call.id },
+      include: { agent: { select: { id: true, name: true } }, recording: true, outcome: true },
+    });
+  }
+
   verifyWebhookSecret(headers: Record<string, unknown>, query: Record<string, unknown>): boolean {
     const expected = process.env.CALLERDESK_WEBHOOK_SECRET;
     if (!expected) return true; // not configured yet — accept until a secret is set up
@@ -349,9 +473,18 @@ class CallingService {
     return provided === expected;
   }
 
-  private async autoLogNoAnswer(callId: string, leadId: string, agentId: string): Promise<void> {
+  private async autoLogNoAnswer(callId: string, leadId: string | null, applicationId: string | null, agentId: string): Promise<void> {
     const outcome = await prisma.callOutcome.findFirst({ where: { code: "RINGING_NO_ANSWER", isActive: true } });
     if (!outcome) return;
+
+    if (!leadId) {
+      if (!applicationId) return;
+      await prisma.$transaction(async (tx) => {
+        await tx.call.update({ where: { id: callId }, data: { outcomeId: outcome.id } });
+        await tx.application.update({ where: { id: applicationId }, data: { status: ApplicationStatus.RINGING } });
+      });
+      return;
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.call.update({ where: { id: callId }, data: { outcomeId: outcome.id } });
@@ -438,7 +571,7 @@ class CallingService {
 
     // Nobody spoke, so there's nothing for the salesperson to log: record "Ringing / no answer" for them.
     if (isFinalReport && status === CallStatus.NO_ANSWER && !call.outcomeId) {
-      await this.autoLogNoAnswer(call.id, call.leadId, call.agentId).catch((e) =>
+      await this.autoLogNoAnswer(call.id, call.leadId, call.applicationId, call.agentId).catch((e) =>
         logger.error("[callerdesk] could not auto-log no-answer outcome", e)
       );
     }
@@ -453,6 +586,9 @@ class CallingService {
       // waits on transcription (which happens off-request - see calling.transcription.ts).
       void enqueueTranscription(call.id);
     }
+
+    // Recruiter calls have no lead, so nothing to put on a lead's activity timeline.
+    if (!call.leadId) return;
 
     await prisma.activity.create({
       data: {

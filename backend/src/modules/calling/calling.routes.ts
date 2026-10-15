@@ -2,6 +2,8 @@ import { Router } from "express";
 import {
   initiateCall,
   listLeadCalls,
+  initiateApplicationCall,
+  listApplicationCalls,
   listVirtualNumbers,
   listAllVirtualNumbers,
   createVirtualNumber,
@@ -20,7 +22,14 @@ const router = Router();
 // Public: CallerDesk can't send a JWT, secured by verifyWebhookSecret instead.
 router.post("/webhooks/callerdesk", receiveCallWebhook);
 
-router.use(requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON));
+router.use(requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON, Role.RECRUITER, Role.HR));
+
+// Recruitment: a recruiter calls applicants of the jobs they are assigned. The service enforces ownership;
+// leads stay closed to recruiter/HR below.
+router.post("/applications/:applicationId/click-to-call", requireRole(Role.RECRUITER), initiateApplicationCall);
+router.get("/applications/:applicationId/calls", requireRole(Role.ADMIN, Role.HR, Role.RECRUITER), listApplicationCalls);
+
+router.use(requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON, Role.RECRUITER));
 
 router.get("/virtual-numbers", listVirtualNumbers);
 router.post("/leads/:leadId/click-to-call", initiateCall);

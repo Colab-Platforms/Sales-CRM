@@ -1,6 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useDashboard } from "@/hooks/useDashboard";
+import { useAuthStore } from "@/stores/auth-store";
+import { HOME_BY_ROLE } from "@/components/app-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SalespersonDashboardView } from "@/components/dashboard/salesperson-dashboard";
 import { ManagerSalesDashboard } from "@/components/manager-dashboard/manager-sales-dashboard";
@@ -9,7 +13,18 @@ import { LeadDistributionDashboard } from "@/components/abandonment/lead-distrib
 import { TelecallerLeadSummary } from "@/components/abandonment/telecaller-lead-summary";
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const role = useAuthStore((s) => s.user?.role);
   const { data, isLoading, error } = useDashboard();
+
+  // HR and recruiters have no dashboard - send them to their main page instead.
+  const home = role ? HOME_BY_ROLE[role] : undefined;
+  useEffect(() => {
+    if (home) router.replace(home);
+  }, [home, router]);
+
+  if (home) return null;
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -53,16 +68,6 @@ export default function DashboardPage() {
         <div className="space-y-8">
           <AdminDashboardView data={data} />
           <LeadDistributionDashboard />
-        </div>
-      )}
-      {/* HR distributes abandoned leads but cannot open them (no lead pages) - so the breakdown has no "View details" into lead records beyond the filtered list. */}
-      {data.role === "HR" && (
-        <div className="space-y-6">
-          <div className="space-y-1">
-            <h1 className="font-heading text-2xl font-extrabold">Lead distribution</h1>
-            <p className="text-sm text-muted-foreground">How many abandoned leads there are, who holds them, and what is still waiting for a telecaller.</p>
-          </div>
-          <LeadDistributionDashboard title="Telecaller breakdown" />
         </div>
       )}
     </>
