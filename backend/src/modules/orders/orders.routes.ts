@@ -3,7 +3,7 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
-import { cancelOrder, revertCancellation, createOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
+import { cancelOrder, revertCancellation, createOrder, listMyOrders, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
@@ -41,6 +41,8 @@ router.get("/live/customer/:customerId/history", requireAuth, getLiveOrderHistor
 router.post("/live/:externalId/cancel", requireAuth, requireRole(Role.ADMIN), cancelLiveOrder);
 // Brings a live-only Shopify order into the CRM through the normal Shopify sync (idempotent). Same ADMIN-only gate as the live page.
 router.post("/live/:externalId/sync", requireAuth, requireRole(Role.ADMIN), syncLiveOrder);
+// Orders created by the signed-in user only. Registered before "/:id" so "mine" is never read as an order id.
+router.get("/mine", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), listMyOrders);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);

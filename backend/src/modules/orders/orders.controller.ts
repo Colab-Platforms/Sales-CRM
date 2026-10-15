@@ -22,6 +22,22 @@ export const listOrders = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
+export const listMyOrders = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateListOrdersQuery(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    // Always scoped to the authenticated user inside the service: there is no parameter that selects whose orders are listed.
+    const result = await ordersService.listMyOrders(req.user!, value);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getOrder = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateOrderIdParams(req.params);

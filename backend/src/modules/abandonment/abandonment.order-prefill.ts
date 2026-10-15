@@ -1,5 +1,6 @@
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
+import { cleanPincode, cleanPlace, readAddressRecord, type ResolvedAddress } from "@/lib/addressReader.js";
 import { parseAbandonmentEvent, parseAddress, type ParsedAddress, type ParsedCheckoutLine, type ParsedCheckoutTotals } from "../shiprocket/shiprocket.abandonment.mapper.js";
 
 // What the Create Order form is prefilled with when it is opened from ONE abandoned checkout. Built only from what the checkout
@@ -38,6 +39,12 @@ export interface OrderPrefillAddress {
   pincode: string | null;
   country: string | null;
   company: string | null;
+  /** The finer parts of the address, read by the shared address reader (absent for an address that only has the basic lines). */
+  houseNumber?: string | null;
+  building?: string | null;
+  area?: string | null;
+  street?: string | null;
+  deliveryInstructions?: string | null;
 }
 
 export interface OrderPrefill {
@@ -64,6 +71,8 @@ interface Captured {
   lines: ParsedCheckoutLine[];
   totals: ParsedCheckoutTotals;
   shippingAddress: ParsedAddress | null;
+  /** The same shipping address as the shared reader sees it (locality, instructions...). Only for a saved cart snapshot. */
+  shippingResolved?: ResolvedAddress | null;
   billingAddress: ParsedAddress | null;
   customer: { firstName: string | null; lastName: string | null; phone: string | null; email: string | null };
   capturedAt: Date | null;
@@ -103,6 +112,7 @@ export function readCaptured(snapshot: unknown): Captured {
     lines,
     totals: { total: str(t.total) ?? str(v.cartValue), shipping: str(t.shipping), tax: str(t.tax), discount: str(t.discount), discountCodes: Array.isArray(t.discountCodes) ? t.discountCodes.filter((x): x is string => typeof x === "string") : [] },
     shippingAddress: parseAddress(v.shippingAddress),
+    shippingResolved: readAddressRecord(v.shippingAddress),
     billingAddress: parseAddress(v.billingAddress),
     customer: { firstName: str(c.firstName), lastName: str(c.lastName), phone: str(c.phone), email: str(c.email) },
     capturedAt: at && !Number.isNaN(at.getTime()) ? at : null,
@@ -197,7 +207,15 @@ export async function buildOrderPrefill(
   if (stale) notes.push(`This saved cart was last updated ${captured.capturedAt!.toISOString().slice(0, 10)} and may be out of date. It cannot be refreshed automatically.`);
 
   const pick = (a: ParsedAddress | null): OrderPrefillAddress | null =>
-    a ? { name: a.name ?? ([a.firstName, a.lastName].filter(Boolean).join(" ") || null), phone: a.phone, line1: a.line1, line2: a.line2, landmark: a.landmark, city: a.city, state: a.state, pincode: a.pincode, country: a.country, company: a.company } : null;
+    a ? { name: a.name ?? ([a.firstName, a.lastName].filter(Boolean).join(" ") || null), phone: a.phone, line1: a.line1, line2: a.line2, landmark: a.landmark, city: cleanPlace(a.city) || null, state: cleanPlace(a.state) || null, pincode: cleanPincode(a.pincode) || null, country: a.country, company: a.company, ...extras(a) } : null;
+  // The finer parts come from the shared reader, for the shipping address of a saved cart only (the billing address and a re-read delivery keep the basic lines).
+  const extras = (a: ParsedAddress) => {
+    const r = a === captured.shippingAddress ? captured.shippingResolved : null;
+    if (!r) return {};
+    // Only the parts that exist: an address with just the basic lines comes back exactly as before.
+    const parts = { houseNumber: r.houseNumber, building: r.building, area: r.area, street: r.street, deliveryInstructions: r.deliveryInstructions };
+    return { ...Object.fromEntries(Object.entries(parts).filter(([, v]) => v)), ...(r.landmark ? { landmark: r.landmark } : {}) };
+  };
 
   return {
     abandonmentId: row.id,

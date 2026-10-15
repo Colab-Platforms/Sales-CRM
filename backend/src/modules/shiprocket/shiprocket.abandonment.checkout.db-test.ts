@@ -39,7 +39,7 @@ async function world(tx: Db, runner: Parameters<typeof processAbandonmentEvent>[
     if (duplicate) return "duplicate" as const;
     return processAbandonmentEvent(eventId, { store, runner, now: () => new Date("2026-10-12T11:00:00Z") });
   };
-  const svc = new AbandonmentService(tx as never, { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async () => ({ assignedCount: 0 }) } as never);
+  const svc = new AbandonmentService(tx as never, { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async () => ({ assignedCount: 0 }) } as never, null);
   const admUser = { id: admin.id, username: admin.username, role: Role.ADMIN };
   const abandonmentFor = (cartId: string) => tx.abandonment.findMany({ where: { referenceId: cartId }, select: { id: true, leadId: true, detectedAt: true, cartSnapshot: true } });
   const prefillFor = (abandonmentId: string) => svc.getOrderPrefill(admUser, abandonmentId);

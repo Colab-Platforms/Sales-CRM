@@ -1,4 +1,5 @@
 import type { AbandonmentStatus, AbandonmentType, CallDirection, CallStatus, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
+import type { CustomerContext } from "./abandonment.customer-context.js";
 import type { Pagination } from "../orders/orders.types.js";
 
 // Abandoned-checkout queue ("/dashboard/abandoned-leads"). Reads the Abandonment/RecoveryAction tables
@@ -126,7 +127,7 @@ export interface RecoveryActionItem {
   performedBy: { id: string; name: string } | null;
 }
 
-export interface AbandonmentDetail extends AbandonmentListItem {
+export interface AbandonmentDetail extends AbandonmentListItem, CustomerContext {
   reference: { referenceType: string | null; referenceId: string | null };
   recoveryActions: RecoveryActionItem[];
 }

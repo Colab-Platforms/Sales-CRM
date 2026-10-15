@@ -194,7 +194,7 @@ class WhatsAppConversationService {
     // The chat's own lead if allowed; else a lead the user owns; else the oldest allowed one - deterministic, so a retry never picks a different customer record.
     const pick = entitled.find((l) => l.id === leadId) ?? entitled.find((l) => l.ownerId === user.id) ?? entitled[0];
     if (pick) return { canCreateOrder: true, createOrderBlockedReason: null, orderLead: { id: pick.id, name: [pick.firstName, pick.lastName].filter(Boolean).join(" ").trim() || "Customer" } };
-    return { canCreateOrder: false, createOrderBlockedReason: "This customer belongs to another team member and this chat is not assigned to you. Ask a manager or admin to assign the chat or the customer to you.", orderLead: null };
+    return { canCreateOrder: false, createOrderBlockedReason: "This customer belongs to another team member and has no WhatsApp conversation, so you cannot create an order for them here. Ask a manager or admin to assign the customer to you.", orderLead: null };
   }
 
   async getConversationDetail(user: AuthUser, leadId: string): Promise<ConversationDetail> {

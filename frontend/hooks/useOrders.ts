@@ -8,6 +8,7 @@ import {
   orderLiveDetailQueryOptions,
   orderLiveHistoryQueryOptions,
   orderStatusHistoryQueryOptions,
+  myOrdersListQueryOptions,
   ordersListQueryOptions,
   ordersLiveListQueryOptions,
 } from "@/lib/api-client/queries/orders.queries";
@@ -29,6 +30,24 @@ export function useOrders(params: OrdersListParams, options: { enabled?: boolean
     isLoading: query.isPending && query.fetchStatus !== "idle",
     isFetching: query.isFetching,
     error: query.error ? getErrorMessage(query.error, "Failed to load orders.") : null,
+    refetch: query.refetch,
+  };
+}
+
+/** "My Orders": the orders the signed-in user created (server-scoped). */
+export function useMyOrders(params: OrdersListParams, options: { enabled?: boolean } = {}) {
+  const token = useAuthStore((s) => s.token);
+
+  const query = useQuery({
+    ...myOrdersListQueryOptions(params),
+    enabled: Boolean(token) && (options.enabled ?? true),
+  });
+
+  return {
+    data: query.data ?? null,
+    isLoading: query.isPending && query.fetchStatus !== "idle",
+    isFetching: query.isFetching,
+    error: query.error ? getErrorMessage(query.error, "Failed to load your orders.") : null,
     refetch: query.refetch,
   };
 }

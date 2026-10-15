@@ -1,3 +1,4 @@
+import type { MessageMediaInfo } from "./whatsapp.media.js";
 import type { ConversationMode, OrderConversationState, WhatsAppDirection, WhatsAppMessageStatus, WhatsAppMessageType, WhatsAppProviderName } from "../../../generated/prisma/enums.js";
 
 export interface ListMessagesQuery {
@@ -54,6 +55,9 @@ export interface WhatsAppMessageHistoryItem {
   /** Whether the CURRENT caller has starred this message - per-user state (WhatsAppMessageUserState),
    *  never a property of the message itself. */
   starred: boolean;
+  /** For an inbound file (image / document / audio ...): what it is, so the UI can show a preview or an honest fallback. Never the provider's media id or any URL - the bytes come from
+   *  GET /whatsapp/messages/:id/media. Null for every message that carries no file. */
+  media: MessageMediaInfo | null;
 }
 
 export interface WhatsAppMessageListResult {

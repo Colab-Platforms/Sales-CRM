@@ -126,6 +126,7 @@ export interface CreateManualOrderInput {
     area?: string;
     street?: string;
     landmark?: string;
+    deliveryInstructions?: string;
     addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
@@ -438,6 +439,8 @@ export interface OrderDetail {
     name: string;
     mobile: string | null;
     email: string | null;
+    /** The abandoned lead of THIS customer that the viewer may open (the checkout the order came from, else the latest); null if none / not allowed. */
+    abandonmentId?: string | null;
   };
   leadSource: { id: string; name: string } | null;
   bookedBy: { id: string; name: string; username: string } | null;

@@ -74,6 +74,28 @@ export const listWhatsAppMessages = async (req: AuthRequest, res: Response): Pro
   }
 };
 
+/** GET /whatsapp/messages/:id/media - the file a customer sent, streamed from the provider through the CRM (the provider's URL and token never reach the browser). */
+export const getWhatsAppMessageMedia = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateMessageIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const media = await whatsappService.getInboundMedia(req.user!, value.id);
+    res.status(STATUS_CODES.OK);
+    res.setHeader("Content-Type", media.contentType);
+    res.setHeader("Content-Disposition", media.contentDisposition);
+    res.setHeader("Content-Length", String(media.buffer.length));
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "sandbox; default-src 'none'");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.end(media.buffer);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getWhatsAppMessage = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateMessageIdParams(req.params);

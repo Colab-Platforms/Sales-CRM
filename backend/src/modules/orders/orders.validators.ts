@@ -63,6 +63,8 @@ const shippingAddressSchema = z
     area: optional(z.string().trim().max(160)),
     street: optional(z.string().trim().max(160)),
     landmark: optional(z.string().trim().max(160)),
+    // What the customer asked for at delivery ("leave with the guard") - kept with the address instead of being dropped.
+    deliveryInstructions: optional(z.string().trim().max(255)),
     addressType: optional(z.enum(["HOME", "WORK", "OTHER"], { error: "Address type must be HOME, WORK or OTHER" })),
   })
   .superRefine((a, ctx) => {

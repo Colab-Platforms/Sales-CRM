@@ -7,6 +7,7 @@ import {
   forwardMessage,
   getCustomerWhatsAppStatus,
   getWhatsAppMessage,
+  getWhatsAppMessageMedia,
   getWhatsAppStatus,
   listStarredMessages,
   listWhatsAppConversations,
@@ -115,6 +116,8 @@ router.post("/messages/:id/delete-for-me", requireAuth, deleteMessageForMe);
 router.post("/messages/:id/forward", requireAuth, forwardMessage);
 // "Edit" is not a separate endpoint: a correction is sent as a new message through the existing
 // POST /whatsapp/conversations/:leadId/messages (sendConversationText) with replyToMessageId.
+// A customer's file (e.g. a payment screenshot). Same access rule as reading the message; fetched from the provider on demand.
+router.get("/messages/:id/media", requireAuth, getWhatsAppMessageMedia);
 router.get("/messages/:id", requireAuth, getWhatsAppMessage);
 
 // Central WhatsApp Inbox (Admin/Telecaller conversation list) - one row per Lead with a message,

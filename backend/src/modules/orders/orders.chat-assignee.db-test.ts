@@ -55,16 +55,18 @@ async function world(tx: Prisma.TransactionClient) {
 }
 
 describe("order flow for the chat's assignee (not the lead's owner)", () => {
-  it("the assignee can load payment options and the address prefill; a stranger, and HR, get 'not found' - no data", async () => {
+  it("every inbox role can load payment options and the address prefill for a customer WITH a WhatsApp chat; HR cannot; nobody but the owner can for a customer with no chat", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
-      const opts = await w.orders.getWhatsAppPaymentOptions(asUser(w.assignee, Role.SALESPERSON), w.lead.id);
-      assert.equal(opts.hasWhatsAppNumber, true);
-      assert.deepEqual((await w.orders.getLastShippingAddress(asUser(w.assignee, Role.SALESPERSON), w.lead.id)), { address: null });
-      for (const [u, role] of [[w.stranger, Role.SALESPERSON], [w.hr, Role.HR]] as const) {
-        await assert.rejects(() => w.orders.getWhatsAppPaymentOptions(asUser(u, role), w.lead.id), /Customer not found/);
-        await assert.rejects(() => w.orders.getLastShippingAddress(asUser(u, role), w.lead.id), /Customer not found/);
+      for (const [u, role] of [[w.assignee, Role.SALESPERSON], [w.stranger, Role.SALESPERSON], [w.admin, Role.ADMIN]] as const) {
+        assert.equal((await w.orders.getWhatsAppPaymentOptions(asUser(u, role), w.lead.id)).hasWhatsAppNumber, true);
+        assert.deepEqual(await w.orders.getLastShippingAddress(asUser(u, role), w.lead.id), { address: null, source: null });
       }
+      await assert.rejects(() => w.orders.getWhatsAppPaymentOptions(asUser(w.hr, Role.HR), w.lead.id), /Customer not found/);
+      await assert.rejects(() => w.orders.getLastShippingAddress(asUser(w.hr, Role.HR), w.lead.id), /Customer not found/);
+      const noChat = await w.mkLead({ mobile: "9000000003", normalizedMobile: "+919000000003" });
+      await assert.rejects(() => w.orders.getWhatsAppPaymentOptions(asUser(w.stranger, Role.SALESPERSON), noChat.id), /Customer not found/);
+      await assert.rejects(() => w.orders.getLastShippingAddress(asUser(w.stranger, Role.SALESPERSON), noChat.id), /Customer not found/);
     });
   });
 
@@ -81,21 +83,30 @@ describe("order flow for the chat's assignee (not the lead's owner)", () => {
     });
   });
 
-  it("a stranger (not the owner, not the assignee) cannot create an order: 'not found', nothing created, no link", async () => {
+  it("a telecaller / salesperson who is neither the owner nor the assignee CAN create the order from a chat that exists (one order, one link, lead ownership untouched); HR cannot", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
-      await assert.rejects(() => w.create(w.stranger, Role.SALESPERSON), /Customer not found/);
       await assert.rejects(() => w.create(w.hr, Role.HR), /Customer not found/);
       assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 0);
       assert.equal(w.calls.create, 0);
+      const r = await w.create(w.stranger, Role.SALESPERSON, { sendPaymentLinkViaWhatsApp: false });
+      assert.equal(r.paymentLink?.status, "created", JSON.stringify(r.paymentLink));
+      assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1);
+      assert.equal(w.calls.create, 1);
+      const order = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { createdById: true } });
+      assert.equal(order.createdById, w.stranger.id, "the order is attributed to the person who created it");
+      const lead = await tx.lead.findUniqueOrThrow({ where: { id: w.lead.id }, select: { ownerId: true } });
+      assert.equal(lead.ownerId, w.owner.id);
     });
   });
 
-  it("the assignee's access is for THIS chat only: another lead of the same owner is still out of scope", async () => {
+  it("the access follows the WhatsApp chat only: another customer of the same owner WITHOUT any WhatsApp history is still out of scope", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const other = await w.mkLead({ mobile: "9000000001", normalizedMobile: "+919000000001" });
       await assert.rejects(() => w.create(w.assignee, Role.SALESPERSON, {}, other.id), /Customer not found/);
+      await assert.rejects(() => w.create(w.stranger, Role.SALESPERSON, {}, other.id), /Customer not found/);
+      assert.equal(await tx.order.count({ where: { leadId: other.id } }), 0);
     });
   });
 
@@ -126,17 +137,22 @@ describe("order flow for the chat's assignee (not the lead's owner)", () => {
 });
 
 describe("the chat's Create Order decision (conversation detail)", () => {
-  it("owner, assignee and admin may; a stranger is blocked with an actionable reason; HR cannot even open the chat's detail", async () => {
+  it("Admin, Manager, Salesperson/telecaller (owner, assignee or neither) may create an order from a chat; a customer with no WhatsApp history is blocked for non-owners with an actionable reason", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
-      const d = (u: { id: string; username: string }, role: Role) => w.conv.viewConversationDetail(asUser(u, role), w.lead.id);
-      assert.equal((await d(w.owner, Role.SALESPERSON)).canCreateOrder, true);
-      assert.equal((await d(w.assignee, Role.SALESPERSON)).canCreateOrder, true);
-      assert.equal((await d(w.admin, Role.ADMIN)).canCreateOrder, true);
-      const blocked = await d(w.stranger, Role.SALESPERSON);
+      const manager = await tx.user.create({ data: { name: "mgr", username: `m-${uid()}`, role: Role.MANAGER }, select: { id: true, username: true } });
+      const d = (u: { id: string; username: string }, role: Role, leadId = w.lead.id) => w.conv.viewConversationDetail(asUser(u, role), leadId);
+      for (const [u, role] of [[w.owner, Role.SALESPERSON], [w.assignee, Role.SALESPERSON], [w.stranger, Role.SALESPERSON], [manager, Role.MANAGER], [w.admin, Role.ADMIN]] as const) {
+        const detail = await d(u, role);
+        assert.equal(detail.canCreateOrder, true, `${role} ${u.username}`);
+        assert.equal(detail.createOrderBlockedReason, null);
+      }
+      // A lead with no conversation and no messages: not a WhatsApp customer, so the normal ownership scope still decides.
+      const noChat = await w.mkLead({ mobile: "9000000004", normalizedMobile: "+919000000004" });
+      const blocked = await d(w.stranger, Role.SALESPERSON, noChat.id);
       assert.equal(blocked.canCreateOrder, false);
-      assert.match(blocked.createOrderBlockedReason ?? "", /not assigned to you.*Ask a manager or admin/);
-      assert.equal((await d(w.stranger, Role.SALESPERSON)).contact?.name, "Vishwa", "the chat itself stays readable");
+      assert.match(blocked.createOrderBlockedReason ?? "", /no WhatsApp conversation.*Ask a manager or admin/);
+      assert.equal((await d(w.owner, Role.SALESPERSON, noChat.id)).canCreateOrder, true, "the owner is unaffected");
     });
   });
 
@@ -163,15 +179,27 @@ describe("the chat's Create Order decision (conversation detail)", () => {
   });
 });
 
-describe("normal scope is unchanged", () => {
-  it("a manager outside the lead's team is blocked; the lead's own owner still works with no conversation assignment", async () => {
+describe("what did NOT widen", () => {
+  it("a manager outside the lead's team can create from a chat that exists, but not for a customer with no chat; the owner still works with no conversation at all", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const manager = await tx.user.create({ data: { name: "mgr", username: `m-${uid()}`, role: Role.MANAGER }, select: { id: true, username: true } });
-      await assert.rejects(() => w.create(manager, Role.MANAGER), /Customer not found/);
+      const ok = await w.create(manager, Role.MANAGER, { sendPaymentLinkViaWhatsApp: false });
+      assert.equal(ok.paymentLink?.status, "created");
       const plain = await w.mkLead({ mobile: "9000000002", normalizedMobile: "+919000000002" });
+      await assert.rejects(() => w.create(manager, Role.MANAGER, {}, plain.id), /Customer not found/);
       const r = await w.create(w.owner, Role.SALESPERSON, { sendPaymentLinkViaWhatsApp: false }, plain.id);
       assert.equal(r.paymentLink?.status, "created");
+    });
+  });
+
+  it("the order action does not open the strict actions: a salesperson who only has the chat cannot cancel the order or touch the customer record", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create(w.stranger, Role.SALESPERSON, { sendPaymentLinkViaWhatsApp: false });
+      await assert.rejects(() => w.orders.cancelOrder(asUser(w.stranger, Role.SALESPERSON), r.order.id, { reason: "x" } as never), /not found|Order not found|Customer not found/i);
+      const order = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { status: true } });
+      assert.notEqual(order.status, "CANCELLED");
     });
   });
 });
@@ -217,7 +245,9 @@ describe("one chat per phone: the order goes under the lead the user is entitled
       assert.equal((await detail(w, w.owner, Role.SALESPERSON, rep.id)).orderLead?.id, rep.id, "the owner of the representative lead keeps it");
       assert.equal((await detail(w, w.stranger, Role.SALESPERSON, mine.id)).orderLead?.id, mine.id);
       const other = await w.mkLead({ mobile: "9811100002", normalizedMobile: "+919811100002", ownerId: w.stranger.id, firstName: "OtherPerson" });
-      const blocked = await detail(w, w.stranger, Role.SALESPERSON, w.lead.id); // a chat for a different phone that this user cannot work
+      // Someone else's customer with NO WhatsApp history and a different phone: the user cannot work it, and their own lead (other phone) must not be substituted for it.
+      const foreign = await w.mkLead({ mobile: "9811100009", normalizedMobile: "+919811100009", ownerId: w.owner.id, firstName: "Foreign" });
+      const blocked = await detail(w, w.stranger, Role.SALESPERSON, foreign.id);
       assert.equal(blocked.canCreateOrder, false);
       assert.notEqual(blocked.orderLead?.id, other.id, "a lead with another phone is never substituted");
     });
@@ -243,7 +273,7 @@ describe("one chat per phone: the order goes under the lead the user is entitled
       const d = await detail(w, nobody, Role.SALESPERSON, rep.id);
       assert.equal(d.canCreateOrder, false);
       assert.equal(d.orderLead ?? null, null);
-      assert.match(d.createOrderBlockedReason ?? "", /not assigned to you/);
+      assert.match(d.createOrderBlockedReason ?? "", /no WhatsApp conversation/);
     });
   });
 });

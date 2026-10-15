@@ -3,6 +3,7 @@ import { ordersApi } from "../endpoints/orders.api";
 import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
+import { deliveryKeys } from "../queries/delivery.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
 import type { CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
@@ -15,6 +16,8 @@ export function useCreateOrderMutation() {
       // (profile + orders list + timeline), and the WhatsApp Inbox's own conversation list (its
       // "latest message" ordering is unaffected, but the underlying lead's data just changed).
       queryClient.invalidateQueries({ queryKey: ordersKeys.all });
+      // The address just used is now this customer's latest one: never offer the previous order's address from the cache.
+      queryClient.invalidateQueries({ queryKey: deliveryKeys.lastAddress(variables.leadId) });
       queryClient.invalidateQueries({ queryKey: customersKeys.detail(variables.leadId) });
       queryClient.invalidateQueries({ queryKey: [...customersKeys.all, "timeline", variables.leadId] });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });

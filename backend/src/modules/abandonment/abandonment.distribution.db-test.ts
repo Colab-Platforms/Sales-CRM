@@ -51,7 +51,7 @@ async function world(tx: Prisma.TransactionClient) {
     if (o.owner) await tx.leadAssignment.create({ data: { leadId: lead.id, userId: o.owner.id, assignmentType: "MANUAL", assignedAt: o.assignedAt ?? new Date(), isCurrent: true } });
     return a;
   };
-  const svc = new AbandonmentService(tx as never, new LeadService());
+  const svc = new AbandonmentService(tx as never, new LeadService(), null);
   const as = (u: { id: string; username: string; role: Role }) => ({ id: u.id, username: u.username, role: u.role });
   const q = (v: Record<string, string>) => { const r = validateListAbandonmentsQuery(v); assert.ifError(r.error); return r.value!; };
   const listTotal = async (u: { id: string; username: string; role: Role }, v: Record<string, string>) => (await svc.listAbandonments(as(u), q({ pageSize: "100", ...v }))).pagination.totalItems;

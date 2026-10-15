@@ -1,6 +1,6 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { LastShippingAddress, PincodeLookup, ServiceabilityResult } from "../types/delivery.types";
+import type { LastShippingAddressResult, PincodeLookup, ServiceabilityResult } from "../types/delivery.types";
 
 export const deliveryApi = {
   async pincode(pincode: string): Promise<PincodeLookup> {
@@ -13,8 +13,8 @@ export const deliveryApi = {
     });
     return res.data.data;
   },
-  async lastAddress(leadId: string): Promise<LastShippingAddress | null> {
-    const res = await apiClient.get<ApiEnvelope<{ address: LastShippingAddress | null }>>("/orders/last-address", { params: { leadId } });
-    return res.data.data.address;
+  async lastAddress(leadId: string): Promise<LastShippingAddressResult> {
+    const res = await apiClient.get<ApiEnvelope<LastShippingAddressResult>>("/orders/last-address", { params: { leadId } });
+    return res.data.data;
   },
 };

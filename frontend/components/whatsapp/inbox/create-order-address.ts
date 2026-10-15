@@ -70,8 +70,58 @@ export interface SavedAddress {
  */
 export function structuredFromSaved(saved: SavedAddress | null | undefined): Pick<StructuredAddress, "houseNumber" | "building" | "area" | "street" | "landmark" | "addressType"> {
   const type = (["HOME", "WORK", "OTHER"] as const).find((t) => t === saved?.addressType) ?? "HOME";
-  if (saved?.houseNumber || saved?.area) {
-    return { houseNumber: saved.houseNumber ?? "", building: saved.building ?? "", area: saved.area ?? "", street: saved.street ?? "", landmark: saved.landmark ?? "", addressType: type };
-  }
-  return { houseNumber: saved?.line1 ?? "", building: "", area: saved?.line2 ?? "", street: "", landmark: "", addressType: type };
+  // Every part is taken field-for-field when it exists. A part the record does not have falls back to the legacy composed line it would have been folded into, so a partly structured
+  // address never loses what it holds: no House/Flat -> line1; no Area and no Street -> line2.
+  const structured = Boolean(saved?.houseNumber || saved?.area);
+  const houseNumber = saved?.houseNumber || (structured && saved?.building ? "" : (saved?.line1 ?? ""));
+  const area = saved?.area || (saved?.street ? "" : (saved?.line2 ?? ""));
+  return { houseNumber, building: saved?.building ?? "", area, street: saved?.street ?? "", landmark: saved?.landmark ?? "", addressType: type };
+}
+
+export interface AddressDraftFields extends StructuredAddress {
+  name: string;
+  phone: string;
+  deliveryInstructions: string;
+}
+
+export interface SavedFull extends SavedAddress {
+  name?: string;
+  phone?: string;
+  pincode?: string;
+  city?: string;
+  state?: string;
+  deliveryInstructions?: string;
+}
+
+/**
+ * The address shown in the Create Order form. Precedence for EVERY field: what the operator typed (even an emptied field) > the saved address (the selected customer's) > what the
+ * pincode itself resolves to (city/state only). A saved value never replaces something typed, and changing an unrelated order field never touches any of this.
+ */
+export function buildAddressDraft(input: {
+  saved: SavedFull | null;
+  edits: Partial<AddressDraftFields>;
+  customerName: string;
+  customerMobile?: string;
+  resolvedCity: string | null;
+  resolvedState: string | null;
+}): AddressDraftFields {
+  const { saved, edits, customerName, customerMobile, resolvedCity, resolvedState } = input;
+  const base = structuredFromSaved(saved);
+  const pincode = edits.pincode ?? saved?.pincode ?? "";
+  const sameAsSaved = Boolean(saved && saved.pincode === pincode);
+  return {
+    // `||` (not `??`) for what is merely suggested: a saved address with an EMPTY name/phone still falls back to the selected customer's own.
+    name: edits.name ?? (saved?.name || customerName),
+    phone: edits.phone ?? (saved?.phone || customerMobile || ""),
+    houseNumber: edits.houseNumber ?? base.houseNumber,
+    building: edits.building ?? base.building,
+    area: edits.area ?? base.area,
+    street: edits.street ?? base.street,
+    landmark: edits.landmark ?? base.landmark,
+    addressType: edits.addressType ?? base.addressType,
+    pincode,
+    deliveryInstructions: edits.deliveryInstructions ?? (saved?.deliveryInstructions ?? ""),
+    city: edits.city ?? ((sameAsSaved && saved!.city) || (resolvedCity ?? "")),
+    state: edits.state ?? ((sameAsSaved && saved!.state) || (resolvedState ?? "")),
+  };
 }

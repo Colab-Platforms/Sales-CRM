@@ -35,6 +35,16 @@ export function defaultChoice(options: Pick<DiscountOptions, "defaultDiscount">)
   return { mode: "CUSTOM", type: options.defaultDiscount.type, value: options.defaultDiscount.value };
 }
 
+/**
+ * The discount that actually applies to an order of this payment type. The configured default (Rs 50 unless the business changes it) is a PREPAID promotion: on a
+ * COD order it is ignored - and the server drops it too, so the total shown here is the total that is saved. A coupon, or a custom discount that is not the default, is
+ * a deliberate choice and is never touched.
+ */
+export function effectiveDiscountChoice(choice: DiscountChoice, isPrepaid: boolean, defaultDiscount: { type: DiscountType; value: string }): DiscountChoice {
+  if (isPrepaid || choice.mode !== "CUSTOM") return choice;
+  return choice.type === defaultDiscount.type && Number(choice.value) === Number(defaultDiscount.value) ? NO_DISCOUNT : choice;
+}
+
 export type DiscountPreview = { ok: true; cents: number } | { ok: false; error: string | null };
 const DECIMAL = /^\d+(\.\d{1,2})?$/;
 

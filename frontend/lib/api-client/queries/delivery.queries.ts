@@ -18,4 +18,4 @@ export const serviceabilityQueryOptions = (pincode: string, cod: boolean, weight
   queryOptions({ queryKey: deliveryKeys.serviceability(pincode, cod, weight, dims, value), queryFn: () => deliveryApi.serviceability({ pincode, cod, weight, dims, value }), staleTime: 5 * 60 * 1000, retry: false });
 
 export const lastAddressQueryOptions = (leadId: string) =>
-  queryOptions({ queryKey: deliveryKeys.lastAddress(leadId), queryFn: () => deliveryApi.lastAddress(leadId), staleTime: 60 * 1000, retry: false });
+  queryOptions({ queryKey: deliveryKeys.lastAddress(leadId), queryFn: () => deliveryApi.lastAddress(leadId), staleTime: 0, retry: 1 });

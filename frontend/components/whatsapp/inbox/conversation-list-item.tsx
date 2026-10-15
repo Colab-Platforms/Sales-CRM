@@ -43,7 +43,7 @@ export function ConversationListItem({
   const { lastMessage } = conversation;
   const preview =
     lastMessage.body ||
-    (lastMessage.templateName ? `Template: ${lastMessage.templateName}` : lastMessage.messageType === "TEMPLATE" ? "(template message)" : "—");
+    (lastMessage.templateName ? `Template: ${lastMessage.templateName}` : lastMessage.messageType === "TEMPLATE" ? "(template message)" : lastMessage.messageType === "MEDIA" ? "File received" : "—");
 
   const archiveLabel = conversation.archived ? "Restore to inbox" : "Archive conversation";
   const activate = selectionMode ? onToggleSelect : onSelect;

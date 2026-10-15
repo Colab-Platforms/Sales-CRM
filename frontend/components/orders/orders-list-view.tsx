@@ -5,8 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useLiveOrders, useOrderFilterOptions, useOrderTagOptions } from "@/hooks/useOrders";
-import { useAuthStore } from "@/stores/auth-store";
+import { useLiveOrders, useOrderTagOptions } from "@/hooks/useOrders";
 import type { LiveOrdersListParams } from "@/lib/api-client/types/orders.types";
 import { OrdersFiltersBar } from "./orders-filters";
 import { OrdersCursorPagination } from "./orders-cursor-pagination";
@@ -35,7 +34,6 @@ export function OrdersListView() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const role = useAuthStore((s) => s.user?.role);
 
   const queryString = searchParams.toString();
   const filters: ColumnFilters = useMemo(() => parseColumnFilters(new URLSearchParams(queryString)), [queryString]);
@@ -77,8 +75,6 @@ export function OrdersListView() {
     router.replace(pathname, { scroll: false });
   };
 
-  const showSalesperson = role !== undefined && role !== "SALESPERSON";
-  const { salespeople, leadSources } = useOrderFilterOptions(true);
   const tagOptions = useOrderTagOptions(true);
 
   const dateRangeInvalid = Boolean(filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo);
@@ -100,7 +96,7 @@ export function OrdersListView() {
   };
   const handlePrevious = () => setAfterStack((stack) => stack.slice(0, -1));
 
-  const headerFilters = headerFilterNodes({ filters, onChange: (patch) => updateUrl(filtersToParams(patch)), salespeople, leadSources, showSalesperson, tagOptions: { tags: tagOptions.tags, loading: tagOptions.isLoading, error: tagOptions.error } });
+  const headerFilters = headerFilterNodes({ filters, onChange: (patch) => updateUrl(filtersToParams(patch)), tagOptions: { tags: tagOptions.tags, loading: tagOptions.isLoading, error: tagOptions.error } });
 
   // Shopify being unreachable is reported inside a successful response body (data.error), not a
   // thrown error - see orders.live.service.ts. Treat it the same as a hard fetch failure here.

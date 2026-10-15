@@ -12,6 +12,22 @@ import type { AbandonmentCallItem, AbandonmentDateRange, AbandonmentListItem, Ab
 
 const MAX_SEARCH_TERMS = 5;
 
+/**
+ * Whose abandoned checkouts a user may see: the SAME assignment-based rule as a normal lead (a manager sees the ones assigned to them, a salesperson the ones they own), ADMIN and HR everything
+ * (HR for lead distribution only - see ABANDONMENT_WORK_ROLES), and a role this module does not know, nothing. Shared by the queue/detail and by "View Customer Details" on an order, so the
+ * two can never disagree about who may open a customer's abandoned lead.
+ */
+export function abandonmentLeadScope(user: { id: string; role: Role }): Prisma.LeadWhereInput {
+  if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
+  if (user.role === Role.SALESPERSON) return { ownerId: user.id };
+  if (user.role === Role.ADMIN || user.role === Role.HR) return {};
+  return { id: { in: [] } };
+}
+
+/** Who may OPEN (not just list) an abandoned lead: HR distributes them but never works one. */
+export const ABANDONMENT_WORK_ROLES: Role[] = [Role.ADMIN, Role.MANAGER, Role.SALESPERSON];
+
+
 export function abandonmentSearchWhere(search: string): Prisma.AbandonmentWhereInput {
   const terms = search.split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_TERMS);
   return {

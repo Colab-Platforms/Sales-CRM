@@ -93,7 +93,10 @@ export function DiscountPricing({ subtotalCents, shippingCents, choice, onChange
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-muted-foreground">Shipping</dt>
-            <dd className="tabular-nums">{formatMoney(fromCents(shippingCents))}</dd>
+            <dd className="tabular-nums" data-testid="shipping-row">
+              {formatMoney(fromCents(shippingCents))}
+              {isPrepaid ? <span className="ml-2 text-xs text-muted-foreground">free on prepaid</span> : null}
+            </dd>
           </div>
           <div className="flex justify-between gap-4">
             <dt className="text-muted-foreground">Tax</dt>
@@ -115,6 +118,7 @@ export function DiscountPricing({ subtotalCents, shippingCents, choice, onChange
         ) : (
           <p className="mt-2 rounded-md bg-muted/70 px-2.5 py-1.5 text-xs text-muted-foreground">
             Customer payable: <span className="font-semibold text-foreground">{formatMoney(fromCents(totalCents))}</span>
+            <span className="mt-0.5 block" data-testid="cod-discount-note">The automatic discount is for prepaid orders only; it does not apply to COD.</span>
           </p>
         )}
       </div>

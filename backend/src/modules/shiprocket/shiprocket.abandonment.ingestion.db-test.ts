@@ -345,7 +345,7 @@ describe("ingestion health (counts and times only)", () => {
   it("who may see it: admin, manager and HR can; a telecaller cannot; only an admin can re-process", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
-      const svc = new AbandonmentService(tx as never);
+      const svc = new AbandonmentService(tx as never, undefined, null);
       for (const role of [Role.ADMIN, Role.MANAGER, Role.HR]) assert.ok((await svc.getIngestionStatus({ id: uid(), username: "x", role }, "today")).timezone);
       await assert.rejects(() => svc.getIngestionStatus({ id: uid(), username: "x", role: Role.SALESPERSON }, "today"), (e: any) => e.statusCode === 403);
       for (const role of [Role.MANAGER, Role.HR, Role.SALESPERSON]) await assert.rejects(() => svc.reconcileIngestion({ id: uid(), username: "x", role }, {}), (e: any) => e.statusCode === 403);

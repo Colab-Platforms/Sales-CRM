@@ -1,4 +1,6 @@
 import { logger } from "@/utils/logger.js";
+import { createHash } from "node:crypto";
+import { parseMetaMedia } from "./whatsapp.media.js";
 import { verifyMetaSignature } from "./whatsapp.hmac.js";
 import { isObject, metaCloudApiMessages } from "./whatsapp.meta.envelope.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
@@ -91,6 +93,42 @@ export interface MetaCatalogMessage {
 // reference docs - only POST /{phoneNumberId}/messages for sending, and DELETE /{media-id} for an
 // uploaded media asset, which is unrelated). See whatsapp.message-actions.service.ts's header comment
 // for the full capability finding across all configured providers.
+const MAX_MEDIA_BYTES = 16 * 1024 * 1024;
+const MEDIA_TIMEOUT_MS = 30_000;
+/** Hosts Meta serves WhatsApp media from (and the Graph API itself). The access token is never sent anywhere else. */
+const META_MEDIA_HOST_SUFFIXES = [".facebook.com", ".fbcdn.net", ".fbsbx.com", ".whatsapp.net", ".whatsapp.com"];
+
+export function isMetaMediaUrl(value: string): boolean {
+  try {
+    const u = new URL(value);
+    if (u.protocol !== "https:" || u.username || u.password) return false;
+    const host = u.hostname.toLowerCase();
+    return host === "graph.facebook.com" || META_MEDIA_HOST_SUFFIXES.some((suffix) => host.endsWith(suffix));
+  } catch {
+    return false;
+  }
+}
+
+export type WhatsAppMediaFailure = "NOT_FOUND" | "TOO_LARGE" | "UNAVAILABLE" | "INTEGRITY";
+
+/** A media download that could not be completed. `kind` tells the caller which HTTP answer fits; the message is safe to show. */
+export class WhatsAppMediaError extends Error {
+  constructor(
+    message: string,
+    readonly kind: WhatsAppMediaFailure,
+  ) {
+    super(message);
+    this.name = "WhatsAppMediaError";
+  }
+}
+
+export interface FetchedMedia {
+  buffer: Buffer;
+  mimeType: string | null;
+  /** true = matched the checksum Meta reported; null = Meta reported none. (A mismatch throws.) */
+  checksumVerified: boolean | null;
+}
+
 export class MetaCloudApiProvider implements WhatsAppProvider {
   readonly id = "META" as const;
   private readonly fetchImpl: typeof fetch;
@@ -310,6 +348,66 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
     return { supported: true, templates };
   }
 
+  /**
+   * Downloads a customer's media from the Graph API: step 1 resolves the media id to a short-lived URL (needs the access token), step 2 downloads that URL (needs it too). The token is only
+   * ever sent to Meta-owned hosts - a redirect anywhere else is refused - and the size is capped and the checksum Meta reported is verified. Nothing is stored; the caller streams it on.
+   */
+  async fetchMedia(mediaId: string, options: { maxBytes?: number } = {}): Promise<FetchedMedia> {
+    const maxBytes = options.maxBytes ?? MAX_MEDIA_BYTES;
+    if (!/^[0-9A-Za-z_-]{1,100}$/.test(mediaId)) throw new WhatsAppMediaError("Invalid media id", "NOT_FOUND");
+    const headers = { Authorization: `Bearer ${this.config.accessToken}` };
+
+    let info: Record<string, unknown>;
+    try {
+      const res = await this.fetchImpl(`https://graph.facebook.com/${this.config.graphApiVersion}/${mediaId}`, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      if (res.status === 404 || res.status === 400) throw new WhatsAppMediaError("The media is no longer available from WhatsApp", "NOT_FOUND");
+      if (!res.ok) throw new WhatsAppMediaError(`WhatsApp refused the media lookup (HTTP ${res.status})`, "UNAVAILABLE");
+      const body = await res.json().catch(() => null);
+      if (!isObject(body)) throw new WhatsAppMediaError("WhatsApp returned an unreadable media description", "UNAVAILABLE");
+      info = body;
+    } catch (error) {
+      if (error instanceof WhatsAppMediaError) throw error;
+      logger.error("Meta Cloud API media lookup failed", this.safe(error instanceof Error ? error.message : String(error)));
+      throw new WhatsAppMediaError("Could not reach WhatsApp to look the media up", "UNAVAILABLE");
+    }
+
+    let url = typeof info.url === "string" ? info.url : "";
+    let response: Response | null = null;
+    for (let hop = 0; hop < 3; hop += 1) {
+      if (!isMetaMediaUrl(url)) throw new WhatsAppMediaError("WhatsApp returned a media address that is not a WhatsApp host; it was not fetched", "UNAVAILABLE");
+      try {
+        response = await this.fetchImpl(url, { headers, redirect: "manual", signal: AbortSignal.timeout(MEDIA_TIMEOUT_MS) });
+      } catch (error) {
+        logger.error("Meta Cloud API media download failed", this.safe(error instanceof Error ? error.message : String(error)));
+        throw new WhatsAppMediaError("Could not download the media from WhatsApp", "UNAVAILABLE");
+      }
+      if (response.status >= 300 && response.status < 400) {
+        const location = response.headers.get("location");
+        if (!location) throw new WhatsAppMediaError("WhatsApp redirected without a location", "UNAVAILABLE");
+        url = new URL(location, url).toString();
+        response = null;
+        continue;
+      }
+      break;
+    }
+    if (!response) throw new WhatsAppMediaError("Too many redirects while downloading the media", "UNAVAILABLE");
+    if (response.status === 404 || response.status === 410) throw new WhatsAppMediaError("The media is no longer available from WhatsApp", "NOT_FOUND");
+    if (!response.ok) throw new WhatsAppMediaError(`WhatsApp refused the media download (HTTP ${response.status})`, "UNAVAILABLE");
+
+    const declared = Number(response.headers.get("content-length"));
+    if (Number.isFinite(declared) && declared > maxBytes) throw new WhatsAppMediaError("The file is larger than the CRM will serve", "TOO_LARGE");
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > maxBytes) throw new WhatsAppMediaError("The file is larger than the CRM will serve", "TOO_LARGE");
+
+    const reported = typeof info.sha256 === "string" ? info.sha256.trim().toLowerCase() : "";
+    let verified: boolean | null = null;
+    if (reported) {
+      verified = createHash("sha256").update(buffer).digest("hex") === reported;
+      if (!verified) throw new WhatsAppMediaError("The downloaded file did not match WhatsApp's checksum, so it was not shown", "INTEGRITY");
+    }
+    return { buffer, mimeType: typeof info.mime_type === "string" ? info.mime_type : null, checksumVerified: verified };
+  }
+
   parseIncomingWebhook(payload: unknown): NormalizedIncomingMessage[] {
     try {
       const values = metaCloudApiMessages(payload);
@@ -333,6 +431,8 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
             to: businessNumber,
             messageType: text !== null ? "TEXT" : type === "interactive" ? "INTERACTIVE" : ["image", "video", "audio", "document", "sticker"].includes(type) ? "MEDIA" : "OTHER",
             text,
+            // Media id / MIME type / file name / checksum / caption, exactly as Meta sent them (null when the id is missing).
+            media: parseMetaMedia(m),
             timestamp: Number.isFinite(timestampSec) ? new Date(timestampSec * 1000) : new Date(),
             replyToProviderMessageId,
           });

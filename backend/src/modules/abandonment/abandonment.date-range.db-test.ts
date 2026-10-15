@@ -43,7 +43,7 @@ async function world(tx: Prisma.TransactionClient) {
   };
   const assigned: { ids: string[]; to: string }[] = [];
   const stub = { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async (_m: string, body: { leadIds: string[]; salespersonId?: string }) => { assigned.push({ ids: body.leadIds, to: body.salespersonId ?? "" }); return { assignedCount: body.leadIds.length }; } };
-  const svc = new AbandonmentService(tx as never, stub as never);
+  const svc = new AbandonmentService(tx as never, stub as never, null);
   const as = (u: { id: string; username: string }, role: Role) => ({ id: u.id, username: u.username, role });
   /** The same WHERE the API builds, run with the fixed clock. */
   const ids = async (query: Record<string, string>, scope: Prisma.LeadWhereInput = {}, role: Role = Role.ADMIN, extra: { skip?: number; take?: number } = {}) => {

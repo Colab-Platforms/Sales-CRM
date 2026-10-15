@@ -50,6 +50,7 @@ export interface CreateManualOrderInput {
     area?: string;
     street?: string;
     landmark?: string;
+    deliveryInstructions?: string;
     addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
@@ -266,6 +267,11 @@ export interface OrderDetail {
     name: string;
     mobile: string | null;
     email: string | null;
+    /**
+     * The abandoned lead behind this customer that THIS viewer may open: the checkout the order was created from when there is one, otherwise the customer's most recent one. null when the
+     * customer never had an abandoned checkout, or the viewer is not allowed to open it - never another customer's.
+     */
+    abandonmentId: string | null;
   };
   leadSource: { id: string; name: string } | null;
   // Salesperson who booked the order (null for website/API orders).

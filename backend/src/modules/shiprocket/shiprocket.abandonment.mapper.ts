@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { unwrapAddress } from "@/lib/addressReader.js";
 import { asRecord, asString, headerOf, sha256Hex } from "../integrations/integrations.common.js";
 
 // Turns a Shiprocket Checkout (Fastrr) "Abandon Cart" webhook delivery into a small description of
@@ -172,7 +173,8 @@ function parseLocation(body: Record<string, unknown>): string | null {
 
 /** Fastrr's own address object -> one tolerant shape. Only fields the customer actually supplied are set; an object with nothing usable is null. */
 export function parseAddress(value: unknown): ParsedAddress | null {
-  const r = asRecord(value);
+  // A provider may nest the address ({ shippingAddress: { address: {...} } }); read the object that actually holds the fields.
+  const r = asRecord(unwrapAddress(value) ?? value);
   const address: ParsedAddress = {
     firstName: asString(r.first_name) ?? asString(r.firstName),
     lastName: asString(r.last_name) ?? asString(r.lastName),
@@ -183,7 +185,7 @@ export function parseAddress(value: unknown): ParsedAddress | null {
     landmark: asString(r.landmark),
     city: asString(r.city),
     state: asString(r.state) ?? asString(r.province),
-    pincode: asString(r.zip) ?? asString(r.pincode) ?? asString(r.postal_code) ?? asString(r.postcode),
+    pincode: asString(r.zip) ?? asString(r.pincode) ?? asString(r.postal_code) ?? asString(r.postcode) ?? asString(r.zipcode) ?? asString(r.postalCode),
     country: asString(r.country) ?? asString(r.country_code),
     company: asString(r.company),
   };

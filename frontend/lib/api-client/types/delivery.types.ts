@@ -53,4 +53,8 @@ export interface LastShippingAddress {
   street: string;
   landmark: string;
   addressType: string;
+  country?: string;
+  deliveryInstructions?: string;
 }
+
+export type LastShippingAddressResult = { address: LastShippingAddress | null; source: "ORDER" | "CHECKOUT" | null };

@@ -30,8 +30,9 @@ import { ClickToCallButton, CallHistoryEntry } from "./calling";
 import { useAuthStore } from "@/stores/auth-store";
 import { leadDetailQueryOptions } from "@/lib/api-client/queries/lead.queries";
 import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
-import { abandonmentByLeadQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import { abandonmentByLeadQueryOptions, abandonmentDetailQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { AbandonmentPanel } from "@/components/abandonment/abandonment-panel";
+import { LeadPreviousOrdersCard } from "@/components/abandonment/abandonment-customer-sections";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { formatDateTime } from "@/lib/order-status";
 import { LEAD_PRIORITY_LABELS } from "@/lib/customer-status";
@@ -92,7 +93,11 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const role = currentUser?.role;
 
   const { data: lead, isLoading, error, refetch } = useQuery(leadDetailQueryOptions(leadId));
-  const { data: abandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  const { data: latestAbandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  // The abandoned lead that was actually opened (?abandonmentId=): loaded by its own id, and only used when it really belongs to THIS lead. Otherwise the lead's latest one is shown - a stale
+  // or foreign id can never put another customer's details on this page.
+  const { data: selectedAbandonment } = useQuery({ ...abandonmentDetailQueryOptions(abandonmentParam ?? ""), enabled: Boolean(abandonmentParam) });
+  const abandonment = selectedAbandonment && selectedAbandonment.lead.id === leadId ? selectedAbandonment : latestAbandonment;
   const checkoutForOrder = abandonmentParam ?? (abandonment && (abandonment.status === "ACTIVE" || abandonment.status === "IN_PROGRESS") ? abandonment.id : undefined);
   // Dedicated calls query, not `lead.calls` - it's the endpoint that already selects `transcript` and
   // polls while one is still transcribing (leadCallsQueryOptions), same one the table's call-history
@@ -248,8 +253,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             </div>
 
             <div className="space-y-0.5">
-              <p className="text-[11px] font-medium text-muted-foreground">Location</p>
-              <p className="truncate text-xs font-semibold">{lead.location ?? "—"}</p>
+              <p className="text-[11px] font-medium text-muted-foreground">{abandonment?.addresses?.shipping ? "Address" : "Location"}</p>
+              {/* The full delivery address when one is available (abandoned leads); the short location text otherwise. */}
+              <p className="break-words text-xs font-semibold" data-testid="lead-address">{abandonment?.addresses?.shipping?.formatted ?? lead.location ?? "—"}</p>
             </div>
 
             <div className="space-y-0.5">
@@ -312,6 +318,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               </div>
             </div>
           </div>
+
+          {/* The customer's earlier orders (CRM and the store's own history), visible straight away - not hidden behind a tab. */}
+          <LeadPreviousOrdersCard abandonment={abandonment} />
         </div>
 
         {/* Right Column (7 cols): Doodle Binder Workspace with Tabs */}
@@ -456,7 +465,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                 </div>
 
                 <div className="max-h-[520px] overflow-y-auto pr-1">
-                  <AbandonmentPanel abandonment={abandonment} />
+                  <AbandonmentPanel abandonment={abandonment} showPreviousOrders={false} />
                 </div>
               </div>
             ) : null}

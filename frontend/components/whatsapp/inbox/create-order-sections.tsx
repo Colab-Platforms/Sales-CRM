@@ -41,6 +41,8 @@ export interface DraftItem {
 export interface AddressDraft extends StructuredAddress {
   name: string;
   phone: string;
+  /** What the customer asked for at delivery ("leave with the guard"). Optional; kept with the address. */
+  deliveryInstructions: string;
 }
 
 export const emptyItem = (): DraftItem => ({ key: crypto.randomUUID(), productId: "", variantId: "", quantity: "1", unitPrice: "" });
@@ -354,9 +356,12 @@ export function ShippingSection({
   onUseSuggestedDimensions,
   onDimensionsChange,
   shippingAmount,
+  shippingFree,
   shippingStatus,
   onShippingAmountChange,
   prefilledFromLastOrder,
+  prefillSource,
+  prefillFailed,
   pincodeState,
   lookup,
   cityMismatch,
@@ -385,10 +390,16 @@ export function ShippingSection({
   onUseSuggestedDimensions?: () => void;
   onDimensionsChange?: (patch: Partial<DimensionDraft>) => void;
   shippingAmount: string;
+  /** Prepaid order: no shipping charge is added (the courier rates only confirm the pincode is serviceable). */
+  shippingFree?: boolean;
   /** Where the shipping charge comes from: the selected courier's Shiprocket rate, still calculating, not available, or not requested yet. */
   shippingStatus?: ShippingChargeState;
   onShippingAmountChange: (v: string) => void;
   prefilledFromLastOrder: boolean;
+  /** Where the prefilled address came from, for the hint under the title. */
+  prefillSource?: "ORDER" | "CHECKOUT" | null;
+  /** The saved address could not be loaded (network / server): say so instead of silently showing an empty form. */
+  prefillFailed?: boolean;
   pincodeState: PincodeUiState;
   lookup: PincodeLookup | undefined;
   cityMismatch: boolean;
@@ -399,9 +410,10 @@ export function ShippingSection({
   const [touched, setTouched] = useState<Partial<Record<keyof AddressErrors, boolean>>>({});
   const touch = (field: keyof AddressErrors) => setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
   const errors = validateAddress(address);
-  const show = (field: keyof AddressErrors) => Boolean(touched[field]);
+  // A field that came pre-filled but is incomplete (a saved address missing its area, say) shows what is wrong straight away; an untouched empty form stays quiet.
+  const show = (field: keyof AddressErrors) => Boolean(touched[field]) || (prefilledFromLastOrder && Boolean(errors[field]));
   return (
-    <SectionCard title="Delivery Address" description={prefilledFromLastOrder ? "Prefilled from this customer's last order. Editing it here changes this order only — the customer record is not touched." : "Where this order will be delivered."}>
+    <SectionCard title="Delivery Address" description={prefillFailed ? "The saved address could not be loaded - enter the delivery address below." : prefilledFromLastOrder ? `Prefilled from ${prefillSource === "CHECKOUT" ? "the address this customer entered at checkout" : "this customer's last order"}. Check it, and edit anything that is wrong - editing here changes this order only; the customer record is not touched.` : "Where this order will be delivered."}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Pincode" htmlFor="ship-pincode" required className="sm:col-span-2" error={show("pincode") && pincodeState !== "invalid" && pincodeState !== "malformed" ? errors.pincode : undefined} hint={<PincodeStatusLines state={pincodeState} lookup={lookup} cityMismatch={cityMismatch} onUseResolved={onUseResolved} />}>
           <Input
@@ -431,6 +443,9 @@ export function ShippingSection({
         </Field>
         <Field label="Landmark" htmlFor="ship-landmark" className="sm:col-span-2">
           <Input id="ship-landmark" autoComplete="off" placeholder="e.g. Near City Mall" value={address.landmark} onChange={(e) => onChange({ landmark: e.target.value })} />
+        </Field>
+        <Field label="Delivery instructions" htmlFor="ship-instructions" className="sm:col-span-2">
+          <Input id="ship-instructions" autoComplete="off" maxLength={255} placeholder="e.g. Call before delivery (optional)" value={address.deliveryInstructions} onChange={(e) => onChange({ deliveryInstructions: e.target.value })} />
         </Field>
         <Field label="City" htmlFor="ship-city" required error={show("city") ? errors.city : undefined}>
           <Input id="ship-city" autoComplete="off" value={address.city} onChange={(e) => onChange({ city: e.target.value })} onBlur={() => touch("city")} aria-invalid={Boolean(show("city") && errors.city)} />
@@ -502,7 +517,9 @@ export function ShippingSection({
           label="Shipping charge (₹)"
           htmlFor="ship-amount"
           hint={
-            shippingStatus?.kind === "rate"
+            shippingFree
+              ? "Prepaid orders ship free - no shipping charge is added. The courier rates below only check that this pincode is serviceable."
+              : shippingStatus?.kind === "rate"
               ? `Shiprocket's charge${shippingStatus.courier ? ` for ${shippingStatus.courier}` : ""}. Choose another courier below to change it.`
               : shippingStatus?.kind === "calculating"
                 ? "Calculating shipping rates..."
@@ -516,7 +533,7 @@ export function ShippingSection({
             inputMode="decimal"
             placeholder={shippingStatus?.kind === "calculating" ? "Calculating…" : shippingStatus?.kind === "unavailable" ? "Not available" : "Not calculated"}
             value={shippingAmount}
-            readOnly={shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
+            readOnly={shippingFree || shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
             data-source={shippingStatus?.kind ?? "idle"}
             onChange={(e) => onShippingAmountChange(e.target.value)}
           />
