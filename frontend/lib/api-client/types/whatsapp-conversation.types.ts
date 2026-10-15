@@ -30,6 +30,11 @@ export interface ConversationDetail {
   unreadCount: number;
   /** Who the conversation is with, so the header does not depend on the team-scoped Customer 360 lookup. */
   contact?: { name: string; mobile: string | null; leadNumber: string };
+  /** Server decision: may this user create an order from this chat (independent of WhatsApp consent and of the options request), and the reason when not. */
+  canCreateOrder?: boolean;
+  createOrderBlockedReason?: string | null;
+  /** The lead to create the order under (same phone as this chat; the one this user is entitled to). */
+  orderLead?: { id: string; name: string } | null;
   archived: boolean;
 }
 

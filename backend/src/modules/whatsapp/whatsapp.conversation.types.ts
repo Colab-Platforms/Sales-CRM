@@ -34,6 +34,11 @@ export interface ConversationDetail {
   archived: boolean;
   /** Who the conversation is with (name + phone), present on the read-only view so the Inbox header never depends on the team-scoped Customer 360 lookup. */
   contact?: { name: string; mobile: string | null; leadNumber: string };
+  /** Present on the Inbox view: whether this user may create an order from this chat, and if not, why (actionable, safe to show). */
+  canCreateOrder?: boolean;
+  createOrderBlockedReason?: string | null;
+  /** The lead the order is created under: the chat's own lead, or - when several leads share this phone - the one this user is entitled to. Never a new customer. */
+  orderLead?: { id: string; name: string } | null;
 }
 
 export interface AssignConversationInput {

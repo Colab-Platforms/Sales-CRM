@@ -4,7 +4,7 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, OrderStatus, Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { getLeadScope, getManagerTeam, type DbClient } from "@/lib/leadScope.js";
+import { getLeadScope, getManagerTeam, getOrderFlowScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
@@ -540,7 +540,7 @@ class OrdersService {
   }
 
   private async createManualOrderOnce(user: AuthUser, input: CreateManualOrderInput, idem?: { key: string; hash: string }): Promise<CreateManualOrderResult> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, leadScope), select: { id: true, normalizedMobile: true } });
     // Out-of-scope reads the same as missing, same convention as every other single-lead lookup.
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
@@ -741,7 +741,7 @@ class OrdersService {
   // What the Create Order screen needs for "Send via WhatsApp": the approved Meta payment templates, the customer's recorded WhatsApp consent
   // and whether they have a number. Lead-scoped like every other single-lead lookup; no provider ids or secrets are returned.
   async getWhatsAppPaymentOptions(user: AuthUser, leadId: string): Promise<WhatsAppPaymentOptions> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true, normalizedMobile: true } });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
     return getWhatsAppPaymentOptions(this.db, lead);
@@ -752,7 +752,7 @@ class OrdersService {
   // other single-lead lookup (out of scope reads as "not found"). Understands both stored shapes: the CRM's own
   // (line1/state/pincode) and a Shopify-synced order's (address1/province/zip).
   async getLastShippingAddress(user: AuthUser, leadId: string): Promise<{ address: LastShippingAddress | null }> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true } });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
     const orders = await this.db.order.findMany({ where: { leadId: lead.id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 10, select: { shippingAddress: true, shippingPincode: true } });
@@ -826,7 +826,7 @@ class OrdersService {
   // Only ONE caller at a time may create the Shopify order for a CRM order (two concurrent retries could otherwise each create one before either links it).
   // The claim is a conditional UPDATE on the order row, so it holds across processes; a claim older than the lease belongs to a dead process and is taken over.
   private async linkOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getOrderFlowScope(user, this.db);
     const visible = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, externalId: true, externalNumber: true } });
     if (!visible) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     if (visible.externalId) return { status: "already_linked", shopifyOrderId: visible.externalId, shopifyOrderName: visible.externalNumber ?? undefined };
@@ -849,7 +849,7 @@ class OrdersService {
   }
 
   private async linkOrderToShopifyClaimed(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getOrderFlowScope(user, this.db);
     const order = await this.db.order.findFirst({
       where: scopedOrderWhere(orderId, leadScope),
       select: {

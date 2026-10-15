@@ -121,7 +121,7 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
 
     const payment = await deps.runner.$transaction((tx) => findPayment(tx, event));
     if (!payment) {
-      logger.info(`Cashfree webhook ${stored.eventType} matched no CRM payment; ignored`);
+      logger.info(`Cashfree webhook ${stored.eventType} matched no CRM payment; ignored (event ${eventId})`);
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }
@@ -150,7 +150,7 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
     // The same reconciliation Refresh and the scheduled catch-up use (apply -> Shopify -> notification), so all three produce the same result.
     const applied = await reconcileCashfreePayment({ runner: deps.runner, now, getShopifyClient: deps.getShopifyClient, notifyDeps: deps.notifyDeps }, payment.id, update, { source: ActivitySource.CASHFREE_WEBHOOK });
     if (applied.outcome === "not_found") {
-      logger.info(`Cashfree webhook ${stored.eventType} matched no CRM payment; ignored`);
+      logger.info(`Cashfree webhook ${stored.eventType} matched no CRM payment; ignored (event ${eventId})`);
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }

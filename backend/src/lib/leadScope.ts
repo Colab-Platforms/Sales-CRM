@@ -64,3 +64,16 @@ export async function getLeadScope(user: AuthUser, db: DbClient = prisma): Promi
   const team = user.role === Role.MANAGER ? await getManagerTeam(user.id, db) : undefined;
   return buildLeadScope(user.role, user.id, team);
 }
+
+// The scope for working an ORDER from a WhatsApp chat (create it, load its payment options and last address, create its payment link, and the Shopify link step of that same creation). It is the user's normal lead scope PLUS any lead
+// whose WhatsApp conversation is assigned to this user - the same rule the conversation service already applies (a conversation can be assigned to someone handling WhatsApp for a
+// customer they do not own outright). It never changes who owns a lead, and it is NOT used for editing / deleting a customer, cancelling, refunding or any other action. HR gets nothing.
+export function buildOrderFlowScope(scope: Prisma.LeadWhereInput, role: Role, userId: string): Prisma.LeadWhereInput {
+  if (Object.keys(scope).length === 0) return scope; // unrestricted (ADMIN)
+  if (role === Role.HR) return scope;
+  return { OR: [scope, { whatsAppConversation: { is: { assignedToId: userId } } }] };
+}
+
+export async function getOrderFlowScope(user: AuthUser, db: DbClient = prisma): Promise<Prisma.LeadWhereInput> {
+  return buildOrderFlowScope(await getLeadScope(user, db), user.role, user.id);
+}

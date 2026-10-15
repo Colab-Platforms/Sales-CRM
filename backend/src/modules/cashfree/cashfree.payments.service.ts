@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope } from "@/lib/leadScope.js";
+import { getLeadScope, getOrderFlowScope } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -199,7 +199,7 @@ class CashfreePaymentsService {
   private async prepare(tx: Db, user: AuthUser, orderId: string, config: CashfreeConfig, opts: { amountCents?: number; upgradeId?: string } = {}) {
     await advisoryLock(tx, orderLockKey(orderId));
     const now = this.now();
-    const scope = await getLeadScope(user, tx);
+    const scope = await getOrderFlowScope(user, tx);
     const order = await tx.order.findFirst({
       where: scopedOrderWhere(orderId, scope),
       select: {

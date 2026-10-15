@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WhatsAppPaymentSection } from "./whatsapp-payment-section";
 import { friendlyWhatsApp } from "./create-order-sections";
-import { NO_WHATSAPP, selectedTemplate, toApiWhatsApp, whatsappBlockReason, type PaymentTemplateOption, type WhatsAppPaymentOptions } from "@/lib/whatsapp-payment";
+import { NO_WHATSAPP, describeOptionsLoadError, selectedTemplate, toApiWhatsApp, whatsappBlockReason, type PaymentTemplateOption, type WhatsAppPaymentOptions } from "@/lib/whatsapp-payment";
 
 const tpl = (over: Partial<PaymentTemplateOption>): PaymentTemplateOption => ({ id: "t1", name: "prepaid_template", language: "en", category: "UTILITY", provider: "META", variables: ["customer_name", "order_number", "amount", "payment_link"], usableForPaymentLink: true, isDefault: true, ...over });
 const options = (over: Partial<WhatsAppPaymentOptions> = {}): WhatsAppPaymentOptions => ({ templates: [tpl({}), tpl({ id: "t2", name: "payment_reminder", isDefault: false })], consent: null, hasWhatsAppNumber: true, ...over });
@@ -89,5 +89,43 @@ describe("result message", () => {
     const unsafe = friendlyWhatsApp("Payment link not sent — Meta Cloud API rejected the template message (HTTP 401): Invalid OAuth access token [REDACTED]");
     assert.match(unsafe, /couldn't deliver the message right now/);
     assert.doesNotMatch(unsafe, /OAuth|HTTP 401/);
+  });
+});
+
+describe("options failed to load", () => {
+  const render = (error: string | null, onRetry?: () => void) =>
+    renderToStaticMarkup(<WhatsAppPaymentSection options={null} loading={false} error={error} choice={SEND} onChange={() => {}} onRetry={onRetry} />);
+
+  it("is never reported as 'Loading': a failed load explains itself and offers Retry", () => {
+    assert.equal(whatsappBlockReason(null, false, SEND, true)?.startsWith("WhatsApp options could not be loaded"), true);
+    assert.equal(whatsappBlockReason(null, true, SEND, false), "Loading WhatsApp options…");
+    const t = text(render("The system database is temporarily unavailable. Retry in a few minutes.", () => {}));
+    assert.match(t, /temporarily unavailable/);
+    assert.match(t, /Retry/);
+    assert.doesNotMatch(t, /Loading WhatsApp options/);
+    assert.match(t, /Templates unavailable/);
+  });
+  it("while a retry is in flight the button says so and is disabled", () => {
+    const h = renderToStaticMarkup(<WhatsAppPaymentSection options={null} loading={false} error="x" choice={SEND} onChange={() => {}} onRetry={() => {}} retrying />);
+    assert.match(text(h), /Retrying…/);
+    assert.match(h, /<button[^>]*disabled=""[^>]*>Retrying…<\/button>/);
+  });
+  it("without a failure the screen is unchanged (no Retry; 'Don't send' is never blocked by a failed load)", () => {
+    assert.doesNotMatch(text(render(null)), /Retry/);
+    assert.equal(whatsappBlockReason(null, false, NO_WHATSAPP, true), null);
+  });
+  it("a failed REFRESH with options already loaded still explains why sending is blocked (no silent disabled button)", () => {
+    const h = renderToStaticMarkup(<WhatsAppPaymentSection options={options({ consent: null })} loading={false} error="The system database is temporarily unavailable. Retry in a few minutes." choice={SEND} onChange={() => {}} onRetry={() => {}} />);
+    assert.match(text(h), /temporarily unavailable/);
+    assert.match(text(h), /Confirm that the customer has agreed to receive WhatsApp updates/);
+  });
+  it("describes the failure from the HTTP status only, in actionable words", () => {
+    const e = (status?: number) => (status === undefined ? new Error("Network Error") : { response: { status, data: { message: "SECRET-DETAIL" } } });
+    assert.match(describeOptionsLoadError(e(404)), /not found or is not assigned/);
+    assert.match(describeOptionsLoadError(e(403)), /permission/);
+    assert.match(describeOptionsLoadError(e(401)), /session/);
+    assert.match(describeOptionsLoadError(e(503)), /database is temporarily unavailable/);
+    assert.match(describeOptionsLoadError(e()), /Could not reach the server/);
+    assert.doesNotMatch(describeOptionsLoadError(e(500)), /SECRET-DETAIL/);
   });
 });

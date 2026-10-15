@@ -34,7 +34,7 @@ import {
 } from "@/lib/package-dimensions";
 import { estimateProductWeight, formatKg, parseParcelWeight, resolveParcelWeight, unitWeightKg, weightHint } from "@/lib/parcel-weight";
 import { WhatsAppPaymentSection } from "./whatsapp-payment-section";
-import { NO_WHATSAPP, toApiWhatsApp, whatsappBlockReason, type WhatsAppPaymentChoice } from "@/lib/whatsapp-payment";
+import { NO_WHATSAPP, describeOptionsLoadError, toApiWhatsApp, whatsappBlockReason, type WhatsAppPaymentChoice } from "@/lib/whatsapp-payment";
 import { whatsAppPaymentOptionsQueryOptions } from "@/lib/api-client/queries/orders.queries";
 import { CreateShipmentDialog } from "@/components/orders/create-shipment-dialog";
 import type { CreateManualOrderItemInput, CreateManualOrderResult } from "@/lib/api-client/types/orders.types";
@@ -143,7 +143,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const waOptionsQuery = useQuery({ ...whatsAppPaymentOptionsQueryOptions(leadId), enabled: open && orderType !== "COD" });
   const waOptions = waOptionsQuery.data ?? null;
   const sendingWhatsApp = orderType !== "COD" && whatsapp.send;
-  const whatsappBlocked = sendingWhatsApp ? whatsappBlockReason(waOptions, waOptionsQuery.isPending, whatsapp) : null;
+  const whatsappBlocked = sendingWhatsApp ? whatsappBlockReason(waOptions, waOptionsQuery.isPending, whatsapp, Boolean(waOptionsQuery.error)) : null;
 
   const createOrder = useCreateOrderMutation();
   const pushToShopify = usePushOrderToShopifyMutation();
@@ -488,7 +488,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                     : "A Cashfree payment link will be generated for this order. It is not sent automatically - use Send via WhatsApp above, or share it from the order."}
               </p>
               {orderType !== "COD" ? (
-                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? "Could not load WhatsApp options." : null} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
+                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? describeOptionsLoadError(waOptionsQuery.error) : null} onRetry={() => void waOptionsQuery.refetch()} retrying={waOptionsQuery.isFetching} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
               ) : null}
               {createOrder.error ? (
                 <p role="alert" className="text-sm text-destructive">
@@ -538,7 +538,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
               {/* Prepaid: the payment-link / WhatsApp template choice is right here under the payment method, and again on Review. */}
               {orderType !== "COD" ? (
-                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? "Could not load WhatsApp options." : null} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
+                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? describeOptionsLoadError(waOptionsQuery.error) : null} onRetry={() => void waOptionsQuery.refetch()} retrying={waOptionsQuery.isFetching} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
               ) : null}
 
               <ShippingSection
