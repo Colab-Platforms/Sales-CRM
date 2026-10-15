@@ -18,6 +18,7 @@ import { useArchiveConversationMutation, useMarkConversationReadMutation, useUna
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { toast } from "sonner";
 import { ConversationContextPanel } from "./conversation-context-panel";
+import { resolveCreateOrderAccess } from "@/lib/whatsapp-payment";
 import { useConversationCustomer } from "@/hooks/useConversationCustomer";
 import { useAuthStore } from "@/stores/auth-store";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
@@ -277,6 +278,11 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const headerMobile = data ? data.profile.mobile : contact?.mobile;
   const headerLeadNumber = data?.profile.leadNumber ?? contact?.leadNumber;
   const hasPhone = Boolean(headerMobile);
+  // Create Order is decided by the server on the conversation (scope or assignment, plus a usable phone) - not by the optional Customer 360 lookup or the payment-options request.
+  const orderAccess = resolveCreateOrderAccess(conversation.data, data, { detailFailed: conversation.isError });
+  // The order goes under the lead this user is entitled to among the leads that share this chat's phone (usually the chat's own lead) - never a new customer.
+  const orderLeadId = orderAccess.orderLeadId ?? leadId;
+  const orderCustomerName = orderAccess.orderLeadName ?? headerName;
   const markRead = useMarkConversationReadMutation();
   const unread = conversation.data?.unreadCount ?? 0;
   const archiveMutation = useArchiveConversationMutation();
@@ -381,7 +387,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           {/* Below lg there is no right panel at all (see the Actions card at the bottom of this
               component), so the same actions stay reachable here instead of disappearing. */}
           <div className="flex gap-2 lg:hidden">
-            <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!data || Boolean(data.readOnly)}>
+            <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!orderAccess.allowed} title={!orderAccess.allowed ? orderAccess.reason ?? undefined : undefined}>
               Create Order
             </Button>
             <Button size="sm" onClick={() => setSendOpen(true)} disabled={!hasPhone}>
@@ -432,6 +438,9 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           canSendWhatsApp={hasPhone}
           onSendWhatsApp={() => setSendOpen(true)}
           onCreateOrder={() => setCreateOrderOpen(true)}
+          canCreateOrder={orderAccess.allowed}
+          createOrderBlockedReason={orderAccess.reason}
+          onRetryCreateOrderAccess={orderAccess.canRetry ? () => void conversation.refetch() : undefined}
           isArchived={isArchived}
           onDeleteChat={() => setArchiveOpen(true)}
           onDeleteCustomer={() => setDeleteCustomerOpen(true)}
@@ -452,9 +461,9 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
 
       {/* The template dialog needs only the conversation's own contact; the customer's orders (for order-based variables) exist only when the Customer 360 record is available to this viewer. */}
       {headerName ? <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={headerName} orders={data?.orders ?? []} /> : null}
+      {orderCustomerName && orderAccess.allowed ? <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={orderLeadId} customerName={orderCustomerName} customerMobile={headerMobile ?? null} /> : null}
       {data ? (
         <>
-          <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={leadId} customerName={data.profile.name} customerMobile={data.profile.mobile} />
           <DeleteCustomerDialog open={deleteCustomerOpen} onOpenChange={setDeleteCustomerOpen} leadId={leadId} customerName={data.profile.name} onDeactivated={onBack} />
         </>
       ) : null}
