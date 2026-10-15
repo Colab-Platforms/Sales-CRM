@@ -3,6 +3,7 @@ enum Role {
   HR
   MANAGER
   SALESPERSON
+  RECRUITER
 
   @@map("role")
 }

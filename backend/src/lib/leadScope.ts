@@ -54,8 +54,9 @@ export function buildLeadScope(role: Role, userId: string, team?: ManagerTeam): 
     case Role.SALESPERSON:
       return { ownerId: userId };
     case Role.HR:
+    case Role.RECRUITER:
       // Matches no row: an id can never be in an empty list.
-      // HR manages staff accounts and sees no CRM leads or orders.
+      // HR manages staff accounts and recruiters work job applications; neither sees CRM leads or orders.
       return { id: { in: [] } };
   }
 }
