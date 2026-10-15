@@ -216,6 +216,7 @@ class ManagerAnalyticsService {
       prisma.call.findMany({
         where: {
           agentId: { in: ids },
+          leadId: { not: null },
           OR: [
             { startedAt: { gte: start, lt: end } },
             { startedAt: null, createdAt: { gte: start, lt: end } },
@@ -357,7 +358,7 @@ class ManagerAnalyticsService {
     // --- team KPIs
     const sum = (pick: (s: (typeof salespeople)[number]) => number) => salespeople.reduce((a, s) => a + pick(s), 0);
     const allLeadIds = new Set<string>();
-    for (const c of calls) if (matchesCall(classify(c.status))) allLeadIds.add(c.leadId);
+    for (const c of calls) if (c.leadId && matchesCall(classify(c.status))) allLeadIds.add(c.leadId);
     const totalLeads = sum((s) => s.leads);
     const contacted = sum((s) => s.contacted);
     const kpis = {
@@ -392,7 +393,7 @@ class ManagerAnalyticsService {
   private async recentActivity(userId: string) {
     const [calls, activities, sessions] = await Promise.all([
       prisma.call.findMany({
-        where: { agentId: userId },
+        where: { agentId: userId, leadId: { not: null } },
         orderBy: { createdAt: "desc" },
         take: 15,
         select: {
@@ -426,10 +427,10 @@ class ManagerAnalyticsService {
         id: `call-${c.id}`,
         at: (c.startedAt ?? c.createdAt).toISOString(),
         kind: "CALL" as const,
-        title: `Called ${[c.lead.firstName, c.lead.lastName].filter(Boolean).join(" ")}`,
+        title: `Called ${[c.lead?.firstName, c.lead?.lastName].filter(Boolean).join(" ")}`,
         detail: classify(c.status) === "connected" ? "Connected" : classify(c.status) === "failed" ? "Failed" : "Not connected",
         durationSec: classify(c.status) === "connected" ? (c.durationSeconds ?? 0) : null,
-        leadId: c.lead.id,
+        leadId: c.lead?.id ?? null,
       })),
       ...activities.map((a) => ({
         id: `act-${a.id}`,

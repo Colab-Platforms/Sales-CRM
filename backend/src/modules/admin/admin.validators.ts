@@ -8,6 +8,8 @@ import type {
   UpdateManagerBody,
   UpdateSalespersonBody,
   CreateHrBody,
+  CreateRecruiterBody,
+  UpdateRecruiterBody,
   CreateGroupBody,
   UpdateGroupBody,
   AddSalespersonBody,
@@ -27,6 +29,14 @@ const createHrSchema = z.object({
   password: z.string().min(6, "Password must be at least 6 characters"),
   phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
 });
+
+const updateRecruiterSchema = z
+  .object({
+    name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long").optional(),
+    phone: z.string().max(20, "Phone number is too long").optional(),
+    status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
+  })
+  .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
 const createGroupSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
@@ -101,6 +111,12 @@ export const validateUpdateSalespersonSchema = (body: unknown) =>
   validateSchema<UpdateSalespersonBody>(updateSalespersonSchema, body);
 
 export const validateCreateHrSchema = (body: unknown) => validateSchema<CreateHrBody>(createHrSchema, body);
+
+export const validateCreateRecruiterSchema = (body: unknown) =>
+  validateSchema<CreateRecruiterBody>(createHrSchema, body);
+
+export const validateUpdateRecruiterSchema = (body: unknown) =>
+  validateSchema<UpdateRecruiterBody>(updateRecruiterSchema, body);
 
 export const validateCreateGroupSchema = (body: unknown) => validateSchema<CreateGroupBody>(createGroupSchema, body);
 

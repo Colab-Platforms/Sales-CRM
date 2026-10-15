@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { FolderPlus, KeyRound, UserPlus, Users } from "lucide-react";
+import { FolderPlus, KeyRound, Search, UserPlus, Users } from "lucide-react";
 import { adminSalespersonsQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
 import {
   useCreateAdminGroupMutation,
@@ -911,6 +911,16 @@ export default function StaffPage() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false);
+  const [salespersonSearch, setSalespersonSearch] = useState("");
+
+  const searchTerm = salespersonSearch.trim().toLowerCase();
+  const filteredSalespersons = salespersons?.filter(
+    (sp) =>
+      !searchTerm ||
+      sp.name.toLowerCase().includes(searchTerm) ||
+      sp.username.toLowerCase().includes(searchTerm) ||
+      (sp.phone ?? "").toLowerCase().includes(searchTerm),
+  );
 
   return (
     <div className="space-y-6">
@@ -1021,6 +1031,17 @@ export default function StaffPage() {
               ? `${salespersons.length} salesperson${salespersons.length === 1 ? "" : "s"} listed`
               : "Loading salespersons..."}
           </CardDescription>
+          <div className="relative mt-3 max-w-sm">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              aria-label="Search salespersons"
+              placeholder="Search by name, username or phone"
+              value={salespersonSearch}
+              onChange={(e) => setSalespersonSearch(e.target.value)}
+              className="pl-8"
+            />
+          </div>
         </CardHeader>
         <CardContent className="px-0">
           {isSalespersonsPending ? (
@@ -1062,8 +1083,14 @@ export default function StaffPage() {
                       </div>
                     </TableCell>
                   </TableRow>
+                ) : filteredSalespersons && filteredSalespersons.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-10 text-center text-sm text-muted-foreground">
+                      No salespersons match &ldquo;{salespersonSearch.trim()}&rdquo;.
+                    </TableCell>
+                  </TableRow>
                 ) : (
-                  salespersons?.map((salesperson) => (
+                  filteredSalespersons?.map((salesperson) => (
                     <SalespersonRow key={salesperson.id} salesperson={salesperson} managers={managers ?? []} />
                   ))
                 )}

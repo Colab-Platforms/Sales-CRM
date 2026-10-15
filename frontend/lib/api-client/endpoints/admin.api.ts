@@ -9,6 +9,9 @@ import type {
   UpdateManagerPayload,
   UpdateSalespersonPayload,
   HrUser,
+  RecruiterUser,
+  CreateRecruiterPayload,
+  UpdateRecruiterPayload,
   CreateHrPayload,
   Group,
   CreateGroupPayload,
@@ -60,6 +63,26 @@ export const adminApi = {
 
   async resetSalespersonPassword(id: string, payload: ResetPasswordPayload): Promise<SalespersonUser> {
     const res = await apiClient.patch<ApiEnvelope<SalespersonUser>>(`/admin/salespersons/${id}/password`, payload);
+    return res.data.data;
+  },
+
+  async listRecruiters(): Promise<RecruiterUser[]> {
+    const res = await apiClient.get<ApiEnvelope<RecruiterUser[]>>("/admin/recruiters");
+    return res.data.data;
+  },
+
+  async createRecruiter(payload: CreateRecruiterPayload): Promise<RecruiterUser> {
+    const res = await apiClient.post<ApiEnvelope<RecruiterUser>>("/admin/recruiters", payload);
+    return res.data.data;
+  },
+
+  async updateRecruiter(id: string, payload: UpdateRecruiterPayload): Promise<RecruiterUser> {
+    const res = await apiClient.patch<ApiEnvelope<RecruiterUser>>(`/admin/recruiters/${id}`, payload);
+    return res.data.data;
+  },
+
+  async resetRecruiterPassword(id: string, payload: ResetPasswordPayload): Promise<RecruiterUser> {
+    const res = await apiClient.patch<ApiEnvelope<RecruiterUser>>(`/admin/recruiters/${id}/password`, payload);
     return res.data.data;
   },
 

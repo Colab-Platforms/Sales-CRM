@@ -112,6 +112,11 @@ class AuthService {
       };
     }
 
+    if (user.role === Role.RECRUITER) {
+      const totalApplications = await prisma.application.count({ where: { recruiterId: user.id } });
+      return { ...base, stats: { totalApplications } };
+    }
+
     if (user.role === Role.HR) {
       const [usersByRole, totalGroups] = await Promise.all([
         prisma.user.groupBy({ by: ["role"], _count: { _all: true } }),

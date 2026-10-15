@@ -20,6 +20,7 @@ const ROLE_LABELS: Record<CurrentUser["role"], string> = {
   HR: "HR",
   MANAGER: "Manager",
   SALESPERSON: "Salesperson",
+  RECRUITER: "Recruiter",
 };
 
 function initials(name: string) {

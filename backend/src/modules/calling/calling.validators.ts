@@ -42,6 +42,13 @@ const updateVirtualNumberSchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
+const applicationIdParamSchema = z.object({
+  applicationId: z.string().uuid(),
+});
+
+export const validateApplicationIdParamSchema = (params: unknown) =>
+  validateSchema<{ applicationId: string }>(applicationIdParamSchema, params);
+
 export const validateLeadIdParamSchema = (params: unknown) =>
   validateSchema<{ leadId: string }>(leadIdParamSchema, params);
 
