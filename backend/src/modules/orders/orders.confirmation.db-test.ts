@@ -346,28 +346,29 @@ describe("telecaller creates an order: creator identity and the 'Order Created b
 describe("CRM discount + shipping reach Shopify at creation, so Shopify's total is the CRM total", () => {
   const meta = async (w: Awaited<ReturnType<typeof world>>, orderId: string) => (((await w.row(orderId)).metadata ?? {}) as any);
 
-  it("a discounted order with shipping (499 - 100 + 66.72 = 465.72): Shopify receives the discount and the shipping line, and the order records that its totals are mirrored", async () => {
+  it("a discounted COD order with the flat shipping (499 - 100 + 50 = 449; the 66.72 in the request is ignored): Shopify receives the discount and the shipping line, and the order records that its totals are mirrored", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const r = await w.create(w.vini, { discount: { type: "FIXED", value: "100" }, shippingAmount: "66.72" });
       const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { subtotal: true, discountAmount: true, shippingAmount: true, totalAmount: true } });
-      assert.deepEqual([row.subtotal.toString(), row.discountAmount.toString(), row.shippingAmount.toString(), row.totalAmount.toString()], ["499", "100", "66.72", "465.72"]);
+      assert.deepEqual([row.subtotal.toString(), row.discountAmount.toString(), row.shippingAmount.toString(), row.totalAmount.toString()], ["499", "100", "50", "449"]);
       const sent = w.shop.state.created.at(-1);
       assert.equal(sent.discountCode.itemFixedDiscountCode.amountSet.shopMoney.amount, "100.00");
-      assert.equal(sent.shippingLines[0].priceSet.shopMoney.amount, "66.72");
+      assert.equal(sent.shippingLines[0].priceSet.shopMoney.amount, "50.00");
       const m = await meta(w, r.order.id);
-      assert.deepEqual([m.shopifyTotals.mirrored, m.shopifyTotals.total], [true, "465.72"]);
+      assert.deepEqual([m.shopifyTotals.mirrored, m.shopifyTotals.total], [true, "449"]);
     });
   });
 
-  it("no discount and no shipping: nothing extra is sent, exactly as before", async () => {
+  it("no discount: only the flat COD shipping line is sent (no discount code), and the totals are mirrored", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const r = await w.create(w.vini);
       const sent = w.shop.state.created.at(-1);
       assert.equal("discountCode" in sent, false);
-      assert.equal("shippingLines" in sent, false);
-      assert.equal((await meta(w, r.order.id)).shopifyTotals.mirrored, true, "trivially equal: items = total");
+      assert.equal(sent.shippingLines.length, 1);
+      assert.equal(sent.shippingLines[0].priceSet.shopMoney.amount, "50.00");
+      assert.equal((await meta(w, r.order.id)).shopifyTotals.mirrored, true, "items + the flat shipping = total");
     });
   });
 

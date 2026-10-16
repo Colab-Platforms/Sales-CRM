@@ -417,7 +417,8 @@ class CashfreePaymentsService {
     const config = this.config();
     const payment = await this.runner.$transaction((tx) => tx.payment.findFirst({ where: { id: paymentId, externalSource: "CASHFREE" }, select: PAYMENT_SELECT }));
     if (!payment) return "not_found";
-    if (!OPEN.has(payment.status)) return "unchanged";
+    // An open payment is asked about at Cashfree; so is a SUCCESS one, because its prepaid order may be stuck awaiting payment (the confirmation step never completed) and reconciliation finishes it. Anything else is final.
+    if (!OPEN.has(payment.status) && payment.status !== PaymentStatus.SUCCESS) return "unchanged";
     const result = await this.reconcileFromCashfree(config, payment, { source: ActivitySource.SYSTEM });
     return result.outcome === "updated" ? "updated" : result.outcome === "not_found" ? "not_found" : "unchanged";
   }

@@ -21,6 +21,7 @@ import type {
   OrderStatusHistory,
   OrdersListParams,
   ShopifyPushResult,
+  ShopifySyncRecord,
 } from "../types/orders.types";
 
 export const ordersApi = {
@@ -96,6 +97,11 @@ export const ordersApi = {
 
   async retryShopifyPaymentSync(orderId: string): Promise<{ status: "synced" | "not_linked" | "failed"; reason?: string }> {
     const res = await apiClient.post<ApiEnvelope<{ status: "synced" | "not_linked" | "failed"; reason?: string }>>(`/orders/${orderId}/shopify-payment-sync/retry`);
+    return res.data.data;
+  },
+
+  async resyncShopify(orderId: string): Promise<{ status: string; reason?: string; sync?: ShopifySyncRecord }> {
+    const res = await apiClient.post<ApiEnvelope<{ status: string; reason?: string; sync?: ShopifySyncRecord }>>(`/orders/${orderId}/shopify-sync/retry`);
     return res.data.data;
   },
 

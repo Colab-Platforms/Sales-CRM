@@ -116,6 +116,20 @@ export const retryShopifyPaymentSync = async (req: AuthRequest, res: Response): 
   }
 };
 
+// Re-verify (and repair supported fields of) an order that is already linked to Shopify. Admin / manager only; never creates an order. RBAC + scope are also enforced in the service.
+export const resyncShopifyOrder = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateOrderIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await ordersService.resyncShopifyOrder(req.user!, value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 // Manual retry of the "CRM Confirmed by <name>" Shopify tag sync. RBAC is server-side (getLeadScope inside the service method).
 export const retryConfirmationTagSync = async (req: AuthRequest, res: Response): Promise<void> => {
   try {

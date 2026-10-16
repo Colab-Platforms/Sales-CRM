@@ -357,6 +357,7 @@ export function ShippingSection({
   onDimensionsChange,
   shippingAmount,
   shippingFree,
+  shippingFlat,
   shippingStatus,
   onShippingAmountChange,
   prefilledFromLastOrder,
@@ -392,6 +393,8 @@ export function ShippingSection({
   shippingAmount: string;
   /** Prepaid order: no shipping charge is added (the courier rates only confirm the pincode is serviceable). */
   shippingFree?: boolean;
+  /** COD order: the charge is the flat COD shipping fee (the courier rates below only confirm the pincode is serviceable). */
+  shippingFlat?: boolean;
   /** Where the shipping charge comes from: the selected courier's Shiprocket rate, still calculating, not available, or not requested yet. */
   shippingStatus?: ShippingChargeState;
   onShippingAmountChange: (v: string) => void;
@@ -519,6 +522,8 @@ export function ShippingSection({
           hint={
             shippingFree
               ? "Prepaid orders ship free - no shipping charge is added. The courier rates below only check that this pincode is serviceable."
+              : shippingFlat
+              ? "Cash on Delivery has a flat shipping charge of ₹50. The courier rates below only check that this pincode is serviceable."
               : shippingStatus?.kind === "rate"
               ? `Shiprocket's charge${shippingStatus.courier ? ` for ${shippingStatus.courier}` : ""}. Choose another courier below to change it.`
               : shippingStatus?.kind === "calculating"
@@ -533,7 +538,7 @@ export function ShippingSection({
             inputMode="decimal"
             placeholder={shippingStatus?.kind === "calculating" ? "Calculating…" : shippingStatus?.kind === "unavailable" ? "Not available" : "Not calculated"}
             value={shippingAmount}
-            readOnly={shippingFree || shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
+            readOnly={shippingFree || shippingFlat || shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
             data-source={shippingStatus?.kind ?? "idle"}
             onChange={(e) => onShippingAmountChange(e.target.value)}
           />
@@ -770,8 +775,10 @@ export function ResultView({
           </ul>
         </ResultRow>
 
-        <ResultRow label="Shopify" state={shopify.status === "failed" ? "fail" : "ok"}>
-          {shopify.status === "failed" ? (
+        <ResultRow label="Shopify" state={shopify.status === "failed" ? "fail" : shopify.status === "awaiting_payment" ? "warn" : "ok"}>
+          {shopify.status === "awaiting_payment" ? (
+            <span data-testid="shopify-awaiting-payment">Not created yet - the Shopify order is created automatically once Cashfree confirms the payment. Until then this is an awaiting-payment request, not a confirmed order.</span>
+          ) : shopify.status === "failed" ? (
             <span className="grid gap-2">
               <span>{friendlyShopify()}</span>
               <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onRetryShopify} disabled={retrying}>

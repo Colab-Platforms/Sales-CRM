@@ -50,10 +50,15 @@ async function world(tx: Prisma.TransactionClient) {
 
   const place = async (paymentMethod: "COD" | "PAYMENT_LINK", extra: Record<string, unknown> = {}) => {
     const r = await orders.createManualOrder(as, { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "449.00" }], paymentMethod, ...(paymentMethod === "PAYMENT_LINK" ? { sendPaymentLinkViaWhatsApp: false } : {}), ...extra } as never);
+    // PREPAID: nothing reaches Shopify until Cashfree verifies the payment. The payload the post-payment step sends is built by the same push, so it is exercised here.
+    if (paymentMethod === "PAYMENT_LINK") {
+      assert.equal(shopifyOrders.length, 0, "a prepaid order is not sent to Shopify before payment");
+      await orders.pushOrderToShopify(as, r.order.id);
+    }
     const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { subtotal: true, discountAmount: true, shippingAmount: true, totalAmount: true } });
     return { r, row: { subtotal: row.subtotal.toString(), discount: row.discountAmount.toString(), shipping: row.shippingAmount.toString(), total: row.totalAmount.toString() }, shopify: shopifyOrders.at(-1), linkAmounts };
   };
-  return { place, orders, as, lead, shopifyOrders, linkAmounts, tx };
+  return { place, orders, as, lead, shopifyOrders, linkAmounts, tx, productId: product.id };
 }
 const num = (v: string) => Number(v);
 
@@ -91,16 +96,17 @@ describe("PREPAID orders: no shipping, existing prepaid promotion", () => {
   });
 });
 
-describe("COD orders: shipping added, no automatic discount", () => {
-  it("shipping 80 is added and the default Rs 50 discount is NOT applied: total 529 everywhere", async () => {
+describe("COD orders: flat Rs 50 shipping, no automatic discount", () => {
+  it("COD is charged the flat Rs 50 whatever shipping the request carries (80 here) and the default Rs 50 discount is NOT applied: total 499 everywhere", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const { r, row, shopify } = await w.place("COD", { shippingAmount: "80.00", discount: DEFAULT_50 });
-      assert.deepEqual(row, { subtotal: "449", discount: "0", shipping: "80", total: "529" });
-      assert.equal(num(r.order.totalAmount), 529);
+      assert.deepEqual(row, { subtotal: "449", discount: "0", shipping: "50", total: "499" });
+      assert.equal(num(r.order.totalAmount), 499);
+      assert.equal(num(r.order.shippingAmount), 50);
       assert.equal(num(r.order.discountAmount), 0);
       assert.equal(shopify.discountCode, undefined, "the dropped discount is not sent to Shopify");
-      assert.equal(shopify.shippingLines?.[0]?.priceSet?.shopMoney?.amount, "80.00");
+      assert.equal(shopify.shippingLines?.[0]?.priceSet?.shopMoney?.amount, "50.00");
     });
   });
 
@@ -108,7 +114,7 @@ describe("COD orders: shipping added, no automatic discount", () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const { row } = await w.place("COD", { shippingAmount: "80.00", discount: { type: "FIXED", value: "20" } });
-      assert.deepEqual(row, { subtotal: "449", discount: "20", shipping: "80", total: "509" });
+      assert.deepEqual(row, { subtotal: "449", discount: "20", shipping: "50", total: "479" });
     });
   });
 
@@ -118,18 +124,18 @@ describe("COD orders: shipping added, no automatic discount", () => {
       setDefaultOffersSource({ getActiveOffers: async () => ({ offers: [{ id: "fr-1", couponCode: "SAVE100", discountType: "flat", discountValue: 100, automaticDiscount: false, startTime: null, endTime: null, active: true, minCartTotal: null, minQtyProduct: null, productFilter: null, expiringSoon: false }] as never, fetchedAt: new Date().toISOString() }) });
       try {
         const { row } = await w.place("COD", { shippingAmount: "60.00", discount: { couponCode: "SAVE100" } });
-        assert.deepEqual(row, { subtotal: "449", discount: "100", shipping: "60", total: "409" });
+        assert.deepEqual(row, { subtotal: "449", discount: "100", shipping: "50", total: "399" });
       } finally {
         setDefaultOffersSource(null);
       }
     });
   });
 
-  it("boundary: COD with no / zero shipping and the default discount is just the items", async () => {
+  it("boundary: COD with no / zero shipping in the request is STILL charged the flat Rs 50 (and the default discount is not applied)", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
-      assert.deepEqual((await w.place("COD", { discount: DEFAULT_50 })).row, { subtotal: "449", discount: "0", shipping: "0", total: "449" });
-      assert.deepEqual((await w.place("COD", { shippingAmount: "0", discount: DEFAULT_50 })).row, { subtotal: "449", discount: "0", shipping: "0", total: "449" });
+      assert.deepEqual((await w.place("COD", { discount: DEFAULT_50 })).row, { subtotal: "449", discount: "0", shipping: "50", total: "499" });
+      assert.deepEqual((await w.place("COD", { shippingAmount: "0", discount: DEFAULT_50 })).row, { subtotal: "449", discount: "0", shipping: "50", total: "499" });
     });
   });
 });
@@ -153,8 +159,83 @@ describe("the server is the authority", () => {
       const again = await w.place("COD", { shippingAmount: "80.00", discount: DEFAULT_50, idempotencyKey: key });
       assert.equal(again.r.order.id, first.r.order.id);
       assert.deepEqual(again.row, first.row);
+      assert.deepEqual(again.row, { subtotal: "449", discount: "0", shipping: "50", total: "499" }, "a retry never adds shipping a second time");
       assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1);
       assert.equal(w.shopifyOrders.length, 1, "Shopify is not asked for a second order");
+    });
+  });
+});
+
+describe("COD shipping is a flat Rs 50 decided by the server (business rule)", () => {
+  const row = (tx: Parameters<Parameters<typeof inRollback>[0]>[0], id: string) => tx.order.findUniqueOrThrow({ where: { id }, select: { subtotal: true, discountAmount: true, shippingAmount: true, taxAmount: true, totalAmount: true } }).then((r) => [r.subtotal, r.discountAmount, r.shippingAmount, r.taxAmount, r.totalAmount].map(String));
+
+  it("COD, subtotal 649, no discount, no tax: shipping 50, total 699 - order row, API response, Shopify payload", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const { r, shopify } = await w.place("COD", { items: [{ productId: w.productId, quantity: 1, unitPrice: "649.00" }] });
+      assert.deepEqual(await row(tx, r.order.id), ["649", "0", "50", "0", "699"]);
+      assert.deepEqual([num(r.order.subtotal), num(r.order.shippingAmount), num(r.order.totalAmount)], [649, 50, 699]);
+      assert.equal(shopify.shippingLines?.length, 1, "one shipping line, not several");
+      assert.equal(shopify.shippingLines?.[0]?.priceSet?.shopMoney?.amount, "50.00");
+    });
+  });
+
+  it("a courier quote or any other figure from the browser cannot change it (66.96, 9999, 0.01, 0 and blank all give 50)", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      for (const sent of ["66.96", "9999", "0.01", "0", undefined]) {
+        const { r } = await w.place("COD", sent === undefined ? {} : { shippingAmount: sent });
+        assert.deepEqual((await row(tx, r.order.id)).slice(2, 3).concat((await row(tx, r.order.id)).slice(4)), ["50", "499"], String(sent));
+      }
+    });
+  });
+
+  it("multiple items / quantities: still one flat 50 for the order, never per item or per unit", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const { r } = await w.place("COD", { items: [{ productId: w.productId, quantity: 2, unitPrice: "449.00" }, { productId: w.productId, quantity: 3, unitPrice: "100.00" }] });
+      assert.deepEqual(await row(tx, r.order.id), ["1198", "0", "50", "0", "1248"]);
+    });
+  });
+
+  it("COD with a deliberate discount: the discount is applied and shipping is still 50", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const { r } = await w.place("COD", { items: [{ productId: w.productId, quantity: 1, unitPrice: "649.00" }], discount: { type: "FIXED", value: "100" } });
+      assert.deepEqual(await row(tx, r.order.id), ["649", "100", "50", "0", "599"]);
+    });
+  });
+
+  it("switching COD <-> prepaid recalculates from scratch: COD never keeps the prepaid Rs 50 discount, prepaid never keeps shipping (same request, either order)", async () => {
+    const request = (w: { productId: string }) => ({ items: [{ productId: w.productId, quantity: 1, unitPrice: "649.00" }], discount: DEFAULT_50, shippingAmount: "66.96" });
+    // (the helper asserts that nothing reaches Shopify before a prepaid payment, so each direction gets its own isolated world)
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const prepaid = await w.place("PAYMENT_LINK", request(w));
+      const cod = await w.place("COD", request(w));
+      assert.deepEqual(await row(tx, prepaid.r.order.id), ["649", "50", "0", "0", "599"], "prepaid: the existing Rs 50 discount, no shipping");
+      assert.deepEqual(await row(tx, cod.r.order.id), ["649", "0", "50", "0", "699"], "then COD: no stale discount, flat shipping");
+      assert.equal(w.linkAmounts.at(-1), "599", "the Cashfree link carried the prepaid total");
+    });
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const cod = await w.place("COD", request(w));
+      assert.deepEqual(await row(tx, cod.r.order.id), ["649", "0", "50", "0", "699"]);
+      // a fresh prepaid order after a COD one: shipping is not carried over, the discount applies again
+      const w2 = await world(tx);
+      const prepaid = await w2.place("PAYMENT_LINK", request(w2));
+      assert.deepEqual(await row(tx, prepaid.r.order.id), ["649", "50", "0", "0", "599"]);
+    });
+  });
+
+  it("the expectedTotal check uses the server's figure: the browser's old 66.96 total is refused, 699 is accepted", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const items = [{ productId: w.productId, quantity: 1, unitPrice: "649.00" }];
+      await assert.rejects(() => w.place("COD", { items, shippingAmount: "66.96", expectedTotal: "715.96" }), /order total changed/i);
+      assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 0);
+      const ok = await w.place("COD", { items, shippingAmount: "66.96", expectedTotal: "699.00" });
+      assert.equal(ok.row.total, "699");
     });
   });
 });

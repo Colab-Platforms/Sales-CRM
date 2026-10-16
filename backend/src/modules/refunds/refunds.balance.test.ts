@@ -60,3 +60,20 @@ describe("what is stored from Shopify and from the verification", () => {
     assert.equal(cashfreeVerificationOf({ cashfreeVerification: { status: "MAYBE" } }), null);
   });
 });
+
+describe("zero refundable balance: reserved by an approved request vs actually refunded (CRM Cashfree payment)", () => {
+  const cf = (over: Partial<{ amount: string; refundedAmount: string | null }> = {}) => pay({ amount: "1.00", externalSource: "CASHFREE", ...over });
+  it("an approved, unexecuted request for the whole payment leaves 0 for NEW requests, while the request itself (which does not count its own reservation) can still use the full amount", () => {
+    assert.equal(refundBalance(cf(), held("1.00"), {}).refundableCents, 0, "new requests: all of it is held");
+    assert.equal(refundBalance(cf(), [], {}).refundableCents, 100, "the approved request when it executes: the others held nothing, nothing refunded");
+    assert.equal(refundBalance(cf(), held("1.00"), {}).calc.refundedCents, 0, "and nothing has been refunded");
+  });
+  it("once the refund really happened it is in refundedAmount: zero again for everyone, and it can never go negative", () => {
+    assert.equal(refundBalance(cf({ refundedAmount: "1.00" }), [], {}).refundableCents, 0);
+    assert.equal(refundBalance(cf({ refundedAmount: "1.00" }), held("1.00"), {}).refundableCents, 0);
+  });
+  it("partial: refunded + held + still free add up to the payment", () => {
+    const b = refundBalance(pay({ amount: "100.00", externalSource: "CASHFREE", refundedAmount: "30.00" }), held("20.00"), {});
+    assert.deepEqual([b.calc.refundedCents, b.calc.reservedCents, b.refundableCents], [3000, 2000, 5000]);
+  });
+});
