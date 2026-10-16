@@ -442,7 +442,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
               <p className="text-base font-semibold">
                 {orderType === "COD" ? `Create COD order for ${customerName}?` : `Create prepaid order for ${customerName}?`}
               </p>
-              <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
+              <div className="rounded-xl border border-border bg-card p-4">
                 <ul className="grid gap-2 text-sm">
                   {summary.lines.map((l) => (
                     <li key={l.key} className="flex justify-between gap-3">
@@ -464,7 +464,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 isPrepaid={orderType !== "COD"}
                 disabled={createOrder.isPending || !discountsLoaded}
               />
-              <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
+              <div className="rounded-xl border border-border bg-card p-4">
                 <dl className="grid gap-1.5">
                   <SummaryRow label="Payment method" value={`${typeInfo.title} · ${typeInfo.subtitle}`} />
                   <SummaryRow label="Payment status" value={orderType === "COD" ? "Pending (collected on delivery)" : "Pending (until the customer pays)"} />

@@ -41,10 +41,10 @@ export default function LoginPage() {
     <div className="flex min-h-screen items-center justify-center px-4 py-10">
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center gap-3 text-center">
-          {/* <BrandMark className="size-14" /> */}
+          <BrandMark className="size-14" />
           <div className="space-y-1">
-            <h1 className="font-hand text-4xl leading-none font-bold">
-              AVATAR CRM
+            <h1 className="text-3xl leading-tight font-semibold tracking-tight">
+              Avance Sales CRM
             </h1>
             <p className="text-sm text-muted-foreground">
               Leads, teams and pipeline in one place.

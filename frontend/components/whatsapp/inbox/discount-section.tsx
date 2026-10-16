@@ -69,7 +69,7 @@ export function DiscountPricing({ subtotalCents, shippingCents, choice, onChange
   }
 
   return (
-    <div className="relative overflow-hidden rounded-xl border-[1.5px] border-border bg-card shadow-sm">
+    <div className="relative overflow-hidden rounded-xl border border-border bg-card shadow-sm">
       {celebrate ? <DiscountCelebration savedLabel={celebrate} onDone={() => setCelebrate(null)} /> : null}
 
       <div className="p-4">

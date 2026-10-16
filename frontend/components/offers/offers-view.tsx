@@ -120,7 +120,7 @@ export function OfferCard({ offer }: { offer: ActiveOffer }) {
 
 function OfferCardSkeleton() {
   return (
-    <div className="grid gap-4 rounded-xl border-[1.5px] border-border p-5" aria-hidden>
+    <div className="grid gap-4 rounded-xl border border-border p-5" aria-hidden>
       <div className="flex justify-between">
         <Skeleton className="h-5 w-32" />
         <Skeleton className="h-5 w-16" />

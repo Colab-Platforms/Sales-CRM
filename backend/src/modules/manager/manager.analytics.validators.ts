@@ -13,12 +13,18 @@ const schema = z
     salespersonId: z.string().uuid().optional(),
     callStatus: z.enum(["ALL", "CONNECTED", "NOT_CONNECTED", "FAILED"]).default("ALL"),
     leadStatus: z.enum(["ALL", "NOT_CONTACTED", "CONTACTED", "INTERESTED", "CONVERTED"]).default("ALL"),
+    paymentMode: z.enum(["ALL", "COD", "PREPAID"]).default("ALL"),
+    // Only the sold statuses: cancelled/returned/refunded orders are never part of Sales & Revenue.
+    orderStatus: z.enum(["ALL", "CONFIRMED", "PROCESSING", "SHIPPED", "OUT_FOR_DELIVERY", "DELIVERED"]).default("ALL"),
     tzOffsetMinutes: z.coerce.number().int().min(-720).max(840).default(REPORT_TZ_OFFSET_MINUTES),
   })
   .transform((q): AnalyticsFilters => {
-    const today = todayString(new Date(), q.tzOffsetMinutes);
+    // Report days are business days in India time (IST) for every viewer, so a browser's own
+    // timezone can never shift orders or calls onto a different day. The client value is ignored.
+    const tzOffsetMinutes = REPORT_TZ_OFFSET_MINUTES;
+    const today = todayString(new Date(), tzOffsetMinutes);
     const to = q.to ?? today;
-    return { ...q, from: q.from ?? to, to };
+    return { ...q, tzOffsetMinutes, from: q.from ?? to, to };
   })
   .refine((q) => q.from <= q.to, { message: "from must not be after to" });
 

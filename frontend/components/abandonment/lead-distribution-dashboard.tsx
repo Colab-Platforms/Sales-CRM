@@ -28,8 +28,8 @@ function StatCard({ label, value, href, hint, tone, testId }: { label: string; v
       data-testid={testId}
       className={cn("sketch-outline block bg-card/60 p-4 transition-colors hover:bg-muted/50", tone === "alert" && value > 0 && "border-destructive/50 bg-destructive/5")}
     >
-      <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1 text-3xl font-bold tabular-nums" data-testid={`${testId}-value`}>{value}</div>
+      <div className="text-xs font-normal text-muted-foreground">{label}</div>
+      <div className="mt-1 text-3xl font-semibold tabular-nums" data-testid={`${testId}-value`}>{value}</div>
       {hint ? <div className="mt-1 text-xs text-muted-foreground">{hint}</div> : null}
     </Link>
   );
@@ -131,7 +131,7 @@ export function LeadDistributionDashboard({ title = "Abandoned leads distributio
   return (
     <section className="space-y-4" data-testid="distribution-section">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="font-heading text-lg font-extrabold">{title}</h2>
+        <h2 className="font-heading text-lg font-semibold">{title}</h2>
         <div role="group" aria-label="Distribution period" className="flex gap-2">
           {PERIODS.map((p) => (
             <Button key={p.value} type="button" size="sm" variant={p.value === range ? "default" : "outline"} aria-pressed={p.value === range} data-testid={`dist-period-${p.value}`} onClick={() => setRange(p.value)}>

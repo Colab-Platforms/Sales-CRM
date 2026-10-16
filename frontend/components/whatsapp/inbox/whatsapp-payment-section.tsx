@@ -27,7 +27,7 @@ export function WhatsAppPaymentSection({ options, loading, error, choice, onChan
   const consentRecorded = options?.consent === "OPTED_IN";
 
   return (
-    <div className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4" data-testid="whatsapp-payment">
+    <div className="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="whatsapp-payment">
       <div className="flex items-center gap-2">
         <MessageCircle className="size-4 text-muted-foreground" aria-hidden />
         <p className="text-sm font-semibold">Payment Link</p>

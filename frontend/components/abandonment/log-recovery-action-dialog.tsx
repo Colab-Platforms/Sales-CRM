@@ -24,7 +24,7 @@ const STATUS_OPTIONS: RecoveryActionStatus[] = ["PENDING", "IN_PROGRESS", "SUCCE
 
 // Same textarea styling as ui/input.tsx's Input, since this codebase has no dedicated Textarea primitive.
 const TEXTAREA_CLASS =
-  "w-full min-w-0 rounded-[11px_9px_12px_9px] border-[1.5px] border-input bg-card px-3 py-2 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
+  "w-full min-w-0 rounded-xl border border-input bg-card px-3 py-2 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 md:text-sm dark:bg-input/30";
 
 export function LogRecoveryActionDialog({ abandonmentId, open, onOpenChange, onDone }: { abandonmentId: string; open: boolean; onOpenChange: (open: boolean) => void; onDone: () => void }) {
   const logAction = useLogRecoveryActionMutation(abandonmentId);

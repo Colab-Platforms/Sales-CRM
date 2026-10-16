@@ -52,7 +52,7 @@ function BackLink({ from }: { from?: string | null }) {
           router.back();
         }
       }}
-      className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+      className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
     >
       <ArrowLeft className="size-3.5" />
       <span>{label}</span>
@@ -120,7 +120,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           <button
             type="button"
             onClick={() => refetch()}
-            className="sketch-press rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)]"
+            className="sketch-press rounded-xl border border-ink-line bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground shadow-xl shadow-black/5"
           >
             Try again
           </button>
@@ -145,7 +145,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setSendWhatsAppOpen(true)}
-              className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-primary/90"
+              className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-primary px-3.5 py-1.5 text-xs font-bold text-primary-foreground shadow-xl shadow-black/5 hover:bg-primary/90"
             >
               <MessageCircle className="size-3.5" />
               <span>Send WhatsApp</span>
@@ -160,7 +160,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           <button
             type="button"
             onClick={() => setCreateOrderOpen(true)}
-            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
           >
             <ShoppingCart className="size-3.5 text-primary" />
             <span>Create Order</span>
@@ -170,7 +170,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           <button
             type="button"
             onClick={() => setEditOpen(true)}
-            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
           >
             <Pencil className="size-3.5 text-primary" />
             <span>Edit Lead</span>
@@ -179,7 +179,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           {/* Customer 360 link as doodle chip */}
           <Link
             href={`/dashboard/customers/${lead.id}`}
-            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
           >
             <ExternalLink className="size-3.5 text-primary" />
             <span>Customer 360</span>
@@ -190,7 +190,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setDeleteOpen(true)}
-              className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-destructive/60 bg-destructive/10 px-3 py-1.5 text-xs font-bold text-destructive shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-destructive/20"
+              className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-destructive/60 bg-destructive/10 px-3 py-1.5 text-xs font-bold text-destructive shadow-xl shadow-black/5 hover:bg-destructive/20"
             >
               <Trash2 className="size-3.5" />
               <span>Delete</span>
@@ -215,13 +215,13 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
               {/* Rubber ink stamp for working status */}
               <div className="rotate-[-1deg]">
-                <StatusBadge status={lead.workingStatus} className="border-[1.5px] border-ink-line font-bold" />
+                <StatusBadge status={lead.workingStatus} className="border border-ink-line font-bold" />
               </div>
 
               {/* Priority doodle badge */}
               <Badge
                 variant="outline"
-                className="rotate-1 border-[1.5px] border-ink-line-soft bg-muted/40 font-mono text-[11px] font-bold"
+                className="rotate-1 border border-ink-line-soft bg-muted/40 font-mono text-[11px] font-bold"
               >
                 ★ {LEAD_PRIORITY_LABELS[lead.priority]}
               </Badge>
@@ -229,14 +229,14 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
             {/* Lead Number */}
             <div className="flex items-center gap-2">
-              <span className="sketch-outline rounded-[10px_8px_11px_8px] bg-muted/30 px-2.5 py-1 font-mono text-xs font-bold text-foreground">
+              <span className="sketch-outline rounded-xl bg-muted/30 px-2.5 py-1 font-mono text-xs font-bold text-foreground">
                 #{lead.leadNumber}
               </span>
             </div>
           </div>
 
           {/* Compact Quick-Stats Ribbon */}
-          <div className="grid grid-cols-2 gap-3 border-t-[1.5px] border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 @6xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 border-t border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 @6xl:grid-cols-6">
             <div className="min-w-0 space-y-0.5">
               <p className="text-[11px] font-medium text-muted-foreground">Phone</p>
               <div className="flex flex-wrap items-center gap-1">
@@ -288,7 +288,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         {/* Left Column (5 cols): Requirement Brief & Lead Info */}
         <div className="min-w-0 space-y-4 @4xl:col-span-4">
           <div className="sketch-panel space-y-3 bg-card p-4.5">
-            <div className="flex items-center justify-between border-b-[1.5px] border-ink-line-soft pb-2">
+            <div className="flex items-center justify-between border-b border-ink-line-soft pb-2">
               <div className="flex items-center gap-2">
                 <NotebookPen className="size-4 text-primary" />
                 <h2 className="font-heading text-sm font-extrabold text-foreground">Requirement Brief</h2>
@@ -330,7 +330,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("calls")}
-              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "calls"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -346,7 +346,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("timeline")}
-              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "timeline"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -359,7 +359,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("assignments")}
-              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "assignments"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -373,7 +373,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <button
                 type="button"
                 onClick={() => setActiveTab("abandonment")}
-                className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+                className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                   activeTab === "abandonment"
                     ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                     : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"

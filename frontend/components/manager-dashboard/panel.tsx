@@ -69,3 +69,13 @@ export function Segmented<T extends string>({
     </div>
   );
 }
+
+/** Heading that groups related panels on a long page (e.g. the Reports page's Sales / Team / Calls sections). */
+export function SectionHeading({ title, description }: { title: string; description?: string }) {
+  return (
+    <div className="border-b border-border/70 pb-2">
+      <h2 className="text-base font-medium tracking-tight">{title}</h2>
+      {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
+    </div>
+  );
+}
