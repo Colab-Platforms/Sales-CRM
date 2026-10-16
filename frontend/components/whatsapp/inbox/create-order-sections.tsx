@@ -22,6 +22,7 @@ import type { PincodeLookup, ServiceabilityResult } from "@/lib/api-client/types
 export { CourierTable, ServiceabilityLine } from "./courier-rates";
 import type { CreateManualOrderResult, PaymentMethod } from "@/lib/api-client/types/orders.types";
 import type { ProductListItem } from "@/lib/api-client/types/products.types";
+import { AddressSearch } from "./address-search";
 
 // ---------------------------------------------------------------------------------------------------------------------
 // shared helpers
@@ -415,6 +416,22 @@ export function ShippingSection({
   return (
     <SectionCard title="Delivery Address" description={prefillFailed ? "The saved address could not be loaded - enter the delivery address below." : prefilledFromLastOrder ? `Prefilled from ${prefillSource === "CHECKOUT" ? "the address this customer entered at checkout" : "this customer's last order"}. Check it, and edit anything that is wrong - editing here changes this order only; the customer record is not touched.` : "Where this order will be delivered."}>
       <div className="grid gap-3 sm:grid-cols-2">
+        <AddressSearch
+          pincode={/^[1-9]\d{5}$/.test(address.pincode) ? address.pincode : undefined}
+          onPick={(p) =>
+            // Only fields Google actually returned overwrite the form; the flat / house number is kept when Google has none, since the telecaller still has to type it.
+            onChange({
+              ...(p.houseNumber ? { houseNumber: p.houseNumber } : {}),
+              building: p.building,
+              street: p.street,
+              area: p.area,
+              ...(p.city ? { city: p.city } : {}),
+              ...(p.state ? { state: p.state } : {}),
+              // A pincode the telecaller already entered wins: it is only filled from the place when it is empty / incomplete.
+              ...(p.pincode && !/^[1-9]\d{5}$/.test(address.pincode) ? { pincode: p.pincode } : {}),
+            })
+          }
+        />
         <Field label="Pincode" htmlFor="ship-pincode" required className="sm:col-span-2" error={show("pincode") && pincodeState !== "invalid" && pincodeState !== "malformed" ? errors.pincode : undefined} hint={<PincodeStatusLines state={pincodeState} lookup={lookup} cityMismatch={cityMismatch} onUseResolved={onUseResolved} />}>
           <Input
             id="ship-pincode"

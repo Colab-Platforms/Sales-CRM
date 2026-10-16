@@ -2,6 +2,9 @@ import { apiClient } from "../client";
 import type { WhatsAppPaymentOptions } from "../../whatsapp-payment";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
+  AddressValidationResult,
+  PlaceAddress,
+  PlaceSuggestion,
   CancelOrderInput,
   CancelOrderResult,
   RevertCancellationResult,
@@ -64,6 +67,24 @@ export const ordersApi = {
 
   async create(input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
     const res = await apiClient.post<ApiEnvelope<CreateManualOrderResult>>("/orders", input);
+    return res.data.data;
+  },
+
+  /** Checks a delivery address with Google before the order is created. Creates nothing. */
+  async validateAddress(shippingAddress: NonNullable<CreateManualOrderInput["shippingAddress"]>): Promise<AddressValidationResult> {
+    const res = await apiClient.post<ApiEnvelope<AddressValidationResult>>("/orders/validate-address", { shippingAddress });
+    return res.data.data;
+  },
+
+  /** Address typeahead (Google Places, proxied by the backend). */
+  async suggestAddress(q: string, sessionToken: string, pincode?: string): Promise<PlaceSuggestion[]> {
+    const res = await apiClient.get<ApiEnvelope<{ suggestions: PlaceSuggestion[] }>>("/orders/address-suggest", { params: { q, sessionToken, pincode } });
+    return res.data.data.suggestions;
+  },
+
+  /** The picked suggestion split into form fields. Uses the same sessionToken as the typing that led to it (one billed session). */
+  async getAddressPlace(placeId: string, sessionToken: string): Promise<PlaceAddress> {
+    const res = await apiClient.get<ApiEnvelope<PlaceAddress>>("/orders/address-place", { params: { placeId, sessionToken } });
     return res.data.data;
   },
 

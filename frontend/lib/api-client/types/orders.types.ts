@@ -104,8 +104,40 @@ export interface CreateManualOrderItemInput {
   discountAmount?: string;
 }
 
+/** Google Address Validation verdict (POST /orders/validate-address). SKIPPED = check unavailable; it never blocks an order. */
+export interface AddressValidationResult {
+  status: "VERIFIED" | "UNCONFIRMED" | "INVALID" | "SKIPPED";
+  reasons: string[];
+  formattedAddress?: string;
+  suggestedPincode?: string;
+  lat?: number;
+  lng?: number;
+  granularity?: string;
+}
+
+export interface PlaceSuggestion {
+  placeId: string;
+  text: string;
+  mainText: string;
+  secondaryText: string;
+}
+
+/** A picked Google place split into the Create Order form's own address fields. */
+export interface PlaceAddress {
+  houseNumber: string;
+  building: string;
+  street: string;
+  area: string;
+  city: string;
+  state: string;
+  pincode: string;
+  formattedAddress: string;
+}
+
 export interface CreateManualOrderInput {
   leadId: string;
+  /** The user saw "address not found" and chose to create the order anyway. */
+  confirmUnverifiedAddress?: boolean;
   /** The abandoned checkout the form was prefilled from (the server checks it belongs to this customer and records it on the order). */
   abandonmentId?: string;
   items: CreateManualOrderItemInput[];

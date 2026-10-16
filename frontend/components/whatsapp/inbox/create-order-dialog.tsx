@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useCreateOrderMutation, usePushOrderToShopifyMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
+import { ordersApi } from "@/lib/api-client/endpoints/orders.api";
+import { AddressCheckBanner } from "./address-check-banner";
 import { productsApi } from "@/lib/api-client/endpoints/products.api";
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
 import { abandonmentOrderPrefillQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
@@ -361,6 +363,38 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     serviceability,
   };
 
+  const shippingAddressPayload = {
+    name: address.name || customerName,
+    ...composeLines(address),
+    line2: composeLines(address).line2 || undefined,
+    houseNumber: address.houseNumber.trim(),
+    building: address.building.trim() || undefined,
+    area: address.area.trim(),
+    street: address.street.trim() || undefined,
+    landmark: address.landmark.trim() || undefined,
+    deliveryInstructions: address.deliveryInstructions.trim() || undefined,
+    addressType: address.addressType,
+    city: address.city.trim(),
+    state: address.state.trim(),
+    pincode: address.pincode,
+    phone: address.phone || customerMobile || undefined,
+  };
+
+  // Google address check, run once when the review step opens (and again if the address changes). A failed/unavailable check shows nothing and never blocks.
+  const addressCheckQuery = useQuery({
+    queryKey: ["orders", "validate-address", shippingAddressPayload.line1, shippingAddressPayload.line2, shippingAddressPayload.city, shippingAddressPayload.state, shippingAddressPayload.pincode],
+    queryFn: () => ordersApi.validateAddress(shippingAddressPayload),
+    enabled: open && step === "review",
+    staleTime: 5 * 60_000,
+    retry: false,
+  });
+  const addressCheck = addressCheckQuery.data ?? null;
+  // INVALID blocks the order until the user explicitly confirms; the checkbox resets whenever the address changes.
+  const [confirmedKey, setConfirmedKey] = useState<string | null>(null);
+  const addressKey = `${shippingAddressPayload.line1}|${shippingAddressPayload.line2}|${shippingAddressPayload.city}|${shippingAddressPayload.state}|${shippingAddressPayload.pincode}`;
+  const unverifiedConfirmed = confirmedKey === addressKey;
+  const addressBlocked = addressCheck?.status === "INVALID" && !unverifiedConfirmed;
+
   function submit() {
     // Synchronous guard: two rapid clicks/Enters can both run before `isPending` re-renders.
     if (submittingRef.current || createOrder.isPending) return;
@@ -369,26 +403,12 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     createOrder.mutate(
       {
         leadId,
+        ...(addressCheck?.status === "INVALID" && unverifiedConfirmed ? { confirmUnverifiedAddress: true } : {}),
         // Only a checkout that actually loaded for this customer is referenced; the server re-checks that it is theirs.
         ...(prefill ? { abandonmentId: prefill.abandonmentId } : {}),
         items: validItems,
         paymentMethod: orderType,
-        shippingAddress: {
-          name: address.name || customerName,
-          ...composeLines(address),
-          line2: composeLines(address).line2 || undefined,
-          houseNumber: address.houseNumber.trim(),
-          building: address.building.trim() || undefined,
-          area: address.area.trim(),
-          street: address.street.trim() || undefined,
-          landmark: address.landmark.trim() || undefined,
-          deliveryInstructions: address.deliveryInstructions.trim() || undefined,
-          addressType: address.addressType,
-          city: address.city.trim(),
-          state: address.state.trim(),
-          pincode: address.pincode,
-          phone: address.phone || customerMobile || undefined,
-        },
+        shippingAddress: shippingAddressPayload,
         shippingPincode: address.pincode,
         // Shiprocket's charge for the selected courier, or what was typed when Shiprocket has none; empty = not sent.
         shippingAmount: orderType === "COD" ? shippingAmount || undefined : "0",
@@ -469,6 +489,13 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                   <SummaryRow label="Ship to" value={<span className="break-words">{formatAddress(address)}</span>} />
                 </dl>
               </div>
+              <AddressCheckBanner
+                loading={addressCheckQuery.isFetching}
+                result={addressCheck}
+                confirmed={unverifiedConfirmed}
+                onConfirmChange={(v) => setConfirmedKey(v ? addressKey : null)}
+                onBack={() => setStep("form")}
+              />
               <p className="rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
                 {orderType === "COD"
                   ? "The order is confirmed, sent to Shopify, and the customer gets a WhatsApp confirmation."
@@ -489,7 +516,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 <Button type="button" variant="outline" onClick={() => setStep("form")} disabled={createOrder.isPending}>
                   Back
                 </Button>
-                <Button type="button" onClick={submit} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
+                <Button type="button" onClick={submit} disabled={createOrder.isPending || Boolean(whatsappBlocked) || addressBlocked}>
                   {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : sendingWhatsApp ? "Create Order & Send Payment Link" : "Create prepaid order"}
                 </Button>
               </div>

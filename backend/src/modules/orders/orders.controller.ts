@@ -3,7 +3,9 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import OrdersService from "./orders.service.js";
-import { validateCancelOrder, validateCreateManualOrder, validateListOrdersQuery, validateOrderIdParams } from "./orders.validators.js";
+import { validateAddress } from "@/lib/addressValidation.js";
+import { getPlaceAddress, suggestPlaces } from "@/lib/placesAutocomplete.js";
+import { validateAddressCheck, validateAddressPlace, validateAddressSuggest, validateCancelOrder,validateCreateManualOrder, validateListOrdersQuery, validateOrderIdParams } from "./orders.validators.js";
 
 const ordersService = new OrdersService();
 
@@ -82,6 +84,48 @@ export const createOrder = async (req: AuthRequest, res: Response): Promise<void
     sendResponse(res, true, result, "Order created", STATUS_CODES.CREATED);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Preview for the Create Order form: checks the address with Google BEFORE submit so the user sees the verdict / corrected address. Creates nothing.
+export const checkAddress = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAddressCheck(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await validateAddress(value.shippingAddress), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Address typeahead (Google Places). Proxied so the API key stays on the server. Any Google failure is a 503 the form treats as "no suggestions"; it never blocks typing an address by hand.
+export const suggestAddress = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAddressSuggest(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, { suggestions: await suggestPlaces(value.q, value.sessionToken, value.pincode) }, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.name === "PlacesUnavailableError" ? 503 : (error.statusCode ?? STATUS_CODES.SERVER_ERROR));
+  }
+};
+
+// The picked suggestion, split into the form's own fields (house / building / street / area / city / state / pincode).
+export const getAddressPlace = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAddressPlace(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await getPlaceAddress(value.placeId, value.sessionToken), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.name === "PlacesUnavailableError" ? 503 : (error.statusCode ?? STATUS_CODES.SERVER_ERROR));
   }
 };
 

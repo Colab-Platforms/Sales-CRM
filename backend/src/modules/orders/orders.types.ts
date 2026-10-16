@@ -54,6 +54,8 @@ export interface CreateManualOrderInput {
     addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
+  /** Telecaller has seen Google's "address not found" result and wants the order created anyway. Without it an INVALID address is refused. */
+  confirmUnverifiedAddress?: boolean;
   shippingAmount?: Money;
   discountAmount?: Money;
   /** Order-level Custom Discount, percent of (subtotal - line discounts). Mutually exclusive with discountAmount. */

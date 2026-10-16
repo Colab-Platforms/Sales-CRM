@@ -88,6 +88,7 @@ const createManualOrderSchema = z.object({
   paymentMethod: z.enum(PaymentMethod, { error: "Invalid payment method" }),
   shippingAddress: optional(shippingAddressSchema),
   shippingPincode: optional(z.string().trim().regex(/^[1-9]\d{5}$/, "Pincode must be a valid 6-digit Indian pincode")),
+  confirmUnverifiedAddress: z.boolean({ error: "confirmUnverifiedAddress must be true or false" }).optional(),
   shippingAmount: optional(money("shippingAmount")),
   discountAmount: optional(money("discountAmount")),
   // Custom Discount: a percentage, validated and applied only by computePercentDiscount() in the service (a string, so
@@ -118,7 +119,16 @@ const createManualOrderSchema = z.object({
   idempotencyKey: optional(z.string().trim().min(8).max(100)),
 });
 
-export const validateCreateManualOrder = (body: unknown) => validateSchema<CreateManualOrderInput>(createManualOrderSchema, body);
+const sessionToken = optional(z.string().trim().min(8).max(100));
+export const validateAddressSuggest = (query: unknown) =>
+  validateSchema<{ q: string; sessionToken?: string; pincode?: string }>(z.object({ q: z.string().trim().min(3, "Type at least 3 characters").max(200), sessionToken, pincode: optional(z.string().trim().regex(/^[1-9]\d{5}$/, "Pincode must be a valid 6-digit Indian pincode")) }), query);
+export const validateAddressPlace = (query: unknown) =>
+  validateSchema<{ placeId: string; sessionToken?: string }>(z.object({ placeId: z.string().trim().min(1).max(300), sessionToken }), query);
+
+export const validateAddressCheck = (body: unknown) =>
+  validateSchema<{ shippingAddress: NonNullable<CreateManualOrderInput["shippingAddress"]> }>(z.object({ shippingAddress: shippingAddressSchema }), body);
+
+export const validateCreateManualOrder =(body: unknown) => validateSchema<CreateManualOrderInput>(createManualOrderSchema, body);
 
 export const validateListOrdersQuery = (query: unknown) =>
   validateSchema<ListOrdersQuery>(listOrdersQuerySchema, query);

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { resolveAddressForLead, type AddressSource, type ResolvedAddress } from "./orders.address-resolver.js";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
+import { validateAddress, type AddressValidationResult } from "@/lib/addressValidation.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, OrderStatus, Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
@@ -589,6 +590,16 @@ class OrdersService {
       abandonmentRef = checkout;
     }
 
+    // Google address check. INVALID (Google cannot place it) is refused unless the caller confirmed it; UNCONFIRMED is allowed but flagged on the order;
+    // SKIPPED (no key / Google down) never blocks. The result is stored with the address so the order shows how it was checked.
+    let addressCheck: AddressValidationResult | null = null;
+    if (input.shippingAddress) {
+      addressCheck = await validateAddress(input.shippingAddress);
+      if (addressCheck.status === "INVALID" && !input.confirmUnverifiedAddress) {
+        throw new ApiError(`Delivery address could not be verified: ${addressCheck.reasons.join("; ")}`, STATUS_CODES.BAD_REQUEST);
+      }
+    }
+
     // "Send via WhatsApp": number, consent and template are validated BEFORE anything is created, so a telecaller who can fix it is told
     // at once and no order is left half-done. (A send that fails AFTER the order exists is handled below and never undoes it.)
     const whatsappSend = input.sendPaymentLinkViaWhatsApp === true ? await validateWhatsAppPaymentSend(this.db, lead, input) : null;
@@ -685,7 +696,7 @@ class OrdersService {
               shippingAmount: fromCents(shippingCents),
               totalAmount: fromCents(totalCents),
               discountReason: input.discountReason ?? (selected && selected.source !== "NONE" ? (selected.couponCode ? `Fastrr coupon ${selected.couponCode}` : "Custom discount") : undefined),
-              shippingAddress: input.shippingAddress ?? undefined,
+              shippingAddress: input.shippingAddress ? { ...input.shippingAddress, ...(addressCheck ? { validation: { ...addressCheck, checkedAt: now.toISOString() } } : {}) } : undefined,
               shippingPincode: input.shippingPincode ?? input.shippingAddress?.pincode,
               ...(input.parcelWeightKg !== undefined ? { parcelWeightKg: input.parcelWeightKg } : {}),
               // Free-form, existing field (Order.metadata) - never a new column. paymentMode mirrors
