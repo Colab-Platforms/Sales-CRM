@@ -21,12 +21,20 @@ function analyticsParams(q: AnalyticsQuery) {
     to: q.to,
     callStatus: q.callStatus,
     leadStatus: q.leadStatus,
+    paymentMode: q.paymentMode,
+    orderStatus: q.orderStatus,
     tzOffsetMinutes: q.tzOffsetMinutes,
     ...(q.salespersonId ? { salespersonId: q.salespersonId } : {}),
   };
 }
 
 export const managerAnalyticsApi = {
+  /** Every order behind the Sales & Revenue figures for these filters, as the server-built CSV file. */
+  async salesOrdersCsv(q: AnalyticsQuery): Promise<Blob> {
+    const res = await apiClient.get<Blob>("/manager/analytics/orders.csv", { params: analyticsParams(q), responseType: "blob" });
+    return res.data;
+  },
+
   async overview(q: AnalyticsQuery): Promise<ManagerAnalytics> {
     const res = await apiClient.get<ApiEnvelope<ManagerAnalytics>>("/manager/analytics", { params: analyticsParams(q) });
     return res.data.data;

@@ -11,6 +11,7 @@ import {
 } from "../../../generated/prisma/enums.js";
 import { PRODUCTIVE_TARGET_MS, REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
 import { computeSummary, mergeSummaries } from "../attendance/attendance.calc.js";
+import { emptySales, addSale, mergeSales, ordersCsv, salesOut, soldOrders, type SalesCents, type SalesFilters } from "./manager.sales.js";
 
 // ---------------------------------------------------------------------------------------------
 // Definitions (kept in one place so the dashboard and the per-salesperson report always agree):
@@ -26,6 +27,14 @@ import { computeSummary, mergeSummaries } from "../attendance/attendance.calc.js
 //                 the selected range. Contacted = has a call (or has moved past NEW/ASSIGNED),
 //                 Interested = INTERESTED/CONVERTED or has an interested period, Converted = CONVERTED.
 //  Productivity   WorkSession/StatusLog via the attendance module's computeSummary (productiveMs).
+//  Sales          orders in a sold state (CONFIRMED through DELIVERED; never draft, pending payment,
+//                 cancelled, returned or refunded) closed by a team member: Order.confirmedByUserId,
+//                 dated by confirmedAt. Revenue = totalAmount minus refunds (computePaymentBreakdown);
+//                 an order refunded in full drops out. Call/lead filters do not apply.
+//                 COD / Prepaid use the orders module's derivePaymentMode; an order with no payment
+//                 recorded yet counts in the totals but in neither split.
+//  Products       the same sold orders' line items, variants rolled up to the product. Product revenue
+//                 is the line totals, so it excludes shipping and order-level discounts.
 // ---------------------------------------------------------------------------------------------
 
 export const TEAM_CONVERSION_TARGET_PERCENT = 6;
@@ -36,7 +45,12 @@ const DAY_MS = 24 * 60 * 60_000;
 export type CallStatusFilter = "ALL" | "CONNECTED" | "NOT_CONNECTED" | "FAILED";
 export type LeadStatusFilter = "ALL" | "NOT_CONTACTED" | "CONTACTED" | "INTERESTED" | "CONVERTED";
 
-export interface AnalyticsFilters {
+export interface AnalyticsViewer {
+  id: string;
+  role: Role;
+}
+
+export interface AnalyticsFilters extends SalesFilters {
   from: string; // YYYY-MM-DD, inclusive, in the manager's timezone
   to: string; // YYYY-MM-DD, inclusive
   salespersonId?: string;
@@ -109,9 +123,16 @@ function matchesLeadStatus(lead: LeadRow, filter: LeadStatusFilter): boolean {
 }
 
 class ManagerAnalyticsService {
-  private async getTeam(managerId: string) {
+  // Who a viewer may report on: a manager sees only their direct reports, an admin sees every active salesperson.
+  // The route admits only these two roles; anything else is refused here too, so the scope never widens by accident.
+  private async getTeam(viewer: AnalyticsViewer) {
+    if (viewer.role !== Role.MANAGER && viewer.role !== Role.ADMIN) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
     return prisma.user.findMany({
-      where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE, reportingManagerId: managerId },
+      where: {
+        role: Role.SALESPERSON,
+        status: UserStatus.ACTIVE,
+        ...(viewer.role === Role.MANAGER ? { reportingManagerId: viewer.id } : {}),
+      },
       select: { id: true, name: true, username: true, phone: true, email: true, status: true },
       orderBy: { name: "asc" },
     });
@@ -184,21 +205,37 @@ class ManagerAnalyticsService {
     return new Map(open.map((s) => [s.userId, s.currentStatus]));
   }
 
-  async overview(managerId: string, f: AnalyticsFilters) {
-    return this.compute(managerId, f, false);
+  async overview(viewer: AnalyticsViewer, f: AnalyticsFilters) {
+    return this.compute(viewer, f, false);
   }
 
-  async salesperson(managerId: string, f: AnalyticsFilters) {
+  async salesperson(viewer: AnalyticsViewer, f: AnalyticsFilters) {
     if (!f.salespersonId) throw new ApiError("salespersonId is required", STATUS_CODES.BAD_REQUEST);
-    const data = await this.compute(managerId, f, true);
+    const data = await this.compute(viewer, f, true);
     const person = data.salespeople[0];
     if (!person) throw new ApiError("Salesperson not found", STATUS_CODES.NOT_FOUND);
     const recentActivity = await this.recentActivity(person.id);
     return { ...data, salesperson: person, recentActivity };
   }
 
-  private async compute(managerId: string, f: AnalyticsFilters, single: boolean) {
-    const allTeam = await this.getTeam(managerId);
+  /** Every eligible order behind the Sales & Revenue figures for this viewer and these filters, as CSV. */
+  async ordersExport(viewer: AnalyticsViewer, f: AnalyticsFilters) {
+    const allTeam = await this.getTeam(viewer);
+    if (f.salespersonId && !allTeam.some((p) => p.id === f.salespersonId)) {
+      throw new ApiError("Salesperson not found", STATUS_CODES.NOT_FOUND);
+    }
+    const team = f.salespersonId ? allTeam.filter((p) => p.id === f.salespersonId) : allTeam;
+    const days = listDays(f);
+    if (days.length === 0 || days.length > MAX_RANGE_DAYS) {
+      throw new ApiError(`Date range must be between 1 and ${MAX_RANGE_DAYS} days`, STATUS_CODES.BAD_REQUEST);
+    }
+    const { start, end } = rangeBounds(f);
+    const orders = await soldOrders(team.map((p) => p.id), start, end, f);
+    return ordersCsv(orders, new Map(team.map((p) => [p.id, p.name])), f.tzOffsetMinutes);
+  }
+
+  private async compute(viewer: AnalyticsViewer, f: AnalyticsFilters, single: boolean) {
+    const allTeam = await this.getTeam(viewer);
     if (f.salespersonId && !allTeam.some((p) => p.id === f.salespersonId)) {
       throw new ApiError("Salesperson not found", STATUS_CODES.NOT_FOUND);
     }
@@ -212,7 +249,7 @@ class ManagerAnalyticsService {
     }
     const prevStart = new Date(start.getTime() - (end.getTime() - start.getTime()));
 
-    const [calls, cohort, prevCohort, productivity, statuses, interestedEvents, convertedEvents] = await Promise.all([
+    const [calls, cohort, prevCohort, productivity, statuses, interestedEvents, convertedEvents, sales, prevSales] = await Promise.all([
       prisma.call.findMany({
         where: {
           agentId: { in: ids },
@@ -241,7 +278,64 @@ class ManagerAnalyticsService {
         },
         select: { actorId: true, createdAt: true },
       }),
+      soldOrders(ids, start, end, f),
+      soldOrders(ids, prevStart, start, f),
     ]);
+
+    const salesByPerson = new Map<string, SalesCents>();
+    const salesByDay = new Map<string, SalesCents>(); // `${userId}|${day}`
+    const teamSales = emptySales();
+    for (const s of sales) {
+      addSale(teamSales, s);
+      for (const [map, key] of [[salesByPerson, s.userId], [salesByDay, `${s.userId}|${dayKey(s.at, tz)}`]] as const) {
+        const row = map.get(key) ?? emptySales();
+        addSale(row, s);
+        map.set(key, row);
+      }
+    }
+    const prevTeamSales = emptySales();
+    for (const s of prevSales) addSale(prevTeamSales, s);
+
+    // --- products sold: an order counts once per product however many lines/variants it has
+    const productAcc = new Map<
+      string,
+      { name: string; sku: string | null; orders: number; units: number; cents: number; codOrders: number; prepaidOrders: number; byUser: Map<string, number> }
+    >();
+    for (const s of sales) {
+      const seen = new Set<string>();
+      for (const i of s.items) {
+        const row = productAcc.get(i.key) ?? { name: i.name, sku: i.sku, orders: 0, units: 0, cents: 0, codOrders: 0, prepaidOrders: 0, byUser: new Map() };
+        row.units += i.units;
+        row.cents += i.cents;
+        row.byUser.set(s.userId, (row.byUser.get(s.userId) ?? 0) + i.units);
+        if (!seen.has(i.key)) {
+          seen.add(i.key);
+          row.orders += 1;
+          if (s.mode === "COD") row.codOrders += 1;
+          else if (s.mode === "PREPAID") row.prepaidOrders += 1;
+        }
+        productAcc.set(i.key, row);
+      }
+    }
+    const nameOf = new Map(team.map((p) => [p.id, p.name]));
+    const products = [...productAcc.entries()]
+      .map(([key, r]) => {
+        const [topId, topUnits] = [...r.byUser.entries()].sort((a, b) => b[1] - a[1])[0] ?? [null, 0];
+        return {
+          key,
+          name: r.name,
+          sku: r.sku,
+          orders: r.orders,
+          units: r.units,
+          revenue: r.cents / 100,
+          codOrders: r.codOrders,
+          prepaidOrders: r.prepaidOrders,
+          sellers: r.byUser.size,
+          topSalesperson: topId ? { id: topId, name: nameOf.get(topId) ?? "", units: topUnits } : null,
+        };
+      })
+      .sort((a, b) => b.revenue - a.revenue || b.units - a.units)
+      .slice(0, 50);
 
     // --- lead cohort metrics (call-status filter does not apply; lead-status filter does)
     const leads = cohort.filter((l) => matchesLeadStatus(l, f.leadStatus));
@@ -317,6 +411,7 @@ class ManagerAnalyticsService {
         ...stats,
         ...c,
         productiveMs,
+        ...salesOut(salesByPerson.get(p.id)),
       };
     });
 
@@ -324,14 +419,18 @@ class ManagerAnalyticsService {
     const daily = days.map((date) => {
       const dayMap = perDay.get(date) ?? new Map();
       const total = { ...emptyCounts(), leadSet: new Set<string>() };
-      const bySalesperson: Record<string, CallCounts & { productiveMs: number; interested: number; converted: number }> = {};
+      const bySalesperson: Record<string, CallCounts & ReturnType<typeof salesOut> & { productiveMs: number; interested: number; converted: number }> = {};
       let productiveMs = 0;
+      const daySales = emptySales();
       for (const p of team) {
         const cell = dayMap.get(p.id);
         const pMs = productivity.get(p.id)?.get(date) ?? 0;
         productiveMs += pMs;
+        const personSales = salesByDay.get(`${p.id}|${date}`) ?? emptySales();
+        mergeSales(daySales, personSales);
         bySalesperson[p.id] = {
           ...finalize(cell),
+          ...salesOut(personSales),
           productiveMs: pMs,
           interested: interestedByDay.get(`${p.id}|${date}`) ?? 0,
           converted: convertedByDay.get(`${p.id}|${date}`) ?? 0,
@@ -349,6 +448,7 @@ class ManagerAnalyticsService {
         date,
         ...finalize(total),
         productiveMs,
+        ...salesOut(daySales),
         interested: Object.values(bySalesperson).reduce((a, b) => a + b.interested, 0),
         converted: Object.values(bySalesperson).reduce((a, b) => a + b.converted, 0),
         bySalesperson,
@@ -375,6 +475,9 @@ class ManagerAnalyticsService {
       uniqueLeadsContacted: allLeadIds.size,
       talkTimeSec: sum((s) => s.talkTimeSec),
       productiveMs: sum((s) => s.productiveMs),
+      ...salesOut(teamSales),
+      previousOrders: prevTeamSales.orders,
+      previousRevenue: prevTeamSales.revenue / 100,
     };
 
     return {
@@ -384,6 +487,7 @@ class ManagerAnalyticsService {
       team: allTeam.map((p) => ({ id: p.id, name: p.name, username: p.username })),
       kpis,
       salespeople,
+      products,
       daily,
       single,
     };

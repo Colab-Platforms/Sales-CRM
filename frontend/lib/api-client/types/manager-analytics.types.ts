@@ -1,5 +1,8 @@
 export type CallStatusFilter = "ALL" | "CONNECTED" | "NOT_CONNECTED" | "FAILED";
 export type LeadStatusFilter = "ALL" | "NOT_CONTACTED" | "CONTACTED" | "INTERESTED" | "CONVERTED";
+export type PaymentModeFilter = "ALL" | "COD" | "PREPAID";
+/** Only sold statuses: cancelled, returned and refunded orders are never part of Sales & Revenue. */
+export type OrderStatusFilter = "ALL" | "CONFIRMED" | "PROCESSING" | "SHIPPED" | "OUT_FOR_DELIVERY" | "DELIVERED";
 
 export interface AnalyticsQuery {
   from: string; // YYYY-MM-DD
@@ -7,6 +10,8 @@ export interface AnalyticsQuery {
   salespersonId?: string;
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
+  paymentMode: PaymentModeFilter;
+  orderStatus: OrderStatusFilter;
   tzOffsetMinutes: number;
 }
 
@@ -19,7 +24,7 @@ export interface CallCounts {
   talkTimeSec: number;
 }
 
-export interface SalespersonStats extends CallCounts {
+export interface SalespersonStats extends CallCounts, SalesCounts {
   id: string;
   name: string;
   username: string;
@@ -33,15 +38,34 @@ export interface SalespersonStats extends CallCounts {
   productiveMs: number;
 }
 
-export interface DailyBucket extends CallCounts {
+/**
+ * Eligible orders in rupees. "revenue" is order value net of refunds (booked); "collected" is money actually
+ * received (SUCCESS payments net of refunds), so COD shows as collected only once it is marked paid.
+ * Orders with no payment method are in the totals but in neither COD nor Prepaid.
+ */
+export interface SalesCounts {
+  orders: number;
+  revenue: number;
+  collected: number;
+  /** Order value ÷ eligible orders; 0 when there are none. */
+  aov: number;
+  codOrders: number;
+  codRevenue: number;
+  codCollected: number;
+  prepaidOrders: number;
+  prepaidRevenue: number;
+  prepaidCollected: number;
+}
+
+export interface DailyBucket extends CallCounts, SalesCounts {
   date: string; // YYYY-MM-DD
   productiveMs: number;
   interested: number;
   converted: number;
-  bySalesperson: Record<string, CallCounts & { productiveMs: number; interested: number; converted: number }>;
+  bySalesperson: Record<string, CallCounts & SalesCounts & { productiveMs: number; interested: number; converted: number }>;
 }
 
-export interface AnalyticsKpis {
+export interface AnalyticsKpis extends SalesCounts {
   totalLeads: number;
   previousTotalLeads: number;
   notContacted: number;
@@ -55,6 +79,8 @@ export interface AnalyticsKpis {
   uniqueLeadsContacted: number;
   talkTimeSec: number;
   productiveMs: number;
+  previousOrders: number;
+  previousRevenue: number;
 }
 
 export interface ActivityItem {
@@ -67,12 +93,27 @@ export interface ActivityItem {
   leadId: string | null;
 }
 
+/** A product's sales in the period (variants rolled up). Revenue is line totals: no shipping or order-level discount. */
+export interface ProductSales {
+  key: string;
+  name: string;
+  sku: string | null;
+  orders: number;
+  units: number;
+  revenue: number;
+  codOrders: number;
+  prepaidOrders: number;
+  sellers: number;
+  topSalesperson: { id: string; name: string; units: number } | null;
+}
+
 export interface ManagerAnalytics {
   range: { from: string; to: string; days: number; tzOffsetMinutes: number };
   targets: { conversionRatePercent: number; productiveMsPerDay: number };
   team: { id: string; name: string; username: string }[];
   kpis: AnalyticsKpis;
   salespeople: SalespersonStats[];
+  products: ProductSales[];
   daily: DailyBucket[];
 }
 
