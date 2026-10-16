@@ -236,7 +236,6 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         },
         {
           title: "Website Chat",
-          href: "/dashboard/webchat",
           icon: MessagesSquare,
         },
       ],
@@ -343,7 +342,6 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         },
         {
           title: "Website Chat",
-          href: "/dashboard/webchat",
           icon: MessagesSquare,
         },
       ],
@@ -452,7 +450,6 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         },
         {
           title: "Website Chat",
-          href: "/dashboard/webchat",
           icon: MessagesSquare,
         },
       ],
