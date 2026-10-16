@@ -124,3 +124,43 @@ describe("rendered: the Shipping charge field and the selectable courier table",
     assert.match(h, /data-selected="true"/);
   });
 });
+
+describe("COD: the flat shipping charge (the courier rate no longer sets what the customer pays)", () => {
+  const flat = (shippingFlat: boolean, shippingAmount: string, courierRate: Parameters<typeof ShippingSection>[0]["shippingStatus"]) =>
+    renderToStaticMarkup(
+      <ShippingSection
+        address={{ name: "", phone: "", houseNumber: "", building: "", area: "", street: "", landmark: "", addressType: "HOME", pincode: "400001", city: "", state: "" } as never}
+        onChange={() => {}}
+        weight="0.12"
+        onWeightChange={() => {}}
+        shippingAmount={shippingAmount}
+        shippingFlat={shippingFlat}
+        shippingStatus={courierRate}
+        onShippingAmountChange={() => {}}
+        prefilledFromLastOrder={false}
+        pincodeState="valid"
+        lookup={undefined}
+        cityMismatch={false}
+        onUseResolved={() => {}}
+        serviceability={null}
+      />,
+    );
+  const input = (h: string) => /<input[^>]*id="ship-amount"[^>]*>/.exec(h)?.[0] ?? "";
+
+  it("the form constant is the business rule: exactly 50.00", async () => {
+    const { COD_SHIPPING_CHARGE } = await import("@/lib/cod-shipping");
+    assert.equal(COD_SHIPPING_CHARGE, "50.00");
+  });
+  it("a COD form shows 50.00, read-only and explained - even when Shiprocket quoted 66.96 for the selected courier", () => {
+    const h = flat(true, "50.00", { kind: "rate", amount: 66.96, courier: "Courier A" });
+    assert.match(input(h), /value="50.00"/);
+    assert.match(input(h), /readOnly=""/);
+    assert.match(text(h), /flat shipping charge of ₹50/);
+    assert.doesNotMatch(h, /66\.96/, "the courier quote is not the charge");
+  });
+  it("without the flag the existing courier-driven behaviour is untouched (the shipment dialog and any other caller)", () => {
+    const h = flat(false, "58", { kind: "rate", amount: 58, courier: "Courier A" });
+    assert.match(input(h), /value="58"/);
+    assert.match(text(h), /Shiprocket(&#x27;|')s charge for Courier A/);
+  });
+});

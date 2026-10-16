@@ -1,9 +1,9 @@
 // Repeatable end-to-end DB test of the whole COD -> prepaid flow, on ISOLATED data with FAKE providers only (no Shopify, Cashfree or WhatsApp call is ever made). Run with: npm run test:db
 //
-//   fresh COD order: item 649.00 - discount 648.00 + shipping 66.72 + tax 0.00 = 67.72
+//   fresh COD order: item 649.00 - discount 648.00 + FLAT COD shipping 50.00 + tax 0.00 = 51.00
 //   -> the Shopify order is created WITH the discount and the shipping line (fake validates the field names against Admin API 2026-01 and does Shopify's arithmetic)
-//   -> prepaid upgrade offer: the server takes 50.00 off -> 17.72 -> Cashfree link for 17.72
-//   -> signed-style PAYMENT_SUCCESS delivery, verified against Cashfree -> CRM payment SUCCESS, order PREPAID, Shopify edited (-50) and paid (17.72), ONE WhatsApp confirmation
+//   -> prepaid upgrade offer: the server takes 50.00 off -> 1.00 -> Cashfree link for 1.00
+//   -> signed-style PAYMENT_SUCCESS delivery, verified against Cashfree -> CRM payment SUCCESS, order PREPAID, Shopify edited (-50) and paid (1.00), ONE WhatsApp confirmation
 //   -> the same delivery again, and a second delivery of the same payment: nothing is duplicated
 //   -> Shopify total mismatch / Shopify down: nothing is written to Shopify, the verified payment stays in the CRM, a recoverable error is recorded, a retry completes it once
 import { after, describe, it } from "node:test";
@@ -125,12 +125,12 @@ async function world(tx: Db, runner: TxRunner) {
   const upgrade = new PrepaidUpgradeService(tx as never, () => cashfree, () => NOW);
   const user = { id: rep.id, username: rep.username, role: Role.SALESPERSON } as never;
 
-  const createCod = () => orders.createManualOrder(user, { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "649.00" }], paymentMethod: "COD", discount: { type: "FIXED", value: "648" }, shippingAmount: "66.72", expectedTotal: "67.72" } as never);
+  const createCod = () => orders.createManualOrder(user, { leadId: lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "649.00" }], paymentMethod: "COD", discount: { type: "FIXED", value: "648" }, shippingAmount: "66.72", expectedTotal: "51.00" } as never);
   const orderRow = (id: string) => tx.order.findUniqueOrThrow({ where: { id }, select: { subtotal: true, discountAmount: true, shippingAmount: true, taxAmount: true, totalAmount: true, currency: true, externalId: true, metadata: true } });
   const meta = async (id: string) => ((await orderRow(id)).metadata ?? {}) as any;
   const upgraded = async () => {
     const created = await createCod();
-    const offer = await upgrade.createOffer(user, created.order.id, { discountType: "FIXED", discountValue: "50", expectedPrepaidAmount: "17.72" });
+    const offer = await upgrade.createOffer(user, created.order.id, { discountType: "FIXED", discountValue: "50", expectedPrepaidAmount: "1.00" });
     const link = await upgrade.generateLink(user, created.order.id, offer.offer!.id);
     const payment = await tx.payment.findFirstOrThrow({ where: { orderId: created.order.id, externalSource: "CASHFREE" }, select: { id: true, externalId: true, amount: true } });
     return { orderId: created.order.id, offer, link, payment };
@@ -145,16 +145,16 @@ async function world(tx: Db, runner: TxRunner) {
   return { tx, user, shop, cf, sends, orders, createCod, orderRow, meta, upgraded, deliver, upgrade };
 }
 
-describe("fresh COD order: 649.00 - 648.00 + 66.72 + 0.00 tax = 67.72, CRM and Shopify agree", () => {
+describe("fresh COD order: 649.00 - 648.00 + 50.00 (flat COD shipping; the request's 66.72 courier quote is ignored) + 0.00 tax = 51.00, CRM and Shopify agree", () => {
   it("the CRM figures and the Shopify order (created WITH the discount and the shipping line) have the same items, discount, shipping, tax treatment, currency and total", async () => {
     await inRollback(async (tx, runner) => {
       const w = await world(tx, runner);
       const r = await w.createCod();
       const row = await w.orderRow(r.order.id);
-      assert.deepEqual([row.subtotal, row.discountAmount, row.shippingAmount, row.taxAmount, row.totalAmount, row.currency].map(String), ["649", "648", "66.72", "0", "67.72", "INR"]);
+      assert.deepEqual([row.subtotal, row.discountAmount, row.shippingAmount, row.taxAmount, row.totalAmount, row.currency].map(String), ["649", "648", "50", "0", "51", "INR"]);
       assert.deepEqual(w.shop.state.rejected, [], "Shopify (schema-validating fake) accepted every field of the payload");
       const sh = w.shop.state.created.at(-1);
-      assert.deepEqual([sh.items, sh.discount, sh.shipping, sh.total, sh.currency], [64900, 64800, 6672, 6772, "INR"]);
+      assert.deepEqual([sh.items, sh.discount, sh.shipping, sh.total, sh.currency], [64900, 64800, 5000, 5100, "INR"]);
       assert.equal(sh.total, Math.round(Number(row.totalAmount.toString()) * 100), "Shopify total === CRM total");
       assert.equal("taxLines" in sh.order, false, "no tax is sent (CRM tax is 0 and orderCreate computes none)");
       assert.equal((await w.meta(r.order.id)).shopifyTotals.mirrored, true);
@@ -163,50 +163,50 @@ describe("fresh COD order: 649.00 - 648.00 + 66.72 + 0.00 tax = 67.72, CRM and S
   });
 });
 
-describe("prepaid upgrade: the server computes 67.72 - 50.00 = 17.72", () => {
+describe("prepaid upgrade: the server computes 51.00 - 50.00 = 1.00", () => {
   it("offer, amount, link and the unchanged COD order; a client-supplied amount is not trusted; a repeat reuses the link", async () => {
     await inRollback(async (tx, runner) => {
       const w = await world(tx, runner);
       const created = await w.createCod();
       await assert.rejects(w.upgrade.createOffer(w.user, created.order.id, { discountType: "FIXED", discountValue: "50", expectedPrepaidAmount: "20.00" }), (e: any) => e.statusCode === 409);
-      const offer = await w.upgrade.createOffer(w.user, created.order.id, { discountType: "FIXED", discountValue: "50", expectedPrepaidAmount: "17.72" });
-      assert.deepEqual([offer.offer!.originalAmount, offer.offer!.discountAmount, offer.offer!.prepaidAmount], ["67.72", "50.00", "17.72"]);
+      const offer = await w.upgrade.createOffer(w.user, created.order.id, { discountType: "FIXED", discountValue: "50", expectedPrepaidAmount: "1.00" });
+      assert.deepEqual([offer.offer!.originalAmount, offer.offer!.discountAmount, offer.offer!.prepaidAmount], ["51", "50.00", "1.00"]);
       const link = await w.upgrade.generateLink(w.user, created.order.id, offer.offer!.id);
       const again = await w.upgrade.generateLink(w.user, created.order.id, offer.offer!.id);
-      assert.deepEqual(w.cf.calls.create, [17.72], "ONE Cashfree link, for exactly 17.72");
+      assert.deepEqual(w.cf.calls.create, [1], "ONE Cashfree link, for exactly 1.00");
       assert.equal(again.reused, true);
       assert.equal(link.paymentId, again.paymentId);
       const row = await w.orderRow(created.order.id);
-      assert.equal(row.totalAmount.toString(), "67.72", "until paid the order total is unchanged");
+      assert.equal(row.totalAmount.toString(), "51", "until paid the order total is unchanged");
       assert.equal((await w.meta(created.order.id)).paymentMode, "COD");
     });
   });
 });
 
 describe("verified payment, replay and duplicate-safety", () => {
-  it("a successful payment converts the order, edits Shopify by -50 and records 17.72 ONCE; a replay and a second delivery add no payment, no Shopify write and no second WhatsApp confirmation", async () => {
+  it("a successful payment converts the order, edits Shopify by -50 and records 1.00 ONCE; a replay and a second delivery add no payment, no Shopify write and no second WhatsApp confirmation", async () => {
     await inRollback(async (tx, runner) => {
       const w = await world(tx, runner);
       const u = await w.upgraded();
       const shopifyId = (await w.orderRow(u.orderId)).externalId!;
-      w.cf.pay(u.payment.externalId!, "17.72");
+      w.cf.pay(u.payment.externalId!, "1.00");
       const same = uid();
-      assert.equal(await w.deliver(u.payment.externalId!, "17.72", same), "processed");
+      assert.equal(await w.deliver(u.payment.externalId!, "1.00", same), "processed");
 
       const pay = await tx.payment.findUniqueOrThrow({ where: { id: u.payment.id }, select: { status: true, amount: true, providerPaymentId: true } });
-      assert.deepEqual([pay.status, pay.amount.toString(), pay.providerPaymentId], ["SUCCESS", "17.72", "9990011223"]);
+      assert.deepEqual([pay.status, pay.amount.toString(), pay.providerPaymentId], ["SUCCESS", "1", "9990011223"]);
       const m = await w.meta(u.orderId);
       assert.deepEqual([m.paymentMode, m.prepaidUpgrade.status, m.shopifyPaymentSync.status], ["PREPAID", "UPGRADED", "synced"], JSON.stringify(m.shopifyPaymentSync));
       const row = await w.orderRow(u.orderId);
-      assert.deepEqual([row.subtotal, row.discountAmount, row.shippingAmount, row.totalAmount].map(String), ["649", "698", "66.72", "17.72"], "649 - (648 + 50) + 66.72 = 17.72");
+      assert.deepEqual([row.subtotal, row.discountAmount, row.shippingAmount, row.totalAmount].map(String), ["649", "698", "50", "1"], "649 - (648 + 50) + 50 = 1");
       const sh = [...w.shop.state.orders.entries()].find(([id]) => id.endsWith(shopifyId.replace(/^gid:\/\/shopify\/Order\//, "")))!;
-      assert.deepEqual([sh[1].total, sh[1].received], [1772, 1772], "Shopify now totals 17.72 and shows 17.72 received");
+      assert.deepEqual([sh[1].total, sh[1].received], [100, 100], "Shopify now totals 1.00 and shows 1.00 received");
       assert.deepEqual(w.shop.state.writes, { edit: 1, payment: 1, markPaid: 0 });
       assert.equal(w.sends.length, 1, "one 'payment received' confirmation");
 
       // replay: the very same delivery, then a different delivery of the same payment
-      await w.deliver(u.payment.externalId!, "17.72", same);
-      await w.deliver(u.payment.externalId!, "17.72", uid());
+      await w.deliver(u.payment.externalId!, "1.00", same);
+      await w.deliver(u.payment.externalId!, "1.00", uid());
       assert.deepEqual(w.shop.state.writes, { edit: 1, payment: 1, markPaid: 0 }, "no second Shopify edit or payment");
       assert.equal(w.sends.length, 1, "no second WhatsApp confirmation");
       assert.equal(await tx.payment.count({ where: { orderId: u.orderId, externalSource: "CASHFREE" } }), 1, "no duplicate payment");
@@ -216,18 +216,18 @@ describe("verified payment, replay and duplicate-safety", () => {
 });
 
 describe("Shopify total mismatch and Shopify failure", () => {
-  it("Shopify at the list price (649.00 vs CRM 67.72): the verified payment stays in the CRM, NOTHING is written to Shopify, a recoverable error is recorded; after Shopify is corrected one retry completes it once", async () => {
+  it("Shopify at the list price (649.00 vs CRM 51.00): the verified payment stays in the CRM, NOTHING is written to Shopify, a recoverable error is recorded; after Shopify is corrected one retry completes it once", async () => {
     await inRollback(async (tx, runner) => {
       const w = await world(tx, runner);
       const u = await w.upgraded();
       w.shop.state.totalOverride = 64900;
-      w.cf.pay(u.payment.externalId!, "17.72");
-      assert.equal(await w.deliver(u.payment.externalId!, "17.72"), "processed");
+      w.cf.pay(u.payment.externalId!, "1.00");
+      assert.equal(await w.deliver(u.payment.externalId!, "1.00"), "processed");
       assert.equal((await tx.payment.findUniqueOrThrow({ where: { id: u.payment.id }, select: { status: true } })).status, "SUCCESS");
       assert.deepEqual(w.shop.state.writes, { edit: 0, payment: 0, markPaid: 0 });
       const failed = (await w.meta(u.orderId)).shopifyPaymentSync;
       assert.equal(failed.status, "failed");
-      assert.match(failed.reason, /neither the original \(67\.72\)/);
+      assert.match(failed.reason, /neither the original \(51.00\)/);
       assert.match(failed.reason, /Retry Shopify payment sync/);
 
       w.shop.state.totalOverride = 0; // an authorised person corrected the Shopify order
@@ -242,8 +242,8 @@ describe("Shopify total mismatch and Shopify failure", () => {
       const w = await world(tx, runner);
       const u = await w.upgraded();
       w.shop.state.down = true;
-      w.cf.pay(u.payment.externalId!, "17.72");
-      assert.equal(await w.deliver(u.payment.externalId!, "17.72"), "processed");
+      w.cf.pay(u.payment.externalId!, "1.00");
+      assert.equal(await w.deliver(u.payment.externalId!, "1.00"), "processed");
       assert.equal((await tx.payment.findUniqueOrThrow({ where: { id: u.payment.id }, select: { status: true } })).status, "SUCCESS");
       const failed = (await w.meta(u.orderId)).shopifyPaymentSync;
       assert.equal(failed.status, "failed");

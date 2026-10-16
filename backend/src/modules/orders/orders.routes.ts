@@ -3,7 +3,7 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
-import { cancelOrder, revertCancellation, createOrder, listMyOrders, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
+import { cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
@@ -56,6 +56,8 @@ router.get("/:id/audit", requireAuth, getOrderAudit);
 // both use getLeadScope), never just which roles can reach the route.
 router.post("/", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createOrder);
 router.post("/:id/shopify-order", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), pushOrderToShopify);
+// Verify and repair a partial Shopify sync (shipping address, crm metafields, missing tags). Admin / manager only.
+router.post("/:id/shopify-sync/retry", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), resyncShopifyOrder);
 router.post("/:id/shopify-confirmation-tag/retry", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), retryConfirmationTagSync);
 router.post("/:id/shopify-payment-sync/retry", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), retryShopifyPaymentSync);
 // Cancel/Revert - same role set as creating an order (order-management permission); real scoping is

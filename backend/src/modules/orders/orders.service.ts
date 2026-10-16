@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveAddressForLead, type AddressSource, type ResolvedAddress } from "./orders.address-resolver.js";
 import { prisma } from "@/lib/prisma.js";
+import { logger } from "@/utils/logger.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, OrderStatus, Role, UserStatus } from "../../../generated/prisma/enums.js";
@@ -15,12 +16,17 @@ import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config
 import { fromCents, normalizeShopifyOrderId, toCents } from "../shopify/shopify.money.js";
 import { toShopifyOrderGid } from "../shopify/shopify.orders.write.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
-import { cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
+import { sanitizeSyncError, syncAdvice } from "../shopify/shopify.sync-status.js";
+import type { ShopifySyncRecord } from "./orders.types.js";
+import { buildShopifyOrderPayload, type CrmOrderForShopify } from "../shopify/shopify.order-mapping.js";
+import { resolveShopifyCustomer } from "../shopify/shopify.order-customer.js";
+import { addShopifyOrderTags, repairShopifyOrderFields, verifyShopifyOrder, cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
 import { ABANDONMENT_WORK_ROLES, abandonmentLeadScope } from "../abandonment/abandonment.filters.js";
 import { UUID_PATTERN } from "../integrations/integrations.common.js";
 import DiscountsService, { type ResolvedDiscount } from "../discounts/discounts.service.js";
 import { clearLiveOrderCaches } from "./orders.live.service.js";
+import { shippingChargeCents } from "./orders.shipping.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
@@ -213,6 +219,85 @@ function summarizePaymentLink(payments: { status: string; externalSource: string
 const unitDims = (r: { lengthCm: { toString(): string } | null; widthCm: { toString(): string } | null; heightCm: { toString(): string } | null }) =>
   r.lengthCm && r.widthCm && r.heightCm ? { lengthCm: r.lengthCm.toString(), widthCm: r.widthCm.toString(), heightCm: r.heightCm.toString() } : null;
 
+const SHOPIFY_PUSH_SELECT = {
+    id: true,
+    orderNumber: true,
+    currency: true,
+    discountAmount: true,
+    subtotal: true,
+    shippingAmount: true,
+    taxAmount: true,
+    totalAmount: true,
+    metadata: true,
+    externalSource: true,
+    externalId: true,
+    externalNumber: true,
+    shippingAddress: true,
+    shippingPincode: true,
+    discountReason: true,
+    conversation: { select: { id: true } },
+    lead: { select: { firstName: true, lastName: true, leadNumber: true, mobile: true, normalizedMobile: true, email: true } },
+    items: {
+      select: {
+        quantity: true,
+        unitPrice: true,
+        productNameSnapshot: true,
+        variantNameSnapshot: true,
+        skuSnapshot: true,
+        product: { select: { externalId: true, type: true } },
+        variant: { select: { externalId: true, externalSource: true } },
+      },
+    },
+    payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" }, take: 1 },
+} as const satisfies Prisma.OrderSelect;
+type PushOrder = Prisma.OrderGetPayload<{ select: typeof SHOPIFY_PUSH_SELECT }>;
+
+/** The ONE place the Shopify payload for a CRM order is prepared - used by the first push, a retry and a re-sync, so they can never disagree. */
+async function prepareShopifyPayload(order: PushOrder, client: ShopifyClient) {
+    // Only when the CRM's own figures add up (items - discount + shipping + tax = total, and no tax that Shopify would not compute) can the Shopify order be made to match; otherwise it is created
+    // exactly as before and NOT claimed to match, so the payment sync keeps its safe reconciliation (and refuses a mismatch).
+    const cents = (v: { toString(): string }) => toCents(v.toString());
+    const itemsCents = order.items.reduce((sum, i) => sum + cents(i.unitPrice) * i.quantity, 0);
+    const crmFiguresAddUp = Number(order.taxAmount) === 0 && itemsCents === cents(order.subtotal) && itemsCents - cents(order.discountAmount) + cents(order.shippingAmount) === cents(order.totalAmount);
+    const extras = crmFiguresAddUp && (cents(order.discountAmount) > 0 || cents(order.shippingAmount) > 0);
+
+    // Which Shopify customer (if any) this order belongs to - verified on phone / real e-mail only; never guessed.
+    const addressRecord = (order.shippingAddress ?? null) as Record<string, unknown> | null;
+    const customerDecision = await resolveShopifyCustomer(client, order.lead, typeof addressRecord?.name === "string" ? addressRecord.name : null);
+
+    // ONE mapping layer builds the whole payload (customer, shipping + billing address, items with shipping-required, discount, tags, note, metafields) - see shopify.order-mapping.ts.
+    const crmForShopify: CrmOrderForShopify = {
+      orderNumber: order.orderNumber,
+      currency: order.currency,
+      subtotal: order.subtotal.toString(),
+      discountAmount: fromCents(cents(order.discountAmount)),
+      discountReason: order.discountReason,
+      shippingAmount: fromCents(cents(order.shippingAmount)),
+      taxAmount: order.taxAmount.toString(),
+      totalAmount: order.totalAmount.toString(),
+      shippingAddress: addressRecord,
+      shippingPincode: order.shippingPincode,
+      metadata: (order.metadata as Record<string, unknown> | null) ?? null,
+      paymentMethod: order.payments[0]?.method ?? null,
+      paymentSucceeded: order.payments[0]?.status === "SUCCESS",
+      settleAfterCreate: ((order.metadata as Record<string, unknown> | null)?.paymentMode) === "PREPAID",
+      fromAiConversation: Boolean(order.conversation),
+      lead: { firstName: order.lead.firstName, lastName: order.lead.lastName, leadNumber: order.lead.leadNumber, email: order.lead.email, normalizedMobile: order.lead.normalizedMobile, mobile: order.lead.mobile },
+      items: order.items.map((item) => ({
+        quantity: item.quantity,
+        unitPrice: item.unitPrice.toString(),
+        productName: item.productNameSnapshot,
+        variantName: item.variantNameSnapshot,
+        sku: item.skuSnapshot,
+        // Only a variant that really came from Shopify has a Shopify variant id; anything else is sent as a custom line item.
+        shopifyVariantId: item.variant?.externalId && item.variant.externalSource === "SHOPIFY" ? item.variant.externalId : null,
+        physical: item.product?.type !== "SERVICE",
+      })),
+    };
+    const built = buildShopifyOrderPayload(crmForShopify, { figuresMirror: Boolean(extras), customer: customerDecision.customer, customerNote: customerDecision.note });
+    return { built, customerDecision, extras, crmFiguresAddUp, cents };
+}
+
 class OrdersService {
   // getShopifyClient is injectable so tests never construct a real client (which would read real
   // env credentials) - same "factory the constructor can override" shape as WhatsAppMessagingService's
@@ -380,6 +465,7 @@ class OrdersService {
       createdByUser: creatorOf(order.metadata) ? { id: creatorOf(order.metadata)!.id, name: creatorOf(order.metadata)!.name } : null,
       creatorTag: creatorOf(order.metadata) ? creatorTagFor(creatorOf(order.metadata)!.name) : null,
       shopifyCreatorTag: ((order.metadata as Record<string, unknown> | null)?.shopifyCreatorTag as OrderDetail["shopifyCreatorTag"] | undefined) ?? null,
+      shopifySync: ((order.metadata as Record<string, unknown> | null)?.shopifySync as OrderDetail["shopifySync"] | undefined) ?? null,
       createdAt: order.createdAt,
       placedAt: order.placedAt,
       confirmedAt: order.confirmedAt,
@@ -562,7 +648,7 @@ class OrdersService {
   // Finish them ONCE, idempotently: the Shopify link goes through the claim + lookup-by-source-identifier path (never a blind second
   // create), a prepaid order's payment link is the existing reuse-or-create, and notifications are NOT resent (they may already have gone).
   private async finishInterrupted(user: AuthUser, input: CreateManualOrderInput, orderId: string): Promise<void> {
-    const shopify = await this.pushOrderToShopify(user, orderId);
+    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
     let paymentLink: OrderPaymentLinkResult | null = null;
     if (input.paymentMethod === "PAYMENT_LINK") {
       try {
@@ -642,11 +728,12 @@ class OrdersService {
     // Billing rules, decided HERE (the browser's figures are only a preview):
     //  - the configured default discount (Rs 50 unless the business changes it) is a PREPAID promotion: it never applies to a COD order. A discount chosen on purpose
     //    (a Fastrr coupon, or a custom value that is not the default) is not "automatic" and is left exactly as it was;
-    //  - shipping is charged on COD only. A prepaid order is always shipped free, whatever shippingAmount the request carried.
+    //  - shipping is a flat rule (orders.shipping.ts): COD pays exactly INR 50, once per order; a prepaid order is always shipped free. The shippingAmount the request carried
+    //    (a courier quote, or a manipulated value) is IGNORED - the order row, the Cashfree/WhatsApp amounts and the Shopify payload all read what is computed here.
     const isCod = input.paymentMethod === "COD";
     const selected: ResolvedDiscount | null = resolvedDiscount && isCod && resolvedDiscount.source === "CUSTOM" && resolvedDiscount.wasDefault ? null : resolvedDiscount;
     const orderDiscountCents = selected ? selected.amountCents : percentDiscount ? percentDiscount.discountCents : toCents(input.discountAmount);
-    const shippingCents = isCod ? toCents(input.shippingAmount) : 0;
+    const shippingCents = shippingChargeCents(isCod);
     const totalCents = Math.max(subtotalCents - itemDiscountCents - orderDiscountCents + shippingCents, 0);
     if (input.expectedTotal !== undefined && toCents(input.expectedTotal) !== totalCents) {
       throw new ApiError("The order total changed. Please review the order again.", STATUS_CODES.CONFLICT);
@@ -744,7 +831,8 @@ class OrdersService {
     // what happens here. A Shopify failure is reported, never hidden, and never rolls back or
     // duplicates the CRM order - retrying just calls pushOrderToShopify again (see there for why
     // that's always safe).
-    const shopify = await this.pushOrderToShopify(user, createdOrderId);
+    // PREPAID: the CRM order is only a payment request (PENDING_PAYMENT) until Cashfree verifies the payment; the Shopify order is created then (see orders.prepaid-confirm.ts). COD is pushed at once, as before.
+    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
     const order = await this.getOrder(user, createdOrderId);
 
     // Prepaid: create exactly one Cashfree payment link for this order (best-effort - see
@@ -805,15 +893,33 @@ class OrdersService {
   // Idempotent by construction: once externalId is set, this only ever returns "already_linked" and
   // never calls Shopify again - the safe way to let a caller "retry" after a failure without ever
   // creating a second Shopify order for the same CRM order.
-  async pushOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
+  async pushOrderToShopify(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
     const result = await this.linkOrderToShopify(user, orderId);
     // Once the order is linked to Shopify, its "CRM Confirmed by <name>" tag is brought in line (best-effort, idempotent). This is
     // also what delivers the tag for an order that was confirmed BEFORE it was linked, whenever the link finally succeeds.
     if (result.status === "created" || result.status === "already_linked") {
       await this.syncConfirmationTagSafely(orderId);
       await this.syncCreatorTagSafely(orderId);
+      // A prepaid order whose payment was ALREADY verified before it reached Shopify (the normal prepaid lifecycle, or a manual retry of a failed push) is marked paid now - and only then.
+      if (result.status === "created") {
+        await this.settlePaidPrepaidOnShopify(orderId);
+        // The Orders page is a cached live Shopify list: without this a just-created order stays hidden from an already-cached page for up to the cache TTL.
+        clearLiveOrderCaches();
+      }
     }
     return result;
+  }
+
+  /** Marks the just-created Shopify order paid, but only when the CRM holds a SUCCESSFUL (verified) payment for it. Idempotent (syncShopifyPayment is guarded). Never throws. */
+  private async settlePaidPrepaidOnShopify(orderId: string): Promise<void> {
+    try {
+      const o = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true, payments: { select: { status: true } } } });
+      const prepaid = (o?.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID";
+      if (!o || !prepaid || !o.payments.some((p) => p.status === "SUCCESS")) return;
+      await syncShopifyPayment(this.db as never, orderId, { source: ActivitySource.SYSTEM, getShopifyClient: this.getShopifyClient });
+    } catch (error) {
+      logger.warn(`Shopify payment settle failed for order ${orderId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   // Same contract as syncConfirmationTagSafely: never throws, never undoes the order; a Shopify failure is remembered on the order (Order.metadata.shopifyCreatorTag) for a retry.
@@ -859,8 +965,8 @@ class OrdersService {
 
   // Only ONE caller at a time may create the Shopify order for a CRM order (two concurrent retries could otherwise each create one before either links it).
   // The claim is a conditional UPDATE on the order row, so it holds across processes; a claim older than the lease belongs to a dead process and is taken over.
-  private async linkOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
-    const leadScope = await getOrderFlowScope(user, this.db);
+  private async linkOrderToShopify(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
+    const leadScope = user ? await getOrderFlowScope(user, this.db) : {}; // null = the system finishing a verified payment (no user in a webhook)
     const visible = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, externalId: true, externalNumber: true } });
     if (!visible) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     if (visible.externalId) return { status: "already_linked", shopifyOrderId: visible.externalId, shopifyOrderName: visible.externalNumber ?? undefined };
@@ -882,37 +988,11 @@ class OrdersService {
     }
   }
 
-  private async linkOrderToShopifyClaimed(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
-    const leadScope = await getOrderFlowScope(user, this.db);
+  private async linkOrderToShopifyClaimed(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
+    const leadScope = user ? await getOrderFlowScope(user, this.db) : {};
     const order = await this.db.order.findFirst({
       where: scopedOrderWhere(orderId, leadScope),
-      select: {
-        id: true,
-        orderNumber: true,
-        currency: true,
-        discountAmount: true,
-        subtotal: true,
-        shippingAmount: true,
-        taxAmount: true,
-        totalAmount: true,
-        metadata: true,
-        externalSource: true,
-        externalId: true,
-        externalNumber: true,
-        shippingAddress: true,
-        shippingPincode: true,
-        lead: { select: { firstName: true, lastName: true, mobile: true, normalizedMobile: true, email: true } },
-        items: {
-          select: {
-            quantity: true,
-            unitPrice: true,
-            productNameSnapshot: true,
-            product: { select: { externalId: true } },
-            variant: { select: { externalId: true, externalSource: true } },
-          },
-        },
-        payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" }, take: 1 },
-      },
+      select: SHOPIFY_PUSH_SELECT,
     });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
 
@@ -930,56 +1010,17 @@ class OrdersService {
       throw error;
     }
 
-    const address = (order.shippingAddress ?? {}) as Record<string, string | null | undefined>;
-    const shippingAddress: ShopifyOrderCreateInput["shippingAddress"] = order.shippingAddress
-      ? {
-          firstName: order.lead.firstName,
-          lastName: order.lead.lastName ?? undefined,
-          address1: address.line1 ?? undefined,
-          address2: address.line2 ?? undefined,
-          city: address.city ?? undefined,
-          province: address.state ?? undefined,
-          zip: address.pincode ?? order.shippingPincode ?? undefined,
-          country: "IN",
-          phone: address.phone ?? order.lead.normalizedMobile ?? undefined,
-        }
-      : undefined;
-
-    const input: ShopifyOrderCreateInput = {
-      lineItems: order.items.map((item) =>
-        // Only a variant that really came from Shopify has a Shopify variant id; anything else is sent as a custom line
-        // item, exactly as before. The id itself is converted to a global id inside createShopifyOrder.
-        item.variant?.externalId && item.variant.externalSource === "SHOPIFY"
-          ? { variantId: item.variant.externalId, quantity: item.quantity, priceAmount: item.unitPrice.toString() }
-          : { title: item.productNameSnapshot, quantity: item.quantity, priceAmount: item.unitPrice.toString() },
-      ),
-      email: order.lead.email ?? undefined,
-      phone: order.lead.normalizedMobile ?? undefined,
-      currency: order.currency,
-      // Reflects the CRM's own recorded payment status, not the payment METHOD - a not-yet-collected
-      // prepaid order is exactly as unpaid as a COD one until a payment actually succeeds.
-      financialStatus: order.payments[0]?.status === "SUCCESS" ? "PAID" : "PENDING",
-      // The CRM discount and shipping are SENT, so the Shopify order total is the CRM total (items - discount + shipping). They used to be left off (Shopify held the list price), which is why
-      // the two systems disagreed and the payment could not be reconciled. The note still states the CRM amounts so a reader of the Shopify order can see them.
-      note: `Created in the CRM (${order.orderNumber}) via the WhatsApp Inbox.${Number(order.discountAmount) > 0 ? ` CRM discount of ${order.discountAmount} applied; amount to collect in the CRM is ${order.totalAmount}.` : ""}`,
-      shippingAddress,
-      sourceIdentifier: order.orderNumber,
-    };
-
-    // Only when the CRM's own figures add up (items - discount + shipping + tax = total, and no tax that Shopify would not compute) can the Shopify order be made to match; otherwise it is created
-    // exactly as before and NOT claimed to match, so the payment sync keeps its safe reconciliation (and refuses a mismatch).
-    const cents = (v: { toString(): string }) => toCents(v.toString());
-    const itemsCents = order.items.reduce((sum, i) => sum + cents(i.unitPrice) * i.quantity, 0);
-    const crmFiguresAddUp = Number(order.taxAmount) === 0 && itemsCents === cents(order.subtotal) && itemsCents - cents(order.discountAmount) + cents(order.shippingAmount) === cents(order.totalAmount);
-    const extras = crmFiguresAddUp && (cents(order.discountAmount) > 0 || cents(order.shippingAmount) > 0);
-    if (extras) {
-      if (cents(order.discountAmount) > 0) input.discount = { amount: fromCents(cents(order.discountAmount)), description: `CRM discount (${order.orderNumber})` };
-      if (cents(order.shippingAmount) > 0) input.shippingAmount = fromCents(cents(order.shippingAmount));
-    }
+    const prepared = await prepareShopifyPayload(order, client);
+    const { built, customerDecision, extras, crmFiguresAddUp } = prepared;
+    const input: ShopifyOrderCreateInput = built.input;
 
     try {
       let result: Awaited<ReturnType<typeof createShopifyOrder>>;
       let mirrored = crmFiguresAddUp;
+      const sentOmitted: string[] = Object.entries(built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
+      let verifiedSync: ShopifySyncRecord | null = null;
+      // A fallback that dropped information the CRM HAS (customer / discount) or a customer that could not be attached is never a complete sync.
+      let degraded: string[] = customerDecision.customer ? [] : (customerDecision.note.startsWith("the lead has no phone") ? [] : [`customer not associated: ${customerDecision.note}`]);
       const earlier = (order.metadata as Record<string, unknown> | null)?.shopifyCreateUncertain === true;
       // A previous attempt ended without an answer (timeout / dropped connection): Shopify may well have created the order. Look for it by the CRM order number FIRST; creating blindly could make a second one.
       const existing = earlier ? await findShopifyOrderBySourceIdentifier(client, order.orderNumber) : null;
@@ -990,10 +1031,34 @@ class OrdersService {
         try {
           result = await createShopifyOrder(client, input);
         } catch (error) {
-          // If Shopify REFUSES the discount/shipping fields (nothing was created), retry once exactly as before and say so: the order then follows the original, safe reconciliation.
-          if (!extras || !isShopifyRejection(error)) throw error;
-          mirrored = false;
-          result = await createShopifyOrder(client, { ...input, discount: undefined, shippingAmount: undefined });
+          if (!isShopifyRejection(error)) throw error;
+          // Shopify REFUSED the request (nothing was created). Retry once, dropping the optional parts that most often cause a refusal, and say so in the sync result:
+          // the customer association (a phone/e-mail that belongs to another Shopify customer) and the discount/shipping mirror.
+          const rejection = error instanceof Error ? error.message : "rejected";
+          if (!input.customer && !extras) throw error;
+          if (input.customer) { sentOmitted.push(`customer (Shopify refused it: ${rejection.slice(0, 120)})`); degraded.push("customer: Shopify refused the association"); }
+          if (extras) { mirrored = false; sentOmitted.push("discount/shipping mirror (Shopify refused it)"); degraded.push("discount/shipping were not mirrored"); }
+          input.customer = undefined;
+          if (extras) { input.discount = undefined; input.shippingAmount = undefined; }
+          result = await createShopifyOrder(client, input);
+        }
+      }
+      // Read the order BACK and compare it with what was sent: a 200 with no userErrors does not prove every field was saved. A missing shipping address / metafields is re-sent once with orderUpdate (those
+      // fields only); anything still missing is recorded as a PARTIAL sync - never reported as complete.
+      {
+        const attemptAt = new Date().toISOString();
+        try {
+          let check = await verifyShopifyOrder(client, result.shopifyOrderId, input, mirrored ? order.totalAmount.toString() : undefined);
+          const repaired: string[] = [];
+          if (check.missing.length > 0) {
+            const fix = await repairShopifyOrderFields(client, result.shopifyOrderId, input, check.missing);
+            repaired.push(...fix.attempted);
+            if (fix.attempted.length > 0) check = await verifyShopifyOrder(client, result.shopifyOrderId, input, mirrored ? order.totalAmount.toString() : undefined);
+          }
+          verifiedSync = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted: sentOmitted, repaired, customer: check.customerAssociated ? customerDecision.note : `no Shopify customer record: ${customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+        } catch (verifyError) {
+          verifiedSync = { status: "partial", missing: ["(could not read the order back to verify it)", ...degraded], omitted: sentOmitted, repaired: [], customer: customerDecision.note, attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(verifyError) };
+          logger.error("Shopify order read-back failed", sanitizeSyncError(verifyError));
         }
       }
       // Guarded by the same id + "still unlinked" condition just checked above, so two concurrent
@@ -1010,8 +1075,8 @@ class OrdersService {
       }
       // Remember what Shopify was given: mirrored = the Shopify order total equals the CRM total (see above). The payment sync relies on it; absent/false (older orders, a refused request) keeps the safe path.
       const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
-      await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifyTotals: { mirrored, total: order.totalAmount.toString(), at: new Date().toISOString() } } as Prisma.InputJsonValue } });
-      return { status: "created", shopifyOrderId: result.shopifyOrderId, shopifyOrderName: result.shopifyOrderName };
+      await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifyTotals: { mirrored, total: order.totalAmount.toString(), at: new Date().toISOString() }, ...(verifiedSync ? { shopifySync: verifiedSync } : {}) } as unknown as Prisma.InputJsonValue } });
+      return { status: "created", shopifyOrderId: result.shopifyOrderId, shopifyOrderName: result.shopifyOrderName, ...(verifiedSync ? { sync: verifiedSync } : {}) };
     } catch (error) {
       if (error instanceof ShopifyOrderCreateError) return { status: "failed", reason: error.message };
       if (error instanceof ShopifyApiError) {
@@ -1022,6 +1087,52 @@ class OrdersService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Re-verify (and, where Shopify allows, repair) an order that is ALREADY linked to Shopify - used after a partial sync. It never creates an order, never touches payment, fulfilment, totals, items or the note,
+   * and repairs only the shipping address, the crm.* metafields and missing tags (add-only). Idempotent: nothing is written when nothing is missing. Admin / manager only (route), within order scope.
+   */
+  async resyncShopifyOrder(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
+    const leadScope = await getOrderFlowScope(user, this.db);
+    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: SHOPIFY_PUSH_SELECT });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    if (!order.externalId) return { status: "failed", reason: "This order is not linked to Shopify yet - use Push to Shopify first." };
+    let client: ShopifyClient;
+    try {
+      client = this.getShopifyClient();
+    } catch (error) {
+      if (error instanceof ShopifyConfigError) return { status: "failed", reason: error.message };
+      throw error;
+    }
+    const attemptAt = new Date().toISOString();
+    const prepared = await prepareShopifyPayload(order, client);
+    const input = prepared.built.input;
+    const mirroredMeta = (order.metadata as Record<string, any> | null)?.shopifyTotals?.mirrored === true;
+    const expectedTotal = mirroredMeta ? order.totalAmount.toString() : undefined;
+    let record: ShopifySyncRecord;
+    try {
+      let check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
+      const repaired: string[] = [];
+      if (check.missing.length > 0) {
+        const fix = await repairShopifyOrderFields(client, order.externalId, input, check.missing);
+        repaired.push(...fix.attempted);
+        if (check.missing.includes("tags") && input.tags?.length) {
+          await addShopifyOrderTags(client, order.externalId, input.tags); // add-only: existing tags are kept
+          repaired.push("tags");
+        }
+        if (repaired.length > 0) check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
+      }
+      const degraded = prepared.customerDecision.customer || check.customerAssociated ? [] : [`customer not associated: ${prepared.customerDecision.note}`];
+      const omitted = Object.entries(prepared.built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
+      record = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted, repaired, customer: check.customerAssociated ? "a Shopify customer is attached" : `no Shopify customer record: ${prepared.customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+    } catch (error) {
+      record = { status: "failed", missing: [], omitted: [], repaired: [], customer: "", attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(error) };
+    }
+    const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
+    await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifySync: record } as unknown as Prisma.InputJsonValue } });
+    return { status: record.status === "failed" ? "failed" : "already_linked", shopifyOrderId: order.externalId, shopifyOrderName: order.externalNumber ?? undefined, reason: record.error ?? undefined, sync: record };
   }
 
   // Manual "Retry Shopify payment sync" action for the order page - the same idempotent reconciliation the Cashfree

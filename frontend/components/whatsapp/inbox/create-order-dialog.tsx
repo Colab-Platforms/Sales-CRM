@@ -15,7 +15,8 @@ import type { LastShippingAddress } from "@/lib/api-client/types/delivery.types"
 import { AbandonedCheckoutPrefill, prefillDraftItems } from "./abandoned-checkout-prefill";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useCourierRates } from "@/hooks/useCourierRates";
-import { chargeText, shippingChargeState } from "@/lib/shipping-charge";
+import { shippingChargeState } from "@/lib/shipping-charge";
+import { COD_SHIPPING_CHARGE } from "@/lib/cod-shipping";
 import { formatMoney } from "@/lib/order-status";
 import { buildAddressDraft, composeLines, formatAddress, validateAddress } from "./create-order-address";
 import { DiscountPricing } from "./discount-section";
@@ -93,7 +94,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // The packed parcel dimensions the operator TYPED (null = never touched, so the safe single-unit suggestion applies). Never overwritten.
   const [manualDims, setManualDims] = useState<DimensionDraft | null>(initialDimensions ?? null);
   // Only used when Shiprocket has no rate to offer (unavailable / not requested): then the charge can be typed. Never used while a rate exists.
-  const [manualShipping, setManualShipping] = useState("");
+  const [, setManualShipping] = useState("");
   // The courier the operator picked, valid only for the rate request it was picked from.
   const [courierPick, setCourierPick] = useState<{ rateKey: string; courier: string } | null>(null);
   const [result, setResult] = useState<CreateManualOrderResult | null>(null);
@@ -311,7 +312,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // Any change to the rate inputs ends the previous pick: the default (cheapest) applies again to the new rates.
   if (courierPick && courierPick.rateKey !== rates.key) setCourierPick(null);
   const shippingState = shippingChargeState({ requested: rateRequest.ok, calculating: rates.calculating, failed: rates.failed, result: serviceability, pickKey });
-  const shippingAmount = shippingState.kind === "rate" ? chargeText(shippingState) : shippingState.kind === "calculating" ? "" : manualShipping;
+  // COD pays the FLAT shipping charge (lib/cod-shipping.ts - the server enforces it and ignores any other figure); the courier rate above no longer sets what the customer pays.
+  const shippingAmount = orderType === "COD" ? COD_SHIPPING_CHARGE : "0";
   // Shipping is charged on COD only. A prepaid order ships free: the rates above still decide whether the pincode is serviceable, but no charge is added.
   const shippingCents = orderType === "COD" ? cents(shippingAmount) : 0;
   const totalCents = Math.max(subtotalCents - discountCents + shippingCents, 0);
@@ -390,8 +392,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
           phone: address.phone || customerMobile || undefined,
         },
         shippingPincode: address.pincode,
-        // Shiprocket's charge for the selected courier, or what was typed when Shiprocket has none; empty = not sent.
-        shippingAmount: orderType === "COD" ? shippingAmount || undefined : "0",
+        // COD: the flat charge (the server recomputes it and ignores this value); prepaid: free.
+        shippingAmount: orderType === "COD" ? COD_SHIPPING_CHARGE : "0",
         // Only the CHOICE goes to the server - never a discount amount or a final total. `expectedTotal` is a consistency check:
         // if the server computes a different total, the order is refused instead of being created at a surprising amount.
         discount: toApiDiscount(discountChoice),
@@ -547,6 +549,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 onDimensionsChange={(patch) => setManualDims({ ...(manualDims ?? dimsResolved.draft), ...patch })}
                 shippingAmount={orderType === "COD" ? shippingAmount : "0"}
                 shippingFree={orderType !== "COD"}
+                shippingFlat={orderType === "COD"}
                 shippingStatus={shippingState}
                 onShippingAmountChange={setManualShipping}
                 prefilledFromLastOrder={Boolean(last)}

@@ -20,6 +20,7 @@ import {
 } from "@/lib/order-status";
 import { DetailField, DetailGrid } from "./detail-field";
 import { OrderConfirmationTags } from "./order-confirmation-tags";
+import { AwaitingPaymentNotice, ShopifySyncStatus, isAwaitingPayment } from "./shopify-sync-status";
 import { OrderAuditHistory } from "./order-audit-history";
 import { customerDetailsTarget } from "./customer-details-link";
 import { useAuthStore } from "@/stores/auth-store";
@@ -262,6 +263,8 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
             </DetailGrid>
             <div className="mt-4 border-t pt-3">
               <OrderConfirmationTags id={order.id} confirmedBy={order.confirmedBy} confirmationTag={order.confirmationTag} shopifyConfirmationTag={order.shopifyConfirmationTag} confirmedAt={order.confirmedAt} externalNumber={order.externalNumber} createdByUser={order.createdByUser} creatorTag={order.creatorTag} shopifyCreatorTag={order.shopifyCreatorTag} />
+              {isAwaitingPayment(order) ? <div className="mt-3"><AwaitingPaymentNotice /></div> : null}
+            {order.shopifySync ? <div className="mt-3 border-t pt-3"><ShopifySyncStatus orderId={order.id} sync={order.shopifySync} role={role} /></div> : null}
             </div>
           </CardContent>
         </AccentCard>

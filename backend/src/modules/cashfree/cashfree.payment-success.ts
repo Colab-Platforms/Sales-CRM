@@ -90,7 +90,20 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
   // An order the CRM itself discounted (WhatsApp Inbox / manual order: Order.metadata.discount | customDiscount) reaches Shopify at LIST price. Marking it paid would record
   // the whole list price as received for a smaller collection, so it gets the same edit-then-pay reconciliation, for exactly what the CRM charged and collected.
   // A CRM-discounted order whose Shopify order was CREATED with the same discount and shipping (Order.metadata.shopifyTotals.mirrored) needs no discount reconciliation at all - see below.
-  const mirrored = !offer && asRecord(meta.shopifyTotals).mirrored === true;
+  const flaggedMirrored = !offer && asRecord(meta.shopifyTotals).mirrored === true;
+  // A CRM-discounted order is not always FLAGGED mirrored: when Shopify refused the discount/shipping mirror at creation the order can still have been created at the CRM total. Shopify is the authority
+  // (read-only check): if its total already EQUALS what the CRM charged there is nothing to edit, so the order is paid like a mirrored one - for exactly that total - instead of going through a discount
+  // edit + manual payment that has nothing to reconcile (the manual-payment step is what Shopify rejected for the two ₹1 orders: "Payment provider is not configured on shop").
+  let holdsCrmTotal = false;
+  if (!offer && !flaggedMirrored && Boolean(meta.discount || meta.customDiscount) && toCents(order.discountAmount.toString()) > 0) {
+    try {
+      const live = await readShopifyOrderTotals(client, order.externalId);
+      holdsCrmTotal = !live.cancelled && live.total === toCents(order.totalAmount.toString());
+    } catch {
+      holdsCrmTotal = false; // unreadable: keep the safe reconciliation path
+    }
+  }
+  const mirrored = flaggedMirrored || holdsCrmTotal;
   const crmDiscount = !offer && !mirrored && Boolean(meta.discount || meta.customDiscount) && toCents(order.discountAmount.toString()) > 0 ? crmDiscountFigures(order) : null;
   if (crmDiscount && "problem" in crmDiscount) {
     await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "failed", failedAt: now.toISOString(), reason: crmDiscount.problem } } as Prisma.InputJsonValue } });

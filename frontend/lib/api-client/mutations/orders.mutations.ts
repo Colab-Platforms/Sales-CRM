@@ -5,7 +5,7 @@ import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
 import { deliveryKeys } from "../queries/delivery.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
+import type { ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -89,6 +89,16 @@ export function usePushOrderToShopifyMutation() {
     onSuccess: (_, orderId) => {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
       queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+    },
+  });
+}
+
+export function useResyncShopifyMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<{ status: string; reason?: string; sync?: ShopifySyncRecord }, unknown, string>({
+    mutationFn: (orderId) => ordersApi.resyncShopify(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
     },
   });
 }
