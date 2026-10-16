@@ -2,12 +2,16 @@ import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import type { LucideIcon } from "lucide-react";
 
+/*
+  Every card stays white; the tone only tints its icon chip. "primary" (the
+  dark chip) marks the headline metric, so use it once per row.
+*/
 const TONES = {
-  default: "border-ink-line/25 bg-muted text-muted-foreground",
-  primary: "border-primary/35 bg-primary/10 text-primary",
-  teal: "border-teal-500/35 bg-teal-500/10 text-teal-600 dark:text-teal-300",
-  amber: "border-amber-500/40 bg-amber-500/12 text-amber-600 dark:text-amber-300",
-  emerald: "border-emerald-500/35 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300",
+  default: "bg-muted text-muted-foreground",
+  primary: "bg-highlight-foreground text-highlight",
+  teal: "bg-teal-500/10 text-teal-700 dark:text-teal-300",
+  amber: "bg-amber-500/12 text-amber-700 dark:text-amber-300",
+  emerald: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
 } as const;
 
 export type StatTone = keyof typeof TONES;
@@ -29,26 +33,28 @@ export function StatCard({
 }) {
   return (
     <Card className={cn("transition-transform hover:-translate-y-0.5", className)}>
-      <CardContent className="flex items-start justify-between gap-4">
-        <div className="min-w-0 space-y-1">
-          <p className="text-xs font-bold tracking-wide text-muted-foreground uppercase">
-            {label}
-          </p>
-          <p className="font-heading text-3xl leading-none font-extrabold tabular-nums">
+      <CardContent className="flex h-full flex-col justify-between gap-6">
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-sm text-muted-foreground">{label}</p>
+          {Icon ? (
+            <div
+              className={cn(
+                "flex size-8 shrink-0 items-center justify-center rounded-full",
+                TONES[tone]
+              )}
+            >
+              <Icon className="size-4" />
+            </div>
+          ) : null}
+        </div>
+        <div className="flex items-end justify-between gap-3">
+          <p className="font-heading text-4xl leading-none font-normal tracking-tight tabular-nums">
             {value}
           </p>
-          {hint ? <p className="font-hand text-sm text-muted-foreground">{hint}</p> : null}
+          {hint ? (
+            <p className="text-xs text-muted-foreground">{hint}</p>
+          ) : null}
         </div>
-        {Icon ? (
-          <div
-            className={cn(
-              "flex size-10 shrink-0 items-center justify-center rounded-[12px_9px_13px_9px] border-[1.5px]",
-              TONES[tone]
-            )}
-          >
-            <Icon className="size-5" />
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );

@@ -293,7 +293,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/abandoned-leads",
           icon: AlertTriangle,
         },
-        { title: "Reports", icon: BarChart3 },
+        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
       ],
     },
     {
@@ -380,7 +380,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/abandoned-leads",
           icon: AlertTriangle,
         },
-        { title: "Reports", icon: BarChart3 },
+        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
       ],
     },
     {
@@ -536,8 +536,8 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
   const homeHref = HOME_BY_ROLE[user.role] ?? "/dashboard";
 
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b-[1.5px] border-sidebar-border pb-3">
+    <Sidebar collapsible="icon" variant="floating">
+      <SidebarHeader className="p-3">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -545,10 +545,10 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
               className="hover:bg-transparent"
               render={<Link href={homeHref} />}
             >
-              {/* <BrandMark className="size-8 shrink-0" /> */}
+              <BrandMark className="size-9 shrink-0" />
               <div className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate font-hand text-xl leading-none font-bold text-foreground">
-                  AVATAR CRM
+                <span className="truncate text-base leading-tight font-semibold text-foreground">
+                  Avance Sales CRM
                 </span>
                 <span className="truncate text-[0.7rem] text-muted-foreground">
                   Lead workspace
@@ -612,7 +612,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="border-t-[1.5px] border-sidebar-border pt-3">
+      <SidebarFooter className="p-3">
         <NavUser user={user} />
       </SidebarFooter>
     </Sidebar>

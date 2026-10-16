@@ -47,7 +47,7 @@ export function AbandonmentPanel({ abandonment }: { abandonment: AbandonmentDeta
         {abandonment.priorityReason ? <span className="text-xs text-muted-foreground">{abandonment.priorityReason}</span> : null}
       </div>
 
-      <div className="space-y-3 rounded-xl border-[1.5px] border-ink-line/20 bg-muted/30 p-4">
+      <div className="space-y-3 rounded-xl border border-ink-line/20 bg-muted/30 p-4">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cart Value</p>

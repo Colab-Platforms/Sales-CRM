@@ -1,6 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
-import { STATUS_LABELS, STATUS_COLORS, STATUS_FILLS } from "@/lib/status";
+import { STATUS_LABELS, STATUS_FILLS } from "@/lib/status";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 
 export function StatusBadge({
@@ -11,10 +11,10 @@ export function StatusBadge({
   className?: string;
 }) {
   return (
-    <Badge variant="outline" className={cn(STATUS_COLORS[status], className)}>
+    <Badge variant="secondary" className={cn("font-medium text-foreground/80", className)}>
       <span
         aria-hidden="true"
-        className={cn("size-1.5 shrink-0 rounded-full", STATUS_FILLS[status])}
+        className={cn("size-2 shrink-0 rounded-full", STATUS_FILLS[status])}
       />
       {STATUS_LABELS[status]}
     </Badge>

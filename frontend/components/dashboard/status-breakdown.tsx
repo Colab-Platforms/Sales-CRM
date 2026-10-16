@@ -47,11 +47,11 @@ export function StatusBreakdown({ counts }: { counts: StatusCounts }) {
                 className={cn("size-2.5 shrink-0 rounded-[3px]", STATUS_FILLS[status])}
               />
               <div className="min-w-0">
-                <dt className="truncate text-xs font-medium text-muted-foreground">
+                <dt className="truncate text-xs font-normal text-muted-foreground">
                   {STATUS_LABELS[status]}
                 </dt>
                 <dd className="flex items-baseline gap-1.5">
-                  <span className="text-base leading-tight font-bold tabular-nums">{count}</span>
+                  <span className="text-base leading-tight font-semibold tabular-nums">{count}</span>
                   <span className="font-hand text-sm text-muted-foreground">
                     {share(status)}%
                   </span>

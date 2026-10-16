@@ -10,13 +10,13 @@ import {
   pct,
 } from "@/lib/manager-analytics";
 import type { AnalyticsKpis, DailyBucket, ManagerAnalytics } from "@/lib/api-client/types/manager-analytics.types";
-import { DonutChart, LineChart, seriesColor, StackedBarChart } from "./svg-charts";
+import { DonutChart, GroupedBarChart, LineChart, seriesColor, StackedBarChart } from "./svg-charts";
 import { Panel, Segmented } from "./panel";
 
 const dayLabels = (daily: DailyBucket[]) => daily.map((d) => formatDay(d.date));
 const dayTitles = (daily: DailyBucket[]) => daily.map((d) => formatDay(d.date, "weekday"));
 
-/** Calls over time: trend lines (calls, connected, unique leads) or stacked outcomes per day. */
+/** Calls over time: grouped daily bars (calls, connected, unique leads) or stacked outcomes per day. */
 export function CallTrendsPanel({ daily }: { daily: DailyBucket[] }) {
   const [view, setView] = useState<"trend" | "outcomes">("trend");
   return (
@@ -36,7 +36,7 @@ export function CallTrendsPanel({ daily }: { daily: DailyBucket[] }) {
       }
     >
       {view === "trend" ? (
-        <LineChart
+        <GroupedBarChart
           labels={dayLabels(daily)}
           tooltipTitles={dayTitles(daily)}
           format={formatNumber}

@@ -4,7 +4,26 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowLeft, ArrowUp, Download, Phone } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowLeft,
+  ArrowUp,
+  Banknote,
+  Calculator,
+  CircleCheck,
+  Clock,
+  CreditCard,
+  Download,
+  IndianRupee,
+  Percent,
+  Phone,
+  PhoneCall,
+  PhoneIncoming,
+  ShoppingBag,
+  Timer,
+  UserRound,
+  Users,
+} from "lucide-react";
 import { salespersonAnalyticsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import type { ActivityItem, DailyBucket, SalespersonAnalytics } from "@/lib/api-client/types/manager-analytics.types";
@@ -25,7 +44,9 @@ import {
   formatMs,
   formatNumber,
   formatPct,
+  formatRupees,
   interestRate,
+  presetRange,
   rangeLabel,
   toQuery,
   type CallMetric,
@@ -66,7 +87,7 @@ export function SalespersonReport({ salespersonId }: { salespersonId: string }) 
         <Skeleton className="h-16 w-72 rounded-lg" />
         <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
           {Array.from({ length: 9 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 rounded-lg" />
+            <Skeleton key={i} className="h-28 rounded-[6px]" />
           ))}
         </div>
         <Skeleton className="h-80 rounded-lg" />
@@ -117,6 +138,7 @@ export function SalespersonReport({ salespersonId }: { salespersonId: string }) 
 
       <div className={cn("space-y-6 transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
         <ReportKpis data={data} />
+        <SalesKpis data={data} />
 
         <div className="grid gap-6 xl:grid-cols-[3fr_2fr]">
           <DailyCallActivity daily={data.daily} />
@@ -154,20 +176,48 @@ function ReportKpis({ data }: { data: SalespersonAnalytics }) {
   const s = data.salesperson;
   return (
     <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-      <KpiCard label="Assigned Leads" tone="blue" value={formatNumber(s.leads)} accent />
-      <KpiCard label="Contacted Leads" tone="teal" value={formatNumber(s.contacted)} lines={[{ text: `${formatPct(contactRate(s))} contact rate` }]} />
-      <KpiCard label="Interested Leads" tone="amber" value={formatNumber(s.interested)} lines={[{ text: `${formatPct(interestRate(s))} of contacted` }]} />
-      <KpiCard label="Converted Leads" tone="emerald" value={formatNumber(s.converted)} />
+      <KpiCard label="Assigned Leads" tone="blue" icon={Users} value={formatNumber(s.leads)} accent />
+      <KpiCard label="Contacted Leads" tone="teal" icon={Phone} value={formatNumber(s.contacted)} lines={[{ text: `${formatPct(contactRate(s))} contact rate` }]} />
+      <KpiCard label="Interested Leads" tone="amber" icon={UserRound} value={formatNumber(s.interested)} lines={[{ text: `${formatPct(interestRate(s))} of contacted` }]} />
+      <KpiCard label="Converted Leads" tone="emerald" icon={CircleCheck} value={formatNumber(s.converted)} />
       <KpiCard
-        label="Conversion Rate" tone="emerald"
+        label="Conversion Rate" tone="emerald" icon={Percent}
         value={formatPct(conversionRate(s), 2)}
         lines={[{ text: `Team target ${data.targets.conversionRatePercent}%`, tone: conversionRate(s) >= data.targets.conversionRatePercent ? "positive" : "negative" }]}
       />
-      <KpiCard label="Calls Made" tone="violet" spark={data.daily.map((d) => d.calls)} value={formatNumber(s.calls)} lines={[{ text: `${formatNumber(s.uniqueLeads)} unique leads called` }]} />
-      <KpiCard label="Connected Calls" tone="teal" value={formatNumber(s.connected)} lines={[{ text: `${formatPct(connectionRate(s))} connection rate` }]} />
-      <KpiCard label="Talk Time" tone="slate" value={formatDuration(s.talkTimeSec)} />
-      <KpiCard label="Productivity Time" tone="blue" spark={data.daily.map((d) => d.productiveMs)} value={formatMs(s.productiveMs)} lines={[{ text: `${callsPerProductiveHour(s.calls, s.productiveMs).toFixed(1)} calls / productive hour` }]} />
+      <KpiCard label="Calls Made" tone="violet" icon={PhoneCall} spark={data.daily.map((d) => d.calls)} value={formatNumber(s.calls)} lines={[{ text: `${formatNumber(s.uniqueLeads)} unique leads called` }]} />
+      <KpiCard label="Connected Calls" tone="teal" icon={PhoneIncoming} value={formatNumber(s.connected)} lines={[{ text: `${formatPct(connectionRate(s))} connection rate` }]} />
+      <KpiCard label="Talk Time" tone="slate" icon={Timer} value={formatDuration(s.talkTimeSec)} />
+      <KpiCard label="Productivity Time" tone="blue" icon={Clock} spark={data.daily.map((d) => d.productiveMs)} value={formatMs(s.productiveMs)} lines={[{ text: `${callsPerProductiveHour(s.calls, s.productiveMs).toFixed(1)} calls / productive hour` }]} />
     </div>
+  );
+}
+
+/** Orders this salesperson closed: for the selected period, with today's figures alongside when today is in range. */
+function SalesKpis({ data }: { data: SalespersonAnalytics }) {
+  const s = data.salesperson;
+  const todayYmd = presetRange("today", "", "").from;
+  const t = data.daily.find((d) => d.date === todayYmd);
+  const today = (text: string) => (t ? [{ text: `Today: ${text}` }] : []);
+  return (
+    <section className="space-y-2" aria-label="Orders">
+      <h2 className="text-sm font-semibold tracking-tight">
+        Orders <span className="font-normal text-muted-foreground">· {rangeLabel(data.range.from, data.range.to)}</span>
+      </h2>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+        <KpiCard label="Total Orders" tone="blue" icon={ShoppingBag} spark={data.daily.map((d) => d.orders)} value={formatNumber(s.orders)} lines={today(`${formatNumber(t?.orders ?? 0)} orders`)} />
+        <KpiCard
+          label="COD Orders" tone="amber" icon={Banknote} value={formatNumber(s.codOrders)}
+          lines={[{ text: `${formatRupees(s.codRevenue)} revenue` }, ...today(`${formatNumber(t?.codOrders ?? 0)} · ${formatRupees(t?.codRevenue ?? 0)}`)]}
+        />
+        <KpiCard
+          label="Prepaid Orders" tone="teal" icon={CreditCard} value={formatNumber(s.prepaidOrders)}
+          lines={[{ text: `${formatRupees(s.prepaidRevenue)} revenue` }, ...today(`${formatNumber(t?.prepaidOrders ?? 0)} · ${formatRupees(t?.prepaidRevenue ?? 0)}`)]}
+        />
+        <KpiCard label="Revenue" tone="emerald" icon={IndianRupee} spark={data.daily.map((d) => d.revenue)} value={formatRupees(s.revenue)} lines={today(formatRupees(t?.revenue ?? 0))} />
+        <KpiCard label="Avg Order Value" tone="violet" icon={Calculator} value={formatRupees(s.orders > 0 ? s.revenue / s.orders : 0)} lines={[{ text: "Revenue ÷ orders" }]} />
+      </div>
+    </section>
   );
 }
 
@@ -244,7 +294,7 @@ function CallActivity({ data }: { data: SalespersonAnalytics }) {
   );
 }
 
-type SortKey = "date" | "calls" | "connected" | "productiveMs" | "interested" | "converted";
+type SortKey = "date" | "calls" | "connected" | "productiveMs" | "interested" | "converted" | "orders" | "codOrders" | "prepaidOrders" | "revenue";
 
 function DailyPerformanceTable({ daily }: { daily: DailyBucket[] }) {
   const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({ key: "date", dir: "desc" });
@@ -264,10 +314,14 @@ function DailyPerformanceTable({ daily }: { daily: DailyBucket[] }) {
     { key: null, label: "Contacted" },
     { key: "interested", label: "Interested" },
     { key: "converted", label: "Converted" },
+    { key: "orders", label: "Orders" },
+    { key: "codOrders", label: "COD" },
+    { key: "prepaidOrders", label: "Prepaid" },
+    { key: "revenue", label: "Revenue" },
   ];
 
   return (
-    <Panel title="Daily Performance" description="Sort by any highlighted column. Contacted = unique leads called that day." bodyClassName="p-0 sm:p-0">
+    <Panel title="Daily Performance" description="Sort by any highlighted column. Contacted = unique leads called that day; Orders split by COD and Prepaid." bodyClassName="p-0 sm:p-0">
       {rows.length === 0 ? (
         <EmptyState>No days in the selected range.</EmptyState>
       ) : (
@@ -303,6 +357,10 @@ function DailyPerformanceTable({ daily }: { daily: DailyBucket[] }) {
                     <td className="px-3 text-right tabular-nums">{formatNumber(d.uniqueLeads)}</td>
                     <td className="px-3 text-right tabular-nums">{formatNumber(d.interested)}</td>
                     <td className="px-3 text-right tabular-nums">{formatNumber(d.converted)}</td>
+                    <td className="px-3 text-right font-medium tabular-nums">{formatNumber(d.orders)}</td>
+                    <td className="px-3 text-right tabular-nums">{formatNumber(d.codOrders)}</td>
+                    <td className="px-3 text-right tabular-nums">{formatNumber(d.prepaidOrders)}</td>
+                    <td className="px-3 pr-5 text-right font-medium tabular-nums">{formatRupees(d.revenue)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -321,6 +379,10 @@ function DailyPerformanceTable({ daily }: { daily: DailyBucket[] }) {
                     ["Contacted", formatNumber(d.uniqueLeads)],
                     ["Interested", formatNumber(d.interested)],
                     ["Converted", formatNumber(d.converted)],
+                    ["Orders", formatNumber(d.orders)],
+                    ["COD", formatNumber(d.codOrders)],
+                    ["Prepaid", formatNumber(d.prepaidOrders)],
+                    ["Revenue", formatRupees(d.revenue)],
                   ].map(([k, v]) => (
                     <div key={k} className="rounded-md bg-muted/50 px-1 py-1.5">
                       <dd className="text-sm font-semibold tabular-nums">{v}</dd>
@@ -386,9 +448,10 @@ function RecentActivityTimeline({ items }: { items: ActivityItem[] }) {
 
 function reportCsv(data: SalespersonAnalytics): (string | number)[][] {
   return [
-    ["Date", "Calls", "Connected", "Not Connected", "Failed", "Talk Time", "Productive Time", "Unique Leads Called", "Interested", "Converted"],
+    ["Date", "Calls", "Connected", "Not Connected", "Failed", "Talk Time", "Productive Time", "Unique Leads Called", "Interested", "Converted", "Orders", "COD Orders", "Prepaid Orders", "Revenue", "COD Revenue", "Prepaid Revenue"],
     ...data.daily.map((d) => [
       d.date, d.calls, d.connected, d.notConnected, d.failed, formatDuration(d.talkTimeSec), formatMs(d.productiveMs), d.uniqueLeads, d.interested, d.converted,
+      d.orders, d.codOrders, d.prepaidOrders, d.revenue.toFixed(2), d.codRevenue.toFixed(2), d.prepaidRevenue.toFixed(2),
     ]),
   ];
 }
