@@ -9,7 +9,7 @@ import type {
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   DRAFT: "Draft",
-  PENDING_PAYMENT: "Pending payment",
+  PENDING_PAYMENT: "Awaiting payment",
   CONFIRMED: "Confirmed",
   PROCESSING: "Processing",
   CANCELLED: "Cancelled",

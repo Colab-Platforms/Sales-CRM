@@ -148,7 +148,8 @@ export interface CreateManualOrderInput {
   discountReason?: string;
 }
 
-export type ShopifyPushStatus = "created" | "already_linked" | "failed";
+/** awaiting_payment = a prepaid order: the Shopify order is created only after Cashfree verifies the payment. */
+export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment";
 
 export interface ShopifyPushResult {
   status: ShopifyPushStatus;
@@ -385,6 +386,19 @@ export interface PaymentDetail {
   paymentExpiresAt: string | null;
 }
 
+/** The verified outcome of the last CRM -> Shopify sync (see backend ShopifySyncRecord). */
+export interface ShopifySyncRecord {
+  status: "complete" | "partial" | "failed";
+  missing: string[];
+  omitted: string[];
+  repaired: string[];
+  customer: string;
+  attemptedAt: string;
+  verifiedAt: string | null;
+  retryAdvice: "NONE" | "RETRY" | "ADMIN";
+  error: string | null;
+}
+
 export interface OrderDetail {
   id: string;
   orderNumber: string;
@@ -417,6 +431,8 @@ export interface OrderDetail {
   // Who created the order (snapshot taken at creation), the "Order Created by <name>" tag derived from it and its Shopify sync state. The same for every viewer.
   createdByUser?: { id: string; name: string } | null;
   creatorTag?: string | null;
+  /** Verified outcome of the last Shopify sync; null for orders pushed before this existed. */
+  shopifySync?: ShopifySyncRecord | null;
   shopifyCreatorTag?: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // The last customer WhatsApp notification about this order as remembered by the backend (null = never attempted).
   whatsappNotification: (OrderNotifyResult & { at: string }) | null;

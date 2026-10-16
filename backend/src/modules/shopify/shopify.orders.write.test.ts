@@ -117,7 +117,7 @@ describe("createShopifyOrder (mocked client - no real Shopify call)", () => {
       email: "customer@example.invalid",
       phone: "+919876543210",
       note: "Created from WhatsApp Inbox",
-      shippingAddress: { firstName: "Mahadev", lastName: "Babar", address1: "123 Main St", city: "Mumbai", province: "Maharashtra", zip: "400001", country: "IN", phone: "+919876543210" },
+      shippingAddress: { firstName: "Mahadev", lastName: "Babar", address1: "123 Main St", city: "Mumbai", provinceCode: "MH", zip: "400001", countryCode: "IN", phone: "+919876543210" },
     });
 
     assert.equal(captured!.order.email, "customer@example.invalid");

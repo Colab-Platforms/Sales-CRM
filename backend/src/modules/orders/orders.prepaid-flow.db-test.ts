@@ -120,7 +120,7 @@ describe("prepaid order -> Cashfree link -> WhatsApp (Meta, window open)", () =>
       assert.equal(payments[0]!.paymentUrl, url);
       assert.equal(r.paymentLink?.status, "created");
       assert.equal(r.paymentLink?.paymentUrl, url);
-      assert.equal(r.shopify.status, "created");
+      assert.equal(r.shopify.status, "awaiting_payment", "prepaid: no Shopify order until Cashfree verifies the payment");
 
       // WhatsApp: free text with order number, amount and the ACTUAL URL
       assert.equal(t.sentTexts.length, 1);
@@ -238,13 +238,13 @@ describe("prepaid order - Meta window closed, and AiSensy/Gupshup", () => {
 });
 
 describe("prepaid order - Cashfree failure and retry", () => {
-  it("a Cashfree rejection does not roll back the order; Shopify stays created; WhatsApp says the link is unavailable", async () => {
+  it("a Cashfree rejection does not roll back the order; Shopify is not involved until payment; WhatsApp says the link is unavailable", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner, { provider: "META" }, { createLink: async () => { throw new ProviderHttpError("CASHFREE", 400, "Cashfree rejected the request", false); } });
       const r = await t.create();
       assert.equal(r.order.status, "PENDING_PAYMENT");
       assert.equal(await tx.order.count({ where: { leadId: t.lead.id } }), 1);
-      assert.equal(r.shopify.status, "created");
+      assert.equal(r.shopify.status, "awaiting_payment", "prepaid: no Shopify order until Cashfree verifies the payment");
       assert.equal(r.paymentLink?.status, "failed");
       assert.match(r.paymentLink?.reason ?? "", /Cashfree rejected the payment link/);
       assert.equal(r.whatsapp.sent, false);
@@ -347,15 +347,15 @@ describe("Custom Discount (percentage) on order creation", () => {
     });
   });
 
-  it("COD 15% total is 594.15; 0% and no discount behave identically (no customDiscount recorded)", async () => {
+  it("COD 15% total is 644.15 (594.15 + the flat COD shipping of 50); 0% and no discount behave identically (no customDiscount recorded)", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner, { provider: "META" });
       const cod = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "15" });
-      assert.equal(Number(cod.order.totalAmount), 594.15);
+      assert.equal(Number(cod.order.totalAmount), 644.15);
       const zero = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "0" });
       const none = await createWith(t, tx, { paymentMethod: "COD" });
       for (const o of [zero.order, none.order]) {
-        assert.equal(Number(o.totalAmount), 699.00);
+        assert.equal(Number(o.totalAmount), 749.00, "699 + the flat COD shipping of 50");
         assert.equal(Number(o.discountAmount), 0.00);
       }
       const row = await tx.order.findUniqueOrThrow({ where: { id: zero.order.id }, select: { metadata: true } });
@@ -376,7 +376,7 @@ describe("Custom Discount (percentage) on order creation", () => {
     });
   });
 
-  it("regression (Dia Shield Tablets / Pack Of 3, unitPrice 1249): exactly the payload the form sends, with no discount, stores discount 0 and total 1249 - for COD and prepaid", async () => {
+  it("regression (Dia Shield Tablets / Pack Of 3, unitPrice 1249): exactly the payload the form sends, with no discount, stores discount 0 and total 1249 for prepaid (1299 for COD: + the flat shipping of 50)", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner, { provider: "META" });
       const product = await tx.product.create({ data: { name: "Dia Shield Tablets", type: ProductType.PRODUCT, sku: `AW-DS-TB-60-${uid()}`, basePrice: "1249.00" }, select: { id: true } });
@@ -385,7 +385,7 @@ describe("Custom Discount (percentage) on order creation", () => {
       const cod = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "COD" });
       assert.equal(Number(cod.order.subtotal), 1249);
       assert.equal(Number(cod.order.discountAmount), 0);
-      assert.equal(Number(cod.order.totalAmount), 1249);
+      assert.equal(Number(cod.order.totalAmount), 1299);
       assert.equal(Number(cod.order.items[0]!.totalPrice), 1249, "line total");
       assert.equal(Number(cod.order.items[0]!.discountAmount), 0, "no line discount");
       const prepaid = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "PAYMENT_LINK" });
