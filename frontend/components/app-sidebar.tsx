@@ -538,7 +538,8 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
 
   return (
     <Sidebar collapsible="icon" variant="floating">
-      <SidebarHeader className="p-3">
+      {/* In icon mode the header/footer use the same padding as the menu groups so everything sits on one centre line. */}
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
@@ -547,7 +548,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
               render={<Link href={homeHref} />}
             >
               <BrandMark className="size-9 shrink-0" />
-              <div className="flex min-w-0 flex-col leading-tight">
+              <div className="flex min-w-0 flex-col leading-tight group-data-[collapsible=icon]:hidden">
                 <span className="truncate text-base leading-tight font-semibold text-foreground">
                   Avance Sales CRM
                 </span>
@@ -613,7 +614,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="p-3">
+      <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
         <NavUser user={user} />
       </SidebarFooter>
     </Sidebar>

@@ -48,13 +48,13 @@ export function NavUser({ user }: { user: CurrentUser }) {
             >
               {initials(user.name)}
             </span>
-            <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
+            <div className="flex min-w-0 flex-1 flex-col text-left leading-tight group-data-[collapsible=icon]:hidden">
               <span className="truncate text-sm font-medium">{user.name}</span>
               <span className="truncate text-xs text-muted-foreground">
                 {ROLE_LABELS[user.role]}
               </span>
             </div>
-            <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
+            <ChevronsUpDown className="ml-auto size-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="end" className="min-w-60">
             <DropdownMenuGroup>
