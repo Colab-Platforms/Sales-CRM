@@ -15,6 +15,7 @@
     "axios": "^1.20.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.3.0",
+    "exceljs": "^4.4.0",
     "js-cookie": "^3.0.8",
     "lucide-react": "^1.47.0",
     "next": "16.3.5",
