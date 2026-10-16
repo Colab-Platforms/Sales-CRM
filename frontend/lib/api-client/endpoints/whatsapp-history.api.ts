@@ -21,6 +21,11 @@ export const whatsappHistoryApi = {
     const res = await apiClient.get<ApiEnvelope<WhatsAppMessageHistoryItem>>(`/whatsapp/messages/${id}`);
     return res.data.data;
   },
+  /** The file a customer sent, fetched through the CRM (authenticated; the provider's URL and token never reach the browser). Resolves to a Blob. */
+  async getMedia(id: string): Promise<Blob> {
+    const res = await apiClient.get<Blob>(`/whatsapp/messages/${id}/media`, { responseType: "blob" });
+    return res.data;
+  },
   async listConversations(params: ListConversationsParams): Promise<ConversationListResult> {
     const res = await apiClient.get<ApiEnvelope<ConversationListResult>>("/whatsapp/conversations", { params });
     return res.data.data;

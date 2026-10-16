@@ -21,7 +21,8 @@ import {
 import { DetailField, DetailGrid } from "./detail-field";
 import { OrderConfirmationTags } from "./order-confirmation-tags";
 import { OrderAuditHistory } from "./order-audit-history";
-import { customerDetailHref } from "./orders-table";
+import { customerDetailsTarget } from "./customer-details-link";
+import { useAuthStore } from "@/stores/auth-store";
 import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderRefundAction, OrderRefundSection } from "@/components/refunds/order-refund-section";
 import { paymentFigures } from "@/lib/payment-figures";
@@ -141,6 +142,9 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
   const [sendOpen, setSendOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const money = (v: string) => formatMoney(v, order.currency);
+  // "View Customer Details": a telecaller goes straight to THIS customer's abandoned lead when they may open one (see customer-details-link.ts).
+  const role = useAuthStore((s) => s.user?.role);
+  const customerTarget = customerDetailsTarget({ role, leadId: order.customer.leadId, abandonmentId: order.customer.abandonmentId });
 
   // Reuses the exact same Customer 360 data/endpoint this customer's own profile page already
   // loads (Lead -> Orders, no second query or duplicated relation) - just to read their other
@@ -211,7 +215,16 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
       {/* ---- Customer + Order information ---- */}
       <div className="grid gap-6 lg:grid-cols-2">
         <AccentCard accent="purple">
-          <SectionTitle icon={<User />} accent="purple" aside={<LinkButton href={customerDetailHref(order.customer.leadId)}>View customer profile</LinkButton>}>
+          <SectionTitle
+            icon={<User />}
+            accent="purple"
+            aside={
+              <span className="flex flex-col items-end gap-1">
+                <LinkButton href={customerTarget.href}>View Customer Details</LinkButton>
+                {customerTarget.note ? <span className="max-w-64 text-right text-xs text-muted-foreground" data-testid="customer-details-note">{customerTarget.note}</span> : null}
+              </span>
+            }
+          >
             Customer
           </SectionTitle>
           <CardContent>

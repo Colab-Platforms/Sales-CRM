@@ -9,6 +9,7 @@ import { cn } from "@/lib/utils";
 import { MessageStatusBadge } from "../conversation/message-status-badge";
 import { useStarMessageMutation, useUnstarMessageMutation } from "@/lib/api-client/mutations/whatsapp-history.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
+import { MessageMedia } from "../conversation/message-media";
 import type { WhatsAppMessageHistoryItem } from "@/lib/api-client/types/whatsapp-history.types";
 
 const TIME_FORMAT = new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit" });
@@ -169,7 +170,8 @@ export function MessageBubble({
               Template: {message.template.name}
             </p>
           ) : null}
-          <p className="whitespace-pre-wrap break-words">{renderBody(bodyText)}</p>
+          {message.media ? <MessageMedia messageId={message.id} media={message.media} /> : null}
+          {message.media && !message.body ? null : <p className="whitespace-pre-wrap break-words">{renderBody(bodyText)}</p>}
           <div className="mt-1 flex items-center justify-end gap-1.5">
             {message.starred ? <Star className="size-3 fill-current opacity-80" aria-label="Starred" /> : null}
             <span className={cn("text-[0.7rem]", outbound ? "text-primary-foreground/75" : "text-muted-foreground")}>{bubbleTime(message)}</span>

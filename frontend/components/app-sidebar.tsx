@@ -185,7 +185,7 @@ interface NavSection {
 // "/dashboard" is the root of every page here, so it only matches exactly; other items
 // also stay highlighted on their nested pages (e.g. an order's detail page) unless marked exact.
 
-const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
+export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
   SALESPERSON: [
     {
       label: "Overview",
@@ -203,6 +203,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+        { title: "My Orders", href: "/dashboard/my-orders", icon: ClipboardList },
         { title: "Offers", href: "/dashboard/offers", icon: Ticket },
       ],
     },

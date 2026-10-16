@@ -1,7 +1,7 @@
 // Run with: ../backend/node_modules/.bin/tsx --test lib/discount.test.ts
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { choiceCaption, choiceCents, choiceFromCoupon, defaultChoice, previewDiscount, toApiDiscount, type CouponOption } from "./discount";
+import { choiceCaption, choiceCents, choiceFromCoupon, defaultChoice, effectiveDiscountChoice, previewDiscount, toApiDiscount, type CouponOption } from "./discount";
 
 const f100: CouponOption = { id: "fr-1", code: "FASTRR100", type: "FIXED", value: "100", minCartTotal: null };
 const p10: CouponOption = { id: "fr-2", code: "FASTRR10P", type: "PERCENT", value: "10", minCartTotal: null };
@@ -41,5 +41,31 @@ describe("discount choice (preview of the server rules)", () => {
     assert.deepEqual(toApiDiscount(choiceFromCoupon(f100)), { couponCode: "FASTRR100" });
     assert.deepEqual(toApiDiscount({ mode: "CUSTOM", type: "PERCENT", value: " 15 " }), { type: "PERCENT", value: "15" });
     assert.deepEqual(toApiDiscount({ mode: "NONE" }), { none: true });
+  });
+});
+
+describe("effectiveDiscountChoice: the default discount is a prepaid promotion", () => {
+  const DEF = { type: "FIXED", value: "50" } as const;
+  it("prepaid keeps the choice exactly as it is (the default stays applied)", () => {
+    assert.deepEqual(effectiveDiscountChoice({ mode: "CUSTOM", type: "FIXED", value: "50" }, true, DEF), { mode: "CUSTOM", type: "FIXED", value: "50" });
+  });
+  it("COD drops the default discount (also when typed as 50.00), so the preview equals what the server saves", () => {
+    assert.deepEqual(effectiveDiscountChoice({ mode: "CUSTOM", type: "FIXED", value: "50" }, false, DEF), { mode: "NONE" });
+    assert.deepEqual(effectiveDiscountChoice({ mode: "CUSTOM", type: "FIXED", value: "50.00" }, false, DEF), { mode: "NONE" });
+  });
+  it("COD keeps a deliberate discount: another amount, another type, or a Fastrr coupon", () => {
+    const other = { mode: "CUSTOM", type: "FIXED", value: "20" } as const;
+    assert.deepEqual(effectiveDiscountChoice(other, false, DEF), other);
+    const pct = { mode: "CUSTOM", type: "PERCENT", value: "50" } as const;
+    assert.deepEqual(effectiveDiscountChoice(pct, false, DEF), pct);
+    const coupon = { mode: "COUPON", code: "SAVE50", type: "FIXED", value: "50" } as const;
+    assert.deepEqual(effectiveDiscountChoice(coupon, false, DEF), coupon);
+    assert.deepEqual(effectiveDiscountChoice({ mode: "NONE" }, false, DEF), { mode: "NONE" });
+  });
+  it("the preview total for COD = subtotal + shipping with NO automatic discount; for prepaid = subtotal - discount with NO shipping", () => {
+    const cod = effectiveDiscountChoice({ mode: "CUSTOM", type: "FIXED", value: "50" }, false, DEF);
+    assert.equal(49900 - choiceCents(49900, cod) + 8000, 57900);
+    const prepaid = effectiveDiscountChoice({ mode: "CUSTOM", type: "FIXED", value: "50" }, true, DEF);
+    assert.equal(49900 - choiceCents(49900, prepaid) + 0, 44900);
   });
 });

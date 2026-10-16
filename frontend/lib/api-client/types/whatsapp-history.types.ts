@@ -48,6 +48,14 @@ export interface WhatsAppMessageHistoryItem {
   /** Whether the CURRENT CRM user has starred this message - per-viewer, not a property of the
    *  message itself (see WhatsAppMessageUserState). */
   starred: boolean;
+  /** For an inbound file (image / document / audio ...): what it is. Never a URL or provider id - the bytes come from GET /whatsapp/messages/:id/media. Null for messages with no file. */
+  media: MessageMediaInfo | null;
+}
+
+export interface MessageMediaInfo {
+  kind: "image" | "video" | "audio" | "document" | "sticker" | "unknown";
+  mimeType: string | null;
+  filename: string | null;
 }
 
 // ---- WhatsApp-style per-message actions ----

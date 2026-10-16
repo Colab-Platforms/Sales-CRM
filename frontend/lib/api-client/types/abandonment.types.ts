@@ -1,4 +1,5 @@
 import type { Pagination } from "./orders.types";
+import type { OrderStatus, PaymentMode, PaymentStatus, ShipmentStatus } from "./orders.types";
 import type { LeadWorkingStatus } from "./dashboard.types";
 import type { Call } from "./calling.types";
 import type { LeadFollowUp } from "./tasks.types";
@@ -102,9 +103,60 @@ export interface RecoveryActionItem {
   performedBy: { id: string; name: string } | null;
 }
 
+/** A delivery address as the customer entered it (every part optional); `formatted` is every available part in reading order. */
+export interface AbandonmentAddress {
+  name: string | null;
+  phone: string | null;
+  line1: string | null;
+  line2: string | null;
+  landmark: string | null;
+  city: string | null;
+  state: string | null;
+  pincode: string | null;
+  country: string | null;
+  formatted: string;
+}
+
+/** One earlier order of the customer behind an abandoned lead (CRM-created or synced from Shopify). */
+export interface CustomerOrderSummary {
+  id: string;
+  orderNumber: string;
+  externalNumber: string | null;
+  createdAt: string;
+  totalAmount: string;
+  currency: string;
+  status: OrderStatus;
+  paymentMode: PaymentMode | null;
+  paymentStatus: PaymentStatus | null;
+  fulfillmentStatus: ShipmentStatus | null;
+  origin: "CRM" | "SHOPIFY";
+  /** Free-text fulfilment state for an order known only from Shopify (no shipment row). */
+  fulfillmentLabel?: string | null;
+  tracking?: { number: string | null; company: string | null; url: string | null } | null;
+  /** false = read live from the store and not a CRM order yet. */
+  inCrm?: boolean;
+}
+
 export interface AbandonmentDetail extends AbandonmentListItem {
   reference: { referenceType: string | null; referenceId: string | null };
   recoveryActions: RecoveryActionItem[];
+  addresses: {
+    shipping: AbandonmentAddress | null;
+    billing: AbandonmentAddress | null;
+    /** Where `shipping` came from: the saved checkout, or the customer's latest order. */
+    source: "CHECKOUT" | "LAST_ORDER" | null;
+    /** The lead's short location text ("City, State"), shown only when nothing fuller exists. */
+    leadLocation: string | null;
+  };
+  previousOrders: {
+    total: number;
+    items: CustomerOrderSummary[];
+    /** What happened when the store (Shopify) was asked: OK = searched; NOT_CONFIGURED / UNAVAILABLE = could not be checked; AMBIGUOUS = several store customers match; NOT_CHECKED = not asked. */
+    shopify: "OK" | "NOT_CONFIGURED" | "UNAVAILABLE" | "AMBIGUOUS" | "NOT_CHECKED";
+    shopifyCustomerFound?: boolean;
+    shopifyTruncated?: boolean;
+    shopifyMatchCount?: number;
+  };
 }
 
 export interface CreateRecoveryActionInput {
@@ -172,6 +224,11 @@ export interface OrderPrefillAddress {
   pincode: string | null;
   country: string | null;
   company: string | null;
+  houseNumber?: string | null;
+  building?: string | null;
+  area?: string | null;
+  street?: string | null;
+  deliveryInstructions?: string | null;
 }
 
 export interface OrderPrefill {

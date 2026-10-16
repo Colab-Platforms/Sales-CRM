@@ -17,10 +17,10 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useCourierRates } from "@/hooks/useCourierRates";
 import { chargeText, shippingChargeState } from "@/lib/shipping-charge";
 import { formatMoney } from "@/lib/order-status";
-import { composeLines, formatAddress, structuredFromSaved, validateAddress } from "./create-order-address";
+import { buildAddressDraft, composeLines, formatAddress, validateAddress } from "./create-order-address";
 import { DiscountPricing } from "./discount-section";
 import { useDiscountOptions } from "@/hooks/useDiscountOptions";
-import { choiceCents, defaultChoice, toApiDiscount, type DiscountChoice } from "@/lib/discount";
+import { choiceCents, defaultChoice, effectiveDiscountChoice, toApiDiscount, type DiscountChoice } from "@/lib/discount";
 import {
   dimensionsHint,
   goodsValue,
@@ -108,7 +108,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // is replaced - never added to - when the user edits it. `null` = the user has not touched it yet.
   const [discountEdit, setDiscountEdit] = useState<DiscountChoice | null>(null);
   const { options: discountOptions, loaded: discountsLoaded } = useDiscountOptions("ORDER", open);
-  const discountChoice: DiscountChoice = discountEdit ?? defaultChoice(discountOptions);
+  // The default discount is a prepaid promotion: on COD it never applies (the server drops it as well), so what is shown is what is saved.
+  const discountChoice: DiscountChoice = effectiveDiscountChoice(discountEdit ?? defaultChoice(discountOptions), orderType !== "COD", discountOptions.defaultDiscount);
   const idempotencyKey = useRef<string>(crypto.randomUUID());
   const submittingRef = useRef(false);
 
@@ -128,7 +129,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   });
   const products = useMemo(() => productsQuery.data?.items ?? [], [productsQuery.data]);
 
-  const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open });
+  // Read fresh on every open (never a cached copy of an earlier visit), and keyed by THIS customer, so one customer's address is never offered for another.
+  const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open, refetchOnMount: "always" });
   // The abandoned checkout this form was opened from (its OWN cart, by id). Read fresh on every open. Without it the form behaves exactly as before.
   const prefillQuery = useQuery({ ...abandonmentOrderPrefillQueryOptions(abandonmentId ?? ""), enabled: open && Boolean(abandonmentId) });
   const prefill = prefillQuery.data ?? null;
@@ -136,9 +138,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const checkoutAddress: LastShippingAddress | null = useMemo(() => {
     const a = prefill?.address;
     if (!a) return null;
-    return { name: a.name ?? prefill.customer.name ?? "", line1: a.line1 ?? "", line2: a.line2 ?? "", city: a.city ?? "", state: a.state ?? "", pincode: a.pincode ?? "", phone: a.phone ?? prefill.customer.phone ?? "", houseNumber: a.line1 ?? "", building: "", area: a.line2 ?? "", street: "", landmark: a.landmark ?? "", addressType: "" };
+    return { name: a.name ?? prefill.customer.name ?? "", line1: a.line1 ?? "", line2: a.line2 ?? "", city: a.city ?? "", state: a.state ?? "", pincode: a.pincode ?? "", phone: a.phone ?? prefill.customer.phone ?? "", houseNumber: a.houseNumber ?? "", building: a.building ?? "", area: a.area ?? "", street: a.street ?? "", landmark: a.landmark ?? "", addressType: "", deliveryInstructions: a.deliveryInstructions ?? "" };
   }, [prefill]);
-  const last = checkoutAddress ?? lastAddressQuery.data ?? null;
+  const last = checkoutAddress ?? lastAddressQuery.data?.address ?? null;
+  const lastSource: "ORDER" | "CHECKOUT" | null = checkoutAddress ? "CHECKOUT" : (lastAddressQuery.data?.source ?? null);
 
   const waOptionsQuery = useQuery({ ...whatsAppPaymentOptionsQueryOptions(leadId), enabled: open && orderType !== "COD" });
   const waOptions = waOptionsQuery.data ?? null;
@@ -165,26 +168,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const pincodeQuery = useQuery({ ...pincodeQueryOptions(pincode), enabled: open && pincodeComplete && pincodeReady });
   const lookup = pincodeComplete ? pincodeQuery.data : undefined;
   const pincodeState = pincodeUiState(pincode, pincodeReady, lookup, pincodeQuery.isFetching);
-  const sameAsLast = Boolean(last && last.pincode === pincode);
   const resolvedCity = lookup?.status === "valid" ? lookup.city : null;
   const resolvedState = lookup?.status === "valid" ? lookup.state : null;
 
-  const saved = structuredFromSaved(last);
-  const address: AddressDraft = {
-    name: edits.name ?? last?.name ?? customerName,
-    phone: edits.phone ?? last?.phone ?? customerMobile ?? "",
-    // Structured fields: what was typed wins, then the previous order's address (a legacy free-text one is carried over
-    // line1 -> House/Flat, line2 -> Area, still editable), otherwise empty. Nothing the user typed is ever overwritten.
-    houseNumber: edits.houseNumber ?? saved.houseNumber,
-    building: edits.building ?? saved.building,
-    area: edits.area ?? saved.area,
-    street: edits.street ?? saved.street,
-    landmark: edits.landmark ?? saved.landmark,
-    addressType: edits.addressType ?? saved.addressType,
-    pincode,
-    city: edits.city ?? (sameAsLast ? last!.city : (resolvedCity ?? "")),
-    state: edits.state ?? (sameAsLast ? last!.state : (resolvedState ?? "")),
-  };
+  const address: AddressDraft = buildAddressDraft({ saved: last, edits, customerName, customerMobile: customerMobile ?? undefined, resolvedCity, resolvedState });
   const cityMismatch = lookup?.status === "valid" && (!placeMatches(address.city, resolvedCity) || !placeMatches(address.state, resolvedState));
 
   // ---- serviceability (COD and prepaid can differ; weight is an estimate typed in by the salesperson).
@@ -325,7 +312,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   if (courierPick && courierPick.rateKey !== rates.key) setCourierPick(null);
   const shippingState = shippingChargeState({ requested: rateRequest.ok, calculating: rates.calculating, failed: rates.failed, result: serviceability, pickKey });
   const shippingAmount = shippingState.kind === "rate" ? chargeText(shippingState) : shippingState.kind === "calculating" ? "" : manualShipping;
-  const shippingCents = cents(shippingAmount);
+  // Shipping is charged on COD only. A prepaid order ships free: the rates above still decide whether the pincode is serviceable, but no charge is added.
+  const shippingCents = orderType === "COD" ? cents(shippingAmount) : 0;
   const totalCents = Math.max(subtotalCents - discountCents + shippingCents, 0);
   const selectedKeyForTable = shippingState.kind === "rate" ? `${shippingState.courier ?? "courier"}|${shippingState.amount}` : null;
 
@@ -394,6 +382,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
           area: address.area.trim(),
           street: address.street.trim() || undefined,
           landmark: address.landmark.trim() || undefined,
+          deliveryInstructions: address.deliveryInstructions.trim() || undefined,
           addressType: address.addressType,
           city: address.city.trim(),
           state: address.state.trim(),
@@ -402,7 +391,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         },
         shippingPincode: address.pincode,
         // Shiprocket's charge for the selected courier, or what was typed when Shiprocket has none; empty = not sent.
-        shippingAmount: shippingAmount || undefined,
+        shippingAmount: orderType === "COD" ? shippingAmount || undefined : "0",
         // Only the CHOICE goes to the server - never a discount amount or a final total. `expectedTotal` is a consistency check:
         // if the server computes a different total, the order is refused instead of being created at a surprising amount.
         discount: toApiDiscount(discountChoice),
@@ -556,10 +545,13 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 productDimensionsNote={productDimensionsNote(dimensionLines) ?? undefined}
                 onUseSuggestedDimensions={manualDims !== null && suggestPackedDimensions(dimensionLines) ? () => setManualDims(null) : undefined}
                 onDimensionsChange={(patch) => setManualDims({ ...(manualDims ?? dimsResolved.draft), ...patch })}
-                shippingAmount={shippingAmount}
+                shippingAmount={orderType === "COD" ? shippingAmount : "0"}
+                shippingFree={orderType !== "COD"}
                 shippingStatus={shippingState}
                 onShippingAmountChange={setManualShipping}
                 prefilledFromLastOrder={Boolean(last)}
+                prefillSource={lastSource}
+                prefillFailed={lastAddressQuery.isError && !last}
                 pincodeState={pincodeState}
                 lookup={lookup}
                 cityMismatch={Boolean(cityMismatch)}

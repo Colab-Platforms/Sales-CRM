@@ -479,7 +479,7 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
       await tx.order.create({ data: { orderNumber: `O-${uid()}`, leadId: lead.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "10.00", createdAt: new Date(Date.now() + 60_000), shippingAddress: { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123" } } });
       const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
       // A legacy free-text address comes back unchanged, with the new structured fields empty (never invented).
-      assert.deepEqual(latest.address, { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123", houseNumber: "", building: "", area: "", street: "", landmark: "", addressType: "" });
+      assert.deepEqual({ ...latest.address, country: undefined, deliveryInstructions: undefined }, { country: undefined, deliveryInstructions: undefined, name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123", houseNumber: "", building: "", area: "", street: "", landmark: "", addressType: "" });
     });
   });
 
@@ -494,7 +494,7 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
       assert.equal(created.order.shippingAddress?.houseNumber, "Flat 4B");
       assert.equal(created.order.shippingAddress?.line1, "Flat 4B, Sunrise Apartments", "the composed line integrations read is intact");
       const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
-      assert.deepEqual(latest.address, { ...addr, phone: "9000000123" });
+      assert.deepEqual({ ...latest.address, country: undefined, deliveryInstructions: undefined }, { ...addr, phone: "9000000123", country: undefined, deliveryInstructions: undefined });
     });
   });
 

@@ -30,6 +30,12 @@ export const ordersApi = {
     return res.data.data;
   },
 
+  /** "My Orders": only the orders the signed-in user created. The server scopes it to the authenticated user; no parameter selects whose orders are returned. */
+  async listMine(params: OrdersListParams): Promise<OrderListResult> {
+    const res = await apiClient.get<ApiEnvelope<OrderListResult>>("/orders/mine", { params });
+    return res.data.data;
+  },
+
   /** The Orders list page's real data source: live from Shopify, cursor-paginated. See GET /orders
    *  above (kept, unchanged) for the original CRM-DB-backed list still used elsewhere. */
   async listLive(params: LiveOrdersListParams): Promise<LiveOrderListResult> {

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveAddressForLead, type AddressSource, type ResolvedAddress } from "./orders.address-resolver.js";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -16,6 +17,8 @@ import { toShopifyOrderGid } from "../shopify/shopify.orders.write.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
 import { cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
+import { ABANDONMENT_WORK_ROLES, abandonmentLeadScope } from "../abandonment/abandonment.filters.js";
+import { UUID_PATTERN } from "../integrations/integrations.common.js";
 import DiscountsService, { type ResolvedDiscount } from "../discounts/discounts.service.js";
 import { clearLiveOrderCaches } from "./orders.live.service.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
@@ -40,7 +43,6 @@ import {
 import {
   ORDER_REFERENCE_TYPE,
   type CancelOrderInput,
-  type LastShippingAddress,
   type CancelOrderResult,
   type RevertCancellationResult,
   type CreateManualOrderInput,
@@ -230,8 +232,24 @@ class OrdersService {
   ) {}
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
+    return this.listOrdersWhere(user, query);
+  }
+
+  /**
+   * "My Orders": only the orders THIS user created (Order.createdById = the authenticated user), enforced in the database query. The id comes from the verified session and from
+   * nothing else - no request parameter can name another creator, and every other filter can only narrow the result further. An order that was merely assigned to the user, or that belongs
+   * to one of their customers, or that was synced from Shopify (no creator), is not included.
+   */
+  async listMyOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
+    // Salesperson-only (the route enforces it too): the page exists for the people who create orders as part of their own work.
+    if (user.role !== Role.SALESPERSON) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
+    return this.listOrdersWhere(user, query, { createdById: user.id });
+  }
+
+  private async listOrdersWhere(user: AuthUser, query: ListOrdersQuery, mustMatch?: Prisma.OrderWhereInput): Promise<OrderListResult> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildOrderWhere(query, orderVisibilityScope(user.role, leadScope));
+    const base = buildOrderWhere(query, orderVisibilityScope(user.role, leadScope));
+    const where: Prisma.OrderWhereInput = mustMatch ? { AND: [base, mustMatch] } : base;
 
     const [totalItems, rows] = await Promise.all([
       this.db.order.count({ where }),
@@ -276,6 +294,24 @@ class OrdersService {
         totalPages: Math.ceil(totalItems / query.pageSize),
       },
     };
+  }
+
+  /**
+   * "View Customer Details" on an order opens the customer's ABANDONED LEAD page. Which one: the checkout this order was created from (Order.metadata.abandonment.id) when it still belongs to
+   * this customer, otherwise the customer's most recent one. Only a checkout of THIS order's customer and inside THIS viewer's abandonment scope is ever returned (the same rule as the abandoned
+   * leads queue); anything else is null and the page shows a clear message instead of opening somebody else's lead.
+   */
+  private async openableAbandonmentId(user: AuthUser, leadId: string, metadata: unknown): Promise<string | null> {
+    if (!ABANDONMENT_WORK_ROLES.includes(user.role)) return null;
+    const scope = abandonmentLeadScope(user);
+    const where: Prisma.AbandonmentWhereInput = { leadId, ...(Object.keys(scope).length > 0 ? { lead: scope } : {}) };
+    const fromOrder = (metadata as { abandonment?: { id?: unknown } } | null | undefined)?.abandonment?.id;
+    if (typeof fromOrder === "string" && UUID_PATTERN.test(fromOrder)) {
+      const exact = await this.db.abandonment.findFirst({ where: { ...where, id: fromOrder }, select: { id: true } });
+      if (exact) return exact.id;
+    }
+    const latest = await this.db.abandonment.findFirst({ where, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], select: { id: true } });
+    return latest?.id ?? null;
   }
 
   async getOrder(user: AuthUser, id: string, opts: { approverScope?: boolean } = {}): Promise<OrderDetail> {
@@ -362,6 +398,7 @@ class OrdersService {
         name: fullName(order.lead.firstName, order.lead.lastName),
         mobile: order.lead.mobile,
         email: order.lead.email,
+        abandonmentId: await this.openableAbandonmentId(user, order.lead.id, order.metadata),
       },
       leadSource: order.lead.source,
       bookedBy: order.createdBy,
@@ -601,15 +638,20 @@ class OrdersService {
     }
     const percentDiscount = input.discountPercent !== undefined ? computePercentDiscount(subtotalCents - itemDiscountCents, input.discountPercent) : null;
     // New selection model: resolved here against the live Fastrr offers and the real subtotal (items after line discounts).
-    const selected: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents) : null;
+    const resolvedDiscount: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents) : null;
+    // Billing rules, decided HERE (the browser's figures are only a preview):
+    //  - the configured default discount (Rs 50 unless the business changes it) is a PREPAID promotion: it never applies to a COD order. A discount chosen on purpose
+    //    (a Fastrr coupon, or a custom value that is not the default) is not "automatic" and is left exactly as it was;
+    //  - shipping is charged on COD only. A prepaid order is always shipped free, whatever shippingAmount the request carried.
+    const isCod = input.paymentMethod === "COD";
+    const selected: ResolvedDiscount | null = resolvedDiscount && isCod && resolvedDiscount.source === "CUSTOM" && resolvedDiscount.wasDefault ? null : resolvedDiscount;
     const orderDiscountCents = selected ? selected.amountCents : percentDiscount ? percentDiscount.discountCents : toCents(input.discountAmount);
-    const shippingCents = toCents(input.shippingAmount);
+    const shippingCents = isCod ? toCents(input.shippingAmount) : 0;
     const totalCents = Math.max(subtotalCents - itemDiscountCents - orderDiscountCents + shippingCents, 0);
     if (input.expectedTotal !== undefined && toCents(input.expectedTotal) !== totalCents) {
       throw new ApiError("The order total changed. Please review the order again.", STATUS_CODES.CONFLICT);
     }
 
-    const isCod = input.paymentMethod === "COD";
     // Prepaid via a Cashfree payment link: no Payment row is created here (below) - CashfreePaymentsService.
     // createPaymentLink is the sole creator of that row (see the call after this transaction), so an order
     // never ends up with two rows for what is really one payment attempt.
@@ -640,7 +682,7 @@ class OrdersService {
               subtotal: fromCents(subtotalCents),
               discountAmount: fromCents(itemDiscountCents + orderDiscountCents),
               taxAmount: "0",
-              shippingAmount: input.shippingAmount ?? "0",
+              shippingAmount: fromCents(shippingCents),
               totalAmount: fromCents(totalCents),
               discountReason: input.discountReason ?? (selected && selected.source !== "NONE" ? (selected.couponCode ? `Fastrr coupon ${selected.couponCode}` : "Custom discount") : undefined),
               shippingAddress: input.shippingAddress ?? undefined,
@@ -747,23 +789,15 @@ class OrdersService {
     return getWhatsAppPaymentOptions(this.db, lead);
   }
 
-  // Prefill for the Create Order form: the shipping address of this customer's most recent order that has one. Leads carry
-  // no address of their own, so a previous order is the only saved address there is. Read-only, lead-scoped like every
-  // other single-lead lookup (out of scope reads as "not found"). Understands both stored shapes: the CRM's own
-  // (line1/state/pincode) and a Shopify-synced order's (address1/province/zip).
-  async getLastShippingAddress(user: AuthUser, leadId: string): Promise<{ address: LastShippingAddress | null }> {
+  // Prefill for the Create Order form. The shared resolver (orders.address-resolver.ts) reads the SELECTED customer's latest order address - CRM or Shopify-synced, any stored field
+  // naming - then the address they typed at checkout, then another lead record of the same person; never a different customer who merely shares the phone number. Read-only and
+  // lead-scoped like every other single-lead lookup (out of scope reads as "not found").
+  async getLastShippingAddress(user: AuthUser, leadId: string): Promise<{ address: ResolvedAddress | null; source: AddressSource | null }> {
     const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true } });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
-    const orders = await this.db.order.findMany({ where: { leadId: lead.id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 10, select: { shippingAddress: true, shippingPincode: true } });
-    for (const o of orders) {
-      const a = (o.shippingAddress ?? null) as Record<string, string | null | undefined> | null;
-      if (!a) continue;
-      const pick = (...keys: string[]) => keys.map((k) => (typeof a[k] === "string" ? a[k]!.trim() : "")).find(Boolean) ?? "";
-      const address = { name: pick("name"), line1: pick("line1", "address1"), line2: pick("line2", "address2"), city: pick("city"), state: pick("state", "province"), pincode: pick("pincode", "zip") || (o.shippingPincode ?? ""), phone: pick("phone"), houseNumber: pick("houseNumber"), building: pick("building"), area: pick("area"), street: pick("street"), landmark: pick("landmark"), addressType: pick("addressType") };
-      if (address.line1 || address.city || address.pincode) return { address };
-    }
-    return { address: null };
+    const { address, source } = await resolveAddressForLead(this.db, lead.id);
+    return { address, source };
   }
 
   // Pushes an already-created CRM order to Shopify via the Admin GraphQL orderCreate mutation - the

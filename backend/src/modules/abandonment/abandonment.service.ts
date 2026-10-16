@@ -14,7 +14,9 @@ import { getDistribution, getTelecallerSummary, listTelecallers, type Distributi
 import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
 import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
 import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
-import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow } from "./abandonment.filters.js";
+import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
+import { loadCustomerContext } from "./abandonment.customer-context.js";
+import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
 import type {
   AbandonmentDetail,
   AbandonmentListResult,
@@ -91,6 +93,8 @@ class AbandonmentService {
   constructor(
     private readonly db: DbClient = prisma,
     private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons" | "bulkAssignSalespersonsByStaff" | "bulkUpdateStatus"> = new LeadService(),
+    // The store's own order history (read-only). Injectable so tests use a fake and never reach Shopify; pass null to skip it.
+    private readonly liveHistory: LiveHistoryClientFactory | null = defaultLiveHistoryClient,
   ) {}
 
   // Same assignment-based scoping lead.service.ts's buildScopeWhere uses - a manager sees abandoned
@@ -99,10 +103,7 @@ class AbandonmentService {
   // ADMIN and HR see every abandoned lead (HR deliberately, for lead distribution only: the global lead scope in lib/leadScope.ts still gives HR no
   // access to leads, orders or customers - HR gets this module's list and distribution, nothing else). A role this module does not know sees nothing.
   private scopeWhere(user: AuthUser): Prisma.LeadWhereInput {
-    if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
-    if (user.role === Role.SALESPERSON) return { ownerId: user.id };
-    if (user.role === Role.ADMIN || user.role === Role.HR) return {};
-    return { id: { in: [] } };
+    return abandonmentLeadScope(user);
   }
 
   // HR may LIST abandoned leads and distribute them, but never open or work one (detail, cart/address prefill, recovery actions, status changes).
@@ -233,10 +234,14 @@ class AbandonmentService {
       row.lead.calls = row.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
     }
 
+    // The customer behind this abandoned lead: the full delivery address and their earlier orders (see abandonment.customer-context.ts).
+    const customer = await loadCustomerContext(this.db, row.lead.id, row.cartSnapshot, this.liveHistory);
+
     return {
       ...mapAbandonmentListRow(row, summary),
       reference: { referenceType: row.referenceType, referenceId: row.referenceId },
       recoveryActions,
+      ...customer,
     };
   }
 

@@ -67,3 +67,22 @@ describe("Edit Discount dialog", () => {
     assert.doesNotMatch(t, /Select Fastrr Coupon|FASTRR100/);
   });
 });
+
+describe("billing breakdown by payment type", () => {
+  const view = (isPrepaid: boolean, shippingCents: number, choice = DEFAULT) =>
+    text(renderToStaticMarkup(<DiscountPricing subtotalCents={49900} shippingCents={shippingCents} choice={choice} onChange={() => {}} fastrr={fastrr} isPrepaid={isPrepaid} />));
+  it("prepaid: shipping reads Rs 0 and is labelled free; the prepaid discount still applies (total 449)", () => {
+    const t = view(true, 0);
+    assert.match(t, /Shipping ₹0\.00 free on prepaid/);
+    assert.match(t, /Discount Custom −₹50\.00/);
+    assert.match(t, /Total ₹449\.00/);
+  });
+  it("COD: the shipping charge is added, no automatic discount, and the summary says why (total 579)", () => {
+    const t = view(false, 8000, { mode: "NONE" });
+    assert.match(t, /Shipping ₹80\.00/);
+    assert.doesNotMatch(t, /free on prepaid/);
+    assert.match(t, /Discount −₹0\.00/);
+    assert.match(t, /Total ₹579\.00/);
+    assert.match(t, /automatic discount is for prepaid orders only/i);
+  });
+});

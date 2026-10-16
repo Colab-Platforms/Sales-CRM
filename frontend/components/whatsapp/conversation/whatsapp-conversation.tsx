@@ -1,5 +1,6 @@
 "use client";
 
+import { MessageMedia } from "./message-media";
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowDownLeft, ArrowUpRight, MessageCircle, Star } from "lucide-react";
@@ -53,7 +54,8 @@ function MessageRow({ message, onSelect }: { message: WhatsAppMessageHistoryItem
           {message.template ? ` · Template: ${message.template.name}` : null}
           {message.starred ? <Star className="ml-auto size-3.5 fill-amber-400 text-amber-500" aria-label="Starred" /> : null}
         </p>
-        <p className="mt-1 text-sm break-words whitespace-pre-wrap">{message.body || (message.template ? "(template message)" : "—")}</p>
+        {message.media ? <MessageMedia messageId={message.id} media={message.media} /> : null}
+        {message.media && !message.body ? null : <p className="mt-1 text-sm break-words whitespace-pre-wrap">{message.body || (message.template ? "(template message)" : "—")}</p>}
         <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <MessageStatusBadge status={message.status} />
           {formatDateTime(outbound ? (message.sentAt ?? message.createdAt) : (message.receivedAt ?? message.createdAt))}

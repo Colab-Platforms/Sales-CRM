@@ -41,7 +41,7 @@ async function world(tx: Prisma.TransactionClient) {
   };
   const assigned: string[] = [];
   const stub = { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async (_m: string, body: { leadIds: string[] }) => { assigned.push(...body.leadIds); return { assignedCount: body.leadIds.length }; } } as never;
-  const svc = new AbandonmentService(tx as never, stub);
+  const svc = new AbandonmentService(tx as never, stub, null);
   const as = (u: { id: string; username: string; role: Role }) => ({ id: u.id, username: u.username, role: u.role });
   const list = (user: typeof admin, q: Record<string, string> = {}) => {
     const parsed = validateListAbandonmentsQuery(q);

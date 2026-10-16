@@ -264,7 +264,7 @@ describe("MetaCloudApiProvider", () => {
       metadata: { display_phone_number: "919876500000" },
       messages: [{ id: "wamid.IN1", from: "919876543210", type: "text", text: { body: "Hi there" }, timestamp: "1700000000" }],
     });
-    assert.deepEqual(provider.parseIncomingWebhook(payload), [{ providerMessageId: "wamid.IN1", from: "919876543210", to: "919876500000", messageType: "TEXT", text: "Hi there", timestamp: new Date(1700000000 * 1000), replyToProviderMessageId: null }]);
+    assert.deepEqual(provider.parseIncomingWebhook(payload), [{ providerMessageId: "wamid.IN1", from: "919876543210", to: "919876500000", messageType: "TEXT", text: "Hi there", timestamp: new Date(1700000000 * 1000), replyToProviderMessageId: null, media: null }]);
   });
 
   // Part 1 (WhatsApp Inbox reply association): Meta's documented `context.id` - present only when

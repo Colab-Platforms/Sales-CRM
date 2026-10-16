@@ -66,7 +66,7 @@ async function world(tx: Prisma.TransactionClient) {
     const snapshot = parsed && opts.saved !== false ? buildCartSnapshot(parsed) : null;
     return tx.abandonment.create({ data: { leadId, type: AbandonmentType.CHECKOUT, detectedAt: new Date(), referenceType: "ShiprocketCheckoutCart", referenceId: opts.referenceId ?? (payload?.cart_id as string | undefined) ?? `cart-${uid()}`, cartSnapshot: (snapshot ?? undefined) as Prisma.InputJsonValue | undefined }, select: { id: true, leadId: true, referenceId: true } });
   };
-  const svc = new AbandonmentService(tx as never, { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async () => ({ assignedCount: 0 }) } as never);
+  const svc = new AbandonmentService(tx as never, { bulkAssignManagers: async () => ({ assignedCount: 0 }), bulkAssignSalespersons: async () => ({ assignedCount: 0 }) } as never, null);
   const shop = fakeShopify();
   const orders = new OrdersService(tx as never, () => shop.client);
   const base = { paymentMethod: "COD" as const, shippingAddress: { line1: "12 Rose Villa", line2: "MG Road", city: "Pune", state: "Maharashtra", pincode: "411001", name: "Priya Shah", phone: "9000000123" } };

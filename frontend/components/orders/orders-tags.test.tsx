@@ -71,7 +71,7 @@ describe("tags in the Orders filter state", () => {
     assert.deepEqual(parseColumnFilters(new URLSearchParams({ tags: ",,  ," })).tags, []);
   });
   it("the header offers a Tags funnel next to the other column filters", () => {
-    const nodes = headerFilterNodes({ filters: EMPTY_FILTERS, onChange: () => {}, salespeople: [], leadSources: [], showSalesperson: false });
+    const nodes = headerFilterNodes({ filters: EMPTY_FILTERS, onChange: () => {} });
     assert.ok("Tags" in nodes && "Payment" in nodes && "Status" in nodes && "Date" in nodes);
   });
 });

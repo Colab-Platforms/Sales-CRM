@@ -34,22 +34,17 @@ const PAYMENT_STATUS_OPTIONS: Option<PaymentStatusFilter>[] = [
 export interface HeaderFilterProps {
   filters: ColumnFilters;
   onChange: (patch: Partial<ColumnFilters>) => void;
-  salespeople: { id: string; name: string }[];
-  leadSources: { id: string; name: string }[];
-  showSalesperson: boolean;
   /** Tags that exist on real orders, for the Tags filter. */
   tagOptions?: { tags: TagOption[]; loading?: boolean; error?: string | null };
 }
 
 const names = (selected: string[], options: Option[]) => selected.map((v) => options.find((o) => o.value === v)?.label ?? v).join(", ");
 
-export function headerFilterNodes({ filters: f, onChange, salespeople, leadSources, showSalesperson, tagOptions }: HeaderFilterProps): Record<string, ReactNode> {
+export function headerFilterNodes({ filters: f, onChange, tagOptions }: HeaderFilterProps): Record<string, ReactNode> {
   const active = (c: FilterColumn) => isColumnActive(f, c);
   const sourceOptions: Option[] = ORDER_SOURCE_ORDER.map((value) => ({ value, label: ORDER_SOURCE_LABELS[value] }));
   const statusOptions: Option[] = ORDER_STATUS_ORDER.map((value) => ({ value, label: ORDER_STATUS_LABELS[value] }));
   const fulfillmentOptions: Option[] = FULFILLMENT_VALUES.map((value) => ({ value, label: FULFILLMENT_LABELS[value]! }));
-  const salespersonOptions: Option[] = salespeople.map((p) => ({ value: p.id, label: p.name }));
-  const leadSourceOptions: Option[] = leadSources.map((s) => ({ value: s.id, label: s.name }));
 
   const nodes: Record<string, ReactNode> = {
     Payment: (
@@ -82,9 +77,6 @@ export function headerFilterNodes({ filters: f, onChange, salespeople, leadSourc
           </div>
         )}
       />
-    ),
-    "Lead source": (
-      <ColumnFilter label="Lead source" active={active("leadSource")} summary={names(f.leadSourceId, leadSourceOptions)} onClear={() => onChange({ leadSourceId: [] })} renderBody={() => <CheckList options={leadSourceOptions} selected={f.leadSourceId} onChange={(leadSourceId) => onChange({ leadSourceId })} emptyText="No lead sources" />} />
     ),
     Tags: <OrdersTagsFilter selected={f.tags} onChange={(tags) => onChange({ tags })} available={tagOptions?.tags ?? []} loading={tagOptions?.loading} error={tagOptions?.error} />,
     Date: (
@@ -160,11 +152,5 @@ export function headerFilterNodes({ filters: f, onChange, salespeople, leadSourc
       />
     ),
   };
-  // A salesperson only ever sees their own orders (the server enforces it); the filter is for roles that can see several.
-  if (showSalesperson) {
-    nodes.Salesperson = (
-      <ColumnFilter label="Salesperson" active={active("salesperson")} summary={names(f.salespersonId, salespersonOptions)} onClear={() => onChange({ salespersonId: [] })} renderBody={() => <CheckList options={salespersonOptions} selected={f.salespersonId} onChange={(salespersonId) => onChange({ salespersonId })} emptyText="No salespeople" />} />
-    );
-  }
   return nodes;
 }
