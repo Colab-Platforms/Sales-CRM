@@ -67,14 +67,12 @@ describe("listMyOrders (service): only the orders the signed-in user created", (
     });
   });
 
-  it("a manager or admin gets THEIR OWN created orders only - never everything", async () => {
+  it("My Orders is Salesperson-only: a manager, admin, HR or recruiter is refused by the service itself, and nobody's rows leak", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
-      assert.equal((await w.svc.listMyOrders(w.as(w.manager), Q())).pagination.totalItems, 0);
-      assert.equal((await w.svc.listMyOrders(w.as(w.admin), Q())).pagination.totalItems, 0);
-      const mgrOrder = await w.order(w.l1.id, w.manager.id);
-      assert.deepEqual(w.ids(await w.svc.listMyOrders(w.as(w.manager), Q())), [mgrOrder.id]);
-      assert.equal((await w.svc.listMyOrders(w.as(w.admin), Q())).pagination.totalItems, 0, "an admin does not see the manager's order either");
+      await w.order(w.l1.id, w.manager.id);
+      for (const u of [w.manager, w.admin]) await assert.rejects(() => w.svc.listMyOrders(w.as(u), Q()), (e: { statusCode?: number }) => e.statusCode === 403);
+      for (const role of [Role.HR, Role.RECRUITER]) await assert.rejects(() => w.svc.listMyOrders({ id: w.a.id, username: "x", role }, Q()), (e: { statusCode?: number }) => e.statusCode === 403);
     });
   });
 

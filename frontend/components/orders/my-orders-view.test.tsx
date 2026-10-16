@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MyOrdersContent, type MyOrdersContentProps } from "./my-orders-view";
 import { NAV_BY_ROLE } from "@/components/app-sidebar";
+import { canViewMyOrders } from "./my-orders-gate";
 import type { OrderListItem, OrderListResult } from "@/lib/api-client/types/orders.types";
 
 const text = (h: string) => h.replace(/<[^>]+>/g, " ").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
@@ -62,14 +63,19 @@ describe("My Orders list states", () => {
 });
 
 describe("navigation", () => {
-  it("Admin, Manager and Salesperson/telecaller each get a separate 'My Orders' entry next to the unchanged 'Orders'", () => {
+  it("only the Salesperson (telecaller) account gets 'My Orders'; every role that has Orders keeps the unchanged Orders entry", () => {
     for (const role of ["ADMIN", "MANAGER", "SALESPERSON"] as const) {
       const items = NAV_BY_ROLE[role].flatMap((s) => s.items);
-      const orders = items.find((i) => i.title === "Orders");
+      assert.equal(items.find((i) => i.title === "Orders")?.href, "/dashboard/orders", `${role} keeps Orders`);
       const mine = items.find((i) => i.title === "My Orders");
-      assert.equal(orders?.href, "/dashboard/orders", `${role} keeps Orders`);
-      assert.equal(mine?.href, "/dashboard/my-orders", `${role} gets My Orders`);
+      if (role === "SALESPERSON") assert.equal(mine?.href, "/dashboard/my-orders");
+      else assert.equal(mine, undefined, `${role} must not see My Orders`);
     }
+    for (const role of ["HR", "RECRUITER"] as const) assert.ok(!NAV_BY_ROLE[role].flatMap((s) => s.items).some((i) => i.title === "My Orders"), role);
+  });
+  it("the page itself refuses everyone but a Salesperson (a typed URL is not a way in)", () => {
+    for (const role of ["ADMIN", "MANAGER", "HR", "RECRUITER", undefined]) assert.equal(canViewMyOrders(role), false, String(role));
+    assert.equal(canViewMyOrders("SALESPERSON"), true);
   });
   it("HR (no orders) gets neither", () => {
     const titles = NAV_BY_ROLE.HR.flatMap((s) => s.items.flatMap((i) => [i.title, ...(i.children ?? []).map((c) => c.title)]));

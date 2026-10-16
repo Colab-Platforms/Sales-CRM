@@ -272,7 +272,6 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "My Orders", href: "/dashboard/my-orders", icon: ClipboardList },
         { title: "Offers", href: "/dashboard/offers", icon: Ticket },
         { title: "Product Weights", href: "/dashboard/products", icon: Scale },
         {
@@ -360,7 +359,6 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
-        { title: "My Orders", href: "/dashboard/my-orders", icon: ClipboardList },
         { title: "Offers", href: "/dashboard/offers", icon: Ticket },
         { title: "Product Weights", href: "/dashboard/products", icon: Scale },
         {

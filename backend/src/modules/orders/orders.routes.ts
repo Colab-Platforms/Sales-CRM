@@ -10,6 +10,9 @@ import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 import { createRefundRequest, resolveCashfreeReferences } from "../refunds/refunds.controller.js";
 
+/** "My Orders" is for Salespersons only. The general Orders list below stays open to every role that could already read orders. */
+export const MY_ORDERS_ROLES: Role[] = [Role.SALESPERSON];
+
 const router = Router();
 
 // Registered before "/:id" so "filter-options"/"reconciliation" are not read as an order id.
@@ -41,8 +44,8 @@ router.get("/live/customer/:customerId/history", requireAuth, getLiveOrderHistor
 router.post("/live/:externalId/cancel", requireAuth, requireRole(Role.ADMIN), cancelLiveOrder);
 // Brings a live-only Shopify order into the CRM through the normal Shopify sync (idempotent). Same ADMIN-only gate as the live page.
 router.post("/live/:externalId/sync", requireAuth, requireRole(Role.ADMIN), syncLiveOrder);
-// Orders created by the signed-in user only. Registered before "/:id" so "mine" is never read as an order id.
-router.get("/mine", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), listMyOrders);
+// Orders created by the signed-in SALESPERSON only. Registered before "/:id" so "mine" is never read as an order id.
+router.get("/mine", requireAuth, requireRole(...MY_ORDERS_ROLES), listMyOrders);
 router.get("/", requireAuth, listOrders);
 router.get("/:id", requireAuth, getOrder);
 router.get("/:id/status-history", requireAuth, getOrderStatusHistory);

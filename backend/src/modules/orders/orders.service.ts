@@ -241,6 +241,8 @@ class OrdersService {
    * to one of their customers, or that was synced from Shopify (no creator), is not included.
    */
   async listMyOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
+    // Salesperson-only (the route enforces it too): the page exists for the people who create orders as part of their own work.
+    if (user.role !== Role.SALESPERSON) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
     return this.listOrdersWhere(user, query, { createdById: user.id });
   }
 

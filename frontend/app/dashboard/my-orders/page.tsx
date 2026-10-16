@@ -1,5 +1,5 @@
-import { MyOrdersView } from "@/components/orders/my-orders-view";
+import { MyOrdersGate } from "@/components/orders/my-orders-gate";
 
 export default function MyOrdersPage() {
-  return <MyOrdersView />;
+  return <MyOrdersGate />;
 }
