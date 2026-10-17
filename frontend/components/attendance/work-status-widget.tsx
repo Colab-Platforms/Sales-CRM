@@ -84,13 +84,13 @@ export function ShiftTimer({ variant }: { variant: "center" | "inline" }) {
     <div
       title={title}
       className={cn(
-        "flex items-center gap-2.5 rounded-full border-[1.5px] px-4 py-1.5 shadow-sm transition-all",
+        "flex items-center gap-2.5 rounded-full border px-4 py-1.5 shadow-sm transition-all",
         over ? "border-destructive/40 bg-destructive/10 text-destructive" : "border-primary/20 bg-primary/5 text-primary",
       )}
     >
       <Timer className="size-4.5 shrink-0" />
-      <span className="font-heading text-lg leading-none font-black tabular-nums tracking-tight">{clock}</span>
-      <span className="text-[10px] font-bold whitespace-nowrap opacity-80 uppercase tracking-wider">{label}</span>
+      <span className="font-heading text-lg leading-none font-semibold tabular-nums tracking-tight">{clock}</span>
+      <span className="text-[10px] font-medium whitespace-nowrap opacity-80 uppercase tracking-wider">{label}</span>
     </div>
   );
 }
@@ -163,7 +163,7 @@ export function WorkStatusMenu() {
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-[34px] gap-2 rounded-full border-[1.5px] px-4 shadow-sm" aria-label="Change my status" />}>
+      <DropdownMenuTrigger render={<Button variant="outline" size="sm" className="h-[34px] gap-2 rounded-full border px-4 shadow-sm" aria-label="Change my status" />}>
         <span className={cn("size-2.5 rounded-full shadow-sm", STATUS_DOT[session.status])} />
         <span className="font-semibold">{STATUS_LABEL[session.status]}</span>
         <ChevronDown className="size-3.5 opacity-60" />

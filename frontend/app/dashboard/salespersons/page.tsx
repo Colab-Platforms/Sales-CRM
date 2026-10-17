@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Contact, Search, Users2 } from "lucide-react";
-import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { managerAnalyticsQueryOptions, mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { defaultFilters, formatNumber, formatRupees, toQuery } from "@/lib/manager-analytics";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -16,6 +17,16 @@ import { Skeleton } from "@/components/ui/skeleton";
 export default function SalespersonsPage() {
   const { data: salespersons, isPending, error } = useQuery(mySalespersonsQueryOptions());
   const [search, setSearch] = useState("");
+  // Today's orders per salesperson, from the same analytics the dashboard uses (manager's local day).
+  const [todayQuery] = useState(() => toQuery({ ...defaultFilters(), preset: "today" }));
+  const today = useQuery(managerAnalyticsQueryOptions(todayQuery));
+  const todayById = useMemo(() => new Map((today.data?.salespeople ?? []).map((p) => [p.id, p])), [today.data]);
+  const todayCell = (id: string, pick: (p: NonNullable<ReturnType<typeof todayById.get>>) => string) => {
+    if (today.isPending) return <span className="text-muted-foreground">…</span>;
+    if (today.error) return <span className="text-muted-foreground" title="Today's orders could not be loaded">—</span>;
+    const p = todayById.get(id);
+    return p ? pick(p) : <span className="text-muted-foreground">—</span>;
+  };
 
   const filtered = useMemo(() => {
     const list = salespersons ?? [];
@@ -35,6 +46,10 @@ export default function SalespersonsPage() {
         title="Salespersons"
         description="Everyone reporting to you, in one place. Adding, editing, or removing salespersons is managed by Admin/HR."
       />
+
+      {today.error ? (
+        <p role="alert" className="text-sm text-destructive">{getErrorMessage(today.error, "Today's orders could not be loaded.")}</p>
+      ) : null}
 
       {salespersons && salespersons.length > 0 ? (
         <div className="relative max-w-sm">
@@ -79,6 +94,10 @@ export default function SalespersonsPage() {
                   <TableHead className="pl-5">Salesperson</TableHead>
                   <TableHead>Phone</TableHead>
                   <TableHead>Group</TableHead>
+                  <TableHead className="text-right">Orders Today</TableHead>
+                  <TableHead className="text-right">COD</TableHead>
+                  <TableHead className="text-right">Prepaid</TableHead>
+                  <TableHead className="text-right">Revenue Today</TableHead>
                   <TableHead className="pr-5">Status</TableHead>
                 </TableRow>
               </TableHeader>
@@ -98,6 +117,17 @@ export default function SalespersonsPage() {
                       ) : (
                         <span className="text-xs text-muted-foreground">Not in a team yet</span>
                       )}
+                    </TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{todayCell(sp.id, (p) => formatNumber(p.orders))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{todayCell(sp.id, (p) => formatNumber(p.codOrders))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{todayCell(sp.id, (p) => formatNumber(p.prepaidOrders))}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {todayCell(sp.id, (p) => formatRupees(p.revenue))}
+                      {!today.isPending && (todayById.get(sp.id)?.revenue ?? 0) > 0 ? (
+                        <div className="text-xs text-muted-foreground">
+                          COD {formatRupees(todayById.get(sp.id)!.codRevenue)} · Prepaid {formatRupees(todayById.get(sp.id)!.prepaidRevenue)}
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell className="pr-5">
                       <Badge variant={sp.status === "ACTIVE" ? "default" : "secondary"}>

@@ -71,7 +71,7 @@ export const ORDER_TYPES: { value: OrderType; title: string; subtitle: string; d
 
 export function SectionCard({ title, description, children, className }: { title: string; description?: string; children: ReactNode; className?: string }) {
   return (
-    <section className={cn("rounded-xl border-[1.5px] border-border bg-card p-4 sm:p-5", className)}>
+    <section className={cn("rounded-xl border border-border bg-card p-4 sm:p-5", className)}>
       <div className="mb-3">
         <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
         {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
@@ -106,7 +106,7 @@ export function Field({ label, htmlFor, hint, children, className, required, err
 
 export function CustomerBar({ name, mobile }: { name: string; mobile: string | null }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border-[1.5px] border-border bg-muted/40 px-4 py-3" aria-label="Customer for this order">
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-4 py-3" aria-label="Customer for this order">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
         <User className="size-5" />
       </span>
@@ -257,7 +257,7 @@ export function PaymentSection({ value, onChange }: { value: OrderType; onChange
               aria-checked={selected}
               onClick={() => onChange(t.value)}
               className={cn(
-                "relative rounded-xl border-[1.5px] p-4 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                "relative rounded-xl border p-4 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                 selected ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/50",
               )}
             >
@@ -580,7 +580,7 @@ export function SummaryCard({ data, action, className }: { data: SummaryData; ac
   const type = ORDER_TYPES.find((t) => t.value === data.orderType)!;
   const hasAddress = Boolean(data.address.houseNumber.trim() || data.address.city.trim() || data.address.pincode);
   return (
-    <aside className={cn("grid gap-4 rounded-xl border-[1.5px] border-border bg-card p-4 sm:p-5", className)} aria-label="Order summary" data-testid="order-summary">
+    <aside className={cn("grid gap-4 rounded-xl border border-border bg-card p-4 sm:p-5", className)} aria-label="Order summary" data-testid="order-summary">
       <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Order summary</h3>
 
       <div>
@@ -663,7 +663,7 @@ export function submitSteps(orderType: OrderType): string[] {
 
 export function CreateOrderProgress({ steps, activeIndex }: { steps: string[]; activeIndex: number }) {
   return (
-    <div className="grid gap-2 rounded-xl border-[1.5px] border-border bg-card p-4" role="status" aria-live="polite" data-testid="create-order-progress">
+    <div className="grid gap-2 rounded-xl border border-border bg-card p-4" role="status" aria-live="polite" data-testid="create-order-progress">
       {steps.map((label, i) => {
         const done = i < activeIndex;
         const active = i === activeIndex;

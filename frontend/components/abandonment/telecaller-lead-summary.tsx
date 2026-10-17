@@ -11,8 +11,8 @@ import { abandonedLeadsHref } from "@/lib/abandoned-leads-href";
 function Card({ label, value, href, hint, testId }: { label: string; value: number; href: string; hint: string; testId: string }) {
   return (
     <Link href={href} data-testid={testId} className="sketch-outline block bg-card/60 p-4 transition-colors hover:bg-muted/50">
-      <div className="text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="mt-1 text-3xl font-bold tabular-nums" data-testid={`${testId}-value`}>{value}</div>
+      <div className="text-xs font-normal text-muted-foreground">{label}</div>
+      <div className="mt-1 text-3xl font-semibold tabular-nums" data-testid={`${testId}-value`}>{value}</div>
       <div className="mt-1 text-xs text-muted-foreground">{hint}</div>
     </Link>
   );
@@ -39,7 +39,7 @@ export function TelecallerLeadSummary() {
   const { data, isPending, error, refetch } = useQuery(myAbandonmentSummaryQueryOptions());
   return (
     <section className="space-y-3" data-testid="my-leads-section">
-      <h2 className="font-heading text-lg font-extrabold">My abandoned leads</h2>
+      <h2 className="font-heading text-lg font-semibold">My abandoned leads</h2>
       {error ? (
         <div role="alert" data-testid="my-summary-error" className="sketch-outline border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
           {getErrorMessage(error, "Could not load your leads.")} <button type="button" className="underline" onClick={() => void refetch()}>Retry</button>

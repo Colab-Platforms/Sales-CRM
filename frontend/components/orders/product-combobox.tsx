@@ -51,7 +51,7 @@ export function ProductCombobox({
     >
       <Combobox.InputGroup
         className={cn(
-          "relative flex h-9 w-full items-center rounded-[11px_9px_12px_9px] border-[1.5px] border-input bg-card transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
+          "relative flex h-9 w-full items-center rounded-xl border border-input bg-card transition-colors focus-within:border-ring focus-within:ring-3 focus-within:ring-ring/50 dark:bg-input/30",
           invalid && "border-destructive",
         )}
       >

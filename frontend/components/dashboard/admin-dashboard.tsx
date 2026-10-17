@@ -64,10 +64,10 @@ export function AdminDashboardView({ data }: { data: AdminDashboard }) {
               key={r.role}
               className="sketch-outline flex min-w-32 flex-col gap-0.5 px-4 py-3"
             >
-              <span className="text-xs font-medium text-muted-foreground">
+              <span className="text-xs font-normal text-muted-foreground">
                 {ROLE_LABELS[r.role] ?? r.role}
               </span>
-              <span className="text-xl leading-tight font-extrabold tabular-nums">{r.count}</span>
+              <span className="text-xl leading-tight font-semibold tabular-nums">{r.count}</span>
             </div>
           ))}
         </CardContent>

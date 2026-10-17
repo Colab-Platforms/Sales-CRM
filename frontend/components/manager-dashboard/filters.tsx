@@ -1,19 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { Download, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, Download, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import {
   CALL_STATUS_LABELS,
   LEAD_STATUS_LABELS,
+  ORDER_STATUS_LABELS,
+  PAYMENT_MODE_LABELS,
   RANGE_LABELS,
   type DashboardFilters,
   type RangePreset,
 } from "@/lib/manager-analytics";
-import type { CallStatusFilter, LeadStatusFilter } from "@/lib/api-client/types/manager-analytics.types";
+import type { CallStatusFilter, LeadStatusFilter, OrderStatusFilter, PaymentModeFilter } from "@/lib/api-client/types/manager-analytics.types";
 
 type Patch = (patch: Partial<DashboardFilters>) => void;
 
@@ -110,6 +113,30 @@ export function LeadStatusSelect({ value, onChange }: { value: LeadStatusFilter;
   );
 }
 
+export function PaymentModeSelect({ value, onChange }: { value: PaymentModeFilter; onChange: (v: PaymentModeFilter) => void }) {
+  return (
+    <NativeSelect aria-label="Payment method" value={value} onChange={(e) => onChange(e.target.value as PaymentModeFilter)} wrapperClassName="sm:w-36">
+      {(Object.keys(PAYMENT_MODE_LABELS) as PaymentModeFilter[]).map((s) => (
+        <option key={s} value={s}>
+          {PAYMENT_MODE_LABELS[s]}
+        </option>
+      ))}
+    </NativeSelect>
+  );
+}
+
+export function OrderStatusSelect({ value, onChange }: { value: OrderStatusFilter; onChange: (v: OrderStatusFilter) => void }) {
+  return (
+    <NativeSelect aria-label="Order status" value={value} onChange={(e) => onChange(e.target.value as OrderStatusFilter)} wrapperClassName="sm:w-44">
+      {(Object.keys(ORDER_STATUS_LABELS) as OrderStatusFilter[]).map((s) => (
+        <option key={s} value={s}>
+          {ORDER_STATUS_LABELS[s]}
+        </option>
+      ))}
+    </NativeSelect>
+  );
+}
+
 /**
  * The global filter bar. On desktop the controls sit inline; below `lg` they collapse into a
  * drawer opened from a single "Filters" button so the page is not dominated by form controls.
@@ -120,14 +147,20 @@ export function FilterBar({
   people,
   showSalesperson = true,
   showLeadStatus = true,
-  onExport,
+  variant = "activity",
+  exportOptions,
+  exporting = false,
 }: {
   filters: DashboardFilters;
   onChange: Patch;
   people: { id: string; name: string }[];
   showSalesperson?: boolean;
   showLeadStatus?: boolean;
-  onExport?: () => void;
+  /** "report" adds the payment-method and order-status filters (for the sales section) and drops the lead-status one. */
+  variant?: "activity" | "report";
+  /** Each entry is one download format in the Export menu; no menu when omitted. */
+  exportOptions?: { label: string; hint: string; onSelect: () => void }[];
+  exporting?: boolean;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -137,30 +170,49 @@ export function FilterBar({
       {showSalesperson ? (
         <SalespersonFilter value={filters.salespersonId} people={people} onChange={(id) => onChange({ salespersonId: id })} />
       ) : null}
-      <CallStatusSelect value={filters.callStatus} onChange={(callStatus) => onChange({ callStatus })} />
-      {showLeadStatus ? <LeadStatusSelect value={filters.leadStatus} onChange={(leadStatus) => onChange({ leadStatus })} /> : null}
+      {variant === "report" ? (
+        <>
+          <PaymentModeSelect value={filters.paymentMode} onChange={(paymentMode) => onChange({ paymentMode })} />
+          <OrderStatusSelect value={filters.orderStatus} onChange={(orderStatus) => onChange({ orderStatus })} />
+          <CallStatusSelect value={filters.callStatus} onChange={(callStatus) => onChange({ callStatus })} />
+        </>
+      ) : (
+        <>
+          <CallStatusSelect value={filters.callStatus} onChange={(callStatus) => onChange({ callStatus })} />
+          {showLeadStatus ? <LeadStatusSelect value={filters.leadStatus} onChange={(leadStatus) => onChange({ leadStatus })} /> : null}
+        </>
+      )}
     </>
   );
 
+  const exportMenu = exportOptions?.length ? (
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="outline" disabled={exporting} />}>
+        <Download data-icon="inline-start" /> {exporting ? "Exporting…" : "Export"}
+        <ChevronDown className="size-3.5 opacity-60" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        {exportOptions.map((o) => (
+          <DropdownMenuItem key={o.label} onClick={o.onSelect} className="flex-col items-start gap-0.5">
+            <span className="text-sm">{o.label}</span>
+            <span className="text-xs text-muted-foreground">{o.hint}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  ) : null;
+
   return (
     <>
-      <div className="hidden flex-wrap items-center gap-2 lg:flex">
+      <div className="hidden flex-wrap items-center justify-end gap-2 lg:flex">
         {controls}
-        {onExport ? (
-          <Button variant="outline" onClick={onExport}>
-            <Download data-icon="inline-start" /> Export Report
-          </Button>
-        ) : null}
+        {exportMenu}
       </div>
       <div className="flex gap-2 lg:hidden">
         <Button variant="outline" className="flex-1" onClick={() => setOpen(true)}>
           <SlidersHorizontal data-icon="inline-start" /> Filters
         </Button>
-        {onExport ? (
-          <Button variant="outline" onClick={onExport} aria-label="Export report">
-            <Download data-icon="inline-start" /> Export
-          </Button>
-        ) : null}
+        {exportMenu}
       </div>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetContent side="bottom" className="max-h-[85dvh] overflow-y-auto">

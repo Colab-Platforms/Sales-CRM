@@ -63,7 +63,7 @@ function useConfiguredProviders(): Partial<Record<WhatsAppProvider, boolean>> {
 function TemplatePreview({ header, body, footer, buttons, examples }: { header?: TemplateHeader; body: string; footer?: string; buttons?: TemplateButton[]; examples: Record<string, string> }) {
   const rendered = renderWhatsAppFormatting(substituteExamples(body, examples));
   return (
-    <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
+    <div className="rounded-xl border border-border bg-card p-4">
       <p className="mb-3 text-xs font-semibold tracking-wide text-muted-foreground uppercase">Preview</p>
       <div className="mx-auto max-w-[320px] rounded-2xl rounded-tl-sm border border-border bg-muted/40 p-3 text-sm shadow-sm">
         {header?.type === "TEXT" && header.text ? <p className="mb-1.5 font-semibold">{header.text}</p> : null}
@@ -236,7 +236,7 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
           <div className="grid gap-4 py-4 lg:grid-cols-[1fr_320px]">
             <div className="grid min-w-0 content-start gap-4">
               {/* A. Basic information */}
-              <section className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4">
+              <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
                 <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Basic information</h3>
                 <div className="grid gap-1.5">
                   <Label htmlFor="template-name">Template name</Label>
@@ -292,7 +292,7 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
               </section>
 
               {/* B. Header */}
-              <section className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4">
+              <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
                 <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Header (optional)</h3>
                 <NativeSelect value={headerType} onChange={(e) => setHeaderType(e.target.value as TemplateHeaderType | "NONE")} className="max-w-[220px]">
                   <option value="NONE">None</option>
@@ -323,7 +323,7 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
               </section>
 
               {/* C. Body */}
-              <section className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4">
+              <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Body</h3>
                   <Counter value={body.length} max={BODY_MAX} />
@@ -356,7 +356,7 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
               </section>
 
               {/* D. Footer */}
-              <section className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4">
+              <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Footer (optional)</h3>
                   <Counter value={footer.length} max={FOOTER_MAX} />
@@ -365,7 +365,7 @@ export function TemplateFormDialog({ open, onOpenChange, template, onSaved }: Te
               </section>
 
               {/* E. Interactive actions */}
-              <section className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4">
+              <section className="grid gap-3 rounded-xl border border-border bg-card p-4">
                 <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Interactive actions (optional)</h3>
                 {!buttonsValid && buttons.length > 0 ? (
                   <p className="text-xs text-destructive">

@@ -4,6 +4,8 @@ import type {
   CallStatusFilter,
   LeadStatusFilter,
   ManagerAnalytics,
+  OrderStatusFilter,
+  PaymentModeFilter,
   SalespersonStats,
 } from "@/lib/api-client/types/manager-analytics.types";
 
@@ -28,6 +30,19 @@ export const formatNumber = (n: number) => n.toLocaleString("en-IN");
 
 export const pct = (part: number, whole: number): number => (whole > 0 ? (part / whole) * 100 : 0);
 export const formatPct = (value: number, digits = 1) => `${value.toFixed(digits)}%`;
+export const formatRupees = (n: number) => n.toLocaleString("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 });
+/** Change vs the previous period of the same length, worded so a zero baseline never shows as Infinity/NaN. */
+export function periodChange(current: number, previous: number): { text: string; tone: "default" | "positive" | "negative" } {
+  if (previous <= 0) {
+    return current > 0 ? { text: "New: none in the previous period", tone: "positive" } : { text: "No sales in either period", tone: "default" };
+  }
+  const change = ((current - previous) / previous) * 100;
+  if (Math.abs(change) < 0.05) return { text: "Same as previous period", tone: "default" };
+  return { text: `${change > 0 ? "+" : ""}${change.toFixed(1)}% vs previous period`, tone: change > 0 ? "positive" : "negative" };
+}
+/** Short axis/tile form: ₹1.2L, ₹3.4Cr. */
+export const formatRupeesCompact = (n: number) =>
+  n.toLocaleString("en-IN", { style: "currency", currency: "INR", notation: "compact", maximumFractionDigits: 1 });
 
 export function formatDay(ymd: string, style: "short" | "long" | "weekday" = "short"): string {
   const d = new Date(`${ymd}T00:00:00.000Z`);
@@ -51,13 +66,14 @@ export function initials(name: string): string {
 
 // ---------- date range / filters ----------
 
-export type RangePreset = "today" | "yesterday" | "7d" | "30d" | "custom";
+export type RangePreset = "today" | "yesterday" | "7d" | "30d" | "month" | "custom";
 
 export const RANGE_LABELS: Record<RangePreset, string> = {
   today: "Today",
   yesterday: "Yesterday",
   "7d": "Last 7 Days",
   "30d": "Last 30 Days",
+  month: "This Month",
   custom: "Custom Range",
 };
 
@@ -83,17 +99,26 @@ export interface DashboardFilters {
   salespersonId: string; // "" = all
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
+  paymentMode: PaymentModeFilter;
+  orderStatus: OrderStatusFilter;
 }
 
-const toYmd = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+export const PAYMENT_MODE_LABELS: Record<PaymentModeFilter, string> = { ALL: "All Payments", COD: "COD", PREPAID: "Prepaid" };
+export const ORDER_STATUS_LABELS: Record<OrderStatusFilter, string> = {
+  ALL: "All Order Statuses",
+  CONFIRMED: "Confirmed",
+  PROCESSING: "Processing",
+  SHIPPED: "Shipped",
+  OUT_FOR_DELIVERY: "Out for Delivery",
+  DELIVERED: "Delivered",
+};
+
+/** Reports run on India business days (IST, UTC+5:30) for every viewer; the backend enforces the same offset. */
+export const REPORT_TZ_OFFSET_MINUTES = 330;
+const toYmd = (d: Date) => new Date(d.getTime() + REPORT_TZ_OFFSET_MINUTES * 60_000).toISOString().slice(0, 10);
 
 export function presetRange(preset: RangePreset, customFrom: string, customTo: string, now = new Date()) {
-  const day = (offset: number) => {
-    const d = new Date(now);
-    d.setDate(d.getDate() - offset);
-    return toYmd(d);
-  };
+  const day = (offset: number) => toYmd(new Date(now.getTime() - offset * 24 * 60 * 60_000));
   switch (preset) {
     case "today":
       return { from: day(0), to: day(0) };
@@ -103,6 +128,10 @@ export function presetRange(preset: RangePreset, customFrom: string, customTo: s
       return { from: day(6), to: day(0) };
     case "30d":
       return { from: day(29), to: day(0) };
+    case "month": {
+      const today = day(0);
+      return { from: `${today.slice(0, 8)}01`, to: today };
+    }
     case "custom": {
       const from = customFrom || day(6);
       const to = customTo || day(0);
@@ -113,7 +142,7 @@ export function presetRange(preset: RangePreset, customFrom: string, customTo: s
 
 export function defaultFilters(): DashboardFilters {
   const today = toYmd(new Date());
-  return { preset: "7d", customFrom: today, customTo: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL" };
+  return { preset: "7d", customFrom: today, customTo: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
 }
 
 export function toQuery(f: DashboardFilters): AnalyticsQuery {
@@ -123,8 +152,10 @@ export function toQuery(f: DashboardFilters): AnalyticsQuery {
     to,
     callStatus: f.callStatus,
     leadStatus: f.leadStatus,
+    paymentMode: f.paymentMode,
+    orderStatus: f.orderStatus,
     salespersonId: f.salespersonId || undefined,
-    tzOffsetMinutes: -new Date().getTimezoneOffset(),
+    tzOffsetMinutes: REPORT_TZ_OFFSET_MINUTES,
   };
 }
 
@@ -288,7 +319,8 @@ export function exportCsv(filename: string, rows: (string | number)[][]) {
     const s = String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
-  const blob = new Blob([rows.map((r) => r.map(esc).join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
+  // The BOM tells Excel the file is UTF-8, so ₹ and non-English names open correctly.
+  const blob = new Blob(["﻿", rows.map((r) => r.map(esc).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
@@ -297,28 +329,12 @@ export function exportCsv(filename: string, rows: (string | number)[][]) {
   URL.revokeObjectURL(url);
 }
 
-export function overviewCsvRows(data: ManagerAnalytics): (string | number)[][] {
-  const rows: (string | number)[][] = [
-    ["Salesperson", "Leads", "Contacted", "Interested", "Converted", "Conversion %", "Calls", "Connected", "Not Connected", "Failed", "Unique Leads Called", "Talk Time", "Productive Time", "Calls / Productive Hour"],
-    ...data.salespeople.map((p) => [
-      p.name, p.leads, p.contacted, p.interested, p.converted, conversionRate(p).toFixed(2), p.calls, p.connected,
-      p.notConnected, p.failed, p.uniqueLeads, formatDuration(p.talkTimeSec), formatMs(p.productiveMs),
-      callsPerProductiveHour(p.calls, p.productiveMs).toFixed(1),
-    ]),
-    [],
-    ["Date", "Calls", "Connected", "Not Connected", "Failed", "Unique Leads", "Talk Time", "Productive Time", ...data.salespeople.map((p) => `${p.name} calls`)],
-    ...data.daily.map((d) => [
-      d.date, d.calls, d.connected, d.notConnected, d.failed, d.uniqueLeads, formatDuration(d.talkTimeSec), formatMs(d.productiveMs),
-      ...data.salespeople.map((p) => d.bySalesperson[p.id]?.calls ?? 0),
-    ]),
-  ];
-  return rows;
-}
-
 // ---------- filters <-> URL (so the drill-down keeps the manager's date range) ----------
 
 export function filtersToSearch(f: DashboardFilters): string {
   const p = new URLSearchParams({ range: f.preset, callStatus: f.callStatus, leadStatus: f.leadStatus });
+  if (f.paymentMode !== "ALL") p.set("payment", f.paymentMode);
+  if (f.orderStatus !== "ALL") p.set("orderStatus", f.orderStatus);
   if (f.preset === "custom") {
     p.set("from", f.customFrom);
     p.set("to", f.customTo);
@@ -331,6 +347,8 @@ export function filtersFromSearch(sp: { get(name: string): string | null }): Das
   const range = sp.get("range") as RangePreset | null;
   const callStatus = sp.get("callStatus") as CallStatusFilter | null;
   const leadStatus = sp.get("leadStatus") as LeadStatusFilter | null;
+  const paymentMode = sp.get("payment") as PaymentModeFilter | null;
+  const orderStatus = sp.get("orderStatus") as OrderStatusFilter | null;
   return {
     ...base,
     preset: range && range in RANGE_LABELS ? range : base.preset,
@@ -338,5 +356,7 @@ export function filtersFromSearch(sp: { get(name: string): string | null }): Das
     customTo: sp.get("to") ?? base.customTo,
     callStatus: callStatus && callStatus in CALL_STATUS_LABELS ? callStatus : "ALL",
     leadStatus: leadStatus && leadStatus in LEAD_STATUS_LABELS ? leadStatus : "ALL",
+    paymentMode: paymentMode && paymentMode in PAYMENT_MODE_LABELS ? paymentMode : "ALL",
+    orderStatus: orderStatus && orderStatus in ORDER_STATUS_LABELS ? orderStatus : "ALL",
   };
 }
