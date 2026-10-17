@@ -1,6 +1,7 @@
-import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
 import LeadService from "../lead/lead.service.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
+import { legacyMatchCandidates } from "../whatsapp/whatsapp.matching.js";
 import { safeMessage, type TxRunner } from "../integrations/integrations.common.js";
 import { backoffMs, MAX_ATTEMPTS, type WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { parseAbandonmentEvent, summarize, type ParsedAbandonment } from "./shiprocket.abandonment.mapper.js";
@@ -62,17 +63,58 @@ async function ensureCheckoutSource(tx: import("../integrations/integrations.com
   return created.id;
 }
 
-async function resolveLead(tx: import("../integrations/integrations.common.js").Db, event: ParsedAbandonment): Promise<{ id: string }> {
+type Db = import("../integrations/integrations.common.js").Db;
+
+const OPEN_STATUSES = [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS];
+
+/** Serialises everything one customer's deliveries do (find-or-create the Lead, find-or-create the
+ *  Abandonment). Without it two near-simultaneous deliveries for the same person both see "nothing
+ *  there yet" and both insert - the schema has no unique constraint to stop them. Transaction-scoped,
+ *  so it is released on commit/rollback. */
+export async function lockContact(tx: Db, event: Pick<ParsedAbandonment, "phone" | "email">): Promise<void> {
+  const key = normalizeMobile(event.phone) ?? normalizeEmail(event.email);
+  if (!key) return;
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`lead-identity:${key}`}))`;
+}
+
+/** The existing Lead for this person, if any - the oldest one, so a pre-existing duplicate never makes
+ *  the choice flip between deliveries. The phone is matched in every stored shape (+91..., 91..., bare
+ *  10 digits, leading 0) via the same candidate list the IVR and WhatsApp matching use: leads created
+ *  before the canonical "+<cc><number>" format would otherwise never be found, and each delivery would
+ *  create yet another Lead. Exact-phone / exact-email only - nobody is merged on a name. */
+export async function findExistingLead(tx: Db, event: Pick<ParsedAbandonment, "phone" | "email">): Promise<{ id: string } | null> {
   const normalizedMobile = normalizeMobile(event.phone);
   const normalizedEmail = normalizeEmail(event.email);
+  if (!normalizedMobile && !normalizedEmail) return null;
 
-  if (normalizedMobile || normalizedEmail) {
-    const existing = await tx.lead.findFirst({
-      where: { OR: [...(normalizedMobile ? [{ normalizedMobile }] : []), ...(normalizedEmail ? [{ normalizedEmail }] : [])] },
-      select: { id: true },
-    });
-    if (existing) return existing;
-  }
+  return tx.lead.findFirst({
+    where: {
+      // A deactivated lead is never the target of a new abandonment; an active match is preferred, and with
+      // none the caller falls through to the existing "create a Lead" path.
+      workingStatus: { not: LeadWorkingStatus.DEACTIVATED },
+      OR: [
+        ...(normalizedMobile ? [{ normalizedMobile: { in: legacyMatchCandidates(normalizedMobile) } }] : []),
+        ...(normalizedEmail ? [{ normalizedEmail }] : []),
+      ],
+    },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+}
+
+/** The open CHECKOUT abandonment a delivery should refresh instead of duplicating: the same cart id, or -
+ *  when Shiprocket sent no cart id at all - the lead's open no-cart-id one. */
+export async function findOpenAbandonment(tx: Db, leadId: string, externalId: string | null): Promise<{ id: string } | null> {
+  return tx.abandonment.findFirst({
+    where: { leadId, type: AbandonmentType.CHECKOUT, referenceId: externalId, status: { in: OPEN_STATUSES } },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+}
+
+async function resolveLead(tx: Db, event: ParsedAbandonment): Promise<{ id: string }> {
+  const existing = await findExistingLead(tx, event);
+  if (existing) return existing;
 
   const sourceId = await ensureCheckoutSource(tx);
   const lead = await leadService.createLeadFromSource(
@@ -86,6 +128,7 @@ async function resolveLead(tx: import("../integrations/integrations.common.js").
     },
     "Lead created from an abandoned Shiprocket Checkout cart",
     tx,
+    { excludeDeactivated: true },
   );
   return { id: lead.id };
 }
@@ -103,6 +146,7 @@ export async function processAbandonmentEvent(eventId: string, deps: Abandonment
     }
 
     await deps.runner.$transaction(async (tx) => {
+      await lockContact(tx, event);
       const lead = await resolveLead(tx, event);
       const { score, reason } = priorityFromCartValue(event.cartValue);
       const detectedAt = event.abandonedAt ?? now();
@@ -110,12 +154,7 @@ export async function processAbandonmentEvent(eventId: string, deps: Abandonment
       // One open (ACTIVE/IN_PROGRESS) CHECKOUT abandonment per cart: a repeat delivery for the same
       // cart (Shiprocket Checkout may resend as the customer keeps stalling) refreshes it in place
       // instead of flooding the queue with duplicates for a lead who has not been called yet.
-      const existing = event.externalId
-        ? await tx.abandonment.findFirst({
-            where: { leadId: lead.id, type: AbandonmentType.CHECKOUT, referenceId: event.externalId, status: { in: [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS] } },
-            select: { id: true },
-          })
-        : null;
+      const existing = await findOpenAbandonment(tx, lead.id, event.externalId);
 
       const cartSnapshot = buildCartSnapshot(event);
 

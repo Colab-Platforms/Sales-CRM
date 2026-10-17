@@ -29,6 +29,7 @@ const callFiltersSchema = {
   agentId: optional(z.uuid({ error: "Invalid agent id" })),
   virtualNumberId: optional(z.uuid({ error: "Invalid virtual number id" })),
   hasRecording: optional(coerceBoolean),
+  callGroup: optional(z.string().trim().max(100, "callGroup must be 100 characters or fewer")),
 };
 
 const listCallsQuerySchema = z.object({

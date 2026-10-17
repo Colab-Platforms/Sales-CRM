@@ -1,3 +1,4 @@
+import { handleSharedUrlCallerDeskWebhook } from "../webhooks/callerdesk/callerdesk.controller.js";
 import { Request, Response } from "express";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -200,18 +201,37 @@ export const streamCallTranscript = async (req: AuthRequest, res: Response): Pro
   req.on("close", cleanup);
 };
 
-export const receiveCallWebhook = async (req: Request, res: Response): Promise<void> => {
-  if (!callingService.verifyWebhookSecret(req.headers as Record<string, unknown>, req.query as Record<string, unknown>)) {
-    res.status(STATUS_CODES.UNAUTHORIZED).json({ success: false, message: "Invalid webhook secret" });
-    return;
-  }
+export interface ReceiveCallWebhookDeps {
+  service: Pick<CallingService, "verifyWebhookSecret" | "handleCallWebhook">;
+  /** Handles an event that is not one of our click-to-call calls (inbound IVR); it sends the response itself. */
+  forward: (req: Request, res: Response) => Promise<void>;
+}
 
-  try {
-    await callingService.handleCallWebhook(req.body);
-    res.status(STATUS_CODES.OK).json({ success: true });
-  } catch (error: any) {
-    logger.error("[callerdesk] webhook processing failed", error);
-    // Always ack so CallerDesk doesn't retry/disable delivery on our processing errors.
-    res.status(STATUS_CODES.OK).json({ success: true });
-  }
-};
+/** Injectable so the response behaviour can be tested without the database. */
+export const createReceiveCallWebhook =
+  ({ service, forward }: ReceiveCallWebhookDeps) =>
+  async (req: Request, res: Response): Promise<void> => {
+    if (!service.verifyWebhookSecret(req.headers as Record<string, unknown>, req.query as Record<string, unknown>)) {
+      res.status(STATUS_CODES.UNAUTHORIZED).json({ success: false, message: "Invalid webhook secret" });
+      return;
+    }
+
+    try {
+      const handled = await service.handleCallWebhook(req.body);
+      // One webhook URL is registered in CallerDesk, so anything that is not one of our click-to-call
+      // calls (inbound IVR: Sales / Partnership...) is passed on to the IVR webhook service, which answers
+      // 200 for everything it can store or safely ignore, and 500 only for a real processing failure.
+      if (!handled) {
+        await forward(req, res);
+        return;
+      }
+      res.status(STATUS_CODES.OK).json({ success: true });
+    } catch (error: any) {
+      logger.error("[callerdesk] webhook processing failed", error);
+      // Always ack so CallerDesk doesn't retry/disable delivery on our processing errors - unless a response
+      // was already sent (the forwarded handler answers for itself).
+      if (!res.headersSent) res.status(STATUS_CODES.OK).json({ success: true });
+    }
+  };
+
+export const receiveCallWebhook = createReceiveCallWebhook({ service: callingService, forward: handleSharedUrlCallerDeskWebhook });

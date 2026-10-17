@@ -111,7 +111,7 @@ function maskPhone(value: string | null | undefined): string {
 
 type Correlation =
   | { kind: "CALL"; call: StoredCall; method: "PROVIDER_CALL_ID" | "CAMPAIGN_ID" }
-  | { kind: "CREATE"; leadId: string; agentId: string; virtualNumberId: string | null; leadCreated: boolean }
+  | { kind: "CREATE"; leadId: string; agentId: string | null; virtualNumberId: string | null; leadCreated: boolean }
   | { kind: "UNMATCHED"; reason: UnmatchedReason; leadId?: string };
 
 function eventTypeDbValue(event: NormalizedCallEvent): string {
@@ -162,21 +162,21 @@ async function correlate(tx: CallEventTx, event: NormalizedCallEvent, provider: 
   // callerdesk.payload.ts's toDigits) - legacyMatchCandidates only needs to add the legacy shapes
   // real leads may still be stored under, not rebuild the canonical form itself.
   const leads = await tx.findLeadsByNormalizedMobile(legacyMatchCandidates(event.customerNumber));
-  if (leads.length > 1) return { kind: "UNMATCHED", reason: "AMBIGUOUS_LEAD_MATCH" };
+  // 2+ leads share this number (the store returns them oldest first): the call is still real and must
+  // be listed, so it attaches to the oldest one rather than being dropped.
 
   // "IVR caller = Lead": a first-time caller becomes a new, unassigned Lead (source "IVR Inquiry"),
   // created here before the Call row - Call.leadId stays required, no migration needed. If agent
   // resolution then fails below, the Lead still commits (self-healing: the next call from the same
   // number matches it normally); this never invents an assignment just to satisfy Call.agentId.
   const leadCreated = leads.length === 0;
-  const lead = leads.length === 1 ? leads[0]! : await tx.createIvrLead(event.customerNumber);
+  const lead = leads.length > 0 ? leads[0]! : await tx.createIvrLead(event.customerNumber);
   if (!lead) return { kind: "UNMATCHED", reason: "NO_LEAD_MATCH" };
 
+  // No resolvable agent (unanswered, or answered on a non-CRM phone - common for Sales/Partnership
+  // call groups) is NOT a reason to drop the call: it is stored with a null agent so it still shows
+  // in the IVR list, exactly as CallerDesk's own report does.
   const agentId = await resolveAgentId(tx, event, lead.ownerId);
-  // The Lead above has already committed (it's created inside the same transaction as everything
-  // else here) even when this returns UNMATCHED - carrying its id through means the diagnostic log
-  // below, and WebhookEvent reconciliation, both know a Lead exists even though no Call does yet.
-  if (!agentId) return { kind: "UNMATCHED", reason: "NO_AGENT_RESOLVED", leadId: lead.id };
 
   const virtualNumberId = await tx.findVirtualNumberId(virtualNumberCandidates(event));
   return { kind: "CREATE", leadId: lead.id, agentId, virtualNumberId, leadCreated };
@@ -207,6 +207,9 @@ function buildCallPatch(call: StoredCall, event: NormalizedCallEvent, status: Ca
   if (status !== undefined && status !== call.status) patch.status = status;
   if (event.startedAt && !call.startedAt) patch.startedAt = event.startedAt;
   if (event.customerPickedAt && !call.answeredAt) patch.answeredAt = event.customerPickedAt;
+  // Never overwrites a once-known call group with a later null/blank - a Call Report carrying it
+  // is authoritative, but a retry or a different event kind that omits it must not erase it.
+  if (event.callGroup && call.callGroup !== event.callGroup) patch.callGroup = event.callGroup;
 
   if (event.eventType === "CALL_REPORT") {
     if (event.endedAt) patch.endedAt = event.endedAt;
@@ -291,6 +294,7 @@ export function createCallerDeskWebhookService(store: CallEventStore, options: C
         answeredAt: event.customerPickedAt,
         endedAt: event.eventType === "CALL_REPORT" ? event.endedAt : null,
         durationSeconds: event.eventType === "CALL_REPORT" ? event.talkDurationSeconds : null,
+        callGroup: event.callGroup,
       });
       callCreated = true;
     }

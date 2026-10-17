@@ -14,6 +14,6 @@ export default defineConfig({
     // adapter straight from DATABASE_URL and never reads this file. Neon's pooled DATABASE_URL
     // (PgBouncer, transaction mode) doesn't support the session-level advisory lock `migrate` takes,
     // so the CLI needs the direct, non-pooled connection instead.
-    url: process.env["DATABASE_URL"],
+    url: process.env["DIRECT_URL"] ?? process.env["DATABASE_URL"],
   },
 });

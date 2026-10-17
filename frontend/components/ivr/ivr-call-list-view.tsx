@@ -32,9 +32,18 @@ export function IvrCallListView({ direction }: { direction: "INBOUND" | "OUTBOUN
 
   const listParams = useMemo(() => ({ page, limit: PAGE_SIZE, direction, ...filters }), [page, direction, filters]);
   const summaryParams = useMemo(() => ({ direction, ...filters }), [direction, filters]);
+  // The call-group tabs need counts for every group regardless of which one (if any) is currently
+  // selected - otherwise picking "Sales" would make every other tab disappear, since the normal
+  // summary query above is itself filtered by the active callGroup. Same request as summaryParams
+  // (and so deduped by React Query) whenever no call-group tab is selected.
+  const tabsSummaryParams = useMemo(() => {
+    const { callGroup: _callGroup, ...rest } = filters;
+    return { direction, ...rest };
+  }, [direction, filters]);
 
   const { data, isLoading, error, refetch } = useCallHistoryList(listParams);
   const { data: summary, isLoading: summaryLoading } = useCallHistorySummary(summaryParams);
+  const { data: tabsSummary } = useCallHistorySummary(tabsSummaryParams);
 
   function handleFiltersChange(next: IvrFilterState) {
     setFilters(next);
@@ -54,7 +63,7 @@ export function IvrCallListView({ direction }: { direction: "INBOUND" | "OUTBOUN
 
       {isInbound ? <IvrInboundSummaryCards summary={summary} isLoading={summaryLoading} /> : <IvrOutboundSummaryCards summary={summary} isLoading={summaryLoading} />}
 
-      <IvrFilters value={filters} onChange={handleFiltersChange} />
+      <IvrFilters value={filters} onChange={handleFiltersChange} callGroups={tabsSummary?.byCallGroup} />
 
       {error ? (
         <div role="alert" className="sketch-outline flex flex-col items-start gap-3 border-destructive/30 bg-destructive/10 p-4">

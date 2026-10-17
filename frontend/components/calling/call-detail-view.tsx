@@ -91,7 +91,7 @@ export function CallDetailView({ callId }: { callId: string }) {
               <span className="font-mono text-sm">{call.lead.leadNumber}</span>
             </DetailField>
             <DetailField label="Mobile">{call.lead.mobile ?? "No mobile on file"}</DetailField>
-            <DetailField label="Salesperson">{call.agent.name}</DetailField>
+            <DetailField label="Salesperson">{call.agent?.name ?? "Not assigned"}</DetailField>
             <DetailField label="Direction">{CALL_DIRECTION_LABELS[call.direction]}</DetailField>
             <DetailField label="Status">
               <CallStatusBadge status={call.status} />

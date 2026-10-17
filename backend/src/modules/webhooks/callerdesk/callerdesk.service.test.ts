@@ -298,22 +298,13 @@ describe("CallerDesk webhook service - correlation", () => {
     assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.RECEIVED);
   });
 
-  it("an unmatched event (no resolvable agent) is reconciled by a later retry, reusing the Lead already created", async () => {
+  it("an inbound call with no resolvable agent is still stored, with a null agent", async () => {
     const { kit, service } = setup();
-    const first = await service.processWebhook(inboundCallReport());
-    assert.equal(first.outcome, "UNMATCHED");
-    assert.equal(first.outcome === "UNMATCHED" && first.reason, "NO_AGENT_RESOLVED");
-    assert.equal(kit.state.leads.length, 1, "the Lead still committed even though the Call did not");
-    assert.equal(kit.state.calls.length, 0);
-
-    kit.addUser({ phone: "9123456789" }); // the agent can now be resolved
-    const retry = processed(await service.processWebhook(inboundCallReport()));
-
-    assert.equal(retry.callCreated, true);
-    assert.equal(kit.state.leads.length, 1, "still the same Lead, not a second one");
+    const first = processed(await service.processWebhook(inboundCallReport()));
+    assert.equal(first.callCreated, true);
+    assert.equal(kit.state.leads.length, 1);
     assert.equal(kit.state.calls.length, 1);
-    assert.equal(kit.state.webhookEvents.length, 1, "the stored event is reused, not duplicated");
-    assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.PROCESSED);
+    assert.equal(kit.state.calls[0]!.agentId, null);
   });
 
   it("successful correlation matches leads stored with or without a country code", async () => {
@@ -325,26 +316,26 @@ describe("CallerDesk webhook service - correlation", () => {
     }
   });
 
-  it("ambiguous lead match is never guessed", async () => {
+  it("ambiguous lead match still stores the call (on one of the matching leads)", async () => {
     const { kit, service } = setup();
     const ownerId = kit.addUser({ phone: "9000000001" });
     kit.addLead({ normalizedMobile: "9876543210", ownerId });
     kit.addLead({ normalizedMobile: "919876543210", ownerId });
 
-    const result = await service.processWebhook(inboundCallReport());
+    processed(await service.processWebhook(inboundCallReport()));
 
-    assert.equal(result.outcome === "UNMATCHED" && result.reason, "AMBIGUOUS_LEAD_MATCH");
-    assert.equal(kit.state.calls.length, 0);
+    assert.equal(kit.state.calls.length, 1);
+    assert.equal(kit.state.leads.length, 2, "no extra Lead created");
   });
 
-  it("no resolvable agent leaves the event unmatched (calls.agent_id is required)", async () => {
+  it("no resolvable agent still stores the call with a null agent", async () => {
     const { kit, service } = setup();
     kit.addLead({ normalizedMobile: "9876543210", ownerId: null });
 
-    const result = await service.processWebhook(inboundCallReport({ DialWhomNumber: "9555555555" }));
+    processed(await service.processWebhook(inboundCallReport({ DialWhomNumber: "9555555555" })));
 
-    assert.equal(result.outcome === "UNMATCHED" && result.reason, "NO_AGENT_RESOLVED");
-    assert.equal(kit.state.calls.length, 0);
+    assert.equal(kit.state.calls.length, 1);
+    assert.equal(kit.state.calls[0]!.agentId, null);
   });
 
   it("does not guess the agent when two users share the answering number", async () => {
@@ -478,13 +469,12 @@ describe("CallerDesk webhook service - existing Call updates and Live Call", () 
     assert.equal(kit.state.webhookEvents.length, 2);
   });
 
-  it("uncorrelated Live Call is persisted and left for reconciliation", async () => {
+  it("an inbound Live Call with no known caller is stored as a Call on a new IVR Lead", async () => {
     const { kit, service } = setup();
-    const result = await service.processWebhook(inboundLiveCall());
-    assert.equal(result.outcome, "UNMATCHED");
-    assert.equal(kit.state.webhookEvents.length, 1);
+    processed(await service.processWebhook(inboundLiveCall()));
+    assert.equal(kit.state.calls.length, 1);
     assert.equal(kit.state.webhookEvents[0]!.eventType, "live_call");
-    assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.RECEIVED);
+    assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.PROCESSED);
   });
 
   it("Live duplicates are keyed by CallSid + Status", async () => {
@@ -510,6 +500,106 @@ describe("CallerDesk webhook service - existing Call updates and Live Call", () 
     assert.equal(kit.state.webhookEvents[0]!.status, WebhookStatus.IGNORED);
     assert.equal((await service.processWebhook(inboundLiveCall({ Status: "WHO_KNOWS" }))).outcome, "DUPLICATE");
     assert.equal(kit.state.webhookEvents.length, 1);
+  });
+});
+
+describe("CallerDesk webhook service - call group classification", () => {
+  it("1. a Sales inbound call (call_group=callgroup1) is persisted and visible with that raw call group", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    const result = processed(await service.processWebhook(inboundCallReport({ call_group: "callgroup1" })));
+
+    assert.equal(result.callCreated, true);
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales");
+  });
+
+  it("2. a Partnership-style inbound call (a different real call_group value) is equally persisted and visible", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    const result = processed(await service.processWebhook(inboundCallReport({ call_group: "callgroup2" })));
+
+    assert.equal(result.callCreated, true);
+    assert.equal(kit.state.calls[0]!.callGroup, "callgroup2", "a second, different call group is stored exactly as sent - never coerced to Sales");
+  });
+
+  it("3. call-group classification comes from the real provider payload field, not inferred from the caller's number", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+    // Same caller/world as the Sales test above, only call_group differs - proves the classification
+    // tracks the payload field, not anything derived from the phone number.
+    await service.processWebhook(inboundCallReport({ call_group: "callgroup2" }));
+    assert.equal(kit.state.calls[0]!.callGroup, "callgroup2");
+  });
+
+  it("4. a missing/unknown call_group is stored as null, never defaulted to a known group", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    const result = processed(await service.processWebhook(inboundCallReport({ call_group: undefined })));
+
+    assert.equal(result.callCreated, true);
+    assert.equal(kit.state.calls[0]!.callGroup, null);
+  });
+
+  it("5. a duplicate Call Report delivery does not change or duplicate the stored call group", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    await service.processWebhook(inboundCallReport({ call_group: "callgroup1" }));
+    const dup = await service.processWebhook(inboundCallReport({ call_group: "callgroup1" }));
+
+    assert.equal(dup.outcome, "DUPLICATE");
+    assert.equal(kit.state.calls.length, 1);
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales");
+  });
+
+  it("6. a Live Call (no report yet) followed by its Call Report: the call group arrives with whichever event carries it", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    const live = processed(await service.processWebhook(inboundLiveCall({ call_group: "callgroup1" })));
+    assert.equal(live.callCreated, true);
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales", "Live Call already carries it in practice - stored immediately, not left blank");
+
+    processed(await service.processWebhook(inboundCallReport({ call_group: "callgroup1" })));
+    assert.equal(kit.state.calls.length, 1);
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales");
+  });
+
+  it("7. lead matching/creation is unaffected by call group - a new caller still gets an IVR Inquiry lead either way", async () => {
+    const { kit, service } = setup();
+    kit.addUser({ phone: "9123456789" }); // DialWhomNumber's answering agent only, no pre-existing lead
+
+    const result = processed(await service.processWebhook(inboundCallReport({ call_group: "callgroup2" })));
+
+    assert.equal(result.leadCreated, true);
+    assert.equal(kit.state.leads.length, 1);
+    assert.equal(kit.state.calls[0]!.callGroup, "callgroup2");
+  });
+
+  it("a later Call Report's call group updates an existing Call created from a Live event with none", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    await service.processWebhook(inboundLiveCall({ call_group: undefined }));
+    assert.equal(kit.state.calls[0]!.callGroup, null);
+
+    await service.processWebhook(inboundCallReport({ call_group: "callgroup1" }));
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales");
+  });
+
+  it("a Live event with no call group never erases an already-known one from an earlier Call Report retry path", async () => {
+    const { kit, service } = setup();
+    seedInboundWorld(kit);
+
+    await service.processWebhook(inboundCallReport({ call_group: "callgroup1" }));
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales");
+
+    // A different, later Live status for the same call, carrying no call_group at all.
+    await service.processWebhook(inboundLiveCall({ Status: "Picked", call_group: undefined }));
+    assert.equal(kit.state.calls[0]!.callGroup, "Sales", "never regressed to null by an event that simply omits it");
   });
 });
 

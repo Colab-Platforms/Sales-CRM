@@ -50,8 +50,9 @@ model Call {
   leadId String @map("lead_id") @db.Uuid
   lead   Lead   @relation(fields: [leadId], references: [id])
 
-  agentId String @map("agent_id") @db.Uuid
-  agent   User   @relation("CallAgent", fields: [agentId], references: [id])
+  // Null for an inbound IVR call no CRM user answered (unanswered, or answered on a non-CRM phone).
+  agentId String? @map("agent_id") @db.Uuid
+  agent   User?   @relation("CallAgent", fields: [agentId], references: [id])
 
   virtualNumberId String?        @map("virtual_number_id") @db.Uuid
   virtualNumber   VirtualNumber? @relation(fields: [virtualNumberId], references: [id])
@@ -64,6 +65,13 @@ model Call {
 
   agentNumber    String? @map("agent_number") @db.VarChar(30)
   customerNumber String? @map("customer_number") @db.VarChar(30)
+
+  // Raw provider call-group/campaign classification (CallerDesk's `call_group`, e.g. "callgroup1"),
+  // verbatim - never translated to a business label ("Sales"/"Partnership") here. That mapping is a
+  // display-only concern (frontend/lib/call-group.ts) so an unmapped or unknown value is still
+  // stored and shown as-is, never silently dropped or guessed into an existing category. Null for
+  // calls the provider never classified (e.g. outbound, or a Live event with no report yet).
+  callGroup String? @map("call_group") @db.VarChar(100)
 
   startedAt  DateTime? @map("started_at")
   answeredAt DateTime? @map("answered_at")
@@ -89,6 +97,7 @@ model Call {
   @@index([providerCallId])
   @@index([status])
   @@index([startedAt])
+  @@index([callGroup])
   @@map("calls")
 }
 

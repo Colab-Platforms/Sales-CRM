@@ -1,5 +1,5 @@
 import type { Prisma } from "@root/generated/prisma/client.js";
-import { ActivityType, Role, SourceStatus, SourceType, UserStatus, WebhookStatus, type CallDirection, type CallStatus } from "@root/generated/prisma/enums.js";
+import { ActivityType, LeadWorkingStatus, Role, SourceStatus, SourceType, UserStatus, WebhookStatus, type CallDirection, type CallStatus } from "@root/generated/prisma/enums.js";
 import type { prisma as PrismaSingleton } from "@/lib/prisma.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import LeadService from "../../lead/lead.service.js";
@@ -36,7 +36,7 @@ export interface WebhookEventPatch {
 export interface StoredCall {
   id: string;
   leadId: string;
-  agentId: string;
+  agentId: string | null;
   provider: string;
   providerCallId: string | null;
   direction: CallDirection;
@@ -45,11 +45,12 @@ export interface StoredCall {
   answeredAt: Date | null;
   endedAt: Date | null;
   durationSeconds: number | null;
+  callGroup: string | null;
 }
 
 export interface NewCall {
   leadId: string;
-  agentId: string;
+  agentId: string | null;
   virtualNumberId: string | null;
   provider: string;
   providerCallId: string;
@@ -61,6 +62,7 @@ export interface NewCall {
   answeredAt: Date | null;
   endedAt: Date | null;
   durationSeconds: number | null;
+  callGroup: string | null;
 }
 
 export interface CallPatch {
@@ -70,6 +72,7 @@ export interface CallPatch {
   answeredAt?: Date;
   endedAt?: Date;
   durationSeconds?: number;
+  callGroup?: string;
 }
 
 export interface CandidateLead {
@@ -120,7 +123,7 @@ export interface CallEventTx {
   createCall(data: NewCall): Promise<StoredCall>;
   updateCall(id: string, patch: CallPatch): Promise<StoredCall>;
 
-  /** At most 2 rows are needed: 0 = no match, 1 = match, 2 = ambiguous. */
+  /** Oldest matching lead only (0 or 1 row); duplicates of one number are never dropped. */
   findLeadsByNormalizedMobile(candidates: string[]): Promise<CandidateLead[]>;
   findActiveUsersWithPhone(): Promise<CandidateUser[]>;
   findVirtualNumberId(numbers: string[]): Promise<string | null>;
@@ -168,7 +171,7 @@ type Db = Prisma.TransactionClient;
 function asStoredCall(row: {
   id: string;
   leadId: string;
-  agentId: string;
+  agentId: string | null;
   provider: string;
   providerCallId: string | null;
   direction: CallDirection;
@@ -177,6 +180,7 @@ function asStoredCall(row: {
   answeredAt: Date | null;
   endedAt: Date | null;
   durationSeconds: number | null;
+  callGroup: string | null;
 }): StoredCall {
   return {
     id: row.id,
@@ -190,6 +194,7 @@ function asStoredCall(row: {
     answeredAt: row.answeredAt,
     endedAt: row.endedAt,
     durationSeconds: row.durationSeconds,
+    callGroup: row.callGroup,
   };
 }
 
@@ -256,9 +261,12 @@ function createTx(db: Db): CallEventTx {
     async findLeadsByNormalizedMobile(candidates) {
       if (candidates.length === 0) return [];
       return db.lead.findMany({
-        where: { normalizedMobile: { in: candidates } },
+        // A deactivated lead is never the target of a new inbound call: only active leads are candidates, so
+        // a caller whose only lead is deactivated falls through to the normal "no lead yet" path.
+        where: { normalizedMobile: { in: candidates }, workingStatus: { not: LeadWorkingStatus.DEACTIVATED } },
         select: { id: true, ownerId: true },
-        take: 2,
+        orderBy: { createdAt: "asc" },
+        take: 1,
       });
     },
 
@@ -299,6 +307,7 @@ function createTx(db: Db): CallEventTx {
         { firstName: IVR_CALLER_PLACEHOLDER_FIRST_NAME, mobile: customerNumber },
         "Lead created via IVR Inquiry",
         db,
+        { excludeDeactivated: true },
       );
 
       return { id: lead.id, ownerId: lead.ownerId };

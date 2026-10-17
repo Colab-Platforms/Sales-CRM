@@ -1,5 +1,5 @@
 import type { Prisma } from "@root/generated/prisma/client.js";
-import { ConversationMode, SourceStatus, SourceType, WebChatSender } from "@root/generated/prisma/enums.js";
+import { ConversationMode, LeadWorkingStatus, SourceStatus, SourceType, WebChatSender } from "@root/generated/prisma/enums.js";
 import type { prisma as PrismaSingleton } from "@/lib/prisma.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import LeadService from "../../lead/lead.service.js";
@@ -161,7 +161,9 @@ function createTx(db: Db): WebChatEventTx {
     async findLeadsByNormalizedMobile(candidates) {
       if (candidates.length === 0) return [];
       return db.lead.findMany({
-        where: { normalizedMobile: { in: candidates } },
+        // A deactivated lead is never the target of a new chat identity match: only active leads are candidates,
+        // so it can neither receive the conversation nor turn a single active match into an "ambiguous" one.
+        where: { normalizedMobile: { in: candidates }, workingStatus: { not: LeadWorkingStatus.DEACTIVATED } },
         select: { id: true, ownerId: true },
         take: 2,
       });
@@ -188,6 +190,7 @@ function createTx(db: Db): WebChatEventTx {
         { firstName: identity.name?.trim() || "Website Visitor", mobile: identity.mobile, email: identity.email },
         "Lead created via Website Chat",
         db,
+        { excludeDeactivated: true },
       );
 
       return { id: lead.id, ownerId: lead.ownerId };

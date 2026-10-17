@@ -21,6 +21,9 @@ export interface ListCallsQuery {
   agentId?: string;
   virtualNumberId?: string;
   hasRecording?: boolean;
+  /** Exact match on the raw, persisted CallerDesk call-group string (e.g. "callgroup1") - never a
+   * business label like "Sales"/"Partnership", which is a display-only mapping the frontend owns. */
+  callGroup?: string;
 }
 
 /** Same filters as the list, minus pagination - shared by `GET /api/calls/summary`. */
@@ -52,7 +55,7 @@ export interface CallingIdentityRef {
 export interface CallListItem {
   id: string;
   lead: CallLeadRef;
-  agent: CallAgentRef;
+  agent: CallAgentRef | null;
   direction: CallDirection;
   status: CallStatus;
   startedAt: Date | null;
@@ -68,6 +71,8 @@ export interface CallListItem {
   virtualNumber: CallingIdentityRef | null;
   /** CallerDesk CallSid once known (set at webhook correlation, or at initiation before that). */
   providerCallId: string | null;
+  /** Raw provider call-group (e.g. "callgroup1"), persisted verbatim - see `ListCallsQuery.callGroup`. */
+  callGroup: string | null;
 }
 
 /** Safe-only fields pulled from the correlated CallerDesk Call Report webhook payload for display.
@@ -99,9 +104,20 @@ export interface CallStatusCount {
   count: number;
 }
 
+export interface CallGroupCount {
+  /** `null` groups every call with no recorded call group (never shown as a fake "Unknown" label
+   * that could be confused with a real provider value). */
+  callGroup: string | null;
+  count: number;
+}
+
 export interface CallSummary {
   total: number;
   byStatus: CallStatusCount[];
+  /** Distinct call groups actually present among the filtered calls - drives the Inbound IVR page's
+   * All/Sales/Partnership-style tabs without hardcoding which raw values exist (see
+   * frontend/lib/call-group.ts). Grows on its own the moment a new raw value is first seen. */
+  byCallGroup: CallGroupCount[];
   totalTalkTimeSeconds: number;
 }
 

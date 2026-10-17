@@ -9,6 +9,7 @@ import { CallStatusBadge } from "@/components/calling/call-status-badge";
 import { callDetailHref } from "@/components/calling/call-history-table";
 import { leadDetailHref } from "@/components/leads/lead-table";
 import { formatCallDuration } from "@/lib/call-status";
+import { formatCallGroup } from "@/lib/call-group";
 import type { CallDirection, CallListItem, CallListPagination } from "@/lib/api-client/types/call-history.types";
 
 export function IvrCallTableSkeleton() {
@@ -34,7 +35,7 @@ interface IvrCallTableProps {
  * `/dashboard/calling/[callId]` detail page - there is no separate IVR detail view. */
 export function IvrCallTable({ direction, calls, pagination, onPageChange }: IvrCallTableProps) {
   const isInbound = direction === "INBOUND";
-  const columnCount = 9;
+  const columnCount = 10;
 
   return (
     <div className="space-y-4">
@@ -56,6 +57,7 @@ export function IvrCallTable({ direction, calls, pagination, onPageChange }: Ivr
               )}
               <TableHead>DID</TableHead>
               {isInbound ? <TableHead>Agent</TableHead> : null}
+              <TableHead>Call Group</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Duration</TableHead>
               <TableHead>{isInbound ? "CallSid" : "campid / CallSid"}</TableHead>
@@ -91,7 +93,7 @@ export function IvrCallTable({ direction, calls, pagination, onPageChange }: Ivr
                     </>
                   ) : (
                     <>
-                      <TableCell>{call.agent.name}</TableCell>
+                      <TableCell>{call.agent?.name ?? "Not assigned"}</TableCell>
                       <TableCell>
                         <Link href={leadDetailHref(call.lead.id)} className="font-semibold hover:underline">
                           {call.lead.firstName} {call.lead.lastName ?? ""}
@@ -101,7 +103,8 @@ export function IvrCallTable({ direction, calls, pagination, onPageChange }: Ivr
                     </>
                   )}
                   <TableCell className="font-mono text-xs">{call.virtualNumber?.number ?? "—"}</TableCell>
-                  {isInbound ? <TableCell>{call.agent.name}</TableCell> : null}
+                  {isInbound ? <TableCell>{call.agent?.name ?? "Not assigned"}</TableCell> : null}
+                  <TableCell className="text-xs">{formatCallGroup(call.callGroup)}</TableCell>
                   <TableCell>
                     <CallStatusBadge status={call.status} />
                   </TableCell>

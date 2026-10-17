@@ -143,6 +143,7 @@ export function createInMemoryCallEventStore() {
         answeredAt: data.answeredAt,
         endedAt: data.endedAt,
         durationSeconds: data.durationSeconds,
+        callGroup: data.callGroup,
       };
       state.calls.push(row);
       return { ...row };
@@ -159,7 +160,7 @@ export function createInMemoryCallEventStore() {
     async findLeadsByNormalizedMobile(candidates) {
       return state.leads
         .filter((l) => candidates.includes(l.normalizedMobile))
-        .slice(0, 2)
+        .slice(0, 1)
         .map((l) => ({ id: l.id, ownerId: l.ownerId }));
     },
 
@@ -279,6 +280,7 @@ export function createInMemoryCallEventStore() {
         answeredAt: null,
         endedAt: null,
         durationSeconds: null,
+        callGroup: null,
         ...call,
       };
       state.calls.push(row);

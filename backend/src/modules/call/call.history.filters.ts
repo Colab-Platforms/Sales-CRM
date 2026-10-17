@@ -1,6 +1,6 @@
 import type { Prisma } from "../../../generated/prisma/client.js";
 import type { CallStatus } from "../../../generated/prisma/enums.js";
-import type { CallStatusCount, CallSummary, ListCallsQuery } from "./call.history.types.js";
+import type { CallGroupCount, CallStatusCount, CallSummary, ListCallsQuery } from "./call.history.types.js";
 
 const MAX_SEARCH_TERMS = 5;
 
@@ -29,15 +29,17 @@ export function searchWhere(search: string): Prisma.CallWhereInput {
 // see callerdesk.store.ts#createIvrLead) would be invisible to the very salesperson who answered it,
 // even though Call.agentId already correctly identifies them. This never widens who may see an
 // already-owned Lead's calls - only adds back calls the viewer personally handled on an unowned one.
+// Calls no CRM user answered (agentId null - unanswered / answered on a non-CRM phone) are a shared
+// inbox: every viewer of the IVR pages sees them.
 export function buildCallWhere(
-  query: Pick<ListCallsQuery, "search" | "status" | "direction" | "dateFrom" | "dateTo" | "agentId" | "virtualNumberId" | "hasRecording">,
+  query: Pick<ListCallsQuery, "search" | "status" | "direction" | "dateFrom" | "dateTo" | "agentId" | "virtualNumberId" | "hasRecording" | "callGroup">,
   leadScope: Prisma.LeadWhereInput,
   viewerId?: string | null,
 ): Prisma.CallWhereInput {
   const and: Prisma.CallWhereInput[] = [];
 
   if (Object.keys(leadScope).length > 0) {
-    and.push(viewerId ? { OR: [{ lead: leadScope }, { agentId: viewerId }] } : { lead: leadScope });
+    and.push(viewerId ? { OR: [{ lead: leadScope }, { agentId: viewerId }, { agentId: null }] } : { lead: leadScope });
   }
   if (query.search) and.push(searchWhere(query.search));
   if (query.status) and.push({ status: query.status });
@@ -50,6 +52,7 @@ export function buildCallWhere(
   if (query.agentId) and.push({ agentId: query.agentId });
   if (query.virtualNumberId) and.push({ virtualNumberId: query.virtualNumberId });
   if (query.hasRecording !== undefined) and.push({ recording: query.hasRecording ? { isNot: null } : { is: null } });
+  if (query.callGroup) and.push({ callGroup: query.callGroup });
 
   return and.length > 0 ? { AND: and } : {};
 }
@@ -62,10 +65,12 @@ export function buildCallWhere(
 export function buildCallSummary(
   counts: { status: CallStatus; _count: { _all: number } }[],
   totalTalkTimeSeconds: number | null,
+  callGroupCounts: { callGroup: string | null; _count: { _all: number } }[] = [],
 ): CallSummary {
   const byStatus: CallStatusCount[] = counts.map((row) => ({ status: row.status, count: row._count._all }));
   const total = byStatus.reduce((sum, row) => sum + row.count, 0);
-  return { total, byStatus, totalTalkTimeSeconds: totalTalkTimeSeconds ?? 0 };
+  const byCallGroup: CallGroupCount[] = callGroupCounts.map((row) => ({ callGroup: row.callGroup, count: row._count._all }));
+  return { total, byStatus, byCallGroup, totalTalkTimeSeconds: totalTalkTimeSeconds ?? 0 };
 }
 
 // One call, but only if the user's lead scope (or, with viewerId, their own agent assignment -
@@ -73,5 +78,5 @@ export function buildCallSummary(
 // exists but is out of scope looks the same as a missing one - no existence leak.
 export function scopedCallWhere(id: string, leadScope: Prisma.LeadWhereInput, viewerId?: string | null): Prisma.CallWhereInput {
   if (Object.keys(leadScope).length === 0) return { id };
-  return { AND: [{ id }, viewerId ? { OR: [{ lead: leadScope }, { agentId: viewerId }] } : { lead: leadScope }] };
+  return { AND: [{ id }, viewerId ? { OR: [{ lead: leadScope }, { agentId: viewerId }, { agentId: null }] } : { lead: leadScope }] };
 }

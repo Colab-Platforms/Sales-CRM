@@ -75,6 +75,7 @@ export class ExotelProvider implements TelephonyProvider {
         externalCallId: callSid,
         dedupeKey: extractExternalEventId(payload),
         campaignId: null,
+        callGroup: null,
         direction: mapExotelDirection(extractDirection(payload)),
         sourceNumber: extractCallerNumber(payload),
         destinationNumber: extractBusinessNumber(payload),

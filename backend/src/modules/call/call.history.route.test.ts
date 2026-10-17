@@ -33,6 +33,7 @@ const LIST_ITEM = {
   customerNumber: "9876543210",
   virtualNumber: { displayName: "Avatar Sales", number: "01204567890" },
   providerCallId: "CA123",
+  callGroup: null,
 };
 
 const LIST_RESULT: CallListResult = { data: [LIST_ITEM], pagination: { page: 1, limit: 20, total: 1, totalPages: 1 } };
@@ -44,7 +45,7 @@ const DETAIL_RESULT: CallDetail = {
   recordingUrl: null,
   providerMetadata: null,
 };
-const SUMMARY_RESULT: CallSummary = { total: 1, byStatus: [{ status: CallStatus.COMPLETED, count: 1 }], totalTalkTimeSeconds: 300 };
+const SUMMARY_RESULT: CallSummary = { total: 1, byStatus: [{ status: CallStatus.COMPLETED, count: 1 }], byCallGroup: [], totalTalkTimeSeconds: 300 };
 
 let server: Server | undefined;
 let baseUrl = "";

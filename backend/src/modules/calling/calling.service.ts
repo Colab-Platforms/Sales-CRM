@@ -7,6 +7,7 @@ import { CallDirection, CallStatus, VirtualNumberStatus, ActivityType, Role, Tas
 import { OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
 import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { enqueueTranscription } from "./calling.transcription.js";
+import { summarizeWebhookForLog } from "./calling.webhook.log.js";
 import { attendanceService } from "../attendance/attendance.service.js";
 import { ENDED_CALL_STATUSES } from "../attendance/attendance.constants.js";
 import type {
@@ -371,7 +372,8 @@ class CallingService {
     });
   }
 
-  async handleCallWebhook(payload: CallerDeskWebhookPayload): Promise<void> {
+  /** Resolves `false` when the event is not about a click-to-call we created (e.g. an inbound IVR call), so the caller can hand it to the IVR webhook service. */
+  async handleCallWebhook(payload: CallerDeskWebhookPayload): Promise<boolean> {
     // triggerClickToCall only gets `campid` back at dial time (no CallSid), so that's what
     // we stored as providerCallId — match on it first, falling back to CallSid in case a
     // future trigger response starts returning one instead.
@@ -382,17 +384,18 @@ class CallingService {
     if (!providerCallId) {
       // Seen in real traffic for an early, pre-dial event that isn't about a call we've created yet -
       // harmless (the controller acks CallerDesk regardless), just not something to act on.
-      logger.warn(`[callerdesk] webhook with no campid/CallSid — ignoring: ${JSON.stringify(payload)}`);
-      return;
+      logger.info("[callerdesk] event has no campid/CallSid - passing to the IVR webhook handler");
+      return false;
     }
 
     const call = await prisma.call.findFirst({ where: { provider: PROVIDER, providerCallId: String(providerCallId) } });
     if (!call) {
-      logger.warn(`[callerdesk] webhook for unknown call id=${providerCallId} — ignoring`);
-      return;
+      logger.info(`[callerdesk] id=${providerCallId} is not a click-to-call - passing to the IVR webhook handler`);
+      return false;
     }
 
-    logger.info(`[callerdesk] webhook payload for call=${call.id}: ${JSON.stringify(payload)}`);
+    // A summary only: the raw payload carries customer and agent phone numbers and a recording URL.
+    logger.info(summarizeWebhookForLog(call.id, payload));
 
     // Only `call_report` is the final word on a call; anything else (live_call, or no `type` at all
     // on an older payload shape) is a mid-call ping and must never be allowed to guess COMPLETED/FAILED.
@@ -404,7 +407,7 @@ class CallingService {
     const status = mapWebhookStatus(payload.Status, isFinalReport, Boolean(talkSeconds));
     if (status === null) {
       // An unrecognized live_call ping - nothing safe to record yet, wait for the next update.
-      return;
+      return true;
     }
 
     // Webhooks can arrive out of order: a late live_call "Picked" must never drag an already-ended
@@ -412,7 +415,7 @@ class CallingService {
     // revise a terminal call, e.g. to attach the recording and duration.
     if (!isFinalReport && TERMINAL_STATUSES.has(call.status)) {
       logger.info(`[callerdesk] ignoring late live_call ${status} for already-ended call=${call.id} (${call.status})`);
-      return;
+      return true;
     }
 
     await prisma.call.update({
@@ -430,14 +433,14 @@ class CallingService {
       },
     });
 
-    if (ENDED_CALL_STATUSES.has(status)) {
+    if (ENDED_CALL_STATUSES.has(status) && call.agentId) {
       attendanceService
         .restoreFromCall(call.agentId)
         .catch((e) => logger.error("[attendance] could not restore status after call", e));
     }
 
     // Nobody spoke, so there's nothing for the salesperson to log: record "Ringing / no answer" for them.
-    if (isFinalReport && status === CallStatus.NO_ANSWER && !call.outcomeId) {
+    if (isFinalReport && status === CallStatus.NO_ANSWER && !call.outcomeId && call.agentId) {
       await this.autoLogNoAnswer(call.id, call.leadId, call.agentId).catch((e) =>
         logger.error("[callerdesk] could not auto-log no-answer outcome", e)
       );
@@ -470,6 +473,7 @@ class CallingService {
           .join(" · ") || undefined,
       },
     });
+    return true;
   }
 }
 

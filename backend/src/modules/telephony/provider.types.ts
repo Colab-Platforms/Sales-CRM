@@ -36,6 +36,13 @@ export interface NormalizedCallEvent {
   /** Outbound click-to-call request id, when the provider supplies one. */
   campaignId: string | null;
 
+  /** Raw provider call-group/campaign classification, exactly as sent (e.g. CallerDesk's
+   * `call_group`: "callgroup1"). Never translated to a business label here - that mapping lives at
+   * the display layer (frontend/lib/call-group.ts) so an unrecognised value is still carried
+   * through verbatim, never dropped or guessed into an existing category. `null` when the provider
+   * sent nothing (Exotel never supplies this). */
+  callGroup: string | null;
+
   direction: NormalizedCallDirection | null;
 
   /** Numbers exactly as the provider sent them (trimmed). Semantics depend on direction, see below. */

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { Prisma } from "../../../generated/prisma/client.js";
 import { CallDirection, CallOutcomeCategory, CallStatus, Role } from "../../../generated/prisma/enums.js";
 import { buildCallSummary, buildCallWhere, scopedCallWhere, searchWhere } from "./call.history.filters.js";
 import { validateCallIdParams, validateCallSummaryQuery, validateListCallsQuery } from "./call.history.validators.js";
-import { mapCallDetail, mapCallListItem } from "./call.history.service.js";
+import { CallHistoryService, isMissingCallGroupColumnError, mapCallDetail, mapCallListItem } from "./call.history.service.js";
 import { extractSafeProviderMetadata } from "./call.history.metadata.js";
 import type { ListCallsQuery } from "./call.history.types.js";
 
@@ -70,7 +71,7 @@ describe("buildCallWhere", () => {
   it("with a viewerId, widens the lead-scope clause to also match calls the viewer personally agented - e.g. an inbound IVR call on a still-unassigned Lead", () => {
     const salespersonScope = { ownerId: "salesperson-1" };
     const where = buildCallWhere(baseQuery, salespersonScope, "salesperson-1");
-    assert.deepEqual(where, { AND: [{ OR: [{ lead: salespersonScope }, { agentId: "salesperson-1" }] }] });
+    assert.deepEqual(where, { AND: [{ OR: [{ lead: salespersonScope }, { agentId: "salesperson-1" }, { agentId: null }] }] });
   });
 
   it("without a viewerId, behaves exactly as before - lead scope only, no widening", () => {
@@ -97,7 +98,7 @@ describe("scopedCallWhere", () => {
 
   it("with a viewerId, also matches a call the viewer personally agented even if its Lead is out of their scope", () => {
     assert.deepEqual(scopedCallWhere(UUID, { ownerId: "salesperson-1" }, "salesperson-1"), {
-      AND: [{ id: UUID }, { OR: [{ lead: { ownerId: "salesperson-1" } }, { agentId: "salesperson-1" }] }],
+      AND: [{ id: UUID }, { OR: [{ lead: { ownerId: "salesperson-1" } }, { agentId: "salesperson-1" }, { agentId: null }] }],
     });
   });
 });
@@ -175,16 +176,23 @@ describe("mapCallListItem / mapCallDetail - the exact frontend contract shape", 
     providerCallId: "CA123" as string | null,
     virtualNumber: null as { id: string; number: string; displayName: string | null } | null,
     provider: "callerdesk",
+    callGroup: null as string | null,
   };
 
   it("maps a call with no outcome/recording to null/false - never inventing either", () => {
     const item = mapCallListItem(baseRow);
     assert.deepEqual(
       Object.keys(item).sort(),
-      ["agent", "agentNumber", "createdAt", "customerNumber", "direction", "durationSeconds", "endedAt", "hasRecording", "id", "lead", "outcome", "providerCallId", "startedAt", "status", "virtualNumber"].sort(),
+      ["agent", "agentNumber", "callGroup", "createdAt", "customerNumber", "direction", "durationSeconds", "endedAt", "hasRecording", "id", "lead", "outcome", "providerCallId", "startedAt", "status", "virtualNumber"].sort(),
     );
     assert.equal(item.outcome, null);
     assert.equal(item.hasRecording, false);
+  });
+
+  it("9. carries the raw call group straight through, for the Call Group column", () => {
+    const item = mapCallListItem({ ...baseRow, callGroup: "callgroup1" });
+    assert.equal(item.callGroup, "callgroup1");
+    assert.equal(mapCallListItem({ ...baseRow, callGroup: null }).callGroup, null);
   });
 
   it("maps a real outcome and recording presence, never the raw recording URL", () => {
@@ -243,6 +251,27 @@ describe("buildCallWhere - IVR reporting filters (agentId / virtualNumberId / ha
   });
 });
 
+describe("buildCallWhere - callGroup filter (8. All/Sales/Partnership tabs)", () => {
+  it("callGroup is an exact-match clause on the raw, persisted value", () => {
+    const where = buildCallWhere({ ...baseQuery, callGroup: "callgroup1" }, {});
+    assert.deepEqual(where, { AND: [{ callGroup: "callgroup1" }] });
+  });
+
+  it("a different raw call group (e.g. Partnership's) filters just as plainly - no special-casing", () => {
+    const where = buildCallWhere({ ...baseQuery, callGroup: "callgroup2" }, {});
+    assert.deepEqual(where, { AND: [{ callGroup: "callgroup2" }] });
+  });
+
+  it("omitted callGroup (the 'All' tab) adds no clause at all", () => {
+    assert.deepEqual(buildCallWhere({ ...baseQuery }, {}), {});
+  });
+
+  it("combines with every other IVR filter and the lead scope, never replacing them", () => {
+    const where = buildCallWhere({ ...baseQuery, direction: CallDirection.INBOUND, callGroup: "callgroup1" }, { ownerId: "s1" });
+    assert.deepEqual(where, { AND: [{ lead: { ownerId: "s1" } }, { direction: CallDirection.INBOUND }, { callGroup: "callgroup1" }] });
+  });
+});
+
 describe("buildCallSummary", () => {
   it("sums counts across statuses into a total, and carries the talk-time sum through", () => {
     const summary = buildCallSummary(
@@ -264,6 +293,27 @@ describe("buildCallSummary", () => {
     assert.equal(buildCallSummary([], null).totalTalkTimeSeconds, 0);
     assert.equal(buildCallSummary([], null).total, 0);
   });
+
+  it("8. carries the call-group breakdown through, for the All/Sales/Partnership tabs", () => {
+    const summary = buildCallSummary(
+      [{ status: CallStatus.COMPLETED, _count: { _all: 5 } }],
+      300,
+      [
+        { callGroup: "callgroup1", _count: { _all: 3 } },
+        { callGroup: "callgroup2", _count: { _all: 1 } },
+        { callGroup: null, _count: { _all: 1 } },
+      ],
+    );
+    assert.deepEqual(summary.byCallGroup, [
+      { callGroup: "callgroup1", count: 3 },
+      { callGroup: "callgroup2", count: 1 },
+      { callGroup: null, count: 1 },
+    ]);
+  });
+
+  it("defaults to an empty call-group breakdown when none is given, never undefined", () => {
+    assert.deepEqual(buildCallSummary([], null).byCallGroup, []);
+  });
 });
 
 describe("validateCallSummaryQuery", () => {
@@ -283,6 +333,11 @@ describe("validateCallSummaryQuery", () => {
 
   it("rejects a hasRecording value that isn't true/false", () => {
     assert.notEqual(validateCallSummaryQuery({ hasRecording: "maybe" }).error, null);
+  });
+
+  it("accepts a callGroup filter and treats an empty string as unset, same as every other filter here", () => {
+    assert.equal(validateCallSummaryQuery({ callGroup: "callgroup1" }).value?.callGroup, "callgroup1");
+    assert.equal(validateCallSummaryQuery({ callGroup: "" }).value?.callGroup, undefined);
   });
 });
 
@@ -327,5 +382,152 @@ describe("extractSafeProviderMetadata - IVR call-detail 'safe provider metadata'
     assert.equal(extractSafeProviderMetadata(null), null);
     assert.equal(extractSafeProviderMetadata("oops"), null);
     assert.equal(extractSafeProviderMetadata([1, 2]), null);
+  });
+});
+
+// Regression coverage for the real GET /api/calls 500: Call.callGroup exists in the Prisma
+// schema/client but the 20261016000000_add_call_group migration hadn't been applied to this
+// environment's database, so every call.findMany/groupBy selecting it threw P2022. Reproduced
+// against the real database (see conversation), root-caused to this exact Postgres error shape.
+function missingCallGroupColumnError(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError("The column `(not available)` does not exist in the current database.", {
+    code: "P2022",
+    clientVersion: "7.10.0",
+    meta: { driverAdapterError: { cause: { kind: "ColumnNotFound", originalMessage: "column calls.call_group does not exist" } } },
+  });
+}
+
+describe("isMissingCallGroupColumnError", () => {
+  it("recognises the exact 'calls.call_group does not exist' shape", () => {
+    assert.equal(isMissingCallGroupColumnError(missingCallGroupColumnError()), true);
+  });
+
+  it("does not match a P2022 for a different, unrelated column - never masks a real bug", () => {
+    const err = new Prisma.PrismaClientKnownRequestError("column does not exist", {
+      code: "P2022",
+      clientVersion: "7.10.0",
+      meta: { driverAdapterError: { cause: { kind: "ColumnNotFound", originalMessage: "column calls.some_other_column does not exist" } } },
+    });
+    assert.equal(isMissingCallGroupColumnError(err), false);
+  });
+
+  it("does not match a different Prisma error code", () => {
+    const err = new Prisma.PrismaClientKnownRequestError("not found", { code: "P2025", clientVersion: "7.10.0" });
+    assert.equal(isMissingCallGroupColumnError(err), false);
+  });
+
+  it("does not match a plain Error, or an error with no meta at all", () => {
+    assert.equal(isMissingCallGroupColumnError(new Error("boom")), false);
+    assert.equal(isMissingCallGroupColumnError(new Prisma.PrismaClientKnownRequestError("x", { code: "P2022", clientVersion: "7.10.0" })), false);
+  });
+});
+
+describe("CallHistoryService - degrades gracefully when the call_group migration isn't applied yet", () => {
+  const admin = { id: "admin-1", role: Role.ADMIN, username: "admin1" };
+  const CALL_ROW = {
+    id: UUID,
+    direction: CallDirection.INBOUND,
+    status: CallStatus.COMPLETED,
+    startedAt: null,
+    endedAt: null,
+    durationSeconds: null,
+    createdAt: new Date("2026-10-03T10:10:43.595Z"),
+    agent: { id: "agent-1", name: "E3 UAT Salesperson" },
+    lead: { id: "lead-1", leadNumber: "LEAD-001", firstName: "IVR Caller", lastName: null, mobile: "09000000012" },
+    outcome: null,
+    recording: null,
+    agentNumber: "09000000013",
+    customerNumber: "09000000012",
+    providerCallId: "CA123",
+    virtualNumber: null,
+    provider: "callerdesk",
+  };
+
+  /** A fake DbClient whose `call.findMany`/`groupBy`/`findFirst` throw the real missing-column
+   * error on their first call (simulating a `select`/`groupBy` that still asks for `callGroup`),
+   * then succeed on a retry that omits it - exactly what the service's fallback path is for. */
+  function fakeDbMissingCallGroupColumn() {
+    let findManyCalls = 0;
+    let findFirstCalls = 0;
+    let groupByCallGroupCalls = 0;
+    return {
+      call: {
+        async count() {
+          return 1;
+        },
+        async findMany(args: { select?: Record<string, unknown> }) {
+          findManyCalls++;
+          if (args.select?.callGroup) throw missingCallGroupColumnError();
+          return [CALL_ROW];
+        },
+        async findFirst(args: { select?: Record<string, unknown> }) {
+          findFirstCalls++;
+          if (args.select?.callGroup) throw missingCallGroupColumnError();
+          return CALL_ROW;
+        },
+        async groupBy(args: { by: string[] }) {
+          if (args.by[0] === "callGroup") {
+            groupByCallGroupCalls++;
+            throw missingCallGroupColumnError();
+          }
+          return [{ status: CallStatus.COMPLETED, _count: { _all: 1 } }];
+        },
+        async aggregate() {
+          return { _sum: { durationSeconds: 10 } };
+        },
+      },
+      webhookEvent: { async findFirst() { return null; } },
+      get calls() {
+        return { findManyCalls, findFirstCalls, groupByCallGroupCalls };
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any;
+  }
+
+  it("1. GET /api/calls (listCalls): falls back to callGroup: null instead of 500ing, every other field intact", async () => {
+    const db = fakeDbMissingCallGroupColumn();
+    const service = new CallHistoryService(db);
+
+    const result = await service.listCalls(admin, { page: 1, limit: 20, direction: CallDirection.INBOUND });
+
+    assert.equal(result.data.length, 1);
+    assert.equal(result.data[0]!.callGroup, null);
+    assert.equal(result.data[0]!.id, UUID, "every other field still comes through unaffected");
+    assert.equal(result.data[0]!.lead.firstName, "IVR Caller");
+  });
+
+  it("2. GET /api/calls/summary (getCallSummary): status counts/talk-time still work, byCallGroup is just empty", async () => {
+    const db = fakeDbMissingCallGroupColumn();
+    const service = new CallHistoryService(db);
+
+    const summary = await service.getCallSummary(admin, { direction: CallDirection.INBOUND });
+
+    assert.equal(summary.total, 1);
+    assert.deepEqual(summary.byStatus, [{ status: CallStatus.COMPLETED, count: 1 }]);
+    assert.equal(summary.totalTalkTimeSeconds, 10, "the status/talk-time query is isolated from the call-group one and never affected");
+    assert.deepEqual(summary.byCallGroup, []);
+  });
+
+  it("3. GET /api/calls/:id (getCallById): falls back the same way for the detail view", async () => {
+    const db = fakeDbMissingCallGroupColumn();
+    const service = new CallHistoryService(db);
+
+    const detail = await service.getCallById(admin, UUID);
+
+    assert.equal(detail.callGroup, null);
+    assert.equal(detail.id, UUID);
+  });
+
+  it("4. an unrelated error during listCalls is never swallowed by the fallback", async () => {
+    const db = fakeDbMissingCallGroupColumn();
+    db.call.findMany = async () => {
+      throw new Error("connection to FAKE-LEAK-CANARY failed");
+    };
+    const service = new CallHistoryService(db);
+
+    await assert.rejects(
+      service.listCalls(admin, { page: 1, limit: 20 }),
+      (err: Error) => err.message === "connection to FAKE-LEAK-CANARY failed",
+    );
   });
 });

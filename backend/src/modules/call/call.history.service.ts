@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import type { Prisma } from "../../../generated/prisma/client.js";
+import { Prisma } from "../../../generated/prisma/client.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
@@ -45,6 +45,7 @@ const LIST_SELECT = {
   providerCallId: true,
   virtualNumber: { select: { id: true, number: true, displayName: true } },
   provider: true,
+  callGroup: true,
 } satisfies Prisma.CallSelect;
 
 const DETAIL_SELECT = {
@@ -59,6 +60,25 @@ const DETAIL_SELECT = {
 
 type ListRow = Prisma.CallGetPayload<{ select: typeof LIST_SELECT }>;
 type DetailRow = Prisma.CallGetPayload<{ select: typeof DETAIL_SELECT }>;
+
+// Fallback selects for an environment where the `20261016000000_add_call_group` migration hasn't
+// been applied yet (`Call.callGroup` exists in the Prisma schema/client but not in the live
+// database) - see isMissingCallGroupColumnError below. Every OTHER field still works; only the
+// call-group reporting itself degrades (callGroup: null everywhere, no tabs), instead of the whole
+// IVR Inbound page/Call History 500ing on a column the code merely hasn't been deployed a migration
+// for yet.
+const { callGroup: _listCallGroup, ...LIST_SELECT_WITHOUT_CALL_GROUP } = LIST_SELECT;
+const { callGroup: _detailCallGroup, ...DETAIL_SELECT_WITHOUT_CALL_GROUP } = DETAIL_SELECT;
+
+/** True only for the exact, identifiable "calls.call_group column does not exist" failure - never a
+ * blanket P2022 catch-all, so an unrelated missing-column bug still surfaces as a real error rather
+ * than being silently swallowed here. */
+export function isMissingCallGroupColumnError(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2022") return false;
+  const cause = (err.meta as { driverAdapterError?: { cause?: { kind?: string; originalMessage?: string } } } | undefined)
+    ?.driverAdapterError?.cause;
+  return cause?.kind === "ColumnNotFound" && typeof cause.originalMessage === "string" && cause.originalMessage.includes("call_group");
+}
 
 export function mapCallListItem(row: ListRow): CallListItem {
   return {
@@ -77,6 +97,7 @@ export function mapCallListItem(row: ListRow): CallListItem {
     customerNumber: row.customerNumber,
     virtualNumber: row.virtualNumber ? { displayName: row.virtualNumber.displayName, number: row.virtualNumber.number } : null,
     providerCallId: row.providerCallId,
+    callGroup: row.callGroup,
   };
 }
 
@@ -98,26 +119,38 @@ export function mapCallDetail(row: DetailRow, role: Role, providerMetadata: Retu
   };
 }
 
+function groupCallsByCallGroup(db: DbClient, where: Prisma.CallWhereInput) {
+  return db.call.groupBy({ by: ["callGroup"], where, _count: { _all: true } });
+}
+
 export class CallHistoryService {
   constructor(private readonly db: DbClient = prisma) {}
 
   async listCalls(user: AuthUser, query: ListCallsQuery): Promise<CallListResult> {
     const leadScope = await getLeadScope(user, this.db);
     const where = buildCallWhere(query, leadScope, user.id);
+    const page = {
+      // id breaks ties so pages never repeat or skip rows created in the same instant.
+      orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }],
+      skip: (query.page - 1) * query.limit,
+      take: query.limit,
+    };
 
     // Single findMany with nested selects (one query with joins), not N+1: the same pattern
     // orders.service.ts#listOrders uses for its own lead/payments relations.
-    const [total, rows] = await Promise.all([
-      this.db.call.count({ where }),
-      this.db.call.findMany({
-        where,
-        select: LIST_SELECT,
-        // id breaks ties so pages never repeat or skip rows created in the same instant.
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        skip: (query.page - 1) * query.limit,
-        take: query.limit,
-      }),
-    ]);
+    let total: number;
+    let rows: ListRow[];
+    try {
+      [total, rows] = await Promise.all([this.db.call.count({ where }), this.db.call.findMany({ where, select: LIST_SELECT, ...page })]);
+    } catch (err) {
+      if (!isMissingCallGroupColumnError(err)) throw err;
+      const [fallbackTotal, fallbackRows] = await Promise.all([
+        this.db.call.count({ where }),
+        this.db.call.findMany({ where, select: LIST_SELECT_WITHOUT_CALL_GROUP, ...page }),
+      ]);
+      total = fallbackTotal;
+      rows = fallbackRows.map((row) => ({ ...row, callGroup: null }));
+    }
 
     return {
       data: rows.map(mapCallListItem),
@@ -135,12 +168,31 @@ export class CallHistoryService {
       this.db.call.aggregate({ where, _sum: { durationSeconds: true } }),
     ]);
 
-    return buildCallSummary(counts, totalTalkTime._sum.durationSeconds);
+    // Isolated from the Promise.all above on purpose: a missing call_group column must only drop
+    // the call-group breakdown (empty tabs), never the status counts/talk-time the summary cards
+    // already show today.
+    let callGroupCounts: Awaited<ReturnType<typeof groupCallsByCallGroup>> = [];
+    try {
+      callGroupCounts = await groupCallsByCallGroup(this.db, where);
+    } catch (err) {
+      if (!isMissingCallGroupColumnError(err)) throw err;
+    }
+
+    return buildCallSummary(counts, totalTalkTime._sum.durationSeconds, callGroupCounts);
   }
 
   async getCallById(user: AuthUser, id: string): Promise<CallDetail> {
     const leadScope = await getLeadScope(user, this.db);
-    const call = await this.db.call.findFirst({ where: scopedCallWhere(id, leadScope, user.id), select: DETAIL_SELECT });
+    const whereScoped = scopedCallWhere(id, leadScope, user.id);
+
+    let call: DetailRow | null;
+    try {
+      call = await this.db.call.findFirst({ where: whereScoped, select: DETAIL_SELECT });
+    } catch (err) {
+      if (!isMissingCallGroupColumnError(err)) throw err;
+      const row = await this.db.call.findFirst({ where: whereScoped, select: DETAIL_SELECT_WITHOUT_CALL_GROUP });
+      call = row ? { ...row, callGroup: null } : null;
+    }
 
     // Out-of-scope calls look the same as missing ones so ids can't be probed (matches getOrder).
     if (!call) {

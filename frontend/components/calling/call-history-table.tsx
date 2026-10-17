@@ -74,7 +74,7 @@ export function CallHistoryTable({ calls, pagination, onPageChange }: CallHistor
                     <div className="font-mono text-xs text-muted-foreground">{call.lead.leadNumber}</div>
                   </TableCell>
                   <TableCell>{call.lead.mobile ?? "—"}</TableCell>
-                  <TableCell>{call.agent.name}</TableCell>
+                  <TableCell>{call.agent?.name ?? "Not assigned"}</TableCell>
                   <TableCell>{CALL_DIRECTION_LABELS[call.direction]}</TableCell>
                   <TableCell>
                     <CallStatusBadge status={call.status} />

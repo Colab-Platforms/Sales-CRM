@@ -58,6 +58,7 @@ const payloadFieldsSchema = z.object({
   endtime: optionalScalar,
   callrecordingurl: optionalScalar,
   direction: optionalScalar,
+  call_group: optionalScalar,
   error_code: optionalScalar,
   lega_picked_time: optionalScalar,
   legb_start_time: optionalScalar,
@@ -189,6 +190,9 @@ export function normalizeCallerDeskPayload(
     externalCallId: fields.callsid,
     dedupeKey,
     campaignId: fields.campid ?? null,
+    // Observed on both Call Report and Live Call ("Picked") events in practice, despite only being
+    // documented for Call Report - carried through whenever present, never guessed when absent.
+    callGroup: canonicalCallGroup(fields.call_group),
     direction,
     sourceNumber: toNumberOrNull(fields.sourcenumber),
     destinationNumber: toNumberOrNull(fields.destinationnumber),
@@ -213,4 +217,18 @@ export function normalizeCallerDeskPayload(
   };
 
   return { ok: true, event };
+}
+
+// CallerDesk sends the same IVR choice under different spellings ("callgroup1", "sales", "Partnership"),
+// which would otherwise show up as separate tabs. Known aliases collapse to one label; any other
+// value is kept exactly as received.
+const CALL_GROUP_ALIASES: Record<string, string> = {
+  callgroup1: "Sales",
+  sales: "Sales",
+  partnership: "Partnership",
+};
+
+export function canonicalCallGroup(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  return CALL_GROUP_ALIASES[raw.trim().toLowerCase()] ?? raw;
 }

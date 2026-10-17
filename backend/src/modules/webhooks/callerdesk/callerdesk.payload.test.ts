@@ -38,6 +38,26 @@ describe("CallerDesk payload normalisation", () => {
     assert.deepEqual(event.rawPayload, inboundCallReport());
   });
 
+  it("captures call_group from a Call Report - never silently dropped", () => {
+    const event = parse(inboundCallReport({ call_group: "callgroup1" }));
+    assert.equal(event.callGroup, "Sales");
+  });
+
+  it("captures call_group from a Live Call too (observed in real CallerDesk payloads)", () => {
+    const event = parse(inboundLiveCall({ call_group: "callgroup1" }));
+    assert.equal(event.callGroup, "Sales");
+  });
+
+  it("an unrecognised/different call_group value is carried through as-is, never coerced to a known one", () => {
+    const event = parse(inboundCallReport({ call_group: "partnership_queue_7" }));
+    assert.equal(event.callGroup, "partnership_queue_7");
+  });
+
+  it("a missing call_group is null, never guessed or defaulted", () => {
+    const event = parse(inboundCallReport({ call_group: undefined }));
+    assert.equal(event.callGroup, null);
+  });
+
   it("normalises a valid Live Call as a separate, non-final event type", () => {
     const event = parse(inboundLiveCall());
 

@@ -268,7 +268,7 @@ class ManagerAnalyticsService {
 
     for (const c of calls) {
       const kind = classify(c.status);
-      if (!matchesCall(kind)) continue;
+      if (!matchesCall(kind) || !c.agentId) continue;
       const day = dayKey(c.startedAt ?? c.createdAt, tz);
       const person = perPerson.get(c.agentId) ?? blank();
       const dayMap = perDay.get(day) ?? new Map();

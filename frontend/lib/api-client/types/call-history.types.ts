@@ -35,7 +35,7 @@ export interface CallVirtualNumberRef {
 export interface CallListItem {
   id: string;
   lead: CallLeadRef;
-  agent: CallAgentRef;
+  agent: CallAgentRef | null;
   direction: CallDirection;
   status: CallStatus;
   startedAt: string | null;
@@ -51,6 +51,9 @@ export interface CallListItem {
   virtualNumber: CallVirtualNumberRef | null;
   /** CallerDesk CallSid once known. */
   providerCallId: string | null;
+  /** Raw provider call-group (e.g. "callgroup1"), persisted verbatim - see lib/call-group.ts for the
+   * display mapping ("Sales"/"Partnership"/etc). Never pre-labelled by the backend. */
+  callGroup: string | null;
 }
 
 /** Safe-only fields read back from the stored CallerDesk Call Report webhook payload for display -
@@ -101,6 +104,8 @@ export interface CallListParams {
   agentId?: string;
   virtualNumberId?: string;
   hasRecording?: boolean;
+  /** Exact match on the raw persisted call group - see CallListItem.callGroup. */
+  callGroup?: string;
 }
 
 export type CallSummaryParams = Omit<CallListParams, "page" | "limit">;
@@ -110,8 +115,17 @@ export interface CallStatusCount {
   count: number;
 }
 
+export interface CallGroupCount {
+  /** `null` = every call with no recorded call group. */
+  callGroup: string | null;
+  count: number;
+}
+
 export interface CallSummary {
   total: number;
   byStatus: CallStatusCount[];
+  /** Distinct raw call groups actually present among the filtered calls - drives the Inbound IVR
+   * page's tabs. See lib/call-group.ts. */
+  byCallGroup: CallGroupCount[];
   totalTalkTimeSeconds: number;
 }

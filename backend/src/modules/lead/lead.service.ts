@@ -27,6 +27,7 @@ import {
   ActivityType,
   TaskType,
   TaskStatus,
+  LeadWorkingStatus,
 } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
 import type { User, Lead } from "../../../generated/prisma/client.js";
@@ -123,6 +124,9 @@ class LeadService {
       // A salesperson's NEW includes leads that are ASSIGNED underneath; they can't filter on ASSIGNED itself.
       where.workingStatus =
         user.role === Role.SALESPERSON && (status === "NEW" || status === "ASSIGNED") ? { in: ["NEW", "ASSIGNED"] } : status;
+    } else {
+      // The default "All Leads" view never shows deactivated (soft-deleted) leads; an explicitly chosen status above is untouched.
+      where.workingStatus = { not: LeadWorkingStatus.DEACTIVATED };
     }
     where.lifecycleStage = query.lifecycleStage ?? "LEAD";
     // Cart-abandonment leads live only in the Abandoned Leads queue, never in the normal Leads list -
@@ -1163,6 +1167,9 @@ class LeadService {
     // Defaults to the global client; a caller already inside its own transaction passes it so these
     // writes see that caller's uncommitted rows (e.g. a Source it just created).
     client: TxClient | typeof prisma = prisma,
+    // Opt-in (default: unchanged for Shopify/WhatsApp/Meta): inbound IVR and abandonment pass it so a
+    // deactivated lead is never the one a new inbound event gets attached to or "updated".
+    options: { excludeDeactivated?: boolean } = {},
   ) {
     const normalizedMobile = normalizeMobile(data.mobile);
     const normalizedEmail = normalizeEmail(data.email);
@@ -1180,6 +1187,7 @@ class LeadService {
                 ...(normalizedMobile ? [{ normalizedMobile }] : []),
                 ...(normalizedEmail ? [{ normalizedEmail }] : []),
               ],
+              ...(options.excludeDeactivated ? { workingStatus: { not: LeadWorkingStatus.DEACTIVATED } } : {}),
             },
           })
         : null;

@@ -50,16 +50,26 @@ export function isWebhookAuthorised(req: Request): boolean {
   return typeof provided === "string" && provided.length > 0 && tokensMatch(provided, expected);
 }
 
+export interface CallerDeskHandlerOptions {
+  /** Answer 200 (not 400) for a payload that cannot be used. For the shared click-to-call URL, where the
+   *  older handler always acknowledged: retrying an unusable payload can never succeed, and a stream of 4xx
+   *  risks CallerDesk retrying or disabling delivery. Genuine processing failures still return 500. */
+  acknowledgeInvalidPayload?: boolean;
+}
+
 /** `getSvc` is injectable so route tests can run without the database. */
-export function createCallerDeskWebhookHandler(getSvc: () => CallerDeskWebhookService) {
+export function createCallerDeskWebhookHandler(getSvc: () => CallerDeskWebhookService, options: CallerDeskHandlerOptions = {}) {
   return async function handler(req: Request, res: Response): Promise<void> {
-    await handleWith(getSvc, req, res);
+    await handleWith(getSvc, req, res, options);
   };
 }
 
 export const handleCallerDeskWebhook = createCallerDeskWebhookHandler(getService);
 
-async function handleWith(getSvc: () => CallerDeskWebhookService, req: Request, res: Response): Promise<void> {
+/** The same processing, used behind the single webhook URL registered in CallerDesk (/api/calling/webhooks/callerdesk). */
+export const handleSharedUrlCallerDeskWebhook = createCallerDeskWebhookHandler(getService, { acknowledgeInvalidPayload: true });
+
+async function handleWith(getSvc: () => CallerDeskWebhookService, req: Request, res: Response, options: CallerDeskHandlerOptions): Promise<void> {
   if (!isWebhookAuthorised(req)) {
     // Never log the supplied token or the query string.
     logger.warn("CallerDesk webhook rejected: category=UNAUTHORISED");
@@ -80,6 +90,11 @@ async function handleWith(getSvc: () => CallerDeskWebhookService, req: Request, 
 
   switch (result.outcome) {
     case "INVALID":
+      if (options.acknowledgeInvalidPayload) {
+        // Already logged by the service (category=INVALID_PAYLOAD); nothing is stored for it.
+        sendResponse(res, true, { ignored: true }, "Webhook payload not usable; acknowledged", STATUS_CODES.OK);
+        return;
+      }
       sendResponse(res, false, null, "Invalid webhook payload", STATUS_CODES.BAD_REQUEST);
       return;
 

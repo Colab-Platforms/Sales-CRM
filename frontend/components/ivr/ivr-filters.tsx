@@ -12,15 +12,85 @@ import { adminSalespersonsQueryOptions } from "@/lib/api-client/queries/admin.qu
 import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
 import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { CALL_STATUS_LABELS, CALL_STATUS_ORDER } from "@/lib/call-status";
+import { formatCallGroup } from "@/lib/call-group";
+import { cn } from "@/lib/utils";
 import type { CallStatus } from "@/lib/api-client/types/calls.types";
-import type { CallListParams } from "@/lib/api-client/types/call-history.types";
+import type { CallGroupCount, CallListParams } from "@/lib/api-client/types/call-history.types";
 
 export type IvrFilterState = Omit<CallListParams, "page" | "limit" | "direction">;
 
+/** All/Sales/Partnership-style tabs, generated from whatever distinct raw call groups the backend
+ * summary actually returns for the current (non-call-group) filters - never a hardcoded list, so a
+ * call group nobody has configured a label for yet still gets its own tab (showing its raw value)
+ * the moment real traffic in it arrives, with no code change needed. See lib/call-group.ts. */
+function CallGroupTabs({
+  callGroups,
+  active,
+  onChange,
+}: {
+  callGroups: CallGroupCount[];
+  active: string | undefined;
+  onChange: (callGroup: string | undefined) => void;
+}) {
+  if (callGroups.length === 0) return null;
+  const total = callGroups.reduce((sum, g) => sum + g.count, 0);
+  // Only real, named groups become tabs - a `null` group (no classification at all) is not a
+  // distinct "call group" to filter by, so it's folded into "All" rather than shown as a fake one.
+  const named = callGroups.filter((g): g is CallGroupCount & { callGroup: string } => g.callGroup !== null);
+
+  return (
+    <div role="tablist" aria-label="Filter by call group" className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        role="tab"
+        aria-selected={active === undefined}
+        onClick={() => onChange(undefined)}
+        className={cn(
+          "sketch-press inline-flex h-7 items-center gap-1.5 rounded-[10px_8px_11px_8px] border-[1.5px] px-3 text-xs font-semibold whitespace-nowrap transition-colors",
+          active === undefined
+            ? "border-ink-line bg-primary text-primary-foreground"
+            : "border-ink-line/50 bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
+        )}
+      >
+        All <span className="opacity-70">({total})</span>
+      </button>
+      {named.map((g) => {
+        const isActive = active === g.callGroup;
+        return (
+          <button
+            key={g.callGroup}
+            type="button"
+            role="tab"
+            aria-selected={isActive}
+            onClick={() => onChange(g.callGroup)}
+            className={cn(
+              "sketch-press inline-flex h-7 items-center gap-1.5 rounded-[10px_8px_11px_8px] border-[1.5px] px-3 text-xs font-semibold whitespace-nowrap transition-colors",
+              isActive
+                ? "border-ink-line bg-primary text-primary-foreground"
+                : "border-ink-line/50 bg-card text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            {formatCallGroup(g.callGroup)} <span className="opacity-70">({g.count})</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Same search/status/date-range shape as CallHistoryFilters, plus the IVR-specific
  * agent/DID/recording filters (section 8 of the IVR spec). The direction itself is fixed by the
- * page (Inbound vs Outbound), so it's never a filter here. */
-export function IvrFilters({ value, onChange }: { value: IvrFilterState; onChange: (value: IvrFilterState) => void }) {
+ * page (Inbound vs Outbound), so it's never a filter here. `callGroups` drives the All/Sales/
+ * Partnership-style tab row - see CallGroupTabs above. */
+export function IvrFilters({
+  value,
+  onChange,
+  callGroups = [],
+}: {
+  value: IvrFilterState;
+  onChange: (value: IvrFilterState) => void;
+  callGroups?: CallGroupCount[];
+}) {
   const role = useAuthStore((s) => s.user?.role);
   const [search, setSearch] = useState(value.search ?? "");
 
@@ -32,7 +102,9 @@ export function IvrFilters({ value, onChange }: { value: IvrFilterState; onChang
 
   const { data: virtualNumbers } = useQuery(virtualNumbersQueryOptions());
 
-  const hasFilters = Boolean(value.search || value.status || value.dateFrom || value.dateTo || value.agentId || value.virtualNumberId || value.hasRecording !== undefined);
+  const hasFilters = Boolean(
+    value.search || value.status || value.dateFrom || value.dateTo || value.agentId || value.virtualNumberId || value.hasRecording !== undefined || value.callGroup,
+  );
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -44,7 +116,10 @@ export function IvrFilters({ value, onChange }: { value: IvrFilterState; onChang
   }
 
   return (
-    <div className="sketch-outline flex flex-wrap items-end gap-4 bg-card/60 p-4">
+    <div className="space-y-3">
+      <CallGroupTabs callGroups={callGroups} active={value.callGroup} onChange={(callGroup) => onChange({ ...value, callGroup })} />
+
+      <div className="sketch-outline flex flex-wrap items-end gap-4 bg-card/60 p-4">
       <div className="min-w-60 flex-1 space-y-2">
         <Label htmlFor="ivr-search" className="text-xs text-muted-foreground">
           Search
@@ -148,6 +223,7 @@ export function IvrFilters({ value, onChange }: { value: IvrFilterState; onChang
           Clear
         </Button>
       ) : null}
+      </div>
     </div>
   );
 }
