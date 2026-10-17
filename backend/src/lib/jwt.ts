@@ -18,7 +18,8 @@ function getSecret(): string {
 }
 
 const JWT_SECRET = getSecret();
-const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN ?? "1d") as SignOptions["expiresIn"];
+// Short on purpose: the long-lived part of a session is the revocable refresh cookie (see refreshToken.ts).
+const JWT_EXPIRES_IN = (process.env.JWT_EXPIRES_IN ?? "15m") as SignOptions["expiresIn"];
 
 export function signToken(payload: JwtPayload): string {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });

@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/auth-store";
+import { restoreSession } from "@/lib/api-client/client";
 import { meQueryOptions } from "@/lib/api-client/queries/auth.queries";
 
 export function AuthGuard({ children }: { children: ReactNode }) {
@@ -12,8 +13,25 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   const token = useAuthStore((s) => s.token);
   const setUser = useAuthStore((s) => s.setUser);
 
-  // Validate the cookie-stored token against the backend, not just its presence.
-  // A 401 here is caught by the axios interceptor, which clears the session —
+  // The access token lives in memory only, so after a reload or a new tab it is restored from the httpOnly
+  // refresh cookie before anything renders. No valid cookie leaves `token` null, which redirects to /login below.
+  const [restoreDone, setRestoreDone] = useState(false);
+  const restoring = !token && !restoreDone;
+  useEffect(() => {
+    if (!hasHydrated || useAuthStore.getState().token) return;
+    let cancelled = false;
+    restoreSession()
+      .catch(() => false)
+      .finally(() => {
+        if (!cancelled) setRestoreDone(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hasHydrated]);
+
+  // Validate the in-memory token against the backend, not just its presence.
+  // A 401 here is caught by the axios interceptor (one refresh-and-retry, then it clears the session) —
   // that flips `token` to null and the effect below redirects to /login.
   const meQuery = useQuery({
     ...meQueryOptions(),
@@ -27,12 +45,12 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   }, [meQuery.data, setUser]);
 
   useEffect(() => {
-    if (hasHydrated && !token) {
+    if (hasHydrated && !restoring && !token) {
       router.replace("/login");
     }
-  }, [hasHydrated, token, router]);
+  }, [hasHydrated, restoring, token, router]);
 
-  if (!hasHydrated || !token || meQuery.isPending) {
+  if (!hasHydrated || restoring || !token || meQuery.isPending) {
     return (
       <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">
         Loading…

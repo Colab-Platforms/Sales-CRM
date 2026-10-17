@@ -2,7 +2,7 @@ import Cookies from "js-cookie";
 import type { StateStorage } from "zustand/middleware";
 
 const COOKIE_OPTIONS = {
-  expires: 1, // days — matches backend JWT_EXPIRES_IN=1d
+  expires: 30, // days — matches backend REFRESH_TOKEN_TTL_DAYS; this cookie only hints the signed-in user, it holds no token
   sameSite: "lax" as const,
   secure: process.env.NODE_ENV === "production",
   path: "/",
