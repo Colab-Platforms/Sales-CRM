@@ -17,5 +17,6 @@ export function syncAdvice(missing: string[], degraded: string[]): "NONE" | "RET
   if (missing.length === 0 && degraded.length === 0) return "NONE";
   if (degraded.some((d) => d.startsWith("customer"))) return "ADMIN";
   if (missing.some((m) => m.startsWith("lineItems.requiresShipping"))) return "ADMIN"; // Shopify cannot change this on an existing order
+  if (missing.some((m) => m.startsWith("billingAddress"))) return "ADMIN"; // orderUpdate cannot set a billing address: it has to be fixed in Shopify
   return "RETRY";
 }

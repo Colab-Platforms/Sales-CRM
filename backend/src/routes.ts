@@ -25,6 +25,7 @@ import ticketsRoutes from "@modules/tickets/tickets.routes.js";
 import { prisma } from "@/lib/prisma.js";
 import { createCachedDatabaseCheck } from "@/lib/dbHealth.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
+import { publicQrRoutes } from "@modules/whatsapp/whatsapp.payment-qr.routes.js";
 import { Role } from "../generated/prisma/enums.js";
 
 const router = Router();
@@ -42,6 +43,8 @@ router.get("/health/db", requireAuth, requireRole(Role.ADMIN), async (_req, res)
   res.status(health.ok ? 200 : 503).json({ success: health.ok, message: health.ok ? "database reachable" : "database unavailable", data: health });
 });
 
+// Public (no login): the signed QR image of an open payment link, fetched by WhatsApp's servers. See whatsapp.payment-qr.ts.
+router.use("/public/payment-qr", publicQrRoutes);
 router.use("/auth", authRoutes);
 router.use("/dashboard", dashboardRoutes);
 router.use("/admin", adminRoutes);

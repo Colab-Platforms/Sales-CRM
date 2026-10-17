@@ -42,7 +42,7 @@ export function createCashfreeReconciler({ runner, reconcile, now = () => new Da
             createdAt: { gte: since },
             OR: [
               { status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] } },
-              { status: PaymentStatus.SUCCESS, order: { is: { status: OrderStatus.PENDING_PAYMENT, externalId: null, metadata: { path: ["paymentMode"], equals: "PREPAID" } } } },
+              { status: PaymentStatus.SUCCESS, order: { is: { status: OrderStatus.PENDING_PAYMENT, source: "SALESPERSON", metadata: { path: ["paymentMode"], equals: "PREPAID" } } } },
             ],
           },
           orderBy: { createdAt: "asc" },

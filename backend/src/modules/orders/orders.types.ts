@@ -36,6 +36,12 @@ export interface CreateManualOrderInput {
   // SAME attempt) - see OrdersService.createManualOrder's own comment for why this is an in-memory,
   // per-process guard against a double submit (double-click/double Enter), not a durable DB constraint.
   idempotencyKey?: string;
+  /** The user confirmed that this is a separate purchase although a matching recent order exists. */
+  acknowledgeDuplicate?: boolean;
+  /** With acknowledgeDuplicate: the earlier UNPAID prepaid order of this customer that this order replaces (a changed price / discount). It is cancelled - with its Cashfree link - before this one is created. */
+  supersedesOrderId?: string;
+  /** Set by the HTTP controller only (not by the request body): refuse a new order that matches a recent one for the same customer unless acknowledged. */
+  rejectRecentTwin?: boolean;
   shippingAddress?: {
     name?: string;
     line1?: string;
@@ -92,6 +98,8 @@ export interface ShopifySyncRecord {
   retryAdvice: "NONE" | "RETRY" | "ADMIN";
   /** A sanitized explanation of a failure (no tokens, no response bodies). */
   error: string | null;
+  /** What Shopify answered when a repair (e.g. of the shipping address) was refused - sanitized, so a failed repair is explained. */
+  repairErrors?: string[];
 }
 
 export interface ShopifyPushResult {

@@ -57,7 +57,7 @@ export async function reconcileCashfreePayment(deps: PaymentReconcileDeps, payme
 }
 
 /** Confirms the order, creates/links its Shopify order, marks it paid there, and refreshes the cached Orders list. Each step is best effort and idempotent; a failure is logged, never thrown. */
-async function confirmAndSyncPaidOrder(deps: PaymentReconcileDeps, orderId: string, ctx: PaymentReconcileContext, now: () => Date): Promise<void> {
+export async function confirmAndSyncPaidOrder(deps: PaymentReconcileDeps, orderId: string, ctx: PaymentReconcileContext, now: () => Date): Promise<void> {
   // A prepaid CRM order exists only as a payment request until now: confirm it and create its Shopify order (idempotent; a Shopify failure is recorded, never undoes the payment).
   try {
     await deps.runner.$transaction((tx) => confirmPaidPrepaidOrder(tx, orderId, { getShopifyClient: deps.getShopifyClient, now: now() }), FOLLOW_UP_TX);
@@ -74,11 +74,11 @@ async function confirmAndSyncPaidOrder(deps: PaymentReconcileDeps, orderId: stri
   clearLiveOrderCaches();
 }
 
-/** A CRM-created prepaid order that still awaits payment although one of its Cashfree payments is SUCCESS - i.e. the confirmation step has not completed. Read-only. */
+/** A CRM-created prepaid order (linked to Shopify or not) that still awaits payment although one of its Cashfree payments is SUCCESS - i.e. the confirmation step has not completed. Read-only. */
 export async function isStuckPaidPrepaidOrder(runner: TxRunner, orderId: string): Promise<boolean> {
   const found = await runner.$transaction((tx) =>
     tx.order.findFirst({
-      where: { id: orderId, status: OrderStatus.PENDING_PAYMENT, externalId: null, metadata: { path: ["paymentMode"], equals: "PREPAID" }, payments: { some: { status: PaymentStatus.SUCCESS, externalSource: "CASHFREE" } } },
+      where: { id: orderId, status: OrderStatus.PENDING_PAYMENT, source: "SALESPERSON", metadata: { path: ["paymentMode"], equals: "PREPAID" }, payments: { some: { status: PaymentStatus.SUCCESS, externalSource: "CASHFREE" } } },
       select: { id: true },
     }),
   );

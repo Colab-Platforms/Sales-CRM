@@ -7,6 +7,9 @@ import type {
   RevertCancellationResult,
   CreateManualOrderInput,
   CreateManualOrderResult,
+  PaymentQrResult,
+  MarkPaidInput,
+  MarkPaidResult,
   LiveOrderCancelResult,
   LiveOrderSyncResult,
   LiveOrderDetailResult,
@@ -60,6 +63,18 @@ export const ordersApi = {
   /** "Previous Orders" on the live Order Detail page - the Shopify customer's other orders, cursor-paginated. */
   async getLiveHistory(shopifyCustomerId: string, params: LiveOrderHistoryParams): Promise<LiveOrderHistoryResult> {
     const res = await apiClient.get<ApiEnvelope<LiveOrderHistoryResult>>(`/orders/live/customer/${shopifyCustomerId}/history`, { params });
+    return res.data.data;
+  },
+
+  /** Re-sends ONLY the QR image of an existing payment link (same order, same link). A delivery problem comes back as status NOT_SENT / FAILED with a reason, not as an error. */
+  async sendPaymentQr(orderId: string, paymentId: string): Promise<PaymentQrResult> {
+    const res = await apiClient.post<ApiEnvelope<PaymentQrResult>>(`/orders/${orderId}/payment-links/${paymentId}/qr`);
+    return res.data.data;
+  },
+
+  /** Records a prepaid payment verified OUTSIDE Cashfree (audited, never Cashfree-verified). Roles: admin / manager / salesperson. */
+  async markPaid(orderId: string, input: MarkPaidInput): Promise<MarkPaidResult> {
+    const res = await apiClient.post<ApiEnvelope<MarkPaidResult>>(`/orders/${orderId}/mark-paid`, input);
     return res.data.data;
   },
 

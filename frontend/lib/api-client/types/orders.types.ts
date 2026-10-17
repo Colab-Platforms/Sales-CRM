@@ -112,6 +112,10 @@ export interface CreateManualOrderInput {
   paymentMethod: PaymentMethod;
   // One per order ATTEMPT (reused across retries of that same attempt) - the backend collapses a double submit with the same key into one order.
   idempotencyKey?: string;
+  // Set only after the server warned that a matching recent order exists and the user confirmed this is a separate purchase.
+  acknowledgeDuplicate?: boolean;
+  /** Replace this earlier unpaid prepaid order of the customer (price / discount changed): it is cancelled with its payment link before the new order is created. */
+  supersedesOrderId?: string;
   shippingAddress?: {
     name?: string;
     line1?: string;
@@ -179,11 +183,22 @@ export interface OrderPaymentLinkResult {
 export type OrderNotifyVia = "FREE_TEXT" | "TEMPLATE";
 export type WhatsAppProviderName = "META" | "AISENSY" | "GUPSHUP";
 
+/** The QR image of a prepaid payment link is its own WhatsApp message with its own outcome (the link text can be sent while the image fails). */
+export interface PaymentQrResult {
+  status: "SENT" | "FAILED" | "NOT_SENT";
+  paymentId: string;
+  reason?: string;
+  messageId?: string;
+  at: string;
+}
+
 export interface OrderNotifyResult {
   sent: boolean;
   via: OrderNotifyVia | null;
   provider: WhatsAppProviderName | null;
   reason?: string;
+  /** Prepaid only: the outcome of the separate QR image message. */
+  qr?: PaymentQrResult;
   /** The approved template that was sent (its name, never the provider id). Present for a template send. */
   templateName?: string;
 }
@@ -642,4 +657,21 @@ export interface OrderFilterOptions {
   salespeople: { id: string; name: string }[];
   /** The CRM's own lead sources. */
   leadSources: { id: string; name: string }[];
+}
+
+export interface MarkPaidInput {
+  /** How the payment was verified (required). */
+  reason: string;
+  /** UTR / UPI transaction id / receipt number, when known. */
+  reference?: string;
+}
+
+export interface MarkPaidResult {
+  orderId: string;
+  orderNumber: string;
+  alreadyPaid: boolean;
+  orderStatus: string;
+  payment: { id: string; verification: "MANUAL_EXTERNAL" | "CASHFREE"; amount: string; paidAt: string | null };
+  shopify: { linked: boolean; paymentSync: "synced" | "failed" | "pending"; reason?: string };
+  openCashfreeLink: boolean;
 }

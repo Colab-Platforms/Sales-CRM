@@ -116,6 +116,8 @@ const createManualOrderSchema = z.object({
   whatsappConsent: z.boolean({ error: "whatsappConsent must be true or false" }).optional(),
   discountReason: optional(z.string().trim().max(255)),
   idempotencyKey: optional(z.string().trim().min(8).max(100)),
+  acknowledgeDuplicate: optional(z.boolean()),
+  supersedesOrderId: optional(z.uuid({ error: "Invalid order id" })),
 });
 
 export const validateCreateManualOrder = (body: unknown) => validateSchema<CreateManualOrderInput>(createManualOrderSchema, body);

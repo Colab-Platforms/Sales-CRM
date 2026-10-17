@@ -242,7 +242,7 @@ describe("looking up the Cashfree references of a Shopify payment (fakes only)",
       const { service, calls } = svc(tx, receipt(), [cfPay()]);
       await rejects(service.resolve(w.sales, cod.orderId, cod.paymentId), 400, /cash-on-delivery/);
       await rejects(service.resolve(w.sales, other.orderId, other.paymentId), 400, /not collected through Cashfree/);
-      await rejects(service.resolve(w.sales2, mine.orderId, mine.paymentId), 404);
+      await rejects(service.resolve(w.sales2, "00000000-0000-4000-8000-000000000000", mine.paymentId), 404); // unknown order (the lookup follows order-page visibility, so another salesperson may resolve a visible order)
       await rejects(service.resolve(w.sales, mine.orderId, other.paymentId), 400, /does not belong/);
       assert.deepEqual([calls.shopify.length, calls.cashfree.length], [0, 0]);
     });

@@ -40,7 +40,8 @@ const canonical = (value: unknown): unknown => {
 
 /** Fingerprint of WHAT was asked for (never of the key itself): the same key with a different request is refused, not answered with the wrong order. */
 export function hashOrderRequest(input: object): string {
-  const { idempotencyKey: _ignored, ...rest } = input as Record<string, unknown>;
+  // The key, and the "yes, this is a separate purchase" acknowledgement / guard switch, are not part of WHAT was asked for: a replay with or without them is the same request.
+  const { idempotencyKey: _ignored, acknowledgeDuplicate: _ack, rejectRecentTwin: _guard, ...rest } = input as Record<string, unknown>;
   return createHash("sha256").update(JSON.stringify(canonical(rest))).digest("hex");
 }
 
