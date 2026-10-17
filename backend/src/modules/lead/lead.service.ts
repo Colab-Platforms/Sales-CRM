@@ -314,6 +314,7 @@ class LeadService {
           actor: { id: user.id, role: user.role },
           type: resultingStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
           scheduledAt: followUpAt,
+          note: data.note,
         });
       } else if (statusChanged) {
         // Moved on to another status - any reminder still pending on the lead has been dealt with.

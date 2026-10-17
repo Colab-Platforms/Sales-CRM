@@ -94,6 +94,8 @@ export interface UpdateLeadPayload {
   priority?: LeadPriority;
   /** ISO time to remind the salesperson; required when switching to CALL_BACK or FOLLOW_UP. */
   followUpAt?: string;
+  /** What the customer said; attached to the call back / follow up reminder. */
+  note?: string;
 }
 
 export interface LeadAssignmentRecord {

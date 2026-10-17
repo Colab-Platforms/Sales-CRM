@@ -46,6 +46,7 @@ const updateLeadSchema = z
     workingStatus: workingStatusEnum.optional(),
     priority: priorityEnum.optional(),
     followUpAt: z.string().datetime({ offset: true }).optional(),
+    note: z.string().max(2000).optional(),
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
