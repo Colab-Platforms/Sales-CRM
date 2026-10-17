@@ -20,7 +20,8 @@ import { ADDRESS_TYPES, formatAddress, validateAddress, type AddressErrors, type
 import type { PincodeLookup, ServiceabilityResult } from "@/lib/api-client/types/delivery.types";
 
 export { CourierTable, ServiceabilityLine } from "./courier-rates";
-import type { CreateManualOrderResult, PaymentMethod } from "@/lib/api-client/types/orders.types";
+import type { CreateManualOrderResult, PaymentMethod, PaymentQrResult } from "@/lib/api-client/types/orders.types";
+import { useSendPaymentQrMutation } from "@/lib/api-client/mutations/orders.mutations";
 import type { ProductListItem } from "@/lib/api-client/types/products.types";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -741,6 +742,9 @@ export function ResultView({
 }) {
   const { order, shopify, paymentLink, whatsapp } = result;
   const [sendOpen, setSendOpen] = useState(false);
+  const sendQr = useSendPaymentQrMutation();
+  const [qrOverride, setQrOverride] = useState<PaymentQrResult | null>(null);
+  const qr = qrOverride ?? whatsapp.qr;
   const isCod = order.paymentMode === "COD";
   const providerLabel = whatsapp.provider ? (PROVIDER_LABELS[whatsapp.provider] ?? whatsapp.provider) : null;
   const what = isCod ? "Order confirmation" : "Payment link";
@@ -833,6 +837,38 @@ export function ResultView({
             </span>
           ) : null}
         </ResultRow>
+
+        {order.paymentMode !== "COD" && qr ? (
+          <ResultRow label="Payment QR" state={qr.status === "SENT" ? "ok" : "warn"}>
+            {qr.status === "SENT" ? `QR code for the same payment link sent to ${customerMobile ?? "the customer"}` : `QR code not sent — ${friendlyWhatsApp(qr.reason)}. The payment link above is unaffected.`}
+            {qr.status !== "SENT" && paymentLink?.paymentId ? (
+              <span className="mt-2 block">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={sendQr.isPending}
+                  data-testid="retry-qr"
+                  onClick={() =>
+                    sendQr.mutate(
+                      { orderId: order.id, paymentId: paymentLink.paymentId! },
+                      {
+                        onSuccess: (r) => {
+                          setQrOverride(r);
+                          if (r.status === "SENT") toast.success("QR code sent.");
+                          else toast.error(r.reason ?? "QR code not sent.");
+                        },
+                        onError: () => toast.error("Could not send the QR code."),
+                      },
+                    )
+                  }
+                >
+                  {sendQr.isPending ? "Sending…" : "Resend QR code"}
+                </Button>
+              </span>
+            ) : null}
+          </ResultRow>
+        ) : null}
 
         <ResultRow label="Shiprocket" state="info">
           Not yet attempted

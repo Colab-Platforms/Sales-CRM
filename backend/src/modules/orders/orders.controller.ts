@@ -78,10 +78,11 @@ export const createOrder = async (req: AuthRequest, res: Response): Promise<void
       sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
       return;
     }
-    const result = await ordersService.createManualOrder(req.user!, value);
+    // From the UI/API a new order that matches a very recent one for the same customer needs an explicit acknowledgement; internal callers (AI order flow, workers) are unaffected.
+    const result = await ordersService.createManualOrder(req.user!, { ...value, rejectRecentTwin: !value.acknowledgeDuplicate && !value.supersedesOrderId });
     sendResponse(res, true, result, "Order created", STATUS_CODES.CREATED);
   } catch (error: any) {
-    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
 

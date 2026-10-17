@@ -17,6 +17,7 @@ import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useCourierRates } from "@/hooks/useCourierRates";
 import { shippingChargeState } from "@/lib/shipping-charge";
 import { COD_SHIPPING_CHARGE } from "@/lib/cod-shipping";
+import { possibleDuplicateOf } from "@/lib/duplicate-order";
 import { formatMoney } from "@/lib/order-status";
 import { buildAddressDraft, composeLines, formatAddress, validateAddress } from "./create-order-address";
 import { DiscountPricing } from "./discount-section";
@@ -363,7 +364,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     serviceability,
   };
 
-  function submit() {
+  function submit(acknowledgeDuplicate = false, supersedesOrderId?: string) {
     // Synchronous guard: two rapid clicks/Enters can both run before `isPending` re-renders.
     if (submittingRef.current || createOrder.isPending) return;
     submittingRef.current = true;
@@ -403,6 +404,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         // COD orders send nothing extra (unchanged). Prepaid: an explicit "Dont send", or the WhatsApp send with template + consent.
         ...(orderType !== "COD" ? toApiWhatsApp(waOptions, whatsapp) : {}),
         idempotencyKey: idempotencyKey.current,
+        // Only after the server warned about a matching recent order and the user chose "create anyway" (the refused request created nothing, so the same key is reused).
+        ...(acknowledgeDuplicate ? { acknowledgeDuplicate: true } : {}),
+        // "Replace": the earlier unpaid order (same items, different price / discount) is cancelled with its payment link, so only this one stays payable.
+        ...(supersedesOrderId ? { supersedesOrderId } : {}),
       },
       {
         onSuccess: (created) => {
@@ -486,12 +491,22 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                   {getErrorMessage(createOrder.error, "Could not create the order.")}
                 </p>
               ) : null}
+              {possibleDuplicateOf(createOrder.error)?.replaceOrderId ? (
+                <Button type="button" onClick={() => submit(false, possibleDuplicateOf(createOrder.error)!.replaceOrderId!)} disabled={createOrder.isPending} data-testid="replace-order">
+                  Replace {possibleDuplicateOf(createOrder.error)!.orderNumber ?? "the open order"} (cancel it and its payment link)
+                </Button>
+              ) : null}
+              {possibleDuplicateOf(createOrder.error) ? (
+                <Button type="button" variant="outline" onClick={() => submit(true)} disabled={createOrder.isPending} data-testid="create-anyway">
+                  This is a separate purchase - create anyway
+                </Button>
+              ) : null}
               {createOrder.isPending ? <CreateOrderProgress steps={steps} activeIndex={stepIndex} /> : null}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button type="button" variant="outline" onClick={() => setStep("form")} disabled={createOrder.isPending}>
                   Back
                 </Button>
-                <Button type="button" onClick={submit} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
+                <Button type="button" onClick={() => submit()} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
                   {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : sendingWhatsApp ? "Create Order & Send Payment Link" : "Create prepaid order"}
                 </Button>
               </div>

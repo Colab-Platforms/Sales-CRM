@@ -25,7 +25,7 @@ interface Script {
   /** orderCreate: refuse when the request carries a customer (a phone/e-mail that belongs to someone else). */
   rejectCustomer?: boolean;
   /** what the read-back returns: everything saved, except these. */
-  dropped?: ("shippingAddress" | "requiresShipping" | "tags" | "metafields")[];
+  dropped?: ("shippingAddress" | "billingAddress" | "requiresShipping" | "tags" | "metafields")[];
   /** after orderUpdate the dropped address / metafields are saved. */
   repairWorks?: boolean;
   /** the total Shopify reports on read-back (default: the CRM total, 1248.00). */
@@ -62,6 +62,7 @@ function fakeShopify(script: Script = {}) {
         const healed = repaired && script.repairWorks;
         return { order: { id: "x", note: sent.note, tags: drop.includes("tags") ? [] : sent.tags ?? [], displayFinancialStatus: "Pending", totalPriceSet: { shopMoney: { amount: script.total ?? "1248.00" } }, customer: sent.customer ? { id: "c" } : null,
           shippingAddress: (drop.includes("shippingAddress") && !healed) || !sent.shippingAddress ? null : { address1: sent.shippingAddress.address1, city: sent.shippingAddress.city, zip: sent.shippingAddress.zip, provinceCode: sent.shippingAddress.provinceCode, countryCodeV2: "IN", firstName: sent.shippingAddress.firstName },
+          billingAddress: drop.includes("billingAddress") || !sent.billingAddress ? null : { address1: sent.billingAddress.address1, city: sent.billingAddress.city, zip: sent.billingAddress.zip },
           lineItems: { nodes: sent.lineItems.map(() => ({ requiresShipping: !drop.includes("requiresShipping") })) }, metafields: { nodes: drop.includes("metafields") && !healed ? [] : (sent.metafields ?? []).map((m: any) => ({ key: m.key })) } } };
       }
       if (/orderUpdate/.test(doc)) { calls.update.push(vars.input); repaired = true; return { orderUpdate: { order: { id: "x" }, userErrors: [] } }; }

@@ -429,6 +429,7 @@ const ORDER_VERIFY_QUERY = `
       customer { id }
       totalPriceSet { shopMoney { amount } }
       shippingAddress { address1 city zip provinceCode countryCodeV2 firstName }
+      billingAddress { address1 city zip }
       lineItems(first: 100) { nodes { requiresShipping } }
       metafields(first: 30, namespace: "crm") { nodes { key } }
     }
@@ -444,6 +445,7 @@ interface VerifyResponse {
     customer: { id: string } | null;
     totalPriceSet?: { shopMoney: { amount: string } } | null;
     shippingAddress: { address1: string | null; city: string | null; zip: string | null; provinceCode: string | null; countryCodeV2: string | null; firstName: string | null } | null;
+    billingAddress?: { address1: string | null; city: string | null; zip: string | null } | null;
     lineItems: { nodes: { requiresShipping: boolean }[] };
     metafields: { nodes: { key: string }[] };
   } | null;
@@ -466,6 +468,12 @@ export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNul
     if (!a) missing.push("shippingAddress");
     else if ((sent.shippingAddress.address1 && !a.address1) || (sent.shippingAddress.city && !a.city) || (sent.shippingAddress.zip && !a.zip)) missing.push("shippingAddress.fields");
     else if (sent.shippingAddress.firstName && !a.firstName) missing.push("shippingAddress.name");
+  }
+  // The billing address is sent too (it equals the shipping address - the CRM keeps no separate one). Shopify's orderUpdate cannot set it, so a missing one can be REPORTED but not repaired here.
+  if (sent.billingAddress) {
+    const b = found.billingAddress;
+    if (!b) missing.push("billingAddress");
+    else if ((sent.billingAddress.address1 && !b.address1) || (sent.billingAddress.city && !b.city) || (sent.billingAddress.zip && !b.zip)) missing.push("billingAddress.fields");
   }
   if (sent.lineItems.some((l) => l.requiresShipping === true) && found.lineItems.nodes.some((n) => !n.requiresShipping)) missing.push("lineItems.requiresShipping");
   if (sent.tags?.length) {
@@ -505,4 +513,26 @@ export async function repairShopifyOrderFields(client: ShopifyClient, shopifyOrd
   if (attempted.length === 0) return { attempted, errors: [] };
   const data = await client.query<{ orderUpdate: { userErrors: { message: string }[] } }>(ORDER_UPDATE_MUTATION, { input });
   return { attempted, errors: data.orderUpdate.userErrors.map((e) => e.message) };
+}
+
+export interface ShopifyRepairOutcome {
+  /** The verification AFTER the repair (or the original one when nothing could be repaired). */
+  check: ShopifyVerification;
+  /** Only the repaired fields that Shopify now really has - not merely the ones that were re-sent. */
+  repaired: string[];
+  /** Shopify's own validation messages for the repair (never tokens), so a failed repair is explained instead of silently ignored. */
+  errors: string[];
+}
+
+/**
+ * Repairs what can be repaired (shipping address, metafields), then reads the order back. A field counts as repaired only when the read-back confirms it; Shopify's userErrors are returned, not discarded.
+ * Idempotent: it only re-sends fields that are missing, so repeating it changes nothing once the order is complete.
+ */
+export async function repairAndVerify(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, check: ShopifyVerification, expectedTotal?: string): Promise<ShopifyRepairOutcome> {
+  if (check.missing.length === 0) return { check, repaired: [], errors: [] };
+  const fix = await repairShopifyOrderFields(client, shopifyOrderId, sent, check.missing);
+  if (fix.attempted.length === 0) return { check, repaired: [], errors: fix.errors };
+  const after = await verifyShopifyOrder(client, shopifyOrderId, sent, expectedTotal);
+  const stillMissing = (field: string) => after.missing.some((m) => m === field || m.startsWith(`${field}.`));
+  return { check: after, repaired: fix.attempted.filter((field) => !stillMissing(field)), errors: fix.errors };
 }

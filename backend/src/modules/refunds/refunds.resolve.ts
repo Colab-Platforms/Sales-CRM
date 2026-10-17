@@ -21,7 +21,7 @@ import { advisoryLock, asRecord, ProviderHttpError, type Db, type TxRunner } fro
 import { ShopifyClient } from "../shopify/shopify.client.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { toCents } from "../shopify/shopify.money.js";
-import { scopedOrderWhere } from "../orders/orders.filters.js";
+import { orderReadWhere, scopedOrderWhere } from "../orders/orders.filters.js";
 import { canResolveCashfreeIds, cashfreeOrderIdOf, cashfreePaymentIdOf, refundIneligibleReason } from "./refunds.eligibility.js";
 
 /** What Shopify says about the payment's gateway transaction. */
@@ -133,7 +133,7 @@ class CashfreeIdResolutionService {
   private async loadPayment(tx: Db, user: AuthUser | null, orderId: string, paymentId: string) {
     // user === null is the system itself (automatic verification right after a Shopify sync), which has no lead scope.
     const scope = user ? await getLeadScope(user, tx) : {};
-    const order = await tx.order.findFirst({ where: scopedOrderWhere(orderId, scope), select: { id: true } });
+    const order = await tx.order.findFirst({ where: user ? orderReadWhere(user, orderId, scope) : scopedOrderWhere(orderId, scope), select: { id: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     const payment = await tx.payment.findFirst({
       where: { id: paymentId, orderId: order.id },

@@ -5,7 +5,7 @@ import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
 import { deliveryKeys } from "../queries/delivery.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
+import type { MarkPaidInput, MarkPaidResult, PaymentQrResult, ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -22,6 +22,14 @@ export function useCreateOrderMutation() {
       queryClient.invalidateQueries({ queryKey: [...customersKeys.all, "timeline", variables.leadId] });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
+  });
+}
+
+export function useSendPaymentQrMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<PaymentQrResult, unknown, { orderId: string; paymentId: string }>({
+    mutationFn: ({ orderId, paymentId }) => ordersApi.sendPaymentQr(orderId, paymentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ordersKeys.all }),
   });
 }
 
@@ -119,6 +127,20 @@ export function useRetryShopifyPaymentSyncMutation() {
     mutationFn: (orderId) => ordersApi.retryShopifyPaymentSync(orderId),
     onSuccess: (_, orderId) => {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}
+
+export function useMarkOrderPaidMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<MarkPaidResult, unknown, { orderId: string } & MarkPaidInput>({
+    mutationFn: ({ orderId, ...input }) => ordersApi.markPaid(orderId, input),
+    onSuccess: (_, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.statusHistory(orderId) });
+      queryClient.invalidateQueries({ queryKey: auditKeys.all });
     },
   });
 }
