@@ -24,7 +24,10 @@ export function SalesSummaryTiles({ data }: { data: ManagerAnalytics }) {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <KpiCard
           label="Total Orders" tone="blue" icon={ShoppingBag} value={formatNumber(k.orders)}
-          lines={[periodChange(k.orders, k.previousOrders), { text: `Previous period: ${formatNumber(k.previousOrders)}` }]}
+          lines={[
+            periodChange(k.orders, k.previousOrders),
+            { text: `${formatNumber(k.orders - k.assistedOrders)} confirmed in CRM · ${formatNumber(k.assistedOrders)} after a call` },
+          ]}
         />
         <KpiCard
           label="AOV (Average Order Value)" tone="violet" icon={Calculator} value={formatRupees(k.aov)}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { MessageCircle, Search, Users } from "lucide-react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -30,12 +30,15 @@ export function NewChatDialog({
   const [search, setSearch] = useState("");
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  useEffect(() => {
+  // Clear the search each time the dialog closes (adjusting state during render, not in an effect).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (!open) {
       setSearchInput("");
       setSearch("");
     }
-  }, [open]);
+  }
 
   function handleSearchChange(value: string) {
     setSearchInput(value);

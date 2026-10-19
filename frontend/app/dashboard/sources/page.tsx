@@ -7,7 +7,6 @@ import { Plug, Plus } from "lucide-react";
 import { sourcesQueryOptions, sourceEventsQueryOptions } from "@/lib/api-client/queries/source.queries";
 import {
   useCreateSourceMutation,
-  useUpdateSourceMutation,
   useToggleSourceStatusMutation,
 } from "@/lib/api-client/mutations/source.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";

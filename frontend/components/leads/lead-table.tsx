@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlarmClock, Phone } from "lucide-react";
+import { AlarmClock } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Inbox, Pencil, Trash2, History, ArrowRight } from "lucide-react";
@@ -26,8 +26,7 @@ import {
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
-import { useInitiateCallMutation } from "@/lib/api-client/mutations/calling.mutations";
-import { virtualNumbersQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
+import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import { ScheduleFollowUpDialog } from "@/components/follow-ups/schedule-follow-up-dialog";

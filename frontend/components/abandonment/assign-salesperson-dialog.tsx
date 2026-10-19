@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
@@ -38,13 +38,16 @@ export function AssignAbandonmentSalespersonDialog({
 
   const team = salespersons ?? [];
 
-  useEffect(() => {
+  // Reset the form each time the dialog opens (adjusting state during render, not in an effect).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) {
       setMethod("MANUAL");
       setSalespersonId("");
       setSalespersonIds(new Set());
     }
-  }, [open]);
+  }
 
   function toggleSalesperson(id: string, checked: boolean) {
     setSalespersonIds((prev) => {

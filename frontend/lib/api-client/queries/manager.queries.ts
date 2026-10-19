@@ -2,6 +2,9 @@ import { keepPreviousData, queryOptions } from "@tanstack/react-query";
 import { managerAnalyticsApi, managerApi } from "../endpoints/manager.api";
 import type { AnalyticsQuery } from "../types/manager-analytics.types";
 
+/** How often dashboards and reports re-read their figures while open. */
+const ANALYTICS_REFRESH_MS = 60_000;
+
 export const managerKeys = {
   all: ["manager"] as const,
   groups: () => [...managerKeys.all, "groups"] as const,
@@ -32,6 +35,8 @@ export function managerAnalyticsQueryOptions(q: AnalyticsQuery) {
     queryKey: managerAnalyticsKeys.overview(q),
     queryFn: () => managerAnalyticsApi.overview(q),
     placeholderData: keepPreviousData,
+    // Live figures: re-read every minute while the tab is open (paused in background tabs).
+    refetchInterval: ANALYTICS_REFRESH_MS,
   });
 }
 
@@ -40,5 +45,6 @@ export function salespersonAnalyticsQueryOptions(id: string, q: AnalyticsQuery) 
     queryKey: managerAnalyticsKeys.salesperson(id, q),
     queryFn: () => managerAnalyticsApi.salesperson(id, q),
     placeholderData: keepPreviousData,
+    refetchInterval: ANALYTICS_REFRESH_MS,
   });
 }

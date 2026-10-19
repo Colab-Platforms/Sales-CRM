@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { inspect } from "node:util";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ShopifyClient, ShopifyApiError, ShopifyGraphQLError } from "./shopify.client.js";
 import { loadShopifyConfig, ShopifyConfigError } from "./shopify.config.js";
 import { countRecords, fetchOrder, listOrderRefs, normalizeOrder, orderNodeSchema } from "./shopify.orders.js";
@@ -620,7 +621,8 @@ describe("dry run", () => {
   });
 
   it("keeps database code out of everything the dry run uses", () => {
-    const dir = new URL(".", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
+    // fileURLToPath decodes %20 etc., so this also works when the project path contains spaces.
+    const dir = fileURLToPath(new URL(".", import.meta.url));
     const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.endsWith(".db-test.ts")).map((f) => join(dir, f));
     assert.ok(files.length >= 12);
 

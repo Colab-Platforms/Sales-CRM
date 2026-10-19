@@ -19,7 +19,7 @@ export function parseAbandonmentCart(item: {
   let cartValue = item.cartSnapshot?.cartValue ?? null;
   let currency = item.cartSnapshot?.currency ?? "INR";
   let itemCount = item.cartSnapshot?.itemCount ?? null;
-  let itemNames = item.cartSnapshot?.itemNames ? [...item.cartSnapshot.itemNames] : [];
+  const itemNames = item.cartSnapshot?.itemNames ? [...item.cartSnapshot.itemNames] : [];
   let stage = item.cartSnapshot?.stage ?? null;
   let checkoutUrl = item.cartSnapshot?.checkoutUrl ?? null;
 

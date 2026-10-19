@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
@@ -36,13 +36,16 @@ export function AssignSalespersonDialog({
   // This dialog stays mounted between opens (only its content is conditionally
   // rendered), so without this reset a stale selection from a previous batch
   // could silently carry over into a new one.
-  useEffect(() => {
+  // Reset the form each time the dialog opens (adjusting state during render, not in an effect).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) {
       setMethod("MANUAL");
       setSalespersonId("");
       setSalespersonIds(new Set());
     }
-  }, [open]);
+  }
 
   function toggleSalesperson(id: string, checked: boolean) {
     setSalespersonIds((prev) => {
