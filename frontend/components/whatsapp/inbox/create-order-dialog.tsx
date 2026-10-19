@@ -249,7 +249,6 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
   function handleVariantChange(key: string, productId: string, variantId: string) {
     const product = products.find((p) => p.id === productId);
-    const variant = product?.variants.find((v) => v.id === variantId);
     updateItem(key, { variantId, unitPrice: catalogPrice(product, variantId), priceEdited: false });
     void productsQuery.refetch();
   }
@@ -257,6 +256,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // When fresh catalogue data arrives, every line that has not had its price typed over follows the catalogue (price changes made since the product was selected apply).
   useEffect(() => {
     if (!productsQuery.data) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncs catalog prices into the editable draft when the products query resolves
     setItems((prev) => {
       let changed = false;
       const next = prev.map((item) => {
@@ -279,6 +279,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     if (!productsQuery.data && !productsQuery.isError) return;
     appliedPrefill.current = prefill.abandonmentId;
     if (prefill.lines.length === 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- applies an abandoned-cart prefill once, after the products query resolves
     setItems((prev) => prefillDraftItems(prev, prefill.lines, (id) => productsQuery.data?.items.find((p) => p.id === id), (product, variantId) => catalogPrice(product as never, variantId)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill, productsQuery.data, productsQuery.isError]);

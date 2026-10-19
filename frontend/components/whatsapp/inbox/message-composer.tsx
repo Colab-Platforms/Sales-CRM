@@ -79,6 +79,7 @@ export function MessageComposer({
       if (replyTarget) {
         textareaRef.current?.focus();
         // Only a starting point - the telecaller can edit or fully replace it before sending; never sent automatically.
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- the prefill belongs with the focus change above (a DOM side effect)
         if (isCorrection) setText(CORRECTION_PREFILL);
       }
     }

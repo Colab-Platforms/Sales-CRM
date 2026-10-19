@@ -83,6 +83,8 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
   useEffect(() => {
     if (fromParam) {
+      // document.referrer only exists in the browser after mount, so this must run in an effect.
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reads document after mount (not available during render)
       setFrom(fromParam);
     } else if (typeof document !== "undefined" && document.referrer.includes("/dashboard/abandoned-leads")) {
       setFrom("abandoned-leads");

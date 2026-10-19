@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma.js";
 import { OrderStatus } from "../../../generated/prisma/enums.js";
 import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus } from "../orders/orders.filters.js";
+import { classify, closingCall, matchesCallStatus, matchesLeadStatus, type CallStatusFilter, type LeadStatusFilter } from "./manager.metrics.js";
 
 // ---------------------------------------------------------------------------------------------
 // Sales & Revenue: one definition shared by the KPI cards, charts, tables and exports.
@@ -16,6 +17,11 @@ import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus } from 
 //                  any payment has a method. An order with no payment method yet is in the totals but in
 //                  neither split (and is excluded when a payment-method filter is chosen).
 //  Counting        per order, never per payment row, so retries and upgrades are not double counted.
+//  Call filter     an order follows its closing call: the confirming telecaller's latest call to that lead
+//                  at or before confirmation. "Failed calls" therefore shows only orders that came from a
+//                  failed call; an order with no such call appears only under "All calls".
+//  Lead filter     a confirmed order is a lead its telecaller worked and converted: it appears under every lead
+//                  filter except "Not contacted".
 // ---------------------------------------------------------------------------------------------
 
 export const SOLD_STATUSES: OrderStatus[] = [
@@ -32,6 +38,8 @@ export type OrderStatusFilter = "ALL" | (typeof SOLD_STATUSES)[number];
 export interface SalesFilters {
   paymentMode: PaymentModeFilter;
   orderStatus: OrderStatusFilter;
+  callStatus: CallStatusFilter;
+  leadStatus: LeadStatusFilter;
 }
 
 export interface SoldItem {
@@ -83,14 +91,31 @@ export async function soldOrders(userIds: string[], start: Date, end: Date, f: S
       totalAmount: true,
       confirmedAt: true,
       confirmedByUserId: true,
+      leadId: true,
       payments: { select: { method: true, status: true, amount: true, refundedAmount: true } },
       items: { select: { productId: true, productNameSnapshot: true, skuSnapshot: true, quantity: true, totalPrice: true } },
     },
     orderBy: { confirmedAt: "asc" },
   });
 
+  // Closing calls are only needed when a call-status filter is on: one query for every lead involved.
+  const calls =
+    f.callStatus === "ALL" || orders.length === 0
+      ? []
+      : await prisma.call.findMany({
+          where: { leadId: { in: [...new Set(orders.map((o) => o.leadId))] }, agentId: { in: userIds } },
+          select: { leadId: true, agentId: true, status: true, startedAt: true, createdAt: true },
+        });
+
   return orders.flatMap((o): SoldOrder[] => {
     if (!o.confirmedByUserId || !o.confirmedAt) return [];
+    // A confirmed order means its confirming telecaller worked and converted that lead.
+    const leadStage = { touched: true, interested: true, converted: true };
+    if (!matchesLeadStatus(leadStage, f.leadStatus)) return [];
+    if (f.callStatus !== "ALL") {
+      const closing = closingCall(calls, { leadId: o.leadId, confirmedByUserId: o.confirmedByUserId, confirmedAt: o.confirmedAt });
+      if (!matchesCallStatus(closing ? classify(closing.status) : null, f.callStatus)) return [];
+    }
     const breakdown = computePaymentBreakdown(o.payments);
     const totalCents = toPaise(o.totalAmount);
     const cents = totalCents - breakdown.refundedCents;

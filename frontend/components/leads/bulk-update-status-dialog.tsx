@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useBulkUpdateStatusMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -34,12 +34,15 @@ export function BulkUpdateStatusDialog({
   const [followUpAt, setFollowUpAt] = useState("");
 
   // Dialog stays mounted between opens - reset so a previous batch's picks don't carry over.
-  useEffect(() => {
+  // Reset the form each time the dialog opens (adjusting state during render, not in an effect).
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
     if (open) {
       setWorkingStatus("NOT_INTERESTED");
       setFollowUpAt("");
     }
-  }, [open]);
+  }
 
   const isFollowUpStatus = workingStatus === "CALL_BACK" || workingStatus === "FOLLOW_UP";
   const followUpIso = localInputToIso(followUpAt);
