@@ -46,6 +46,9 @@ export interface SalespersonStats extends CallCounts, SalesCounts {
 export interface SalesCounts {
   orders: number;
   revenue: number;
+  /** Of which: Shopify/other orders credited because the telecaller worked that customer in the 7 days before. */
+  assistedOrders: number;
+  assistedRevenue: number;
   collected: number;
   /** Order value ÷ eligible orders; 0 when there are none. */
   aov: number;

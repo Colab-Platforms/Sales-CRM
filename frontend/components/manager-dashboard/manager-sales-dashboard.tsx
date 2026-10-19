@@ -172,7 +172,7 @@ export function ManagerSalesDashboard({
               <section className="space-y-4" aria-label="Sales">
                 <SectionHeading
                   title="Sales"
-                  description="Orders confirmed by the team, split by payment type, salesperson and product. Payment and order-status filters apply here."
+                  description="Orders a telecaller confirmed in the CRM, plus orders customers placed within 7 days after a telecaller called or worked them. Payment and order-status filters apply here."
                 />
                 <SalesSummaryTiles data={data} />
                 <RevenuePerDayPanel data={data} />

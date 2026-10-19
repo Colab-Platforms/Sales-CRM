@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { OrderStatus } from "../../../generated/prisma/enums.js";
-import { addSale, csvCell, emptySales, mergeSales, ordersCsv, salesOut, SOLD_STATUSES, type SoldOrder } from "./manager.sales.js";
+import { addSale, ASSIST_WINDOW_DAYS, creditFor, csvCell, emptySales, mergeSales, ordersCsv, salesOut, SOLD_STATUSES, type SoldOrder } from "./manager.sales.js";
 
 const order = (over: Partial<SoldOrder> = {}): SoldOrder => ({
   id: "o1",
@@ -11,6 +11,7 @@ const order = (over: Partial<SoldOrder> = {}): SoldOrder => ({
   status: OrderStatus.CONFIRMED,
   currency: "INR",
   userId: "u1",
+  credit: "CONFIRMED",
   at: new Date("2026-10-15T20:00:00.000Z"), // 01:30 on Oct 16 in IST
   totalCents: 69_900,
   refundedCents: 0,
@@ -32,7 +33,7 @@ describe("sales tallies", () => {
   it("zero orders gives zeros, never NaN or Infinity", () => {
     const out = salesOut(emptySales());
     assert.deepEqual(out, {
-      orders: 0, codOrders: 0, prepaidOrders: 0, revenue: 0, collected: 0, codRevenue: 0, codCollected: 0, prepaidRevenue: 0, prepaidCollected: 0, aov: 0,
+      orders: 0, codOrders: 0, prepaidOrders: 0, revenue: 0, assistedOrders: 0, assistedRevenue: 0, collected: 0, codRevenue: 0, codCollected: 0, prepaidRevenue: 0, prepaidCollected: 0, aov: 0,
     });
   });
 
@@ -92,9 +93,52 @@ describe("orders CSV", () => {
     assert.ok(csv.startsWith("﻿"));
     const lines = csv.slice(1).trim().split("\r\n");
     assert.equal(lines.length, 3);
-    assert.match(lines[0], /^Order Number,Shopify Number,Confirmed At \(IST\),Business Date,Salesperson,/);
+    assert.match(lines[0], /^Order Number,Shopify Number,Sale At \(IST\),Business Date,Salesperson,Credit,/);
     assert.doesNotMatch(lines[0], /phone|email|address|customer/i);
-    assert.match(lines[1], /^CRM-1,,2026-10-16 01:30:00,2026-10-16,Priti,CONFIRMED,COD,PENDING,CRM,INR,1,2,699,0,699,0,699$/);
+    assert.match(lines[1], /^CRM-1,,2026-10-16 01:30:00,2026-10-16,Priti,Confirmed in CRM,CONFIRMED,COD,PENDING,CRM,INR,1,2,699,0,699,0,699$/);
     assert.match(lines[2], /^'=evil,.*,Prepaid,SUCCESS,.*,699,0,699,699,0$/);
+  });
+});
+
+describe("who a sale is credited to", () => {
+  const sale = new Date("2026-10-19T08:00:00.000Z");
+  const daysBefore = (d: number) => new Date(sale.getTime() - d * 24 * 60 * 60_000);
+  const shopify = { at: sale, confirmedBy: null, confirmedByAnySalesperson: false };
+
+  it("a CRM confirmation by the team always wins", () => {
+    const c = creditFor({ at: sale, confirmedBy: "rustam", confirmedByAnySalesperson: true }, [{ userId: "priti", at: daysBefore(1) }]);
+    assert.deepEqual(c, { userId: "rustam", credit: "CONFIRMED" });
+  });
+
+  it("a Shopify order after a telecaller's call is credited to them as ASSISTED", () => {
+    assert.deepEqual(creditFor(shopify, [{ userId: "priti", at: daysBefore(2) }]), { userId: "priti", credit: "ASSISTED" });
+  });
+
+  it("the most recent contact before the sale wins; contact after the sale does not count", () => {
+    const touches = [
+      { userId: "priti", at: daysBefore(5) },
+      { userId: "roshni", at: daysBefore(1) },
+      { userId: "yash", at: new Date(sale.getTime() + 60_000) },
+    ];
+    assert.equal(creditFor(shopify, touches)?.userId, "roshni");
+  });
+
+  it("contact older than the window, or no contact at all, earns nothing", () => {
+    assert.equal(creditFor(shopify, [{ userId: "priti", at: daysBefore(ASSIST_WINDOW_DAYS + 1) }]), null);
+    assert.equal(creditFor(shopify, []), null);
+  });
+
+  it("an order another team's telecaller confirmed is never re-credited here", () => {
+    assert.equal(creditFor({ at: sale, confirmedBy: null, confirmedByAnySalesperson: true }, [{ userId: "priti", at: daysBefore(1) }]), null);
+  });
+
+  it("assisted sales are tallied separately inside the totals", () => {
+    const t = emptySales();
+    addSale(t, { cents: 50_000, collectedCents: 0, mode: "COD", credit: "CONFIRMED" });
+    addSale(t, { cents: 70_000, collectedCents: 0, mode: "COD", credit: "ASSISTED" });
+    const out = salesOut(t);
+    assert.equal(out.orders, 2);
+    assert.equal(out.assistedOrders, 1);
+    assert.equal(out.assistedRevenue, 700);
   });
 });
