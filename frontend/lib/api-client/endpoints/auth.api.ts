@@ -1,4 +1,4 @@
-import { apiClient } from "../client";
+import { AJAX_HEADERS, apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type { CurrentUser, LoginPayload, LoginResult, UserProfile } from "../types/auth.types";
 
@@ -6,6 +6,10 @@ export const authApi = {
   async login(payload: LoginPayload): Promise<LoginResult> {
     const res = await apiClient.post<ApiEnvelope<LoginResult>>("/auth/login", payload);
     return res.data.data;
+  },
+
+  async logout(): Promise<void> {
+    await apiClient.post("/auth/logout", {}, { headers: AJAX_HEADERS });
   },
 
   async me(): Promise<CurrentUser> {

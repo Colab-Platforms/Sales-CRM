@@ -20,6 +20,10 @@ const CONFIRMATION_TAG = /^CRM Confirmed by\b/i;
 const MAX_TAG_LENGTH = 40;
 
 export const isConfirmationTag = (tag: string): boolean => CONFIRMATION_TAG.test(tag.trim());
+// Older / foreign wordings of the same idea ("Order Confirmed by Telecaller", "Confirmed by Vini"): they are not the CRM's tag, they conflict with it, and they are replaced by the canonical "CRM Confirmed by <name>".
+// Only a tag that says "[Order] Confirmed by <something>" matches - a business tag such as "Order Confirmed" or "Confirmed" is never touched.
+const LEGACY_CONFIRMATION_TAG = /^(order\s+)?confirmed\s+by\s+\S/i;
+export const isLegacyConfirmationTag = (tag: string): boolean => LEGACY_CONFIRMATION_TAG.test(tag.trim());
 
 /** Shopify tags cannot contain commas and are capped at 40 characters; whitespace is collapsed so the same person always yields the same tag. */
 export function confirmationTagFor(name: string): string {
@@ -30,7 +34,7 @@ export function confirmationTagFor(name: string): string {
 /** What to change on an order that currently has `existing` so that exactly `desired` is its CRM confirmation tag. Nothing else is touched. */
 export function planTagChange(existing: string[], desired: string): { add: string[]; remove: string[] } {
   const lower = desired.toLowerCase();
-  const remove = existing.filter((t) => isConfirmationTag(t) && t.trim().toLowerCase() !== lower);
+  const remove = existing.filter((t) => (isConfirmationTag(t) && t.trim().toLowerCase() !== lower) || isLegacyConfirmationTag(t));
   const has = existing.some((t) => t.trim().toLowerCase() === lower);
   return { add: has ? [] : [desired], remove };
 }

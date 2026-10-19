@@ -7,6 +7,8 @@ import { cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopi
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
+import { sendPaymentLinkQr } from "../whatsapp/whatsapp.payment-qr.routes.js";
+import { markOrderPaid, MANUAL_PAYMENT_ROLES } from "./orders.manual-payment.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 import { createRefundRequest, resolveCashfreeReferences } from "../refunds/refunds.controller.js";
 
@@ -74,6 +76,10 @@ router.post("/:id/revert-cancel", requireAuth, requireRole(Role.ADMIN, Role.MANA
 
 // Cashfree payment link for the order's exact pending amount. Every role may collect on orders inside their own lead scope.
 router.post("/:orderId/payment-links", requireAuth, createPaymentLink);
+// A person verified an EXTERNAL payment (e.g. the telecaller's own QR) for an unpaid prepaid order: recorded as a separate, audited, non-Cashfree payment. See orders.manual-payment.ts.
+router.post("/:id/mark-paid", requireAuth, requireRole(...MANUAL_PAYMENT_ROLES), markOrderPaid);
+// Re-send ONLY the QR image of an existing payment link (same order, same link) after a failed or skipped delivery.
+router.post("/:orderId/payment-links/:paymentId/qr", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), sendPaymentLinkQr);
 // Refund APPROVAL workflow: raise a request (no refund is executed here or on approval). Same role set + lead scope as order creation.
 router.post("/:orderId/payments/:paymentId/resolve-cashfree", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), resolveCashfreeReferences);
 router.post("/:orderId/refund-requests", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createRefundRequest);

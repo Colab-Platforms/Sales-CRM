@@ -23,6 +23,8 @@ export interface UpdateLeadBody {
   priority?: "LOW" | "MEDIUM" | "HIGH";
   // Required when workingStatus changes to CALL_BACK or FOLLOW_UP: when to remind the salesperson.
   followUpAt?: string;
+  // What the customer said, attached to the call back / follow up reminder.
+  note?: string;
 }
 
 export type AssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";

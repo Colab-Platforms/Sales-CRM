@@ -121,6 +121,37 @@ describe("Create Order result screen", () => {
   });
 });
 
+describe("Create Order result screen: the payment QR is its own message with its own outcome", () => {
+  const link = { sent: true, via: "FREE_TEXT" as const, provider: "META" as const };
+  it("QR sent: shown next to the link, tied to the same payment link, with no retry button", () => {
+    const h = result(created({ ...link, qr: { status: "SENT", paymentId: "p1", at: "2026-10-17T10:00:00Z" } }));
+    assert.match(text(h), /Payment link sent to/);
+    assert.match(text(h), /QR code for the same payment link sent to .{0,3}919594849404/);
+    assert.doesNotMatch(h, /retry-qr/);
+  });
+  it("QR failed while the link was sent: says so, keeps the link message as sent, and offers a retry that re-sends only the image", () => {
+    const h = result(created({ ...link, qr: { status: "FAILED", paymentId: "p1", reason: "The image could not be sent.", at: "2026-10-17T10:00:00Z" } }));
+    assert.match(text(h), /Payment link sent to/);
+    assert.match(text(h), /QR code not sent/);
+    assert.match(text(h), /The payment link above is unaffected/);
+    assert.match(h, /data-testid="retry-qr"/);
+    assert.match(h, />Resend QR code</);
+  });
+  it("QR not sent (window closed / no public address): explained, with the retry", () => {
+    const h = result(created({ ...link, qr: { status: "NOT_SENT", paymentId: "p1", reason: "The 24-hour window has closed.", at: "2026-10-17T10:00:00Z" } }));
+    assert.match(text(h), /QR code not sent/);
+    assert.match(h, /retry-qr/);
+  });
+  it("no QR outcome (older result / link text not sent): no QR row at all", () => {
+    assert.doesNotMatch(text(result(created({ ...link }))), /QR code/);
+  });
+  it("COD never shows a QR row", () => {
+    const cod = created({ sent: true, via: "FREE_TEXT", provider: "META", qr: { status: "SENT", paymentId: "p1", at: "x" } });
+    (cod.order as { paymentMode: string }).paymentMode = "COD";
+    assert.doesNotMatch(text(result(cod)), /QR code/);
+  });
+});
+
 describe("Send Payment Link dialog body (existing order)", () => {
   const body = (data: WhatsAppPaymentOptions | null) => renderToStaticMarkup(withClient(<SendPaymentLinkBody paymentId="p1" orderId="o1" leadId={LEAD} customerName="Vishwa" onClose={() => {}} />, data));
 

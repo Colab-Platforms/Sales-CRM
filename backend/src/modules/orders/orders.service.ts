@@ -20,13 +20,17 @@ import { sanitizeSyncError, syncAdvice } from "../shopify/shopify.sync-status.js
 import type { ShopifySyncRecord } from "./orders.types.js";
 import { buildShopifyOrderPayload, type CrmOrderForShopify } from "../shopify/shopify.order-mapping.js";
 import { resolveShopifyCustomer } from "../shopify/shopify.order-customer.js";
-import { addShopifyOrderTags, repairShopifyOrderFields, verifyShopifyOrder, cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
+import { addShopifyOrderTags, repairAndVerify, verifyShopifyOrder, cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
 import { ABANDONMENT_WORK_ROLES, abandonmentLeadScope } from "../abandonment/abandonment.filters.js";
 import { UUID_PATTERN } from "../integrations/integrations.common.js";
 import DiscountsService, { type ResolvedDiscount } from "../discounts/discounts.service.js";
 import { clearLiveOrderCaches } from "./orders.live.service.js";
 import { shippingChargeCents } from "./orders.shipping.js";
+
+/** How recent an identical order for the same customer has to be to be treated as "probably the same sale entered twice" (see assertNoRecentTwin). */
+const RECENT_TWIN_WINDOW_MS = 60 * 60_000;
+const SUPERSEDE_REASON_PREFIX = "Replaced by";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
@@ -35,6 +39,7 @@ import { confirmationTagFor, recordConfirmation, syncConfirmationTag, type Confi
 import { creatorOf, creatorTagFor, resolveCreatorSnapshot, syncCreatorTag, type CreatorTagSyncResult } from "./orders.creator-tag.js";
 import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
+import { sendPaymentQr } from "../whatsapp/whatsapp.payment-qr.js";
 import { loadOrderRefundInfo } from "../refunds/refunds.service.js";
 import {
   buildOrderWhere,
@@ -313,7 +318,7 @@ class OrdersService {
     private readonly getCashfree: () => CashfreeOps = () => new CashfreePaymentsService(),
     // Real WhatsApp sends by default; tests inject trivial stubs so order-creation tests never touch
     // WhatsApp/Meta/template resolution at all.
-    private readonly notify: { confirmation: typeof notifyOrderConfirmation; paymentLink: typeof notifyPaymentLink } = { confirmation: notifyOrderConfirmation, paymentLink: notifyPaymentLink },
+    private readonly notify: { confirmation: typeof notifyOrderConfirmation; paymentLink: typeof notifyPaymentLink; paymentQr?: typeof sendPaymentQr } = { confirmation: notifyOrderConfirmation, paymentLink: notifyPaymentLink, paymentQr: sendPaymentQr },
   ) {}
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
@@ -578,6 +583,54 @@ class OrdersService {
     return promise;
   }
 
+  /**
+   * Cancels the earlier UNPAID prepaid order that a new order replaces, through the normal cancel workflow (which cancels its Cashfree link at the provider). Refuses anything that could collect money or
+   * is not the caller's to replace: another customer's order, an order that is paid / being paid, a COD order, or one the caller did not create (managers and admins may replace any). If the old payment
+   * link cannot be cancelled the new order is NOT created, so two payable links never exist for one purchase. A retry after a failure finds the order already replaced and carries on.
+   */
+  private async supersedeUnpaidOrder(user: AuthUser, leadId: string, newIsCod: boolean, oldOrderId: string): Promise<void> {
+    if (newIsCod) throw new ApiError("Only a prepaid order can replace an unpaid prepaid order", STATUS_CODES.BAD_REQUEST);
+    const old = await this.db.order.findFirst({ where: { id: oldOrderId, leadId }, select: { id: true, status: true, createdById: true, cancelReason: true, metadata: true, payments: { select: { status: true } } } });
+    if (!old) throw new ApiError("The order to replace was not found for this customer", STATUS_CODES.NOT_FOUND);
+    if (!(user.role === "ADMIN" || user.role === "MANAGER" || old.createdById === user.id)) throw new ApiError("You can only replace an order you created", STATUS_CODES.FORBIDDEN);
+    if (old.status === "CANCELLED" && String(old.cancelReason ?? "").startsWith(SUPERSEDE_REASON_PREFIX)) return; // an earlier attempt already replaced it
+    const unpaid = old.status === "PENDING_PAYMENT" && (old.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID" && !old.payments.some((p) => p.status === "SUCCESS" || p.status === "PROCESSING");
+    if (!unpaid) throw new ApiError("That order cannot be replaced: it is already paid, being paid, or no longer awaiting payment", STATUS_CODES.CONFLICT);
+    const cancelled = await this.cancelOrder(user, old.id, { reason: `${SUPERSEDE_REASON_PREFIX} a new order for the same items (price or discount changed)` }, { approverScope: true });
+    if (cancelled.paymentLink.status === "failed") throw new ApiError("The old order was cancelled but its payment link could not be cancelled, so no new order was created. Retry in a moment.", STATUS_CODES.SERVICE_UNAVAILABLE);
+  }
+
+  private async assertNoRecentTwin(leadId: string, want: { isCod: boolean; totalCents: number; items: { productId: string | null; variantId: string | null; quantity: number }[] }): Promise<void> {
+    const since = new Date(Date.now() - RECENT_TWIN_WINDOW_MS);
+    const signature = (items: { productId: string | null; variantId: string | null; quantity: number }[]) => items.map((i) => `${i.productId ?? ""}|${i.variantId ?? ""}|${i.quantity}`).sort().join(",");
+    const recent = await this.db.order.findMany({
+      where: { leadId, createdAt: { gte: since }, status: { not: "CANCELLED" } },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, orderNumber: true, status: true, totalAmount: true, createdAt: true, metadata: true, items: { select: { productId: true, variantId: true, quantity: true } } },
+    });
+    const mode = want.isCod ? "COD" : "PREPAID";
+    const twin = recent.find((o) => (o.metadata as Record<string, unknown> | null)?.paymentMode === mode && toCents(o.totalAmount.toString()) === want.totalCents && signature(o.items) === signature(want.items));
+    // The same items for the same customer, still awaiting payment, but at a DIFFERENT total: the price or discount was changed and the order entered again. Not an exact twin, so it used to slip through
+    // and leave two live orders (and two payable links) for one purchase. It is offered as a replacement of the unpaid order instead.
+    const repriced = twin ? undefined : want.isCod ? undefined : recent.find((o) => o.status === "PENDING_PAYMENT" && (o.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID" && signature(o.items) === signature(want.items));
+    if (repriced) {
+      const ago = Math.max(Math.round((Date.now() - repriced.createdAt.getTime()) / 60_000), 0);
+      throw new ApiError(
+        `Order ${repriced.orderNumber} for this customer (${ago} minute${ago === 1 ? "" : "s"} ago, same items, awaiting payment at ${repriced.totalAmount.toString()}) is still open. If you only changed the price or discount, replace it: the old order and its payment link are cancelled and this one takes its place. Otherwise confirm that this is a separate purchase.`,
+        STATUS_CODES.CONFLICT,
+        { code: "POSSIBLE_DUPLICATE_ORDER", orderNumber: repriced.orderNumber, status: repriced.status, minutesAgo: ago, orderId: repriced.id, supersedable: true },
+      );
+    }
+    if (!twin) return;
+    const minutesAgo = Math.max(Math.round((Date.now() - twin.createdAt.getTime()) / 60_000), 0);
+    throw new ApiError(
+      `A matching order (${twin.orderNumber}, ${twin.status.toLowerCase().replace("_", " ")}) was already created for this customer ${minutesAgo} minute${minutesAgo === 1 ? "" : "s"} ago. Open that order instead, or confirm that this is a separate purchase.`,
+      STATUS_CODES.CONFLICT,
+      { code: "POSSIBLE_DUPLICATE_ORDER", orderNumber: twin.orderNumber, status: twin.status, minutesAgo },
+    );
+  }
+
   private idempotencyWhere(userId: string, key: string) {
     return { userId_operation_key: { userId, operation: ORDER_CREATE_OPERATION, key } };
   }
@@ -739,6 +792,12 @@ class OrdersService {
       throw new ApiError("The order total changed. Please review the order again.", STATUS_CODES.CONFLICT);
     }
 
+    // A very recent order for this customer with the same items, total and payment mode is almost always the same sale entered twice (a second dialog, a re-entered form): ask first. A genuine second purchase
+    // is one acknowledgement away - this is a warning, never a ban, and a replay of the SAME idempotency key never gets here.
+    if (input.rejectRecentTwin) await this.assertNoRecentTwin(input.leadId, { isCod, totalCents, items: itemRows });
+    // The user chose to REPLACE an earlier unpaid order (changed price / discount): that order and its payment link are cancelled first, so only one order stays payable for the purchase.
+    if (input.supersedesOrderId) await this.supersedeUnpaidOrder(user, lead.id, isCod, input.supersedesOrderId);
+
     // Prepaid via a Cashfree payment link: no Payment row is created here (below) - CashfreePaymentsService.
     // createPaymentLink is the sole creator of that row (see the call after this transaction), so an order
     // never ends up with two rows for what is really one payment attempt.
@@ -851,6 +910,8 @@ class OrdersService {
           whatsapp = link.paymentUrl
             ? await this.notify.paymentLink(this.db, user, { leadId: lead.id, orderId: createdOrderId, normalizedMobile: lead.normalizedMobile, orderNumber: order.orderNumber, paymentUrl: link.paymentUrl, amount: link.amount, currency: link.currency, customerName: order.customer.name, items: messageItems(order), ...(whatsappSend?.templateId ? { templateId: whatsappSend.templateId } : {}) })
             : { sent: false, via: null, provider: null, reason: "The payment link has no URL yet." };
+          // The link text went out: send its QR image too (a separate message with its own outcome - a failure here never undoes or hides the link, and the retry reuses this same payment link).
+          if (whatsapp.sent && link.paymentId && this.notify.paymentQr) whatsapp = { ...whatsapp, qr: await this.notify.paymentQr(this.db, user, link.paymentId) };
           // A requested send that did not go through says so plainly; the order and its payment link are kept for the retry.
           if (whatsappSend && !whatsapp.sent && whatsapp.reason && !whatsapp.reason.startsWith("Payment link not sent")) whatsapp = { ...whatsapp, reason: `Payment link not sent — ${whatsapp.reason}` };
         }
@@ -1049,13 +1110,16 @@ class OrdersService {
         const attemptAt = new Date().toISOString();
         try {
           let check = await verifyShopifyOrder(client, result.shopifyOrderId, input, mirrored ? order.totalAmount.toString() : undefined);
-          const repaired: string[] = [];
+          let repaired: string[] = [];
+          let repairErrors: string[] = [];
           if (check.missing.length > 0) {
-            const fix = await repairShopifyOrderFields(client, result.shopifyOrderId, input, check.missing);
-            repaired.push(...fix.attempted);
-            if (fix.attempted.length > 0) check = await verifyShopifyOrder(client, result.shopifyOrderId, input, mirrored ? order.totalAmount.toString() : undefined);
+            const fixed = await repairAndVerify(client, result.shopifyOrderId, input, check, mirrored ? order.totalAmount.toString() : undefined);
+            check = fixed.check;
+            repaired = fixed.repaired;
+            repairErrors = fixed.errors.map(sanitizeSyncError);
+            if (repairErrors.length > 0) logger.warn(`Shopify refused the repair of order ${order.orderNumber}: ${repairErrors.join(" | ")}`);
           }
-          verifiedSync = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted: sentOmitted, repaired, customer: check.customerAssociated ? customerDecision.note : `no Shopify customer record: ${customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+          verifiedSync = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted: sentOmitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? customerDecision.note : `no Shopify customer record: ${customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
         } catch (verifyError) {
           verifiedSync = { status: "partial", missing: ["(could not read the order back to verify it)", ...degraded], omitted: sentOmitted, repaired: [], customer: customerDecision.note, attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(verifyError) };
           logger.error("Shopify order read-back failed", sanitizeSyncError(verifyError));
@@ -1114,19 +1178,23 @@ class OrdersService {
     let record: ShopifySyncRecord;
     try {
       let check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
-      const repaired: string[] = [];
+      let repaired: string[] = [];
+      let repairErrors: string[] = [];
       if (check.missing.length > 0) {
-        const fix = await repairShopifyOrderFields(client, order.externalId, input, check.missing);
-        repaired.push(...fix.attempted);
+        const fixed = await repairAndVerify(client, order.externalId, input, check, expectedTotal);
+        check = fixed.check;
+        repaired = fixed.repaired;
+        repairErrors = fixed.errors.map(sanitizeSyncError);
+        if (repairErrors.length > 0) logger.warn(`Shopify refused the repair of order ${order.orderNumber}: ${repairErrors.join(" | ")}`);
         if (check.missing.includes("tags") && input.tags?.length) {
           await addShopifyOrderTags(client, order.externalId, input.tags); // add-only: existing tags are kept
-          repaired.push("tags");
+          check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
+          if (!check.missing.includes("tags")) repaired.push("tags");
         }
-        if (repaired.length > 0) check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
       }
       const degraded = prepared.customerDecision.customer || check.customerAssociated ? [] : [`customer not associated: ${prepared.customerDecision.note}`];
       const omitted = Object.entries(prepared.built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
-      record = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted, repaired, customer: check.customerAssociated ? "a Shopify customer is attached" : `no Shopify customer record: ${prepared.customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+      record = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? "a Shopify customer is attached" : `no Shopify customer record: ${prepared.customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
     } catch (error) {
       record = { status: "failed", missing: [], omitted: [], repaired: [], customer: "", attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(error) };
     }

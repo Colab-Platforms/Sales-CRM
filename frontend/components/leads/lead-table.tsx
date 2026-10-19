@@ -268,9 +268,9 @@ export function LeadStatusSelect({ lead }: { lead: StatusEditableLead }) {
     "CALL_BACK" | "FOLLOW_UP" | null
   >(null);
 
-  function save(workingStatus: LeadWorkingStatus, followUpAt?: string) {
+  function save(workingStatus: LeadWorkingStatus, followUpAt?: string, note?: string) {
     updateLead.mutate(
-      { id: lead.id, payload: { workingStatus, followUpAt } },
+      { id: lead.id, payload: { workingStatus, followUpAt, note } },
       {
         onSuccess: () => {
           toast.success(
@@ -316,7 +316,7 @@ export function LeadStatusSelect({ lead }: { lead: StatusEditableLead }) {
           leadName={`${lead.firstName} ${lead.lastName ?? ""}`.trim()}
           current={lead.tasks[0]}
           isPending={updateLead.isPending}
-          onConfirm={(iso) => save(pendingFollowUp, iso)}
+          onConfirm={(iso, note) => save(pendingFollowUp, iso, note)}
           onCancel={() => setPendingFollowUp(null)}
         />
       ) : null}

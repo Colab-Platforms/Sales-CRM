@@ -5,13 +5,22 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { LoginBody } from "./auth.types.js";
+import { generateRefreshToken, hashRefreshToken, refreshTtlMs, ROTATION_GRACE_MS } from "@/lib/refreshToken.js";
+import { randomUUID } from "node:crypto";
+
+export interface IssuedSession {
+  user: ReturnType<typeof toPublicUser>;
+  accessToken: string;
+  /** null when the caller must keep the cookie it already has (parallel-refresh grace). */
+  refreshToken: string | null;
+}
 
 function toPublicUser(user: { id: string; name: string; username: string; role: string; status: string }) {
   return { id: user.id, name: user.name, username: user.username, role: user.role, status: user.status };
 }
 
 class AuthService {
-  async login(data: LoginBody) {
+  async login(data: LoginBody, userAgent?: string): Promise<IssuedSession> {
     const user = await prisma.user.findUnique({ where: { username: data.username } });
 
     if (!user || !user.passwordHash) {
@@ -34,7 +43,64 @@ class AuthService {
       data: { lastLoginAt: new Date() },
     });
 
-    return { user: toPublicUser(user), accessToken };
+    const refreshToken = await this.issueRefreshToken(user.id, randomUUID(), userAgent);
+    // Lazy housekeeping: this user's long-expired rows are of no use to anyone.
+    await prisma.refreshToken.deleteMany({ where: { userId: user.id, expiresAt: { lt: new Date(Date.now() - 86_400_000) } } }).catch(() => {});
+
+    return { user: toPublicUser(user), accessToken, refreshToken };
+  }
+
+  private async issueRefreshToken(userId: string, familyId: string, userAgent?: string): Promise<string> {
+    const { token, hash } = generateRefreshToken();
+    await prisma.refreshToken.create({
+      data: { userId, familyId, tokenHash: hash, expiresAt: new Date(Date.now() + refreshTtlMs()), userAgent: userAgent?.slice(0, 255) },
+    });
+    return token;
+  }
+
+  /**
+   * Exchanges a refresh token for a new access token and a NEW refresh token (rotation). The presented token dies on use.
+   * Showing a dead token again outside the race grace means it was copied: the whole login (family) is revoked.
+   */
+  async refreshSession(rawToken: string, userAgent?: string): Promise<IssuedSession> {
+    const reject = (message = "Session expired. Please sign in again.") => new ApiError(message, STATUS_CODES.UNAUTHORIZED);
+    const row = await prisma.refreshToken.findUnique({ where: { tokenHash: hashRefreshToken(rawToken) }, include: { user: true } });
+    if (!row) throw reject();
+
+    const now = new Date();
+    const revokeFamily = () => prisma.refreshToken.updateMany({ where: { familyId: row.familyId, revokedAt: null }, data: { revokedAt: now } });
+
+    if (row.user.status !== UserStatus.ACTIVE) {
+      await prisma.refreshToken.updateMany({ where: { userId: row.userId, revokedAt: null }, data: { revokedAt: now } });
+      throw reject("Account is inactive");
+    }
+    if (row.expiresAt <= now) throw reject();
+
+    const accessToken = signToken({ sub: row.user.id, role: row.user.role, username: row.user.username });
+
+    // Lost a race (or already rotated): inside the grace it's a parallel tab, so hand out an access token only and leave the
+    // browser's newer cookie alone. Outside it, treat as theft.
+    const withinGrace = row.revokedAt !== null && row.rotatedAt !== null && now.getTime() - row.rotatedAt.getTime() <= ROTATION_GRACE_MS;
+    if (row.revokedAt) {
+      if (!withinGrace) {
+        await revokeFamily();
+        throw reject();
+      }
+      return { user: toPublicUser(row.user), accessToken, refreshToken: null };
+    }
+
+    const claimed = await prisma.refreshToken.updateMany({ where: { id: row.id, revokedAt: null }, data: { revokedAt: now, rotatedAt: now } });
+    if (claimed.count === 0) return { user: toPublicUser(row.user), accessToken, refreshToken: null };
+
+    const refreshToken = await this.issueRefreshToken(row.userId, row.familyId, userAgent);
+    return { user: toPublicUser(row.user), accessToken, refreshToken };
+  }
+
+  /** Ends this login on the server: the refresh cookie (and any copy of it) stops working. Unknown tokens are ignored. */
+  async logout(rawToken: string | null): Promise<void> {
+    if (!rawToken) return;
+    const row = await prisma.refreshToken.findUnique({ where: { tokenHash: hashRefreshToken(rawToken) }, select: { familyId: true } });
+    if (row) await prisma.refreshToken.updateMany({ where: { familyId: row.familyId, revokedAt: null }, data: { revokedAt: new Date() } });
   }
 
   async getCurrentUser(userId: string) {

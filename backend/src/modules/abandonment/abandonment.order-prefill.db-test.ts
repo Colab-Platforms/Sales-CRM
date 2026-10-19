@@ -270,7 +270,7 @@ describe("creating the order from the prefilled checkout", () => {
       assert.equal((row.shippingAddress as any).line1, "99 Edited Street");
       assert.equal(row.shippingPincode, "411002");
       assert.equal(row.leadId, l.id);
-      assert.equal(row.totalAmount.toString(), "1847", "3 x 449 + 500, computed by the server");
+      assert.equal(row.totalAmount.toString(), "1897", "3 x 449 + 500 + the flat COD shipping of 50, computed by the server");
       assert.deepEqual((row.metadata as any).abandonment, { id: c.id, referenceId: c.referenceId });
       const act = await tx.activity.findFirstOrThrow({ where: { orderId: r.order.id, type: "ORDER_CREATED" } });
       assert.match(act.description ?? "", /abandoned checkout/i);

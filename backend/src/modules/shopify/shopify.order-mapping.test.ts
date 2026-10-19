@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildShopifyOrderPayload, orderSourceLabel, provinceCodeFor, splitName, type CrmOrderForShopify } from "./shopify.order-mapping.js";
 import { customerNames, resolveShopifyCustomer } from "./shopify.order-customer.js";
-import { compareShopifyOrder, createShopifyOrder, repairShopifyOrderFields, verifyShopifyOrder, type ShopifyOrderCreateInput } from "./shopify.orders.write.js";
+import { compareShopifyOrder, createShopifyOrder, repairAndVerify, repairShopifyOrderFields, verifyShopifyOrder, type ShopifyOrderCreateInput } from "./shopify.orders.write.js";
+import { syncAdvice } from "./shopify.sync-status.js";
 import type { ShopifyClient } from "./shopify.client.js";
 
 const crm = (over: Partial<CrmOrderForShopify> = {}): CrmOrderForShopify => ({
@@ -143,7 +144,10 @@ test("createShopifyOrder puts customer, addresses, tags, metafields and requires
   assert.ok(!("transactions" in o), "no payment transaction is ever sent: unpaid stays unpaid");
 });
 
-const found = (over: Record<string, unknown> = {}) => ({ id: "x", note: "n", tags: ["CRM", "CRM Source: WhatsApp Inbox", "Order Created by Aayush Tiwari", "Existing"], displayFinancialStatus: "Pending", customer: { id: "c" }, shippingAddress: { address1: "a", city: "Pune", zip: "411045", provinceCode: "MH", countryCodeV2: "IN", firstName: "Anil" }, lineItems: { nodes: [{ requiresShipping: true }, { requiresShipping: true }] }, metafields: { nodes: build().input.metafields!.map((m) => ({ key: m.key })) }, ...over });
+const foundWithoutBilling = (over: Record<string, unknown> = {}) => ({ id: "x", note: "n", tags: ["CRM", "CRM Source: WhatsApp Inbox", "Order Created by Aayush Tiwari", "Existing"], displayFinancialStatus: "Pending", customer: { id: "c" }, shippingAddress: { address1: "a", city: "Pune", zip: "411045", provinceCode: "MH", countryCodeV2: "IN", firstName: "Anil" }, lineItems: { nodes: [{ requiresShipping: true }, { requiresShipping: true }] }, metafields: { nodes: build().input.metafields!.map((m) => ({ key: m.key })) }, ...over });
+
+// What Shopify holds for a complete order: the billing address is saved as well (it equals the shipping address).
+const found = (over: Record<string, unknown> = {}) => ({ billingAddress: { address1: "123 Main St", city: "Mumbai", zip: "400001" }, ...foundWithoutBilling(over) });
 
 test("verification: a fully saved order is complete; each silently dropped part is named", () => {
   const input = build().input;
@@ -170,4 +174,38 @@ test("verifyShopifyOrder reads the order back and reports user errors from a rep
   assert.deepEqual((await verifyShopifyOrder(client, "1", input)).missing, []);
   const bad = recording({ orderUpdate: { order: null, userErrors: [{ message: "Address is invalid" }] } });
   assert.deepEqual((await repairShopifyOrderFields(bad.client, "1", input, ["shippingAddress"])).errors, ["Address is invalid"]);
+});
+
+test("verification: the billing address is verified too - a missing one is reported (orderUpdate cannot set it), a half-saved one is named", () => {
+  const input = build().input;
+  assert.deepEqual(compareShopifyOrder(input, found({ billingAddress: null }) as never).missing, ["billingAddress"]);
+  assert.deepEqual(compareShopifyOrder(input, found({ billingAddress: { address1: null, city: "Mumbai", zip: "400001" } }) as never).missing, ["billingAddress.fields"]);
+  assert.deepEqual(compareShopifyOrder({ ...input, billingAddress: undefined }, found({ billingAddress: null }) as never).missing, [], "nothing is demanded that was never sent");
+  assert.equal(syncAdvice(["billingAddress"], []), "ADMIN", "it has to be fixed in Shopify");
+  assert.equal(syncAdvice(["shippingAddress"], []), "RETRY");
+});
+
+test("repairAndVerify: a repair counts only when the read-back confirms it", async () => {
+  const input = build().input;
+  const ok = recording({ orderUpdate: { order: { id: "x" }, userErrors: [] }, order: found() });
+  const fixed = await repairAndVerify(ok.client, "gid://shopify/Order/1", input, { missing: ["shippingAddress"], customerAssociated: true });
+  assert.deepEqual([fixed.repaired, fixed.errors, fixed.check.missing], [["shippingAddress"], [], []]);
+  // Shopify answers ok but the address is still not there: it was re-sent, yet it is NOT reported as repaired
+  const silent = recording({ orderUpdate: { order: { id: "x" }, userErrors: [] }, order: found({ shippingAddress: null }) });
+  const stuck = await repairAndVerify(silent.client, "1", input, { missing: ["shippingAddress"], customerAssociated: true });
+  assert.deepEqual([stuck.repaired, stuck.check.missing], [[], ["shippingAddress"]]);
+});
+
+test("repairAndVerify: a refused repair is returned with Shopify's message, never swallowed, and nothing is claimed repaired", async () => {
+  const input = build().input;
+  const refused = recording({ orderUpdate: { order: null, userErrors: [{ message: "Address is invalid" }] }, order: found({ shippingAddress: null }) });
+  const out = await repairAndVerify(refused.client, "1", input, { missing: ["shippingAddress"], customerAssociated: true });
+  assert.deepEqual([out.repaired, out.errors, out.check.missing], [[], ["Address is invalid"], ["shippingAddress"]]);
+  // a billing-only gap has nothing repairable: no Shopify call is made at all
+  const none = recording({ order: found({ billingAddress: null }) });
+  const skipped = await repairAndVerify(none.client, "1", input, { missing: ["billingAddress"], customerAssociated: true });
+  assert.deepEqual([skipped.repaired, none.calls.length], [[], 0]);
+  // and a complete order is left alone
+  assert.deepEqual((await repairAndVerify(none.client, "1", input, { missing: [], customerAssociated: true })).repaired, []);
+  assert.equal(none.calls.length, 0);
 });

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
 import { logger } from "@/utils/logger.js";
 import { ActivitySource, ActivityType, Role } from "../../../generated/prisma/enums.js";
@@ -250,6 +251,9 @@ class WhatsAppOrderConversationService {
       paymentMethod: draft.paymentMethod,
       shippingAddress: { name: draft.customerName, line1: draft.addressLine, city: draft.city, state: draft.state, pincode: draft.pincode, phone: draft.phone },
       shippingPincode: draft.pincode,
+      // One key per conversation + confirmed draft: the conversation-state claim above already stops a concurrent trigger, and this key makes the follow-up safe too - if the order committed but something after it
+      // threw (so the claim was rolled back), the retry returns THAT order instead of creating a second one.
+      idempotencyKey: `wa-order-${leadId}-${createHash("sha256").update(JSON.stringify(draft)).digest("hex").slice(0, 24)}`,
     };
 
     try {

@@ -27,7 +27,10 @@ export const useAuthStore = create<AuthState>()(
     {
       name: "auth-token",
       storage: createJSONStorage(() => cookieStorage),
-      partialize: (state) => ({ token: state.token, user: state.user }),
+      // Only the user (for instant UI) is persisted. The access token lives in memory; the session is the httpOnly refresh cookie.
+      partialize: (state) => ({ user: state.user }),
+      // Ignore a token left in the cookie by the old long-lived-token auth.
+      merge: (persisted, current) => ({ ...current, user: (persisted as { user?: CurrentUser | null } | undefined)?.user ?? null }),
       onRehydrateStorage: () => (state) => {
         state?.setHasHydrated(true);
       },

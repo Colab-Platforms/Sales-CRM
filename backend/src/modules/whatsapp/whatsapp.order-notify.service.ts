@@ -22,6 +22,7 @@ import type { AuthUser } from "@/middlewares/auth.js";
 import type { WhatsAppProviderName } from "../../../generated/prisma/client.js";
 import { findConversationProvider } from "./whatsapp.conversation-provider.js";
 import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
+import type { PaymentQrResult } from "./whatsapp.payment-qr.js";
 import WhatsAppMessagingService, { ORDER_CONFIRMATION_TEMPLATE_NAME } from "./whatsapp.messaging.service.js";
 import { type UpgradeDiscount, buildOrderConfirmationMessage, buildPaymentLinkMessage, type MessageItem } from "./whatsapp.order-message.js";
 
@@ -39,6 +40,8 @@ export interface OrderNotifyResult {
   reason?: string;
   /** The approved template that was actually sent (name, never the provider id). Set only for a template send. */
   templateName?: string;
+  /** Prepaid payment link only: the outcome of the SEPARATE QR image message (sent / failed / not sent, with a reason). A failed image never changes `sent` for the link text. */
+  qr?: PaymentQrResult;
 }
 
 export interface OrderNotifyDeps {

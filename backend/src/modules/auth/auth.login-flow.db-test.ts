@@ -65,3 +65,60 @@ describe("username/password login, then an authorized request", () => {
     assert.equal(((await res.json()) as { data: unknown }).data, null);
   });
 });
+
+// --- refresh-token session: rotation, reuse detection, logout, deactivation ---
+const cookieFrom = (res: Response) => (res.headers.getSetCookie().find((c) => c.startsWith("crm_refresh=")) ?? "").split(";")[0];
+const callAuth = (path: string, cookie?: string, ajax = true) =>
+  fetch(`${base}${path}`, { method: "POST", headers: { ...(cookie ? { Cookie: cookie } : {}), ...(ajax ? { "X-Requested-With": "XMLHttpRequest" } : {}) } });
+const loginCookie = async () => cookieFrom(await post("/auth/login", { username, password }));
+
+describe("refresh-token session", () => {
+  it("login sets an httpOnly refresh cookie and keeps it out of the body", async () => {
+    const res = await post("/auth/login", { username, password });
+    const setCookie = res.headers.getSetCookie().find((c) => c.startsWith("crm_refresh=")) ?? "";
+    assert.match(setCookie, /HttpOnly/i);
+    assert.doesNotMatch(JSON.stringify(await res.json()), /refreshToken/);
+  });
+
+  it("refresh rotates: new access token + new cookie, and the old cookie is dead outside the race grace", async () => {
+    const first = await loginCookie();
+    const res = await callAuth("/auth/refresh", first);
+    assert.equal(res.status, 200);
+    const second = cookieFrom(res);
+    assert.ok(second && second !== first);
+    assert.ok(((await res.json()) as { data: { accessToken: string } }).data.accessToken);
+    // Age the rotation past the grace, then replay the old cookie: refused, and the whole login is revoked (even the newest cookie).
+    await prisma.refreshToken.updateMany({ where: { userId }, data: { rotatedAt: new Date(Date.now() - 120_000) } });
+    assert.equal((await callAuth("/auth/refresh", first)).status, 401);
+    assert.equal((await callAuth("/auth/refresh", second)).status, 401);
+  });
+
+  it("a parallel refresh with the just-rotated cookie gets an access token but no new cookie", async () => {
+    const first = await loginCookie();
+    assert.equal((await callAuth("/auth/refresh", first)).status, 200);
+    const replay = await callAuth("/auth/refresh", first);
+    assert.equal(replay.status, 200);
+    assert.equal(cookieFrom(replay), "");
+  });
+
+  it("refresh needs the cookie and the AJAX header", async () => {
+    assert.equal((await callAuth("/auth/refresh")).status, 401);
+    assert.equal((await callAuth("/auth/refresh", await loginCookie(), false)).status, 403);
+  });
+
+  it("logout revokes the cookie server-side", async () => {
+    const cookie = await loginCookie();
+    assert.equal((await callAuth("/auth/logout", cookie)).status, 200);
+    assert.equal((await callAuth("/auth/refresh", cookie)).status, 401);
+  });
+
+  it("a deactivated user can no longer refresh", async () => {
+    const cookie = await loginCookie();
+    await prisma.user.update({ where: { id: userId }, data: { status: "INACTIVE" } });
+    try {
+      assert.equal((await callAuth("/auth/refresh", cookie)).status, 401);
+    } finally {
+      await prisma.user.update({ where: { id: userId }, data: { status: "ACTIVE" } });
+    }
+  });
+});

@@ -16,8 +16,7 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
 // One log line for a rejected authentication/authorization, safe to keep: method, route without its query string, status,
 // whether an Authorization header was sent at all (a boolean - never its value), and the correlation id. No token, cookie or body.
 export function describeAuthFailure(req: Request, res: Response, status: number, message: string): string {
-  // Defensive: the error handler can be reached with a partial request (tests, aborted sockets); logging must never throw.
-  const route = (req.originalUrl ?? req.url ?? "").split("?")[0];
+  const route = (req.originalUrl ?? "").split("?")[0];
   const sentAuthHeader = Boolean(req.headers?.authorization);
   return `[auth] ${status} ${req.method} ${route} reason="${message}" authHeader=${sentAuthHeader} requestId=${res.locals?.requestId ?? "-"}`;
 }
