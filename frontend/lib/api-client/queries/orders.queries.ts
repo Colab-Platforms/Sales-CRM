@@ -7,6 +7,8 @@ export const ordersKeys = {
   all: ["orders"] as const,
   lists: () => [...ordersKeys.all, "list"] as const,
   list: (params: OrdersListParams) => [...ordersKeys.lists(), params] as const,
+  myLists: () => [...ordersKeys.all, "my-list"] as const,
+  myList: (params: OrdersListParams) => [...ordersKeys.myLists(), params] as const,
   liveLists: () => [...ordersKeys.all, "live-list"] as const,
   liveList: (params: LiveOrdersListParams) => [...ordersKeys.liveLists(), params] as const,
   detail: (id: string) => [...ordersKeys.all, "detail", id] as const,
@@ -34,6 +36,17 @@ export function ordersListQueryOptions(params: OrdersListParams) {
     queryFn: () => ordersApi.list(params),
     staleTime: LIST_STALE_TIME_MS,
     // Keep the current rows on screen while the next page/filter loads.
+    placeholderData: keepPreviousData,
+    retry: retryUnlessClientError,
+  });
+}
+
+/** "My Orders": the signed-in user's own created orders. Its own cache key, so it never shares rows with the broad Orders list. */
+export function myOrdersListQueryOptions(params: OrdersListParams) {
+  return queryOptions({
+    queryKey: ordersKeys.myList(params),
+    queryFn: () => ordersApi.listMine(params),
+    staleTime: LIST_STALE_TIME_MS,
     placeholderData: keepPreviousData,
     retry: retryUnlessClientError,
   });

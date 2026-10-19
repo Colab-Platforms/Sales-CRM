@@ -26,19 +26,27 @@ model User {
   directReports      User[]  @relation("UserReportingManager")
 
   // Audit trail: which account (admin or manager) created this user.
-  createdById String? @map("created_by_id") @db.Uuid
-  createdBy   User?   @relation("UserCreatedBy", fields: [createdById], references: [id])
-  createdUsers User[] @relation("UserCreatedBy")
+  createdById  String? @map("created_by_id") @db.Uuid
+  createdBy    User?   @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers User[]  @relation("UserCreatedBy")
 
   groupsManaged Group[] @relation("GroupManager")
+
+  jobsCreated              Job[]                    @relation("JobCreatedBy")
+  applicationsOwned        Application[]            @relation("ApplicationRecruiter")
+  applicationAssignments   ApplicationAssignment[]  @relation("ApplicationAssignmentRecruiter")
+  applicationAssignedBy    ApplicationAssignment[]  @relation("ApplicationAssignmentBy")
+  applicationImportBatches ApplicationImportBatch[] @relation("ApplicationImportBatchBy")
 
   ticketsRaised   Ticket[]        @relation("TicketRaisedBy")
   ticketsResolved Ticket[]        @relation("TicketResolvedBy")
   ticketComments  TicketComment[] @relation("TicketCommentAuthor")
 
-  refundRequestsMade    RefundRequest[] @relation("RefundRequestedBy")
-  refundRequestsDecided RefundRequest[] @relation("RefundDecidedBy")
+  refundRequestsMade     RefundRequest[] @relation("RefundRequestedBy")
+  refundRequestsDecided  RefundRequest[] @relation("RefundDecidedBy")
   refundRequestsExecuted RefundRequest[] @relation("RefundExecutedBy")
+
+  refreshTokens RefreshToken[]
 
   groupMemberships GroupMember[] @relation("GroupMemberUser")
 
@@ -58,7 +66,7 @@ model User {
 
   managerAutoAssignConfigsUpdated      ManagerAutoAssignConfig[]    @relation("ManagerAutoAssignConfigUpdatedBy")
   salespersonAutoAssignConfigAsManager SalespersonAutoAssignConfig? @relation("SalespersonAutoAssignConfigManager")
-  managerAutoAssignTarget               ManagerAutoAssignTarget?     @relation("ManagerAutoAssignTargetManager")
+  managerAutoAssignTarget              ManagerAutoAssignTarget?     @relation("ManagerAutoAssignTargetManager")
 
   callsAsAgent Call[] @relation("CallAgent")
 
@@ -70,21 +78,21 @@ model User {
 
   interestedPeriodsQualified InterestedLeadPeriod[] @relation("InterestedLeadPeriodQualifiedBy")
 
-  ordersCreated Order[] @relation("OrderCreatedBy")
+  ordersCreated   Order[] @relation("OrderCreatedBy")
   ordersConfirmed Order[] @relation("OrderConfirmedBy")
 
   recoveryActionsPerformed RecoveryAction[] @relation("RecoveryActionPerformedBy")
 
   activitiesAsActor Activity[] @relation("ActivityActor")
 
-  whatsAppMessagesSent WhatsAppMessage[] @relation("WhatsAppMessageSentBy")
-  whatsAppMessageStates WhatsAppMessageUserState[]
-  whatsAppTemplatesCreated WhatsAppTemplate[] @relation("WhatsAppTemplateCreatedBy")
+  whatsAppMessagesSent             WhatsAppMessage[]          @relation("WhatsAppMessageSentBy")
+  whatsAppMessageStates            WhatsAppMessageUserState[]
+  whatsAppTemplatesCreated         WhatsAppTemplate[]         @relation("WhatsAppTemplateCreatedBy")
   whatsAppAutomationConfigsUpdated WhatsAppAutomationConfig[] @relation("WhatsAppAutomationConfigUpdatedBy")
-  whatsAppCampaignsCreated WhatsAppCampaign[] @relation("WhatsAppCampaignCreatedBy")
-  whatsAppConfigsCreated WhatsAppConfig[] @relation("WhatsAppConfigCreatedBy")
-  whatsAppConfigsUpdated WhatsAppConfig[] @relation("WhatsAppConfigUpdatedBy")
-  whatsAppConversationsAssigned WhatsAppConversation[] @relation("WhatsAppConversationAssignedTo")
+  whatsAppCampaignsCreated         WhatsAppCampaign[]         @relation("WhatsAppCampaignCreatedBy")
+  whatsAppConfigsCreated           WhatsAppConfig[]           @relation("WhatsAppConfigCreatedBy")
+  whatsAppConfigsUpdated           WhatsAppConfig[]           @relation("WhatsAppConfigUpdatedBy")
+  whatsAppConversationsAssigned    WhatsAppConversation[]     @relation("WhatsAppConversationAssignedTo")
 
   webChatConversationsAssigned WebChatConversation[] @relation("WebChatConversationAssignedTo")
   webChatMessagesSent          WebChatMessage[]       @relation("WebChatMessageSentBy")

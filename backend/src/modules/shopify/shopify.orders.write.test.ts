@@ -3,7 +3,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ShopifyGraphQLError, type ShopifyClient } from "./shopify.client.js";
-import { createShopifyOrder, ShopifyOrderCreateError, toShopifyProductVariantGid } from "./shopify.orders.write.js";
+import { createShopifyOrder, findShopifyOrderBySourceIdentifier, ShopifyOrderCreateError, toShopifyProductVariantGid } from "./shopify.orders.write.js";
 
 function fakeClient(query: (document: string, variables: Record<string, unknown>) => Promise<unknown>): ShopifyClient {
   return { query } as unknown as ShopifyClient;
@@ -117,7 +117,7 @@ describe("createShopifyOrder (mocked client - no real Shopify call)", () => {
       email: "customer@example.invalid",
       phone: "+919876543210",
       note: "Created from WhatsApp Inbox",
-      shippingAddress: { firstName: "Mahadev", lastName: "Babar", address1: "123 Main St", city: "Mumbai", province: "Maharashtra", zip: "400001", country: "IN", phone: "+919876543210" },
+      shippingAddress: { firstName: "Mahadev", lastName: "Babar", address1: "123 Main St", city: "Mumbai", provinceCode: "MH", zip: "400001", countryCode: "IN", phone: "+919876543210" },
     });
 
     assert.equal(captured!.order.email, "customer@example.invalid");
@@ -191,5 +191,74 @@ describe("Shopify ProductVariant global ids (orderCreate requires a GID)", () =>
       (e: unknown) => e instanceof ShopifyOrderCreateError && /not a valid Shopify product variant id/.test(e.message),
     );
     assert.equal(called, 0);
+  });
+});
+
+describe("createShopifyOrder: the CRM discount and shipping reach Shopify, so its total is the CRM total", () => {
+  const capture = () => {
+    const box: { order?: any } = {};
+    return { box, client: fakeClient(async (_doc, vars) => { box.order = (vars as any).order; return okResponse; }) };
+  };
+  const base = { lineItems: [{ title: "Herbal Masala", quantity: 1, priceAmount: "649.00" }], currency: "INR", financialStatus: "PENDING" as const };
+
+  it("a discount and a shipping charge are sent as a fixed item discount and one shipping line (649 - 648 + 66.72 = 67.72)", async () => {
+    const { box, client } = capture();
+    await createShopifyOrder(client, { ...base, discount: { amount: "648.00", description: "CRM discount (CRM-1)" }, shippingAmount: "66.72" });
+    assert.deepEqual(box.order.discountCode, { itemFixedDiscountCode: { code: "CRM discount (CRM-1)", amountSet: { shopMoney: { amount: "648.00", currencyCode: "INR" } } } });
+    assert.deepEqual(box.order.shippingLines, [{ title: "Shipping", priceSet: { shopMoney: { amount: "66.72", currencyCode: "INR" } } }]);
+    // the arithmetic Shopify will do with those inputs equals the CRM's own total
+    const item = 64900, discount = Math.round(Number(box.order.discountCode.itemFixedDiscountCode.amountSet.shopMoney.amount) * 100), ship = Math.round(Number(box.order.shippingLines[0].priceSet.shopMoney.amount) * 100);
+    assert.equal(item - discount + ship, 6772);
+  });
+
+  it("with no discount and no shipping nothing extra is sent (the request is exactly what it always was)", async () => {
+    const { box, client } = capture();
+    await createShopifyOrder(client, base);
+    assert.equal("discountCode" in box.order, false);
+    assert.equal("shippingLines" in box.order, false);
+    await createShopifyOrder(client, { ...base, discount: { amount: "0", description: "x" }, shippingAmount: "0" });
+    assert.equal("discountCode" in box.order, false);
+    assert.equal("shippingLines" in box.order, false);
+  });
+
+  it("isShopifyRejection is true only for a refusal by Shopify (userErrors / GraphQL errors), never for a transport failure", async () => {
+    const { isShopifyRejection } = await import("./shopify.orders.write.js");
+    const userErrors = await createShopifyOrder(fakeClient(async () => ({ orderCreate: { order: null, userErrors: [{ field: ["discountCode"], message: "Discount code is invalid" }] } })), base).catch((e) => e);
+    const graphql = await createShopifyOrder(fakeClient(async () => { throw new ShopifyGraphQLError("Field 'shippingLines' doesn't exist", []); }), base).catch((e) => e);
+    const transport = await createShopifyOrder(fakeClient(async () => { throw new Error("network down"); }), base).catch((e) => e);
+    const noOrder = await createShopifyOrder(fakeClient(async () => ({ orderCreate: { order: null, userErrors: [] } })), base).catch((e) => e);
+    assert.equal(isShopifyRejection(userErrors), true);
+    assert.equal(isShopifyRejection(graphql), true);
+    assert.equal(isShopifyRejection(transport), false, "a timeout may have created the order - never retried");
+    assert.equal(isShopifyRejection(noOrder), false, "an empty answer is ambiguous - never retried");
+  });
+});
+
+describe("createShopifyOrder: a variant line carries the CRM unit price", () => {
+  it("variantId + priceAmount sends priceSet (the CRM price, before discounts); without priceAmount the request is unchanged", async () => {
+    const box: { order?: any } = {};
+    const client = fakeClient(async (_doc, vars) => { box.order = (vars as any).order; return okResponse; });
+    await createShopifyOrder(client, { lineItems: [{ variantId: "55", quantity: 2, priceAmount: "649.00" }], currency: "INR", financialStatus: "PENDING" });
+    assert.deepEqual(box.order.lineItems, [{ variantId: "gid://shopify/ProductVariant/55", quantity: 2, priceSet: { shopMoney: { amount: "649.00", currencyCode: "INR" } } }]);
+    await createShopifyOrder(client, { lineItems: [{ variantId: "55", quantity: 2 }], currency: "INR", financialStatus: "PENDING" });
+    assert.deepEqual(box.order.lineItems, [{ variantId: "gid://shopify/ProductVariant/55", quantity: 2 }]);
+  });
+});
+
+describe("sourceIdentifier: a retry can find an order whose creation answer was lost", () => {
+  it("is sent on orderCreate only when given", async () => {
+    const seen: any[] = [];
+    const client = fakeClient(async (_d, v) => { seen.push(v); return okResponse; });
+    await createShopifyOrder(client, { lineItems: [{ title: "x", quantity: 1, priceAmount: "1.00" }], currency: "INR", financialStatus: "PENDING", sourceIdentifier: "CRM-1" });
+    await createShopifyOrder(client, { lineItems: [{ title: "x", quantity: 1, priceAmount: "1.00" }], currency: "INR", financialStatus: "PENDING" });
+    assert.equal((seen[0].order as any).sourceIdentifier, "CRM-1");
+    assert.equal("sourceIdentifier" in (seen[1].order as object), false);
+  });
+
+  it("the lookup returns the one match, null for none, and refuses to guess between several", async () => {
+    const one = fakeClient(async (_d, v) => { assert.equal((v as any).query, 'source_identifier:"CRM-1"'); return { orders: { nodes: [{ id: "gid://shopify/Order/5", name: "#5" }] } }; });
+    assert.deepEqual(await findShopifyOrderBySourceIdentifier(one, "CRM-1"), { shopifyOrderId: "gid://shopify/Order/5", shopifyOrderName: "#5" });
+    assert.equal(await findShopifyOrderBySourceIdentifier(fakeClient(async () => ({ orders: { nodes: [] } })), "CRM-1"), null);
+    await assert.rejects(() => findShopifyOrderBySourceIdentifier(fakeClient(async () => ({ orders: { nodes: [{ id: "1", name: "a" }, { id: "2", name: "b" }] } })), "CRM-1"), ShopifyOrderCreateError);
   });
 });

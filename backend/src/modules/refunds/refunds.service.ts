@@ -17,7 +17,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { orderLockKey } from "../cashfree/cashfree.apply.js";
 import { advisoryLock, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
-import { fullName, getRefundablePaymentAmount, scopedOrderWhere } from "../orders/orders.filters.js";
+import { fullName, getRefundablePaymentAmount, orderReadWhere } from "../orders/orders.filters.js";
 import { canResolveCashfreeIds, isSupersededPayment, refundIneligibleReason } from "./refunds.eligibility.js";
 import { refundBalance, SHOPIFY_UNCONFIRMED_REASON } from "./refunds.balance.js";
 import type { ListRefundRequestsQuery, OrderRefundInfo, RefundActor, RefundRequestListResult, RefundRequestView, RefundablePaymentView } from "./refunds.types.js";
@@ -191,7 +191,9 @@ class RefundsService {
 
     return this.runner.$transaction(async (tx) => {
       const scope = await getLeadScope(user, tx);
-      const order = await tx.order.findFirst({ where: scopedOrderWhere(orderId, scope), select: { id: true, leadId: true, orderNumber: true, status: true, metadata: true } });
+      // The order page (and its Refund button) is readable for every admin / manager / salesperson, so RAISING a refund request - which still needs a manager's approval - uses the same visibility.
+      // The strict lead scope used here before answered "Order not found" for an order the person had just opened.
+      const order = await tx.order.findFirst({ where: orderReadWhere(user, orderId, scope), select: { id: true, leadId: true, orderNumber: true, status: true, metadata: true } });
       // Out-of-scope orders look the same as missing ones so ids can't be probed.
       if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
 

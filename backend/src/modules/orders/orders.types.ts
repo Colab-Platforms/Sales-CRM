@@ -28,12 +28,20 @@ export interface CreateManualOrderItemInput {
 
 export interface CreateManualOrderInput {
   leadId: string;
+  /** The abandoned checkout this order was created from (the Create Order form was prefilled from it). Must belong to `leadId`; recorded on the order for traceability. */
+  abandonmentId?: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
   // Frontend-generated (e.g. crypto.randomUUID(), one per order attempt, reused across retries of that
   // SAME attempt) - see OrdersService.createManualOrder's own comment for why this is an in-memory,
   // per-process guard against a double submit (double-click/double Enter), not a durable DB constraint.
   idempotencyKey?: string;
+  /** The user confirmed that this is a separate purchase although a matching recent order exists. */
+  acknowledgeDuplicate?: boolean;
+  /** With acknowledgeDuplicate: the earlier UNPAID prepaid order of this customer that this order replaces (a changed price / discount). It is cancelled - with its Cashfree link - before this one is created. */
+  supersedesOrderId?: string;
+  /** Set by the HTTP controller only (not by the request body): refuse a new order that matches a recent one for the same customer unless acknowledged. */
+  rejectRecentTwin?: boolean;
   shippingAddress?: {
     name?: string;
     line1?: string;
@@ -48,6 +56,7 @@ export interface CreateManualOrderInput {
     area?: string;
     street?: string;
     landmark?: string;
+    deliveryInstructions?: string;
     addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
@@ -69,7 +78,29 @@ export interface CreateManualOrderInput {
   discountReason?: string;
 }
 
-export type ShopifyPushStatus = "created" | "already_linked" | "failed";
+/** awaiting_payment = a prepaid order that is not sent to Shopify until Cashfree verifies the payment. */
+export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment";
+
+/** What the last Shopify sync attempt achieved, as verified by reading the order back. Stored on Order.metadata.shopifySync and shown on the order page. */
+export interface ShopifySyncRecord {
+  status: "complete" | "partial" | "failed";
+  /** Fields that were sent (or should have been) but are not on the Shopify order, plus customer/discount problems. Empty = everything verified. */
+  missing: string[];
+  /** CRM fields deliberately not sent, with the reason. */
+  omitted: string[];
+  /** Fields re-sent by a repair (shipping address, metafields, tags). */
+  repaired: string[];
+  customer: string;
+  attemptedAt: string;
+  /** When everything was last verified on Shopify; null while anything is missing. */
+  verifiedAt: string | null;
+  /** RETRY = running the re-sync again may fix it; ADMIN = needs an administrator's decision in Shopify; NONE = nothing to do. */
+  retryAdvice: "NONE" | "RETRY" | "ADMIN";
+  /** A sanitized explanation of a failure (no tokens, no response bodies). */
+  error: string | null;
+  /** What Shopify answered when a repair (e.g. of the shipping address) was refused - sanitized, so a failed repair is explained. */
+  repairErrors?: string[];
+}
 
 export interface ShopifyPushResult {
   status: ShopifyPushStatus;
@@ -78,6 +109,8 @@ export interface ShopifyPushResult {
   /** Set only when status is "failed" - the real reason (from ShopifyOrderCreateError/config), never
    *  invented, never a generic "something went wrong". */
   reason?: string;
+  /** For a created order: what was verified on the Shopify order after creation. `partial` = something sent is not on the Shopify order (listed in `missing`); `omitted` = CRM fields deliberately not sent, with the reason. */
+  sync?: ShopifySyncRecord;
 }
 
 // The combined, honest result of "create a CRM order, then best-effort try to push it to Shopify,
@@ -239,6 +272,12 @@ export interface OrderDetail {
   confirmationTag: string | null;
   // Outcome of the last Shopify tag sync (Order.metadata); null when none was attempted (not linked / not confirmed).
   shopifyConfirmationTag: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  /** Who created the order in the CRM (snapshot taken at creation), the "Order Created by <name>" tag derived from it, and how its Shopify sync went. null when the creator was never established. */
+  createdByUser: { id: string; name: string } | null;
+  creatorTag: string | null;
+  /** Verified outcome of the last Shopify sync (see ShopifySyncRecord); null for orders pushed before this existed. */
+  shopifySync: ShopifySyncRecord | null;
+  shopifyCreatorTag: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // Null when nothing was ever sent/attempted. Only a safe reason is stored (never a URL or credential).
   whatsappNotification: OrderWhatsAppNotification | null;
   createdAt: Date;
@@ -260,6 +299,11 @@ export interface OrderDetail {
     name: string;
     mobile: string | null;
     email: string | null;
+    /**
+     * The abandoned lead behind this customer that THIS viewer may open: the checkout the order was created from when there is one, otherwise the customer's most recent one. null when the
+     * customer never had an abandoned checkout, or the viewer is not allowed to open it - never another customer's.
+     */
+    abandonmentId: string | null;
   };
   leadSource: { id: string; name: string } | null;
   // Salesperson who booked the order (null for website/API orders).

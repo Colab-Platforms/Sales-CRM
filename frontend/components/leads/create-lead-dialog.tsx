@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useCreateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -14,7 +14,10 @@ export function CreateLeadDialog({
   open,
   onOpenChange,
   onDone,
+  defaultMobile,
 }: {
+  /** Pre-fills the phone number (e.g. creating a customer for a WhatsApp number that no lead has yet). */
+  defaultMobile?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   /** The just-created lead, so a caller (e.g. the WhatsApp page) can immediately act on it - open
@@ -27,6 +30,10 @@ export function CreateLeadDialog({
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
   const [requirement, setRequirement] = useState("");
+
+  useEffect(() => {
+    if (open && defaultMobile) setMobile(defaultMobile);
+  }, [open, defaultMobile]);
 
   function reset() {
     setFirstName("");

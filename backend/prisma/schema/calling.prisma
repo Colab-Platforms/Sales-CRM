@@ -47,8 +47,13 @@ model CallOutcome {
 model Call {
   id String @id @default(uuid()) @db.Uuid
 
-  leadId String @map("lead_id") @db.Uuid
-  lead   Lead   @relation(fields: [leadId], references: [id])
+  // Exactly one of leadId / applicationId is set (enforced in the service layer): sales calls hit a
+  // Lead, recruiter calls hit a job Application.
+  leadId String? @map("lead_id") @db.Uuid
+  lead   Lead?   @relation(fields: [leadId], references: [id])
+
+  applicationId String?      @map("application_id") @db.Uuid
+  application   Application? @relation(fields: [applicationId], references: [id])
 
   // Null for an inbound IVR call no CRM user answered (unanswered, or answered on a non-CRM phone).
   agentId String? @map("agent_id") @db.Uuid
@@ -92,6 +97,7 @@ model Call {
   recoveryActions RecoveryAction[]
 
   @@index([leadId])
+  @@index([applicationId])
   @@index([agentId])
   @@index([virtualNumberId])
   @@index([providerCallId])

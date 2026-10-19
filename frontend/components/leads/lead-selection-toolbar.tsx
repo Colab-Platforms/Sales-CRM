@@ -15,7 +15,7 @@ export function LeadSelectionToolbar({
   onUpdateStatus?: () => void;
 }) {
   return (
-    <div className="sketch-outline flex flex-wrap items-center justify-between gap-3 border-primary/40 bg-primary/8 px-4 py-3">
+    <div className="sketch-outline flex flex-wrap items-center justify-between gap-3 border-transparent bg-highlight px-4 py-3 text-highlight-foreground">
       <span className="flex items-center gap-2 text-sm">
         <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-bold text-primary-foreground tabular-nums">
           {count}

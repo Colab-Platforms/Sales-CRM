@@ -43,8 +43,9 @@ import { EditLeadDialog } from "./edit-lead-dialog";
 import { DeleteLeadDialog } from "./delete-lead-dialog";
 import { leadDetailQueryOptions } from "@/lib/api-client/queries/lead.queries";
 import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
-import { abandonmentByLeadQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import { abandonmentByLeadQueryOptions, abandonmentDetailQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { AbandonmentPanel } from "@/components/abandonment/abandonment-panel";
+import { LeadPreviousOrdersCard } from "@/components/abandonment/abandonment-customer-sections";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { formatDateTime } from "@/lib/order-status";
 import { LEAD_PRIORITY_LABELS } from "@/lib/customer-status";
@@ -68,7 +69,7 @@ function BackLink({ from }: { from?: string | null }) {
           router.back();
         }
       }}
-      className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+      className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
     >
       <ArrowLeft className="size-3.5" />
       <span>{label}</span>
@@ -281,6 +282,8 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromParam = searchParams.get("from");
+  // Which abandoned checkout the salesperson opened (from the abandoned-leads queue); otherwise this lead's own latest one.
+  const abandonmentParam = searchParams.get("abandonmentId");
   const [from, setFrom] = useState<string | null>(fromParam);
 
   useEffect(() => {
@@ -299,7 +302,12 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
   // still in flight survives a lead refetch/re-render instead of being reset by it.
   const call = useCallCustomer(leadId);
   const { data: lead, isPending, error, refetch } = useQuery(leadDetailQueryOptions(leadId));
-  const { data: abandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  const { data: latestAbandonment } = useQuery(abandonmentByLeadQueryOptions(leadId));
+  // The abandoned lead that was actually opened (?abandonmentId=): loaded by its own id, and only used when it really belongs to THIS lead. Otherwise the lead's latest one is shown - a stale
+  // or foreign id can never put another customer's details on this page.
+  const { data: selectedAbandonment } = useQuery({ ...abandonmentDetailQueryOptions(abandonmentParam ?? ""), enabled: Boolean(abandonmentParam) });
+  const abandonment = selectedAbandonment && selectedAbandonment.lead.id === leadId ? selectedAbandonment : latestAbandonment;
+  const checkoutForOrder = abandonmentParam ?? (abandonment && (abandonment.status === "ACTIVE" || abandonment.status === "IN_PROGRESS") ? abandonment.id : undefined);
   // Dedicated calls query, not `lead.calls` - it's the endpoint that already selects `transcript` and
   // polls while one is still transcribing (leadCallsQueryOptions), same one the table's call-history
   // popup uses. `lead.calls` (from the Lead fetch above) never carried transcript data at all.
@@ -348,7 +356,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setSendWhatsAppOpen(true)}
-              className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+              className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
             >
               <MessageCircle className="size-3.5" />
               <span>Send WhatsApp</span>
@@ -363,7 +371,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           <button
             type="button"
             onClick={() => setCreateOrderOpen(true)}
-            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
           >
             <ShoppingCart className="size-3.5 text-primary" />
             <span>Create Order</span>
@@ -373,7 +381,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           <button
             type="button"
             onClick={() => setEditOpen(true)}
-            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
           >
             <Pencil className="size-3.5 text-primary" />
             <span>Edit Lead</span>
@@ -381,7 +389,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
 
           <Link
             href={`/dashboard/customers/${lead.id}`}
-            className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-muted"
+            className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-ink-line bg-card px-3.5 py-1.5 text-xs font-bold text-foreground shadow-xl shadow-black/5 hover:bg-muted"
           >
             <ExternalLink className="size-3.5 text-primary" />
             <span>Customer 360</span>
@@ -391,7 +399,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setDeleteOpen(true)}
-              className="sketch-press inline-flex items-center gap-1.5 rounded-[11px_9px_12px_9px] border-[1.5px] border-destructive/60 bg-destructive/10 px-3 py-1.5 text-xs font-bold text-destructive shadow-[2px_2px_0_0_var(--sketch-shadow)] hover:bg-destructive/20"
+              className="sketch-press inline-flex items-center gap-1.5 rounded-xl border border-destructive/60 bg-destructive/10 px-3 py-1.5 text-xs font-bold text-destructive shadow-xl shadow-black/5 hover:bg-destructive/20"
             >
               <Trash2 className="size-3.5" />
               <span>Delete</span>
@@ -425,12 +433,12 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               </div>
 
               <div className="rotate-[-1deg]">
-                <StatusBadge status={lead.workingStatus} className="border-[1.5px] border-ink-line font-bold" />
+                <StatusBadge status={lead.workingStatus} className="border border-ink-line font-bold" />
               </div>
 
               <Badge
                 variant="outline"
-                className="rotate-1 border-[1.5px] border-ink-line-soft bg-muted/40 font-mono text-[11px] font-bold"
+                className="rotate-1 border border-ink-line-soft bg-muted/40 font-mono text-[11px] font-bold"
               >
                 ★ {LEAD_PRIORITY_LABELS[lead.priority]}
               </Badge>
@@ -444,14 +452,14 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="sketch-outline rounded-[10px_8px_11px_8px] bg-muted/30 px-2.5 py-1 font-mono text-xs font-bold text-foreground">
+              <span className="sketch-outline rounded-xl bg-muted/30 px-2.5 py-1 font-mono text-xs font-bold text-foreground">
                 #{lead.leadNumber}
               </span>
             </div>
           </div>
 
           {/* Compact Quick-Stats Ribbon */}
-          <div className="grid grid-cols-2 gap-3 border-t-[1.5px] border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 @6xl:grid-cols-6">
+          <div className="grid grid-cols-2 gap-3 border-t border-dashed border-ink-line-soft pt-3 sm:grid-cols-3 @6xl:grid-cols-6">
             <div className="min-w-0 space-y-0.5">
               <p className="text-[11px] font-medium text-muted-foreground">Phone</p>
               <p className="truncate text-xs font-bold">{lead.mobile ?? "—"}</p>
@@ -465,8 +473,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             </div>
 
             <div className="space-y-0.5">
-              <p className="text-[11px] font-medium text-muted-foreground">Location</p>
-              <p className="truncate text-xs font-semibold">{lead.location ?? "—"}</p>
+              <p className="text-[11px] font-medium text-muted-foreground">{abandonment?.addresses?.shipping ? "Address" : "Location"}</p>
+              {/* The full delivery address when one is available (abandoned leads); the short location text otherwise. */}
+              <p className="break-words text-xs font-semibold" data-testid="lead-address">{abandonment?.addresses?.shipping?.formatted ?? lead.location ?? "—"}</p>
             </div>
 
             <div className="space-y-0.5">
@@ -499,7 +508,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
         {/* Left Column (5 cols): Requirement Brief & Lead Info */}
         <div className="min-w-0 space-y-4 @4xl:col-span-4">
           <div className="sketch-panel space-y-3 bg-card p-4.5">
-            <div className="flex items-center justify-between border-b-[1.5px] border-ink-line-soft pb-2">
+            <div className="flex items-center justify-between border-b border-ink-line-soft pb-2">
               <div className="flex items-center gap-2">
                 <NotebookPen className="size-4 text-primary" />
                 <h2 className="font-heading text-sm font-extrabold text-foreground">Requirement Brief</h2>
@@ -528,6 +537,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               </div>
             </div>
           </div>
+
+          {/* The customer's earlier orders (CRM and the store's own history), visible straight away - not hidden behind a tab. */}
+          <LeadPreviousOrdersCard abandonment={abandonment} />
         </div>
 
         {/* Right Column (7 cols): Doodle Binder Workspace with Tabs */}
@@ -537,7 +549,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("calls")}
-              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "calls"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -553,7 +565,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("timeline")}
-              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "timeline"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -566,7 +578,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
             <button
               type="button"
               onClick={() => setActiveTab("assignments")}
-              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+              className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                 activeTab === "assignments"
                   ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                   : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -592,7 +604,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
               <button
                 type="button"
                 onClick={() => setActiveTab("abandonment")}
-                className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border-[1.5px] border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
+                className={`sketch-press flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-t-[12px_10px_0_0] border border-b-0 border-ink-line px-4 py-2 text-xs font-extrabold transition-all ${
                   activeTab === "abandonment"
                     ? "-mb-[2px] border-b-card bg-card pb-2.5 text-foreground shadow-[0_-2px_0_0_var(--sketch-shadow)]"
                     : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -677,7 +689,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                 </div>
 
                 <div className="max-h-[520px] overflow-y-auto pr-1">
-                  <AbandonmentPanel abandonment={abandonment} />
+                  <AbandonmentPanel abandonment={abandonment} showPreviousOrders={false} />
                 </div>
               </div>
             ) : null}
@@ -709,7 +721,7 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
           optional and stays hidden whenever there are none, exactly as it does for a customer with
           no orders yet on Customer 360. */}
       <SendWhatsAppDialog open={sendWhatsAppOpen} onOpenChange={setSendWhatsAppOpen} leadId={lead.id} customerName={name} orders={[]} />
-      <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={lead.id} customerName={name} customerMobile={lead.mobile} />
+      <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={lead.id} customerName={name} customerMobile={lead.mobile} abandonmentId={checkoutForOrder} />
     </div>
   );
 }

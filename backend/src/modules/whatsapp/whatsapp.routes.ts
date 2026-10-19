@@ -7,6 +7,7 @@ import {
   forwardMessage,
   getCustomerWhatsAppStatus,
   getWhatsAppMessage,
+  getWhatsAppMessageMedia,
   getWhatsAppStatus,
   listStarredMessages,
   listWhatsAppConversations,
@@ -49,6 +50,7 @@ import {
   assignConversation,
   confirmOrderDraft,
   getConversationDetail,
+  getConversationCustomer,
   getOrderDraft,
   handoffConversation,
   markConversationRead,
@@ -114,6 +116,8 @@ router.post("/messages/:id/delete-for-me", requireAuth, deleteMessageForMe);
 router.post("/messages/:id/forward", requireAuth, forwardMessage);
 // "Edit" is not a separate endpoint: a correction is sent as a new message through the existing
 // POST /whatsapp/conversations/:leadId/messages (sendConversationText) with replyToMessageId.
+// A customer's file (e.g. a payment screenshot). Same access rule as reading the message; fetched from the provider on demand.
+router.get("/messages/:id/media", requireAuth, getWhatsAppMessageMedia);
 router.get("/messages/:id", requireAuth, getWhatsAppMessage);
 
 // Central WhatsApp Inbox (Admin/Telecaller conversation list) - one row per Lead with a message,
@@ -126,6 +130,8 @@ router.get("/conversations", requireAuth, listWhatsAppConversations);
 // see whatsapp.conversation.service.ts's assertAccess). Registered right after the list route above
 // they all extend.
 router.get("/conversations/:leadId", requireAuth, getConversationDetail);
+// The customer behind the conversation (Customer 360 data), read-only across teams for admin/manager/salesperson - see getConversationCustomer.
+router.get("/conversations/:leadId/customer", requireAuth, getConversationCustomer);
 router.post("/conversations/:leadId/read", requireAuth, markConversationRead);
 router.post("/conversations/:leadId/assign", requireAuth, assignConversation);
 router.post("/conversations/:leadId/handoff", requireAuth, handoffConversation);

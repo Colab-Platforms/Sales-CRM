@@ -20,8 +20,10 @@ import {
 } from "@/lib/order-status";
 import { DetailField, DetailGrid } from "./detail-field";
 import { OrderConfirmationTags } from "./order-confirmation-tags";
+import { AwaitingPaymentNotice, ShopifySyncStatus, isAwaitingPayment } from "./shopify-sync-status";
 import { OrderAuditHistory } from "./order-audit-history";
-import { customerDetailHref } from "./orders-table";
+import { customerDetailsTarget } from "./customer-details-link";
+import { useAuthStore } from "@/stores/auth-store";
 import { OrderShipmentSection } from "./order-shipment-section";
 import { OrderRefundAction, OrderRefundSection } from "@/components/refunds/order-refund-section";
 import { paymentFigures } from "@/lib/payment-figures";
@@ -32,6 +34,7 @@ import { AccentCard, EmptyState, ItemsCard, LinkButton, MilestoneList, MonoId, N
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { CancelOrderButton, OrderPaymentSummary } from "./cancel-order-button";
+import { MarkPaidButton } from "./mark-paid-button";
 import { CreatePaymentLinkButton, PaymentLinkPanel, ShopifyPaymentSyncStatus } from "./payment-link-panel";
 import { PrepaidUpgradeAction } from "./prepaid-upgrade-action";
 import { PrepaidUpgradeCard } from "./prepaid-upgrade-card";
@@ -141,6 +144,9 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
   const [sendOpen, setSendOpen] = useState(false);
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   const money = (v: string) => formatMoney(v, order.currency);
+  // "View Customer Details": a telecaller goes straight to THIS customer's abandoned lead when they may open one (see customer-details-link.ts).
+  const role = useAuthStore((s) => s.user?.role);
+  const customerTarget = customerDetailsTarget({ role, leadId: order.customer.leadId, abandonmentId: order.customer.abandonmentId });
 
   // Reuses the exact same Customer 360 data/endpoint this customer's own profile page already
   // loads (Lead -> Orders, no second query or duplicated relation) - just to read their other
@@ -186,6 +192,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           <div className="flex flex-wrap items-start justify-end gap-2">
             <PrepaidUpgradeAction target={{ kind: "crm", orderId: order.id }} onOpen={() => setUpgradeOpen(true)} />
             <OrderRefundAction orderId={order.id} orderNumber={order.orderNumber} customerName={order.customer.name} info={order.refunds} />
+            <MarkPaidButton order={order} />
             <CancelOrderButton order={order} />
           </div>
         </div>
@@ -211,7 +218,16 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
       {/* ---- Customer + Order information ---- */}
       <div className="grid gap-6 lg:grid-cols-2">
         <AccentCard accent="purple">
-          <SectionTitle icon={<User />} accent="purple" aside={<LinkButton href={customerDetailHref(order.customer.leadId)}>View customer profile</LinkButton>}>
+          <SectionTitle
+            icon={<User />}
+            accent="purple"
+            aside={
+              <span className="flex flex-col items-end gap-1">
+                <LinkButton href={customerTarget.href}>View Customer Details</LinkButton>
+                {customerTarget.note ? <span className="max-w-64 text-right text-xs text-muted-foreground" data-testid="customer-details-note">{customerTarget.note}</span> : null}
+              </span>
+            }
+          >
             Customer
           </SectionTitle>
           <CardContent>
@@ -248,7 +264,9 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
               {order.cancelReason ? <DetailField label="Cancel reason">{order.cancelReason}</DetailField> : null}
             </DetailGrid>
             <div className="mt-4 border-t pt-3">
-              <OrderConfirmationTags id={order.id} confirmedBy={order.confirmedBy} confirmationTag={order.confirmationTag} shopifyConfirmationTag={order.shopifyConfirmationTag} confirmedAt={order.confirmedAt} externalNumber={order.externalNumber} />
+              <OrderConfirmationTags id={order.id} confirmedBy={order.confirmedBy} confirmationTag={order.confirmationTag} shopifyConfirmationTag={order.shopifyConfirmationTag} confirmedAt={order.confirmedAt} externalNumber={order.externalNumber} createdByUser={order.createdByUser} creatorTag={order.creatorTag} shopifyCreatorTag={order.shopifyCreatorTag} />
+              {isAwaitingPayment(order) ? <div className="mt-3"><AwaitingPaymentNotice /></div> : null}
+            {order.shopifySync ? <div className="mt-3 border-t pt-3"><ShopifySyncStatus orderId={order.id} sync={order.shopifySync} role={role} /></div> : null}
             </div>
           </CardContent>
         </AccentCard>

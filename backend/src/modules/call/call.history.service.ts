@@ -7,7 +7,7 @@ import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { buildCallSummary, buildCallWhere, scopedCallWhere } from "./call.history.filters.js";
 import { extractSafeProviderMetadata } from "./call.history.metadata.js";
-import type { CallDetail, CallListItem, CallListResult, CallSummary, CallSummaryQuery, ListCallsQuery } from "./call.history.types.js";
+import type { CallDetail, CallLeadRef, CallListItem, CallListResult, CallSummary, CallSummaryQuery, ListCallsQuery } from "./call.history.types.js";
 
 /**
  * `GET /api/calls` / `GET /api/calls/:id` / `GET /api/calls/summary` — read-only, reads directly from
@@ -83,7 +83,7 @@ export function isMissingCallGroupColumnError(err: unknown): boolean {
 export function mapCallListItem(row: ListRow): CallListItem {
   return {
     id: row.id,
-    lead: row.lead,
+    lead: row.lead as CallLeadRef, // never null: every query above excludes lead-less (recruiter) calls
     agent: row.agent,
     direction: row.direction,
     status: row.status,
@@ -119,6 +119,10 @@ export function mapCallDetail(row: DetailRow, role: Role, providerMetadata: Retu
   };
 }
 
+// Recruiter calls hang off an Application and have no lead; this sales call history (and the IVR pages built on it) is about
+// calls on leads, so those rows are never part of it.
+const CALLS_ON_LEADS: Prisma.CallWhereInput = { leadId: { not: null } };
+
 function groupCallsByCallGroup(db: DbClient, where: Prisma.CallWhereInput) {
   return db.call.groupBy({ by: ["callGroup"], where, _count: { _all: true } });
 }
@@ -128,7 +132,7 @@ export class CallHistoryService {
 
   async listCalls(user: AuthUser, query: ListCallsQuery): Promise<CallListResult> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildCallWhere(query, leadScope, user.id);
+    const where: Prisma.CallWhereInput = { AND: [buildCallWhere(query, leadScope, user.id), CALLS_ON_LEADS] };
     const page = {
       // id breaks ties so pages never repeat or skip rows created in the same instant.
       orderBy: [{ createdAt: "desc" as const }, { id: "desc" as const }],
@@ -161,7 +165,7 @@ export class CallHistoryService {
   /** Aggregate counts/talk-time for the IVR summary cards - same filters/scope as `listCalls`, no rows returned. */
   async getCallSummary(user: AuthUser, query: CallSummaryQuery): Promise<CallSummary> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildCallWhere(query, leadScope, user.id);
+    const where: Prisma.CallWhereInput = { AND: [buildCallWhere(query, leadScope, user.id), CALLS_ON_LEADS] };
 
     const [counts, totalTalkTime] = await Promise.all([
       this.db.call.groupBy({ by: ["status"], where, _count: { _all: true } }),
@@ -183,7 +187,7 @@ export class CallHistoryService {
 
   async getCallById(user: AuthUser, id: string): Promise<CallDetail> {
     const leadScope = await getLeadScope(user, this.db);
-    const whereScoped = scopedCallWhere(id, leadScope, user.id);
+    const whereScoped: Prisma.CallWhereInput = { AND: [scopedCallWhere(id, leadScope, user.id), CALLS_ON_LEADS] };
 
     let call: DetailRow | null;
     try {

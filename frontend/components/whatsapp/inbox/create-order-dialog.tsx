@@ -10,14 +10,19 @@ import { useCreateOrderMutation, usePushOrderToShopifyMutation } from "@/lib/api
 import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
 import { productsApi } from "@/lib/api-client/endpoints/products.api";
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
+import { abandonmentOrderPrefillQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import type { LastShippingAddress } from "@/lib/api-client/types/delivery.types";
+import { AbandonedCheckoutPrefill, prefillDraftItems } from "./abandoned-checkout-prefill";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { useCourierRates } from "@/hooks/useCourierRates";
-import { chargeText, shippingChargeState } from "@/lib/shipping-charge";
+import { shippingChargeState } from "@/lib/shipping-charge";
+import { COD_SHIPPING_CHARGE } from "@/lib/cod-shipping";
+import { possibleDuplicateOf } from "@/lib/duplicate-order";
 import { formatMoney } from "@/lib/order-status";
-import { composeLines, formatAddress, structuredFromSaved, validateAddress } from "./create-order-address";
+import { buildAddressDraft, composeLines, formatAddress, validateAddress } from "./create-order-address";
 import { DiscountPricing } from "./discount-section";
 import { useDiscountOptions } from "@/hooks/useDiscountOptions";
-import { choiceCents, defaultChoice, toApiDiscount, type DiscountChoice } from "@/lib/discount";
+import { choiceCents, defaultChoice, effectiveDiscountChoice, toApiDiscount, type DiscountChoice } from "@/lib/discount";
 import {
   dimensionsHint,
   goodsValue,
@@ -31,7 +36,7 @@ import {
 } from "@/lib/package-dimensions";
 import { estimateProductWeight, formatKg, parseParcelWeight, resolveParcelWeight, unitWeightKg, weightHint } from "@/lib/parcel-weight";
 import { WhatsAppPaymentSection } from "./whatsapp-payment-section";
-import { NO_WHATSAPP, toApiWhatsApp, whatsappBlockReason, type WhatsAppPaymentChoice } from "@/lib/whatsapp-payment";
+import { NO_WHATSAPP, describeOptionsLoadError, toApiWhatsApp, whatsappBlockReason, type WhatsAppPaymentChoice } from "@/lib/whatsapp-payment";
 import { whatsAppPaymentOptionsQueryOptions } from "@/lib/api-client/queries/orders.queries";
 import { CreateShipmentDialog } from "@/components/orders/create-shipment-dialog";
 import type { CreateManualOrderItemInput, CreateManualOrderResult } from "@/lib/api-client/types/orders.types";
@@ -66,6 +71,8 @@ interface CreateOrderDialogProps {
   leadId: string;
   customerName: string;
   customerMobile: string | null;
+  /** Set when the form is opened from ONE abandoned checkout: its saved cart and address prefill the form (all editable), and the order is tied to it. */
+  abandonmentId?: string;
   /** Test seams: render the same content inline (no portal) from a given order type / step. Not used by the app. */
   inline?: boolean;
   initialOrderType?: OrderType;
@@ -78,7 +85,7 @@ interface CreateOrderDialogProps {
 
 type Step = "form" | "review" | "done";
 
-export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, customerMobile, inline, initialOrderType, initialStep, initialSendViaWhatsApp, initialWeight, initialItems, initialDimensions }: CreateOrderDialogProps) {
+export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, customerMobile, abandonmentId, inline, initialOrderType, initialStep, initialSendViaWhatsApp, initialWeight, initialItems, initialDimensions }: CreateOrderDialogProps) {
   const [step, setStep] = useState<Step>(initialStep ?? "form");
   const [items, setItems] = useState<DraftItem[]>(initialItems ? initialItems.map((i) => ({ ...emptyItem(), ...i })) : [emptyItem()]);
   const [orderType, setOrderType] = useState<OrderType>(initialOrderType ?? "COD");
@@ -88,7 +95,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // The packed parcel dimensions the operator TYPED (null = never touched, so the safe single-unit suggestion applies). Never overwritten.
   const [manualDims, setManualDims] = useState<DimensionDraft | null>(initialDimensions ?? null);
   // Only used when Shiprocket has no rate to offer (unavailable / not requested): then the charge can be typed. Never used while a rate exists.
-  const [manualShipping, setManualShipping] = useState("");
+  const [, setManualShipping] = useState("");
   // The courier the operator picked, valid only for the rate request it was picked from.
   const [courierPick, setCourierPick] = useState<{ rateKey: string; courier: string } | null>(null);
   const [result, setResult] = useState<CreateManualOrderResult | null>(null);
@@ -103,7 +110,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // is replaced - never added to - when the user edits it. `null` = the user has not touched it yet.
   const [discountEdit, setDiscountEdit] = useState<DiscountChoice | null>(null);
   const { options: discountOptions, loaded: discountsLoaded } = useDiscountOptions("ORDER", open);
-  const discountChoice: DiscountChoice = discountEdit ?? defaultChoice(discountOptions);
+  // The default discount is a prepaid promotion: on COD it never applies (the server drops it as well), so what is shown is what is saved.
+  const discountChoice: DiscountChoice = effectiveDiscountChoice(discountEdit ?? defaultChoice(discountOptions), orderType !== "COD", discountOptions.defaultDiscount);
   const idempotencyKey = useRef<string>(crypto.randomUUID());
   const submittingRef = useRef(false);
 
@@ -123,13 +131,24 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   });
   const products = useMemo(() => productsQuery.data?.items ?? [], [productsQuery.data]);
 
-  const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open });
-  const last = lastAddressQuery.data ?? null;
+  // Read fresh on every open (never a cached copy of an earlier visit), and keyed by THIS customer, so one customer's address is never offered for another.
+  const lastAddressQuery = useQuery({ ...lastAddressQueryOptions(leadId), enabled: open, refetchOnMount: "always" });
+  // The abandoned checkout this form was opened from (its OWN cart, by id). Read fresh on every open. Without it the form behaves exactly as before.
+  const prefillQuery = useQuery({ ...abandonmentOrderPrefillQueryOptions(abandonmentId ?? ""), enabled: open && Boolean(abandonmentId) });
+  const prefill = prefillQuery.data ?? null;
+  // The address the customer typed at checkout wins over the address of an earlier order (it is the one they just asked to be delivered to); nothing typed here is ever overwritten.
+  const checkoutAddress: LastShippingAddress | null = useMemo(() => {
+    const a = prefill?.address;
+    if (!a) return null;
+    return { name: a.name ?? prefill.customer.name ?? "", line1: a.line1 ?? "", line2: a.line2 ?? "", city: a.city ?? "", state: a.state ?? "", pincode: a.pincode ?? "", phone: a.phone ?? prefill.customer.phone ?? "", houseNumber: a.houseNumber ?? "", building: a.building ?? "", area: a.area ?? "", street: a.street ?? "", landmark: a.landmark ?? "", addressType: "", deliveryInstructions: a.deliveryInstructions ?? "" };
+  }, [prefill]);
+  const last = checkoutAddress ?? lastAddressQuery.data?.address ?? null;
+  const lastSource: "ORDER" | "CHECKOUT" | null = checkoutAddress ? "CHECKOUT" : (lastAddressQuery.data?.source ?? null);
 
   const waOptionsQuery = useQuery({ ...whatsAppPaymentOptionsQueryOptions(leadId), enabled: open && orderType !== "COD" });
   const waOptions = waOptionsQuery.data ?? null;
   const sendingWhatsApp = orderType !== "COD" && whatsapp.send;
-  const whatsappBlocked = sendingWhatsApp ? whatsappBlockReason(waOptions, waOptionsQuery.isPending, whatsapp) : null;
+  const whatsappBlocked = sendingWhatsApp ? whatsappBlockReason(waOptions, waOptionsQuery.isPending, whatsapp, Boolean(waOptionsQuery.error)) : null;
 
   const createOrder = useCreateOrderMutation();
   const pushToShopify = usePushOrderToShopifyMutation();
@@ -151,26 +170,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const pincodeQuery = useQuery({ ...pincodeQueryOptions(pincode), enabled: open && pincodeComplete && pincodeReady });
   const lookup = pincodeComplete ? pincodeQuery.data : undefined;
   const pincodeState = pincodeUiState(pincode, pincodeReady, lookup, pincodeQuery.isFetching);
-  const sameAsLast = Boolean(last && last.pincode === pincode);
   const resolvedCity = lookup?.status === "valid" ? lookup.city : null;
   const resolvedState = lookup?.status === "valid" ? lookup.state : null;
 
-  const saved = structuredFromSaved(last);
-  const address: AddressDraft = {
-    name: edits.name ?? last?.name ?? customerName,
-    phone: edits.phone ?? last?.phone ?? customerMobile ?? "",
-    // Structured fields: what was typed wins, then the previous order's address (a legacy free-text one is carried over
-    // line1 -> House/Flat, line2 -> Area, still editable), otherwise empty. Nothing the user typed is ever overwritten.
-    houseNumber: edits.houseNumber ?? saved.houseNumber,
-    building: edits.building ?? saved.building,
-    area: edits.area ?? saved.area,
-    street: edits.street ?? saved.street,
-    landmark: edits.landmark ?? saved.landmark,
-    addressType: edits.addressType ?? saved.addressType,
-    pincode,
-    city: edits.city ?? (sameAsLast ? last!.city : (resolvedCity ?? "")),
-    state: edits.state ?? (sameAsLast ? last!.state : (resolvedState ?? "")),
-  };
+  const address: AddressDraft = buildAddressDraft({ saved: last, edits, customerName, customerMobile: customerMobile ?? undefined, resolvedCity, resolvedState });
   const cityMismatch = lookup?.status === "valid" && (!placeMatches(address.city, resolvedCity) || !placeMatches(address.state, resolvedState));
 
   // ---- serviceability (COD and prepaid can differ; weight is an estimate typed in by the salesperson).
@@ -218,6 +221,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
       setShipmentOpen(false);
       setWhatsapp(NO_WHATSAPP);
       setStepIndex(0);
+      appliedPrefill.current = null;
       createOrder.reset();
       idempotencyKey.current = crypto.randomUUID();
     }
@@ -268,6 +272,18 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [productsQuery.dataUpdatedAt]);
 
+  // The checkout's product lines are applied ONCE per open (once the catalogue is known, so each matched line is priced by the CRM catalogue, as every line is),
+  // and only onto a form the salesperson has not started. Re-renders, refetches and re-opens never add them a second time.
+  const appliedPrefill = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prefill || appliedPrefill.current === prefill.abandonmentId) return;
+    if (!productsQuery.data && !productsQuery.isError) return;
+    appliedPrefill.current = prefill.abandonmentId;
+    if (prefill.lines.length === 0) return;
+    setItems((prev) => prefillDraftItems(prev, prefill.lines, (id) => productsQuery.data?.items.find((p) => p.id === id), (product, variantId) => catalogPrice(product as never, variantId)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill, productsQuery.data, productsQuery.isError]);
+
   const itemValid = (i: DraftItem) => {
     const product = products.find((p) => p.id === i.productId);
     return Boolean(product) && (product!.variants.length === 0 || Boolean(i.variantId)) && Number(i.quantity) > 0 && Number.isInteger(Number(i.quantity)) && i.unitPrice.trim() !== "";
@@ -297,8 +313,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // Any change to the rate inputs ends the previous pick: the default (cheapest) applies again to the new rates.
   if (courierPick && courierPick.rateKey !== rates.key) setCourierPick(null);
   const shippingState = shippingChargeState({ requested: rateRequest.ok, calculating: rates.calculating, failed: rates.failed, result: serviceability, pickKey });
-  const shippingAmount = shippingState.kind === "rate" ? chargeText(shippingState) : shippingState.kind === "calculating" ? "" : manualShipping;
-  const shippingCents = cents(shippingAmount);
+  // COD pays the FLAT shipping charge (lib/cod-shipping.ts - the server enforces it and ignores any other figure); the courier rate above no longer sets what the customer pays.
+  const shippingAmount = orderType === "COD" ? COD_SHIPPING_CHARGE : "0";
+  // Shipping is charged on COD only. A prepaid order ships free: the rates above still decide whether the pincode is serviceable, but no charge is added.
+  const shippingCents = orderType === "COD" ? cents(shippingAmount) : 0;
   const totalCents = Math.max(subtotalCents - discountCents + shippingCents, 0);
   const selectedKeyForTable = shippingState.kind === "rate" ? `${shippingState.courier ?? "courier"}|${shippingState.amount}` : null;
 
@@ -346,7 +364,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     serviceability,
   };
 
-  function submit() {
+  function submit(acknowledgeDuplicate = false, supersedesOrderId?: string) {
     // Synchronous guard: two rapid clicks/Enters can both run before `isPending` re-renders.
     if (submittingRef.current || createOrder.isPending) return;
     submittingRef.current = true;
@@ -354,6 +372,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     createOrder.mutate(
       {
         leadId,
+        // Only a checkout that actually loaded for this customer is referenced; the server re-checks that it is theirs.
+        ...(prefill ? { abandonmentId: prefill.abandonmentId } : {}),
         items: validItems,
         paymentMethod: orderType,
         shippingAddress: {
@@ -365,6 +385,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
           area: address.area.trim(),
           street: address.street.trim() || undefined,
           landmark: address.landmark.trim() || undefined,
+          deliveryInstructions: address.deliveryInstructions.trim() || undefined,
           addressType: address.addressType,
           city: address.city.trim(),
           state: address.state.trim(),
@@ -372,8 +393,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
           phone: address.phone || customerMobile || undefined,
         },
         shippingPincode: address.pincode,
-        // Shiprocket's charge for the selected courier, or what was typed when Shiprocket has none; empty = not sent.
-        shippingAmount: shippingAmount || undefined,
+        // COD: the flat charge (the server recomputes it and ignores this value); prepaid: free.
+        shippingAmount: orderType === "COD" ? COD_SHIPPING_CHARGE : "0",
         // Only the CHOICE goes to the server - never a discount amount or a final total. `expectedTotal` is a consistency check:
         // if the server computes a different total, the order is refused instead of being created at a surprising amount.
         discount: toApiDiscount(discountChoice),
@@ -383,6 +404,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         // COD orders send nothing extra (unchanged). Prepaid: an explicit "Dont send", or the WhatsApp send with template + consent.
         ...(orderType !== "COD" ? toApiWhatsApp(waOptions, whatsapp) : {}),
         idempotencyKey: idempotencyKey.current,
+        // Only after the server warned about a matching recent order and the user chose "create anyway" (the refused request created nothing, so the same key is reused).
+        ...(acknowledgeDuplicate ? { acknowledgeDuplicate: true } : {}),
+        // "Replace": the earlier unpaid order (same items, different price / discount) is cancelled with its payment link, so only this one stays payable.
+        ...(supersedesOrderId ? { supersedesOrderId } : {}),
       },
       {
         onSuccess: (created) => {
@@ -422,7 +447,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
               <p className="text-base font-semibold">
                 {orderType === "COD" ? `Create COD order for ${customerName}?` : `Create prepaid order for ${customerName}?`}
               </p>
-              <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
+              <div className="rounded-xl border border-border bg-card p-4">
                 <ul className="grid gap-2 text-sm">
                   {summary.lines.map((l) => (
                     <li key={l.key} className="flex justify-between gap-3">
@@ -444,7 +469,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 isPrepaid={orderType !== "COD"}
                 disabled={createOrder.isPending || !discountsLoaded}
               />
-              <div className="rounded-xl border-[1.5px] border-border bg-card p-4">
+              <div className="rounded-xl border border-border bg-card p-4">
                 <dl className="grid gap-1.5">
                   <SummaryRow label="Payment method" value={`${typeInfo.title} · ${typeInfo.subtitle}`} />
                   <SummaryRow label="Payment status" value={orderType === "COD" ? "Pending (collected on delivery)" : "Pending (until the customer pays)"} />
@@ -459,19 +484,29 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                     : "A Cashfree payment link will be generated for this order. It is not sent automatically - use Send via WhatsApp above, or share it from the order."}
               </p>
               {orderType !== "COD" ? (
-                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? "Could not load WhatsApp options." : null} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
+                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? describeOptionsLoadError(waOptionsQuery.error) : null} onRetry={() => void waOptionsQuery.refetch()} retrying={waOptionsQuery.isFetching} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
               ) : null}
               {createOrder.error ? (
                 <p role="alert" className="text-sm text-destructive">
                   {getErrorMessage(createOrder.error, "Could not create the order.")}
                 </p>
               ) : null}
+              {possibleDuplicateOf(createOrder.error)?.replaceOrderId ? (
+                <Button type="button" onClick={() => submit(false, possibleDuplicateOf(createOrder.error)!.replaceOrderId!)} disabled={createOrder.isPending} data-testid="replace-order">
+                  Replace {possibleDuplicateOf(createOrder.error)!.orderNumber ?? "the open order"} (cancel it and its payment link)
+                </Button>
+              ) : null}
+              {possibleDuplicateOf(createOrder.error) ? (
+                <Button type="button" variant="outline" onClick={() => submit(true)} disabled={createOrder.isPending} data-testid="create-anyway">
+                  This is a separate purchase - create anyway
+                </Button>
+              ) : null}
               {createOrder.isPending ? <CreateOrderProgress steps={steps} activeIndex={stepIndex} /> : null}
               <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
                 <Button type="button" variant="outline" onClick={() => setStep("form")} disabled={createOrder.isPending}>
                   Back
                 </Button>
-                <Button type="button" onClick={submit} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
+                <Button type="button" onClick={() => submit()} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
                   {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : sendingWhatsApp ? "Create Order & Send Payment Link" : "Create prepaid order"}
                 </Button>
               </div>
@@ -487,6 +522,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
             className="grid gap-4 lg:grid-cols-[1fr_340px]"
           >
             <div className="grid min-w-0 content-start gap-4">
+              {abandonmentId ? <AbandonedCheckoutPrefill prefill={prefill} loading={prefillQuery.isPending && prefillQuery.fetchStatus !== "idle"} failed={prefillQuery.isError} /> : null}
               <ItemsSection onAdd={() => setItems((prev) => [...prev, emptyItem()])}>
                 {items.map((item, index) => (
                   <ItemCard
@@ -508,7 +544,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
               {/* Prepaid: the payment-link / WhatsApp template choice is right here under the payment method, and again on Review. */}
               {orderType !== "COD" ? (
-                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? "Could not load WhatsApp options." : null} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
+                <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? describeOptionsLoadError(waOptionsQuery.error) : null} onRetry={() => void waOptionsQuery.refetch()} retrying={waOptionsQuery.isFetching} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
               ) : null}
 
               <ShippingSection
@@ -526,10 +562,14 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 productDimensionsNote={productDimensionsNote(dimensionLines) ?? undefined}
                 onUseSuggestedDimensions={manualDims !== null && suggestPackedDimensions(dimensionLines) ? () => setManualDims(null) : undefined}
                 onDimensionsChange={(patch) => setManualDims({ ...(manualDims ?? dimsResolved.draft), ...patch })}
-                shippingAmount={shippingAmount}
+                shippingAmount={orderType === "COD" ? shippingAmount : "0"}
+                shippingFree={orderType !== "COD"}
+                shippingFlat={orderType === "COD"}
                 shippingStatus={shippingState}
                 onShippingAmountChange={setManualShipping}
                 prefilledFromLastOrder={Boolean(last)}
+                prefillSource={lastSource}
+                prefillFailed={lastAddressQuery.isError && !last}
                 pincodeState={pincodeState}
                 lookup={lookup}
                 cityMismatch={Boolean(cityMismatch)}

@@ -30,6 +30,8 @@ import {
   ChevronRight,
   MessagesSquare,
   PhoneIncoming,
+  Briefcase,
+  ClipboardList,
 } from "lucide-react";
 import {
   Sidebar,
@@ -186,7 +188,7 @@ interface NavSection {
 // "/dashboard" is the root of every page here, so it only matches exactly; other items
 // also stay highlighted on their nested pages (e.g. an order's detail page) unless marked exact.
 
-const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
+export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
   SALESPERSON: [
     {
       label: "Overview",
@@ -211,6 +213,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
+        { title: "My Orders", href: "/dashboard/my-orders", icon: ClipboardList },
         { title: "Offers", href: "/dashboard/offers", icon: Ticket },
       ],
     },
@@ -312,7 +315,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/abandoned-leads",
           icon: AlertTriangle,
         },
-        { title: "Reports", icon: BarChart3 },
+        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
       ],
     },
     {
@@ -410,7 +413,7 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/abandoned-leads",
           icon: AlertTriangle,
         },
-        { title: "Reports", icon: BarChart3 },
+        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
       ],
     },
     {
@@ -463,14 +466,8 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     },
   ],
 
-  // HR only handles team/salesperson management — nothing else is exposed.
+  // HR handles team/salesperson management - nothing else is exposed.
   HR: [
-    {
-      label: "Overview",
-      items: [
-        { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-      ],
-    },
     {
       label: "Organization",
       items: [
@@ -478,7 +475,28 @@ const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         { title: "Teams", href: "/dashboard/groups", icon: Building2 },
       ],
     },
+    {
+      label: "Recruitment",
+      items: [
+        { title: "Jobs", href: "/dashboard/jobs", icon: Briefcase },
+        { title: "Recruiters", href: "/dashboard/recruiters", icon: Contact },
+      ],
+    },
   ],
+
+  // Recruiters only work the job applications assigned to them.
+  RECRUITER: [
+    {
+      label: "Recruitment",
+      items: [{ title: "My Applications", href: "/dashboard/applications", icon: ClipboardList }],
+    },
+  ],
+};
+
+// Roles without a dashboard land on their main work page instead.
+export const HOME_BY_ROLE: Partial<Record<CurrentUser["role"], string>> = {
+  HR: "/dashboard/staff",
+  RECRUITER: "/dashboard/applications",
 };
 
 function isActivePath(pathname: string, href: string, exact = false) {
@@ -552,21 +570,23 @@ function CollapsibleNavItem({
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
   const sections = NAV_BY_ROLE[user.role];
+  const homeHref = HOME_BY_ROLE[user.role] ?? "/dashboard";
 
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader className="border-b-[1.5px] border-sidebar-border pb-3">
+    <Sidebar collapsible="icon" variant="floating">
+      {/* In icon mode the header/footer use the same padding as the menu groups so everything sits on one centre line. */}
+      <SidebarHeader className="p-3 group-data-[collapsible=icon]:p-2">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
               size="lg"
               className="hover:bg-transparent"
-              render={<Link href="/dashboard" />}
+              render={<Link href={homeHref} />}
             >
-              {/* <BrandMark className="size-8 shrink-0" /> */}
-              <div className="flex min-w-0 flex-col leading-tight">
-                <span className="truncate font-hand text-xl leading-none font-bold text-foreground">
-                  AVATAR CRM
+              <BrandMark className="size-9 shrink-0" />
+              <div className="flex min-w-0 flex-col leading-tight group-data-[collapsible=icon]:hidden">
+                <span className="truncate text-base leading-tight font-semibold text-foreground">
+                  Avance Sales CRM
                 </span>
                 <span className="truncate text-[0.7rem] text-muted-foreground">
                   Lead workspace
@@ -630,7 +650,7 @@ export function AppSidebar({ user }: { user: CurrentUser }) {
         ))}
       </SidebarContent>
 
-      <SidebarFooter className="border-t-[1.5px] border-sidebar-border pt-3">
+      <SidebarFooter className="p-3 group-data-[collapsible=icon]:p-2">
         <NavUser user={user} />
       </SidebarFooter>
     </Sidebar>

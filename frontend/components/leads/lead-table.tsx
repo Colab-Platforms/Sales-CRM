@@ -56,11 +56,13 @@ import { Badge } from "../ui/badge";
 // Every history-showing surface (this table's popup, the lead detail page) links back to a single
 // per-lead page, so a salesperson's "My Leads" list stops routing into the unrelated Customer 360
 // view and instead lands somewhere that actually shows this lead's own assignment/call history.
-export function leadDetailHref(leadId: string, options?: { from?: string }) {
-  if (options?.from) {
-    return `/dashboard/leads/${leadId}?from=${encodeURIComponent(options.from)}`;
-  }
-  return `/dashboard/leads/${leadId}`;
+export function leadDetailHref(leadId: string, options?: { from?: string; abandonmentId?: string }) {
+  const params = new URLSearchParams();
+  if (options?.from) params.set("from", options.from);
+  // Which of the lead's abandoned checkouts was opened, so Create Order is prefilled from THAT cart (not an arbitrary one).
+  if (options?.abandonmentId) params.set("abandonmentId", options.abandonmentId);
+  const query = params.toString();
+  return query ? `/dashboard/leads/${leadId}?${query}` : `/dashboard/leads/${leadId}`;
 }
 
 const CALL_HISTORY_PREVIEW_COUNT = 5;
@@ -334,9 +336,9 @@ export function LeadStatusSelect({ lead }: { lead: StatusEditableLead }) {
     "CALL_BACK" | "FOLLOW_UP" | null
   >(null);
 
-  function save(workingStatus: LeadWorkingStatus, followUpAt?: string) {
+  function save(workingStatus: LeadWorkingStatus, followUpAt?: string, note?: string) {
     updateLead.mutate(
-      { id: lead.id, payload: { workingStatus, followUpAt } },
+      { id: lead.id, payload: { workingStatus, followUpAt, note } },
       {
         onSuccess: () => {
           toast.success(
@@ -382,7 +384,7 @@ export function LeadStatusSelect({ lead }: { lead: StatusEditableLead }) {
           leadName={`${lead.firstName} ${lead.lastName ?? ""}`.trim()}
           current={lead.tasks[0]}
           isPending={updateLead.isPending}
-          onConfirm={(iso) => save(pendingFollowUp, iso)}
+          onConfirm={(iso, note) => save(pendingFollowUp, iso, note)}
           onCancel={() => setPendingFollowUp(null)}
         />
       ) : null}

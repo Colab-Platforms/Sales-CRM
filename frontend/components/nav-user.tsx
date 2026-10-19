@@ -20,6 +20,7 @@ const ROLE_LABELS: Record<CurrentUser["role"], string> = {
   HR: "HR",
   MANAGER: "Manager",
   SALESPERSON: "Salesperson",
+  RECRUITER: "Recruiter",
 };
 
 function initials(name: string) {
@@ -43,17 +44,17 @@ export function NavUser({ user }: { user: CurrentUser }) {
           <DropdownMenuTrigger render={<SidebarMenuButton size="lg" />}>
             <span
               aria-hidden="true"
-              className="flex size-8 shrink-0 items-center justify-center rounded-[11px_9px_12px_9px] border-[1.5px] border-ink-line/40 bg-primary/10 text-xs font-bold text-primary"
+              className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-semibold text-foreground"
             >
               {initials(user.name)}
             </span>
-            <div className="flex min-w-0 flex-1 flex-col text-left leading-tight">
-              <span className="truncate text-sm font-semibold">{user.name}</span>
+            <div className="flex min-w-0 flex-1 flex-col text-left leading-tight group-data-[collapsible=icon]:hidden">
+              <span className="truncate text-sm font-medium">{user.name}</span>
               <span className="truncate text-xs text-muted-foreground">
                 {ROLE_LABELS[user.role]}
               </span>
             </div>
-            <ChevronsUpDown className="ml-auto size-4 text-muted-foreground" />
+            <ChevronsUpDown className="ml-auto size-4 text-muted-foreground group-data-[collapsible=icon]:hidden" />
           </DropdownMenuTrigger>
           <DropdownMenuContent side={isMobile ? "bottom" : "right"} align="end" className="min-w-60">
             <DropdownMenuGroup>

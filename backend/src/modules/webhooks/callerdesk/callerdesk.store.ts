@@ -35,7 +35,7 @@ export interface WebhookEventPatch {
 
 export interface StoredCall {
   id: string;
-  leadId: string;
+  leadId: string | null;
   agentId: string | null;
   provider: string;
   providerCallId: string | null;
@@ -170,7 +170,7 @@ type Db = Prisma.TransactionClient;
 
 function asStoredCall(row: {
   id: string;
-  leadId: string;
+  leadId: string | null;
   agentId: string | null;
   provider: string;
   providerCallId: string | null;

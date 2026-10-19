@@ -9,6 +9,7 @@ const ROLE_LABELS: Record<UserProfile["role"], string> = {
   HR: "HR",
   MANAGER: "Manager",
   SALESPERSON: "Salesperson",
+  RECRUITER: "Recruiter",
 };
 
 function initials(name: string) {
@@ -29,7 +30,7 @@ export function ProfileHeaderCard({ profile }: { profile: UserProfile }) {
         <div className="flex flex-wrap items-center gap-4">
           <span
             aria-hidden="true"
-            className="flex size-16 shrink-0 items-center justify-center rounded-[18px_14px_19px_14px] border-2 border-ink-line/40 bg-primary/10 text-xl font-extrabold text-primary"
+            className="flex size-16 shrink-0 items-center justify-center rounded-xl border-2 border-ink-line/40 bg-primary/10 text-xl font-extrabold text-primary"
           >
             {initials(profile.name)}
           </span>

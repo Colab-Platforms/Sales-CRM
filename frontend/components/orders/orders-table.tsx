@@ -29,13 +29,11 @@ function titleCase(value: string): string {
     .join(" ");
 }
 
-const COLUMN_COUNT = 11;
+const COLUMN_COUNT = 9;
 
 const HEADERS = [
   "Order",
   "Customer",
-  "Salesperson",
-  "Lead source",
   "Order source",
   "Total",
   "Payment",
@@ -133,8 +131,6 @@ export function OrdersTable({ items, isFetching, onOpen, headerFilters }: Orders
                 <span className="font-medium">{order.customer.name}</span>
               )}
             </TableCell>
-            <TableCell>{order.salesperson?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
-            <TableCell>{order.leadSource?.name ?? <span className="text-muted-foreground">—</span>}</TableCell>
             <TableCell>{ORDER_SOURCE_LABELS[order.source]}</TableCell>
             <TableCell className="text-right tabular-nums">{formatMoney(order.totalAmount, order.currency)}</TableCell>
             <TableCell>

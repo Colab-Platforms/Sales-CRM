@@ -1,3 +1,5 @@
+import type { InboundMedia } from "./whatsapp.media.js";
+
 // Provider abstraction: the rest of the CRM (service/controller/processor) talks to this interface
 // only, never to AiSensy or Gupshup specifics directly. Mirrors how shopify.client.ts isolates the
 // rest of the app from the Shopify Admin API's own shapes.
@@ -86,6 +88,9 @@ export interface NormalizedIncomingMessage {
    *  at all - never inferred when the provider didn't say so. AiSensy/Gupshup document no equivalent,
    *  so their parsers never set this. */
   replyToProviderMessageId?: string | null;
+  /** The file the customer sent (image / document / audio / video / sticker), as the provider described it: its media id and metadata - never the bytes. Only Meta's parser sets it today;
+   *  absent for text and for a media message whose id the provider did not send (then the message is still recorded, with no preview available). */
+  media?: InboundMedia | null;
 }
 
 export type WhatsAppDeliveryStatus = "SENT" | "DELIVERED" | "READ" | "FAILED";

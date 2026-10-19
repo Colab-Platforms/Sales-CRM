@@ -20,7 +20,8 @@ import { ADDRESS_TYPES, formatAddress, validateAddress, type AddressErrors, type
 import type { PincodeLookup, ServiceabilityResult } from "@/lib/api-client/types/delivery.types";
 
 export { CourierTable, ServiceabilityLine } from "./courier-rates";
-import type { CreateManualOrderResult, PaymentMethod } from "@/lib/api-client/types/orders.types";
+import type { CreateManualOrderResult, PaymentMethod, PaymentQrResult } from "@/lib/api-client/types/orders.types";
+import { useSendPaymentQrMutation } from "@/lib/api-client/mutations/orders.mutations";
 import type { ProductListItem } from "@/lib/api-client/types/products.types";
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -41,6 +42,8 @@ export interface DraftItem {
 export interface AddressDraft extends StructuredAddress {
   name: string;
   phone: string;
+  /** What the customer asked for at delivery ("leave with the guard"). Optional; kept with the address. */
+  deliveryInstructions: string;
 }
 
 export const emptyItem = (): DraftItem => ({ key: crypto.randomUUID(), productId: "", variantId: "", quantity: "1", unitPrice: "" });
@@ -69,7 +72,7 @@ export const ORDER_TYPES: { value: OrderType; title: string; subtitle: string; d
 
 export function SectionCard({ title, description, children, className }: { title: string; description?: string; children: ReactNode; className?: string }) {
   return (
-    <section className={cn("rounded-xl border-[1.5px] border-border bg-card p-4 sm:p-5", className)}>
+    <section className={cn("rounded-xl border border-border bg-card p-4 sm:p-5", className)}>
       <div className="mb-3">
         <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{title}</h3>
         {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
@@ -104,7 +107,7 @@ export function Field({ label, htmlFor, hint, children, className, required, err
 
 export function CustomerBar({ name, mobile }: { name: string; mobile: string | null }) {
   return (
-    <div className="flex items-center gap-3 rounded-xl border-[1.5px] border-border bg-muted/40 px-4 py-3" aria-label="Customer for this order">
+    <div className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-4 py-3" aria-label="Customer for this order">
       <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
         <User className="size-5" />
       </span>
@@ -255,7 +258,7 @@ export function PaymentSection({ value, onChange }: { value: OrderType; onChange
               aria-checked={selected}
               onClick={() => onChange(t.value)}
               className={cn(
-                "relative rounded-xl border-[1.5px] p-4 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+                "relative rounded-xl border p-4 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                 selected ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:bg-muted/50",
               )}
             >
@@ -354,9 +357,13 @@ export function ShippingSection({
   onUseSuggestedDimensions,
   onDimensionsChange,
   shippingAmount,
+  shippingFree,
+  shippingFlat,
   shippingStatus,
   onShippingAmountChange,
   prefilledFromLastOrder,
+  prefillSource,
+  prefillFailed,
   pincodeState,
   lookup,
   cityMismatch,
@@ -385,10 +392,18 @@ export function ShippingSection({
   onUseSuggestedDimensions?: () => void;
   onDimensionsChange?: (patch: Partial<DimensionDraft>) => void;
   shippingAmount: string;
+  /** Prepaid order: no shipping charge is added (the courier rates only confirm the pincode is serviceable). */
+  shippingFree?: boolean;
+  /** COD order: the charge is the flat COD shipping fee (the courier rates below only confirm the pincode is serviceable). */
+  shippingFlat?: boolean;
   /** Where the shipping charge comes from: the selected courier's Shiprocket rate, still calculating, not available, or not requested yet. */
   shippingStatus?: ShippingChargeState;
   onShippingAmountChange: (v: string) => void;
   prefilledFromLastOrder: boolean;
+  /** Where the prefilled address came from, for the hint under the title. */
+  prefillSource?: "ORDER" | "CHECKOUT" | null;
+  /** The saved address could not be loaded (network / server): say so instead of silently showing an empty form. */
+  prefillFailed?: boolean;
   pincodeState: PincodeUiState;
   lookup: PincodeLookup | undefined;
   cityMismatch: boolean;
@@ -399,9 +414,10 @@ export function ShippingSection({
   const [touched, setTouched] = useState<Partial<Record<keyof AddressErrors, boolean>>>({});
   const touch = (field: keyof AddressErrors) => setTouched((prev) => (prev[field] ? prev : { ...prev, [field]: true }));
   const errors = validateAddress(address);
-  const show = (field: keyof AddressErrors) => Boolean(touched[field]);
+  // A field that came pre-filled but is incomplete (a saved address missing its area, say) shows what is wrong straight away; an untouched empty form stays quiet.
+  const show = (field: keyof AddressErrors) => Boolean(touched[field]) || (prefilledFromLastOrder && Boolean(errors[field]));
   return (
-    <SectionCard title="Delivery Address" description={prefilledFromLastOrder ? "Prefilled from this customer's last order. Editing it here changes this order only — the customer record is not touched." : "Where this order will be delivered."}>
+    <SectionCard title="Delivery Address" description={prefillFailed ? "The saved address could not be loaded - enter the delivery address below." : prefilledFromLastOrder ? `Prefilled from ${prefillSource === "CHECKOUT" ? "the address this customer entered at checkout" : "this customer's last order"}. Check it, and edit anything that is wrong - editing here changes this order only; the customer record is not touched.` : "Where this order will be delivered."}>
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Pincode" htmlFor="ship-pincode" required className="sm:col-span-2" error={show("pincode") && pincodeState !== "invalid" && pincodeState !== "malformed" ? errors.pincode : undefined} hint={<PincodeStatusLines state={pincodeState} lookup={lookup} cityMismatch={cityMismatch} onUseResolved={onUseResolved} />}>
           <Input
@@ -431,6 +447,9 @@ export function ShippingSection({
         </Field>
         <Field label="Landmark" htmlFor="ship-landmark" className="sm:col-span-2">
           <Input id="ship-landmark" autoComplete="off" placeholder="e.g. Near City Mall" value={address.landmark} onChange={(e) => onChange({ landmark: e.target.value })} />
+        </Field>
+        <Field label="Delivery instructions" htmlFor="ship-instructions" className="sm:col-span-2">
+          <Input id="ship-instructions" autoComplete="off" maxLength={255} placeholder="e.g. Call before delivery (optional)" value={address.deliveryInstructions} onChange={(e) => onChange({ deliveryInstructions: e.target.value })} />
         </Field>
         <Field label="City" htmlFor="ship-city" required error={show("city") ? errors.city : undefined}>
           <Input id="ship-city" autoComplete="off" value={address.city} onChange={(e) => onChange({ city: e.target.value })} onBlur={() => touch("city")} aria-invalid={Boolean(show("city") && errors.city)} />
@@ -502,7 +521,11 @@ export function ShippingSection({
           label="Shipping charge (₹)"
           htmlFor="ship-amount"
           hint={
-            shippingStatus?.kind === "rate"
+            shippingFree
+              ? "Prepaid orders ship free - no shipping charge is added. The courier rates below only check that this pincode is serviceable."
+              : shippingFlat
+              ? "Cash on Delivery has a flat shipping charge of ₹50. The courier rates below only check that this pincode is serviceable."
+              : shippingStatus?.kind === "rate"
               ? `Shiprocket's charge${shippingStatus.courier ? ` for ${shippingStatus.courier}` : ""}. Choose another courier below to change it.`
               : shippingStatus?.kind === "calculating"
                 ? "Calculating shipping rates..."
@@ -516,7 +539,7 @@ export function ShippingSection({
             inputMode="decimal"
             placeholder={shippingStatus?.kind === "calculating" ? "Calculating…" : shippingStatus?.kind === "unavailable" ? "Not available" : "Not calculated"}
             value={shippingAmount}
-            readOnly={shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
+            readOnly={shippingFree || shippingFlat || shippingStatus?.kind === "rate" || shippingStatus?.kind === "calculating"}
             data-source={shippingStatus?.kind ?? "idle"}
             onChange={(e) => onShippingAmountChange(e.target.value)}
           />
@@ -558,7 +581,7 @@ export function SummaryCard({ data, action, className }: { data: SummaryData; ac
   const type = ORDER_TYPES.find((t) => t.value === data.orderType)!;
   const hasAddress = Boolean(data.address.houseNumber.trim() || data.address.city.trim() || data.address.pincode);
   return (
-    <aside className={cn("grid gap-4 rounded-xl border-[1.5px] border-border bg-card p-4 sm:p-5", className)} aria-label="Order summary" data-testid="order-summary">
+    <aside className={cn("grid gap-4 rounded-xl border border-border bg-card p-4 sm:p-5", className)} aria-label="Order summary" data-testid="order-summary">
       <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">Order summary</h3>
 
       <div>
@@ -641,7 +664,7 @@ export function submitSteps(orderType: OrderType): string[] {
 
 export function CreateOrderProgress({ steps, activeIndex }: { steps: string[]; activeIndex: number }) {
   return (
-    <div className="grid gap-2 rounded-xl border-[1.5px] border-border bg-card p-4" role="status" aria-live="polite" data-testid="create-order-progress">
+    <div className="grid gap-2 rounded-xl border border-border bg-card p-4" role="status" aria-live="polite" data-testid="create-order-progress">
       {steps.map((label, i) => {
         const done = i < activeIndex;
         const active = i === activeIndex;
@@ -719,6 +742,9 @@ export function ResultView({
 }) {
   const { order, shopify, paymentLink, whatsapp } = result;
   const [sendOpen, setSendOpen] = useState(false);
+  const sendQr = useSendPaymentQrMutation();
+  const [qrOverride, setQrOverride] = useState<PaymentQrResult | null>(null);
+  const qr = qrOverride ?? whatsapp.qr;
   const isCod = order.paymentMode === "COD";
   const providerLabel = whatsapp.provider ? (PROVIDER_LABELS[whatsapp.provider] ?? whatsapp.provider) : null;
   const what = isCod ? "Order confirmation" : "Payment link";
@@ -753,8 +779,10 @@ export function ResultView({
           </ul>
         </ResultRow>
 
-        <ResultRow label="Shopify" state={shopify.status === "failed" ? "fail" : "ok"}>
-          {shopify.status === "failed" ? (
+        <ResultRow label="Shopify" state={shopify.status === "failed" ? "fail" : shopify.status === "awaiting_payment" ? "warn" : "ok"}>
+          {shopify.status === "awaiting_payment" ? (
+            <span data-testid="shopify-awaiting-payment">Not created yet - the Shopify order is created automatically once Cashfree confirms the payment. Until then this is an awaiting-payment request, not a confirmed order.</span>
+          ) : shopify.status === "failed" ? (
             <span className="grid gap-2">
               <span>{friendlyShopify()}</span>
               <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onRetryShopify} disabled={retrying}>
@@ -809,6 +837,38 @@ export function ResultView({
             </span>
           ) : null}
         </ResultRow>
+
+        {order.paymentMode !== "COD" && qr ? (
+          <ResultRow label="Payment QR" state={qr.status === "SENT" ? "ok" : "warn"}>
+            {qr.status === "SENT" ? `QR code for the same payment link sent to ${customerMobile ?? "the customer"}` : `QR code not sent — ${friendlyWhatsApp(qr.reason)}. The payment link above is unaffected.`}
+            {qr.status !== "SENT" && paymentLink?.paymentId ? (
+              <span className="mt-2 block">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={sendQr.isPending}
+                  data-testid="retry-qr"
+                  onClick={() =>
+                    sendQr.mutate(
+                      { orderId: order.id, paymentId: paymentLink.paymentId! },
+                      {
+                        onSuccess: (r) => {
+                          setQrOverride(r);
+                          if (r.status === "SENT") toast.success("QR code sent.");
+                          else toast.error(r.reason ?? "QR code not sent.");
+                        },
+                        onError: () => toast.error("Could not send the QR code."),
+                      },
+                    )
+                  }
+                >
+                  {sendQr.isPending ? "Sending…" : "Resend QR code"}
+                </Button>
+              </span>
+            ) : null}
+          </ResultRow>
+        ) : null}
 
         <ResultRow label="Shiprocket" state="info">
           Not yet attempted

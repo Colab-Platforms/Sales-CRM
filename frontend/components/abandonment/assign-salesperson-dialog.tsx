@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { assignableTelecallersQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
+import { useAuthStore } from "@/stores/auth-store";
 import { useBulkAssignSalespersonMutation } from "@/lib/api-client/mutations/abandonment.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -23,7 +25,12 @@ export function AssignAbandonmentSalespersonDialog({
   abandonmentIds: string[];
   onDone: () => void;
 }) {
-  const { data: salespersons, isPending, error } = useQuery({ ...mySalespersonsQueryOptions(), enabled: open });
+  // A manager picks from their own team; admin / HR pick any active telecaller (and assign directly, one telecaller at a time - round-robin is a team-lead tool).
+  const role = useAuthStore((s) => s.user?.role);
+  const direct = role === "ADMIN" || role === "HR";
+  const managerTeam = useQuery({ ...mySalespersonsQueryOptions(), enabled: open && !direct });
+  const allTelecallers = useQuery({ ...assignableTelecallersQueryOptions(), enabled: open && direct });
+  const { data: salespersons, isPending, error } = direct ? allTelecallers : managerTeam;
   const bulkAssign = useBulkAssignSalespersonMutation();
   const [method, setMethod] = useState<"MANUAL" | "ROUND_ROBIN">("MANUAL");
   const [salespersonId, setSalespersonId] = useState("");
@@ -55,7 +62,9 @@ export function AssignAbandonmentSalespersonDialog({
         : { abandonmentIds, method, salespersonIds: [...salespersonIds] },
       {
         onSuccess: (result) => {
-          toast.success(`${result.assignedCount} abandoned lead(s) assigned.`);
+          toast.success(
+            `${result.assignedCount} abandoned lead(s) assigned${result.unchangedCount ? `; ${result.unchangedCount} already belonged to that telecaller` : ""}.`,
+          );
           onDone();
         },
       },
@@ -79,10 +88,12 @@ export function AssignAbandonmentSalespersonDialog({
                 <input type="radio" checked={method === "MANUAL"} onChange={() => setMethod("MANUAL")} />
                 Manual
               </label>
-              <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
-                <input type="radio" checked={method === "ROUND_ROBIN"} onChange={() => setMethod("ROUND_ROBIN")} />
-                Round Robin
-              </label>
+              {direct ? null : (
+                <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
+                  <input type="radio" checked={method === "ROUND_ROBIN"} onChange={() => setMethod("ROUND_ROBIN")} />
+                  Round Robin
+                </label>
+              )}
             </div>
 
             {error ? (

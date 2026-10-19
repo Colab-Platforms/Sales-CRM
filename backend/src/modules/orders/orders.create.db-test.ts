@@ -149,7 +149,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
       assert.equal(result.order.status, "CONFIRMED", "COD orders are confirmed immediately");
       assert.equal(result.order.items.length, 1);
       assert.equal(result.order.items[0]!.quantity, 2);
-      assert.equal(result.order.totalAmount, "698");
+      assert.equal(result.order.totalAmount, "748", "698 of items + the flat COD shipping of 50");
       assert.equal(result.order.paymentMode, "COD");
       assert.ok(result.order.orderNumber.startsWith("CRM-"));
 
@@ -161,6 +161,27 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
       assert.equal(fetched.id, result.order.id);
       const listed = await svc.listOrders(as(admin, Role.ADMIN), { page: 1, pageSize: 20 });
       assert.ok(listed.items.some((o) => o.id === result.order.id));
+    });
+  });
+
+  it("order lines come back in the order they were entered, every time (lines inserted together must not tie and be shuffled by their random ids)", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const lead = await makeLead(tx);
+      const products = [];
+      for (let i = 0; i < 10; i++) products.push(await makeProduct(tx, { name: `Line product ${i}` }));
+      let n = 0;
+      const svc = new OrdersService(tx, () => fakeShopifyClient(async () => ({ orderCreate: { order: { id: `gid://shopify/Order/${Date.now()}${++n}`, name: "#TST" }, userErrors: [] } })));
+      for (let round = 0; round < 5; round++) {
+        const { order } = await svc.createManualOrder(as(admin, Role.ADMIN), {
+          leadId: lead.id,
+          items: products.map((p, i) => ({ productId: p.id, quantity: 1, unitPrice: `${100 + i}.00` })),
+          paymentMethod: "COD",
+          shippingAddress: { line1: "123 Main St", city: "Mumbai", state: "Maharashtra", pincode: "400001" },
+        });
+        const fetched = await svc.getOrder(as(admin, Role.ADMIN), order.id);
+        assert.deepEqual(fetched.items.map((i) => i.productName), products.map((_, i) => `Line product ${i}`), `round ${round}`);
+      }
     });
   });
 
@@ -200,8 +221,8 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
       assert.equal(result.order.subtotal, "698");
       assert.equal(result.order.discountAmount, "50");
-      assert.equal(result.order.shippingAmount, "49");
-      assert.equal(result.order.totalAmount, "697");
+      assert.equal(result.order.shippingAmount, "50", "the 49 in the request is ignored: COD shipping is the flat 50");
+      assert.equal(result.order.totalAmount, "698", "698 - 50 discount + 50 shipping");
     });
   });
 
@@ -358,7 +379,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
         paymentMethod: "COD",
       });
 
-      assert.deepEqual(result.shopify, { status: "created", shopifyOrderId: "gid://shopify/Order/555", shopifyOrderName: "#TST555" });
+      assert.deepEqual({ ...result.shopify, sync: undefined }, { sync: undefined, status: "created", shopifyOrderId: "gid://shopify/Order/555", shopifyOrderName: "#TST555" });
       const stored = await tx.order.findUniqueOrThrow({ where: { id: result.order.id }, select: { externalSource: true, externalId: true, externalNumber: true } });
       assert.equal(stored.externalSource, "SHOPIFY");
       assert.equal(stored.externalId, "555"); // canonical numeric id
@@ -396,7 +417,8 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       let calls = 0;
       const svc = new OrdersService(tx, () => fakeShopifyClient(async () => {
         calls++;
-        if (calls === 1) return { orderCreate: { order: null, userErrors: [{ field: null, message: "Temporary failure" }] } };
+        // A COD order now always carries its flat shipping line, so Shopify's one "retry without the optional parts" fallback is attempted inside the first push: Shopify is down for BOTH of those calls.
+        if (calls <= 2) return { orderCreate: { order: null, userErrors: [{ field: null, message: "Temporary failure" }] } };
         return { orderCreate: { order: { id: "gid://shopify/Order/777", name: "#TST777" }, userErrors: [] } };
       }));
 
@@ -404,10 +426,10 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       assert.equal(first.shopify.status, "failed");
 
       const retry = await svc.pushOrderToShopify(as(admin, Role.ADMIN), first.order.id);
-      assert.deepEqual(retry, { status: "created", shopifyOrderId: "gid://shopify/Order/777", shopifyOrderName: "#TST777" });
+      assert.deepEqual({ ...retry, sync: undefined }, { sync: undefined, status: "created", shopifyOrderId: "gid://shopify/Order/777", shopifyOrderName: "#TST777" });
 
       assert.equal(await tx.order.count({ where: { leadId: lead.id } }), 1, "still exactly one CRM order - never duplicated by the retry");
-      assert.equal(calls, 2);
+      assert.equal(calls, 3, "two failed attempts in the first push + one successful retry");
     });
   });
 
@@ -458,7 +480,7 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
       await tx.order.create({ data: { orderNumber: `O-${uid()}`, leadId: lead.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "10.00", createdAt: new Date(Date.now() + 60_000), shippingAddress: { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123" } } });
       const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
       // A legacy free-text address comes back unchanged, with the new structured fields empty (never invented).
-      assert.deepEqual(latest.address, { name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123", houseNumber: "", building: "", area: "", street: "", landmark: "", addressType: "" });
+      assert.deepEqual({ ...latest.address, country: undefined, deliveryInstructions: undefined }, { country: undefined, deliveryInstructions: undefined, name: "Priya Shah", line1: "12 MG Road", line2: "Near Park", city: "Mumbai", state: "Maharashtra", pincode: "400001", phone: "9000000123", houseNumber: "", building: "", area: "", street: "", landmark: "", addressType: "" });
     });
   });
 
@@ -473,7 +495,7 @@ describe("getLastShippingAddress (Create Order prefill)", () => {
       assert.equal(created.order.shippingAddress?.houseNumber, "Flat 4B");
       assert.equal(created.order.shippingAddress?.line1, "Flat 4B, Sunrise Apartments", "the composed line integrations read is intact");
       const latest = await svc.getLastShippingAddress(as(admin, Role.ADMIN), lead.id);
-      assert.deepEqual(latest.address, { ...addr, phone: "9000000123" });
+      assert.deepEqual({ ...latest.address, country: undefined, deliveryInstructions: undefined }, { ...addr, phone: "9000000123", country: undefined, deliveryInstructions: undefined });
     });
   });
 

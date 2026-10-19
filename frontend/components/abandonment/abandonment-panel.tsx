@@ -9,6 +9,7 @@ import { formatDateTime, formatMoney } from "@/lib/order-status";
 import { RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
 import { LogRecoveryActionDialog } from "./log-recovery-action-dialog";
 import { parseAbandonmentCart, humanizeStage } from "./abandonment-cart-utils";
+import { DeliveryAddressSection, PreviousOrdersSection } from "./abandonment-customer-sections";
 import type { AbandonmentDetail } from "@/lib/api-client/types/abandonment.types";
 
 const NOT_AVAILABLE = "Not available";
@@ -17,7 +18,7 @@ const INITIAL_VISIBLE_COUNT = 3;
 // Same cart-details/recovery-history content the abandoned-leads queue used to show in a side sheet,
 // now embedded directly on the lead's own detail page (same page normal leads open) so a salesperson
 // works an abandoned lead the same way as any other lead, with this panel as the extra context.
-export function AbandonmentPanel({ abandonment }: { abandonment: AbandonmentDetail }) {
+export function AbandonmentPanel({ abandonment, showPreviousOrders = true }: { abandonment: AbandonmentDetail; /** The lead page shows the previous orders in its own always-visible card instead. */ showPreviousOrders?: boolean }) {
   const [logOpen, setLogOpen] = useState(false);
   const [showAllItems, setShowAllItems] = useState(false);
 
@@ -47,7 +48,7 @@ export function AbandonmentPanel({ abandonment }: { abandonment: AbandonmentDeta
         {abandonment.priorityReason ? <span className="text-xs text-muted-foreground">{abandonment.priorityReason}</span> : null}
       </div>
 
-      <div className="space-y-3 rounded-xl border-[1.5px] border-ink-line/20 bg-muted/30 p-4">
+      <div className="space-y-3 rounded-xl border border-ink-line/20 bg-muted/30 p-4">
         <div className="flex items-center justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Cart Value</p>
@@ -104,6 +105,9 @@ export function AbandonmentPanel({ abandonment }: { abandonment: AbandonmentDeta
         <DetailField label="Source">{abandonment.source?.name ?? NOT_AVAILABLE}</DetailField>
         {abandonment.recoveredAt ? <DetailField label="Recovered">{formatDateTime(abandonment.recoveredAt)}</DetailField> : null}
       </DetailGrid>
+
+      {abandonment.addresses ? <DeliveryAddressSection addresses={abandonment.addresses} /> : null}
+      {showPreviousOrders && abandonment.previousOrders ? <PreviousOrdersSection previousOrders={abandonment.previousOrders} /> : null}
 
       <div className="space-y-3 border-t border-border/60 pt-3">
         <h4 className="text-sm font-semibold">Recovery History</h4>

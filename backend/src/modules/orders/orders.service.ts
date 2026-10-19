@@ -1,29 +1,45 @@
 import { randomUUID } from "node:crypto";
+import { resolveAddressForLead, type AddressSource, type ResolvedAddress } from "./orders.address-resolver.js";
 import { prisma } from "@/lib/prisma.js";
+import { logger } from "@/utils/logger.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, OrderStatus, Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { getLeadScope, getManagerTeam, type DbClient } from "@/lib/leadScope.js";
+import { getLeadScope, getManagerTeam, getOrderFlowScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
-import { ShopifyClient } from "../shopify/shopify.client.js";
+import { ShopifyApiError, ShopifyClient } from "../shopify/shopify.client.js";
+import { hashOrderRequest, IDEMPOTENCY_COMPLETED, IDEMPOTENCY_ORDER_CREATED, idempotencyTuning, IdempotencyRaceLost, ORDER_CREATE_OPERATION, sleep } from "./orders.idempotency.js";
 import { loadShopifyConfig, ShopifyConfigError } from "../shopify/shopify.config.js";
 import { fromCents, normalizeShopifyOrderId, toCents } from "../shopify/shopify.money.js";
 import { toShopifyOrderGid } from "../shopify/shopify.orders.write.js";
 import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopify/shopify.orders.js";
-import { cancelShopifyOrder, createShopifyOrder, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
+import { sanitizeSyncError, syncAdvice } from "../shopify/shopify.sync-status.js";
+import type { ShopifySyncRecord } from "./orders.types.js";
+import { buildShopifyOrderPayload, type CrmOrderForShopify } from "../shopify/shopify.order-mapping.js";
+import { resolveShopifyCustomer } from "../shopify/shopify.order-customer.js";
+import { addShopifyOrderTags, repairAndVerify, verifyShopifyOrder, cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
+import { ABANDONMENT_WORK_ROLES, abandonmentLeadScope } from "../abandonment/abandonment.filters.js";
+import { UUID_PATTERN } from "../integrations/integrations.common.js";
 import DiscountsService, { type ResolvedDiscount } from "../discounts/discounts.service.js";
 import { clearLiveOrderCaches } from "./orders.live.service.js";
+import { shippingChargeCents } from "./orders.shipping.js";
+
+/** How recent an identical order for the same customer has to be to be treated as "probably the same sale entered twice" (see assertNoRecentTwin). */
+const RECENT_TWIN_WINDOW_MS = 60 * 60_000;
+const SUPERSEDE_REASON_PREFIX = "Replaced by";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
 import { getWhatsAppPaymentOptions, recordWhatsAppConsent, validateWhatsAppPaymentSend, type WhatsAppPaymentOptions } from "./orders.whatsapp-payment.js";
 import { confirmationTagFor, recordConfirmation, syncConfirmationTag, type ConfirmationTagSyncResult } from "./orders.confirmation.js";
+import { creatorOf, creatorTagFor, resolveCreatorSnapshot, syncCreatorTag, type CreatorTagSyncResult } from "./orders.creator-tag.js";
 import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
+import { sendPaymentQr } from "../whatsapp/whatsapp.payment-qr.js";
 import { loadOrderRefundInfo } from "../refunds/refunds.service.js";
 import {
   buildOrderWhere,
@@ -38,7 +54,6 @@ import {
 import {
   ORDER_REFERENCE_TYPE,
   type CancelOrderInput,
-  type LastShippingAddress,
   type CancelOrderResult,
   type RevertCancellationResult,
   type CreateManualOrderInput,
@@ -209,6 +224,85 @@ function summarizePaymentLink(payments: { status: string; externalSource: string
 const unitDims = (r: { lengthCm: { toString(): string } | null; widthCm: { toString(): string } | null; heightCm: { toString(): string } | null }) =>
   r.lengthCm && r.widthCm && r.heightCm ? { lengthCm: r.lengthCm.toString(), widthCm: r.widthCm.toString(), heightCm: r.heightCm.toString() } : null;
 
+const SHOPIFY_PUSH_SELECT = {
+    id: true,
+    orderNumber: true,
+    currency: true,
+    discountAmount: true,
+    subtotal: true,
+    shippingAmount: true,
+    taxAmount: true,
+    totalAmount: true,
+    metadata: true,
+    externalSource: true,
+    externalId: true,
+    externalNumber: true,
+    shippingAddress: true,
+    shippingPincode: true,
+    discountReason: true,
+    conversation: { select: { id: true } },
+    lead: { select: { firstName: true, lastName: true, leadNumber: true, mobile: true, normalizedMobile: true, email: true } },
+    items: {
+      select: {
+        quantity: true,
+        unitPrice: true,
+        productNameSnapshot: true,
+        variantNameSnapshot: true,
+        skuSnapshot: true,
+        product: { select: { externalId: true, type: true } },
+        variant: { select: { externalId: true, externalSource: true } },
+      },
+    },
+    payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" }, take: 1 },
+} as const satisfies Prisma.OrderSelect;
+type PushOrder = Prisma.OrderGetPayload<{ select: typeof SHOPIFY_PUSH_SELECT }>;
+
+/** The ONE place the Shopify payload for a CRM order is prepared - used by the first push, a retry and a re-sync, so they can never disagree. */
+async function prepareShopifyPayload(order: PushOrder, client: ShopifyClient) {
+    // Only when the CRM's own figures add up (items - discount + shipping + tax = total, and no tax that Shopify would not compute) can the Shopify order be made to match; otherwise it is created
+    // exactly as before and NOT claimed to match, so the payment sync keeps its safe reconciliation (and refuses a mismatch).
+    const cents = (v: { toString(): string }) => toCents(v.toString());
+    const itemsCents = order.items.reduce((sum, i) => sum + cents(i.unitPrice) * i.quantity, 0);
+    const crmFiguresAddUp = Number(order.taxAmount) === 0 && itemsCents === cents(order.subtotal) && itemsCents - cents(order.discountAmount) + cents(order.shippingAmount) === cents(order.totalAmount);
+    const extras = crmFiguresAddUp && (cents(order.discountAmount) > 0 || cents(order.shippingAmount) > 0);
+
+    // Which Shopify customer (if any) this order belongs to - verified on phone / real e-mail only; never guessed.
+    const addressRecord = (order.shippingAddress ?? null) as Record<string, unknown> | null;
+    const customerDecision = await resolveShopifyCustomer(client, order.lead, typeof addressRecord?.name === "string" ? addressRecord.name : null);
+
+    // ONE mapping layer builds the whole payload (customer, shipping + billing address, items with shipping-required, discount, tags, note, metafields) - see shopify.order-mapping.ts.
+    const crmForShopify: CrmOrderForShopify = {
+      orderNumber: order.orderNumber,
+      currency: order.currency,
+      subtotal: order.subtotal.toString(),
+      discountAmount: fromCents(cents(order.discountAmount)),
+      discountReason: order.discountReason,
+      shippingAmount: fromCents(cents(order.shippingAmount)),
+      taxAmount: order.taxAmount.toString(),
+      totalAmount: order.totalAmount.toString(),
+      shippingAddress: addressRecord,
+      shippingPincode: order.shippingPincode,
+      metadata: (order.metadata as Record<string, unknown> | null) ?? null,
+      paymentMethod: order.payments[0]?.method ?? null,
+      paymentSucceeded: order.payments[0]?.status === "SUCCESS",
+      settleAfterCreate: ((order.metadata as Record<string, unknown> | null)?.paymentMode) === "PREPAID",
+      fromAiConversation: Boolean(order.conversation),
+      lead: { firstName: order.lead.firstName, lastName: order.lead.lastName, leadNumber: order.lead.leadNumber, email: order.lead.email, normalizedMobile: order.lead.normalizedMobile, mobile: order.lead.mobile },
+      items: order.items.map((item) => ({
+        quantity: item.quantity,
+        unitPrice: item.unitPrice.toString(),
+        productName: item.productNameSnapshot,
+        variantName: item.variantNameSnapshot,
+        sku: item.skuSnapshot,
+        // Only a variant that really came from Shopify has a Shopify variant id; anything else is sent as a custom line item.
+        shopifyVariantId: item.variant?.externalId && item.variant.externalSource === "SHOPIFY" ? item.variant.externalId : null,
+        physical: item.product?.type !== "SERVICE",
+      })),
+    };
+    const built = buildShopifyOrderPayload(crmForShopify, { figuresMirror: Boolean(extras), customer: customerDecision.customer, customerNote: customerDecision.note });
+    return { built, customerDecision, extras, crmFiguresAddUp, cents };
+}
+
 class OrdersService {
   // getShopifyClient is injectable so tests never construct a real client (which would read real
   // env credentials) - same "factory the constructor can override" shape as WhatsAppMessagingService's
@@ -224,12 +318,28 @@ class OrdersService {
     private readonly getCashfree: () => CashfreeOps = () => new CashfreePaymentsService(),
     // Real WhatsApp sends by default; tests inject trivial stubs so order-creation tests never touch
     // WhatsApp/Meta/template resolution at all.
-    private readonly notify: { confirmation: typeof notifyOrderConfirmation; paymentLink: typeof notifyPaymentLink } = { confirmation: notifyOrderConfirmation, paymentLink: notifyPaymentLink },
+    private readonly notify: { confirmation: typeof notifyOrderConfirmation; paymentLink: typeof notifyPaymentLink; paymentQr?: typeof sendPaymentQr } = { confirmation: notifyOrderConfirmation, paymentLink: notifyPaymentLink, paymentQr: sendPaymentQr },
   ) {}
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
+    return this.listOrdersWhere(user, query);
+  }
+
+  /**
+   * "My Orders": only the orders THIS user created (Order.createdById = the authenticated user), enforced in the database query. The id comes from the verified session and from
+   * nothing else - no request parameter can name another creator, and every other filter can only narrow the result further. An order that was merely assigned to the user, or that belongs
+   * to one of their customers, or that was synced from Shopify (no creator), is not included.
+   */
+  async listMyOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
+    // Salesperson-only (the route enforces it too): the page exists for the people who create orders as part of their own work.
+    if (user.role !== Role.SALESPERSON) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
+    return this.listOrdersWhere(user, query, { createdById: user.id });
+  }
+
+  private async listOrdersWhere(user: AuthUser, query: ListOrdersQuery, mustMatch?: Prisma.OrderWhereInput): Promise<OrderListResult> {
     const leadScope = await getLeadScope(user, this.db);
-    const where = buildOrderWhere(query, orderVisibilityScope(user.role, leadScope));
+    const base = buildOrderWhere(query, orderVisibilityScope(user.role, leadScope));
+    const where: Prisma.OrderWhereInput = mustMatch ? { AND: [base, mustMatch] } : base;
 
     const [totalItems, rows] = await Promise.all([
       this.db.order.count({ where }),
@@ -274,6 +384,24 @@ class OrdersService {
         totalPages: Math.ceil(totalItems / query.pageSize),
       },
     };
+  }
+
+  /**
+   * "View Customer Details" on an order opens the customer's ABANDONED LEAD page. Which one: the checkout this order was created from (Order.metadata.abandonment.id) when it still belongs to
+   * this customer, otherwise the customer's most recent one. Only a checkout of THIS order's customer and inside THIS viewer's abandonment scope is ever returned (the same rule as the abandoned
+   * leads queue); anything else is null and the page shows a clear message instead of opening somebody else's lead.
+   */
+  private async openableAbandonmentId(user: AuthUser, leadId: string, metadata: unknown): Promise<string | null> {
+    if (!ABANDONMENT_WORK_ROLES.includes(user.role)) return null;
+    const scope = abandonmentLeadScope(user);
+    const where: Prisma.AbandonmentWhereInput = { leadId, ...(Object.keys(scope).length > 0 ? { lead: scope } : {}) };
+    const fromOrder = (metadata as { abandonment?: { id?: unknown } } | null | undefined)?.abandonment?.id;
+    if (typeof fromOrder === "string" && UUID_PATTERN.test(fromOrder)) {
+      const exact = await this.db.abandonment.findFirst({ where: { ...where, id: fromOrder }, select: { id: true } });
+      if (exact) return exact.id;
+    }
+    const latest = await this.db.abandonment.findFirst({ where, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], select: { id: true } });
+    return latest?.id ?? null;
   }
 
   async getOrder(user: AuthUser, id: string, opts: { approverScope?: boolean } = {}): Promise<OrderDetail> {
@@ -338,6 +466,11 @@ class OrdersService {
       confirmedBy: order.confirmedByUserId && order.confirmedByName ? { id: order.confirmedByUserId, name: order.confirmedByName } : null,
       confirmationTag: order.confirmedByUserId && order.confirmedByName ? confirmationTagFor(order.confirmedByName) : null,
       shopifyConfirmationTag: ((order.metadata as Record<string, unknown> | null)?.shopifyConfirmationTag as OrderDetail["shopifyConfirmationTag"] | undefined) ?? null,
+      // Who created the order (the snapshot stored at creation) and the matching "Order Created by <name>" tag - the same for every viewer, never the viewer's own name.
+      createdByUser: creatorOf(order.metadata) ? { id: creatorOf(order.metadata)!.id, name: creatorOf(order.metadata)!.name } : null,
+      creatorTag: creatorOf(order.metadata) ? creatorTagFor(creatorOf(order.metadata)!.name) : null,
+      shopifyCreatorTag: ((order.metadata as Record<string, unknown> | null)?.shopifyCreatorTag as OrderDetail["shopifyCreatorTag"] | undefined) ?? null,
+      shopifySync: ((order.metadata as Record<string, unknown> | null)?.shopifySync as OrderDetail["shopifySync"] | undefined) ?? null,
       createdAt: order.createdAt,
       placedAt: order.placedAt,
       confirmedAt: order.confirmedAt,
@@ -356,6 +489,7 @@ class OrdersService {
         name: fullName(order.lead.firstName, order.lead.lastName),
         mobile: order.lead.mobile,
         email: order.lead.email,
+        abandonmentId: await this.openableAbandonmentId(user, order.lead.id, order.metadata),
       },
       leadSource: order.lead.source,
       bookedBy: order.createdBy,
@@ -427,41 +561,172 @@ class OrdersService {
   // (Shopify sync) writes, so it appears through listOrders/getOrder/Customer 360 automatically -
   // there is no separate WhatsApp-only order record. source: SALESPERSON marks it as staff-entered,
   // the same value a human-created order already used before this method existed.
-  // In-memory, per-process guard against a double submit (double-click, double Enter, a client retry
-  // racing its own first attempt) - not a durable/cross-instance idempotency key. This module has no
-  // request-level idempotency table, and adding one is a genuine schema change; a real double-click is
-  // a same-process, sub-second race, which this closes completely without one. If this API is ever
-  // served from multiple processes/instances behind a load balancer, or a client could plausibly retry
-  // after a process restart, a persisted key would be needed - flagged here, not decided unilaterally.
-  // `OrdersService` is constructed once per process (see orders.controller.ts's module-level
-  // `ordersService`), so a static Map survives across requests within that one process.
-  private static readonly idempotencyCache = new Map<string, Promise<CreateManualOrderResult>>();
-  private static readonly IDEMPOTENCY_TTL_MS = 5 * 60_000;
+  // Duplicate protection for a retried / double-submitted order request. The truth is the database: an `idempotency_keys` row
+  // (unique per actor + operation + client key) is written in the SAME transaction that creates the order, so two simultaneous
+  // requests - in this process, another process or another server - can never both create one; the loser reads the winner's order.
+  // Surviving a restart or a client retry after a timeout is the same mechanism (the row is durable). The per-process map below is
+  // only an optimisation: it lets a same-process double click wait for its twin instead of racing it to the unique index.
+  private static readonly inFlight = new Map<string, Promise<CreateManualOrderResult>>();
 
   async createManualOrder(user: AuthUser, input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
     if (!input.idempotencyKey) return this.createManualOrderOnce(user, input);
 
-    // Scoped per-user so one caller's key can never collide with another's.
-    const key = `${user.id}:${input.idempotencyKey}`;
-    const existing = OrdersService.idempotencyCache.get(key);
-    if (existing) return existing;
-
-    const promise = this.createManualOrderOnce(user, input);
-    OrdersService.idempotencyCache.set(key, promise);
-    // A failed attempt must be retryable immediately (never cache a rejection) - and a successful one
-    // only needs to survive long enough to absorb a fast repeat click/Enter, not forever.
-    promise.then(
-      () => setTimeout(() => OrdersService.idempotencyCache.delete(key), OrdersService.IDEMPOTENCY_TTL_MS).unref(),
-      () => OrdersService.idempotencyCache.delete(key),
-    );
+    const mapKey = `${user.id}:${input.idempotencyKey}`;
+    const running = OrdersService.inFlight.get(mapKey);
+    if (running) return running.then(() => this.createWithKey(user, input), () => this.createWithKey(user, input));
+    const promise = this.createWithKey(user, input);
+    OrdersService.inFlight.set(mapKey, promise);
+    const clear = () => {
+      if (OrdersService.inFlight.get(mapKey) === promise) OrdersService.inFlight.delete(mapKey);
+    };
+    promise.then(clear, clear);
     return promise;
   }
 
-  private async createManualOrderOnce(user: AuthUser, input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
-    const leadScope = await getLeadScope(user, this.db);
+  /**
+   * Cancels the earlier UNPAID prepaid order that a new order replaces, through the normal cancel workflow (which cancels its Cashfree link at the provider). Refuses anything that could collect money or
+   * is not the caller's to replace: another customer's order, an order that is paid / being paid, a COD order, or one the caller did not create (managers and admins may replace any). If the old payment
+   * link cannot be cancelled the new order is NOT created, so two payable links never exist for one purchase. A retry after a failure finds the order already replaced and carries on.
+   */
+  private async supersedeUnpaidOrder(user: AuthUser, leadId: string, newIsCod: boolean, oldOrderId: string): Promise<void> {
+    if (newIsCod) throw new ApiError("Only a prepaid order can replace an unpaid prepaid order", STATUS_CODES.BAD_REQUEST);
+    const old = await this.db.order.findFirst({ where: { id: oldOrderId, leadId }, select: { id: true, status: true, createdById: true, cancelReason: true, metadata: true, payments: { select: { status: true } } } });
+    if (!old) throw new ApiError("The order to replace was not found for this customer", STATUS_CODES.NOT_FOUND);
+    if (!(user.role === "ADMIN" || user.role === "MANAGER" || old.createdById === user.id)) throw new ApiError("You can only replace an order you created", STATUS_CODES.FORBIDDEN);
+    if (old.status === "CANCELLED" && String(old.cancelReason ?? "").startsWith(SUPERSEDE_REASON_PREFIX)) return; // an earlier attempt already replaced it
+    const unpaid = old.status === "PENDING_PAYMENT" && (old.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID" && !old.payments.some((p) => p.status === "SUCCESS" || p.status === "PROCESSING");
+    if (!unpaid) throw new ApiError("That order cannot be replaced: it is already paid, being paid, or no longer awaiting payment", STATUS_CODES.CONFLICT);
+    const cancelled = await this.cancelOrder(user, old.id, { reason: `${SUPERSEDE_REASON_PREFIX} a new order for the same items (price or discount changed)` }, { approverScope: true });
+    if (cancelled.paymentLink.status === "failed") throw new ApiError("The old order was cancelled but its payment link could not be cancelled, so no new order was created. Retry in a moment.", STATUS_CODES.SERVICE_UNAVAILABLE);
+  }
+
+  private async assertNoRecentTwin(leadId: string, want: { isCod: boolean; totalCents: number; items: { productId: string | null; variantId: string | null; quantity: number }[] }): Promise<void> {
+    const since = new Date(Date.now() - RECENT_TWIN_WINDOW_MS);
+    const signature = (items: { productId: string | null; variantId: string | null; quantity: number }[]) => items.map((i) => `${i.productId ?? ""}|${i.variantId ?? ""}|${i.quantity}`).sort().join(",");
+    const recent = await this.db.order.findMany({
+      where: { leadId, createdAt: { gte: since }, status: { not: "CANCELLED" } },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: { id: true, orderNumber: true, status: true, totalAmount: true, createdAt: true, metadata: true, items: { select: { productId: true, variantId: true, quantity: true } } },
+    });
+    const mode = want.isCod ? "COD" : "PREPAID";
+    const twin = recent.find((o) => (o.metadata as Record<string, unknown> | null)?.paymentMode === mode && toCents(o.totalAmount.toString()) === want.totalCents && signature(o.items) === signature(want.items));
+    // The same items for the same customer, still awaiting payment, but at a DIFFERENT total: the price or discount was changed and the order entered again. Not an exact twin, so it used to slip through
+    // and leave two live orders (and two payable links) for one purchase. It is offered as a replacement of the unpaid order instead.
+    const repriced = twin ? undefined : want.isCod ? undefined : recent.find((o) => o.status === "PENDING_PAYMENT" && (o.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID" && signature(o.items) === signature(want.items));
+    if (repriced) {
+      const ago = Math.max(Math.round((Date.now() - repriced.createdAt.getTime()) / 60_000), 0);
+      throw new ApiError(
+        `Order ${repriced.orderNumber} for this customer (${ago} minute${ago === 1 ? "" : "s"} ago, same items, awaiting payment at ${repriced.totalAmount.toString()}) is still open. If you only changed the price or discount, replace it: the old order and its payment link are cancelled and this one takes its place. Otherwise confirm that this is a separate purchase.`,
+        STATUS_CODES.CONFLICT,
+        { code: "POSSIBLE_DUPLICATE_ORDER", orderNumber: repriced.orderNumber, status: repriced.status, minutesAgo: ago, orderId: repriced.id, supersedable: true },
+      );
+    }
+    if (!twin) return;
+    const minutesAgo = Math.max(Math.round((Date.now() - twin.createdAt.getTime()) / 60_000), 0);
+    throw new ApiError(
+      `A matching order (${twin.orderNumber}, ${twin.status.toLowerCase().replace("_", " ")}) was already created for this customer ${minutesAgo} minute${minutesAgo === 1 ? "" : "s"} ago. Open that order instead, or confirm that this is a separate purchase.`,
+      STATUS_CODES.CONFLICT,
+      { code: "POSSIBLE_DUPLICATE_ORDER", orderNumber: twin.orderNumber, status: twin.status, minutesAgo },
+    );
+  }
+
+  private idempotencyWhere(userId: string, key: string) {
+    return { userId_operation_key: { userId, operation: ORDER_CREATE_OPERATION, key } };
+  }
+
+  private async createWithKey(user: AuthUser, input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
+    const key = input.idempotencyKey!;
+    const hash = hashOrderRequest(input);
+    const existing = await this.db.idempotencyKey.findUnique({ where: this.idempotencyWhere(user.id, key) });
+    if (existing) return this.replayOrder(user, input, existing, hash);
+    try {
+      const result = await this.createManualOrderOnce(user, input, { key, hash });
+      await this.completeIdempotency(user.id, key, result);
+      return result;
+    } catch (error) {
+      if (!(error instanceof IdempotencyRaceLost)) throw error; // anything else: nothing was committed under this key, so the same key can simply be retried
+      const winner = await this.db.idempotencyKey.findUnique({ where: this.idempotencyWhere(user.id, key) });
+      if (!winner) throw error;
+      return this.replayOrder(user, input, winner, hash);
+    }
+  }
+
+  private async completeIdempotency(userId: string, key: string, result: CreateManualOrderResult): Promise<void> {
+    const stored = JSON.parse(JSON.stringify({ shopify: result.shopify, paymentLink: result.paymentLink, whatsapp: result.whatsapp }));
+    await this.db.idempotencyKey.updateMany({ where: { userId, operation: ORDER_CREATE_OPERATION, key, status: { not: IDEMPOTENCY_COMPLETED } }, data: { status: IDEMPOTENCY_COMPLETED, result: stored } });
+  }
+
+  // A repeat of a request that already created an order. Same key + different request is refused; a finished request is answered with the
+  // ORIGINAL order; one still running elsewhere is waited for; one that was interrupted (crash, timeout, lost Shopify answer) is reconciled -
+  // never repeated - so no second CRM order, Shopify order or notification can result.
+  private async replayOrder(user: AuthUser, input: CreateManualOrderInput, row: { requestHash: string; orderId: string | null; status: string; result: unknown }, hash: string): Promise<CreateManualOrderResult> {
+    if (row.requestHash !== hash) {
+      throw new ApiError("This idempotency key was already used for a different order request. Resend the original request, or use a new key for a new order.", 422);
+    }
+    if (!row.orderId) throw new ApiError("The original request has no order to return", STATUS_CODES.CONFLICT);
+    const key = input.idempotencyKey!;
+    let current = row;
+    const deadline = Date.now() + idempotencyTuning.replayWaitMs;
+    while (current.status !== IDEMPOTENCY_COMPLETED && Date.now() < deadline) {
+      await sleep(idempotencyTuning.pollMs);
+      const fresh = await this.db.idempotencyKey.findUnique({ where: this.idempotencyWhere(user.id, key) });
+      if (fresh) current = fresh;
+    }
+    if (current.status !== IDEMPOTENCY_COMPLETED) {
+      await this.finishInterrupted(user, input, current.orderId!);
+      const fresh = await this.db.idempotencyKey.findUnique({ where: this.idempotencyWhere(user.id, key) });
+      if (fresh) current = fresh;
+    }
+    const order = await this.getOrder(user, current.orderId!); // scoped: a user who cannot see this order never gets it
+    const stored = (current.result && typeof current.result === "object" ? current.result : {}) as { shopify?: ShopifyPushResult; paymentLink?: OrderPaymentLinkResult | null; whatsapp?: OrderNotifyResult };
+    // The original answer said the Shopify step FAILED (possibly an ambiguous one: a timeout after Shopify had created the order). Retrying the same request
+    // reconciles that step - through the claim and the lookup by source identifier, never a blind second create - and remembers the outcome.
+    if (stored.shopify?.status === "failed") {
+      const unlinked = await this.db.order.findUnique({ where: { id: order.id }, select: { externalId: true } });
+      if (!unlinked?.externalId) {
+        stored.shopify = await this.pushOrderToShopify(user, order.id);
+        await this.db.idempotencyKey.updateMany({ where: { userId: user.id, operation: ORDER_CREATE_OPERATION, key }, data: { result: JSON.parse(JSON.stringify(stored)) } });
+      }
+    }
+    const linked = await this.db.order.findUnique({ where: { id: order.id }, select: { externalId: true, externalNumber: true } });
+    const shopify: ShopifyPushResult =
+      linked?.externalId && stored.shopify?.status !== "created"
+        ? { status: "already_linked", shopifyOrderId: linked.externalId, shopifyOrderName: linked.externalNumber ?? undefined }
+        : (stored.shopify ?? { status: "failed", reason: "Shopify status unknown for this request" });
+    return { order, shopify, paymentLink: stored.paymentLink ?? null, whatsapp: stored.whatsapp ?? { sent: false, via: null, provider: null, reason: "Nothing to notify for this payment method." } };
+  }
+
+  // The original request committed the order but never finished its follow-ups (process crash, client timeout, lost Shopify answer).
+  // Finish them ONCE, idempotently: the Shopify link goes through the claim + lookup-by-source-identifier path (never a blind second
+  // create), a prepaid order's payment link is the existing reuse-or-create, and notifications are NOT resent (they may already have gone).
+  private async finishInterrupted(user: AuthUser, input: CreateManualOrderInput, orderId: string): Promise<void> {
+    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
+    let paymentLink: OrderPaymentLinkResult | null = null;
+    if (input.paymentMethod === "PAYMENT_LINK") {
+      try {
+        const link = await this.getCashfree().createPaymentLink(user, orderId);
+        paymentLink = { status: link.reused ? "reused" : "created", paymentId: link.paymentId, paymentUrl: link.paymentUrl, expiresAt: link.expiresAt };
+      } catch (error) {
+        paymentLink = { status: "failed", reason: error instanceof Error ? error.message : "Could not create a Cashfree payment link" };
+      }
+    }
+    const result = { shopify, paymentLink, whatsapp: { sent: false, via: null, provider: null, reason: "Completed on a retry: the original request was interrupted, so notifications were not repeated." } } as CreateManualOrderResult;
+    await this.completeIdempotency(user.id, input.idempotencyKey!, result);
+  }
+
+  private async createManualOrderOnce(user: AuthUser, input: CreateManualOrderInput, idem?: { key: string; hash: string }): Promise<CreateManualOrderResult> {
+    const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, leadScope), select: { id: true, normalizedMobile: true } });
     // Out-of-scope reads the same as missing, same convention as every other single-lead lookup.
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
+    // An order created from an abandoned checkout: that checkout must be THIS customer's (never another lead's cart), or the request is refused.
+    let abandonmentRef: { id: string; referenceId: string | null } | null = null;
+    if (input.abandonmentId) {
+      const checkout = await this.db.abandonment.findFirst({ where: { id: input.abandonmentId, leadId: lead.id }, select: { id: true, referenceId: true } });
+      if (!checkout) throw new ApiError("Abandoned checkout not found for this customer", STATUS_CODES.NOT_FOUND);
+      abandonmentRef = checkout;
+    }
 
     // "Send via WhatsApp": number, consent and template are validated BEFORE anything is created, so a telecaller who can fix it is told
     // at once and no order is left half-done. (A send that fails AFTER the order exists is handled below and never undoes it.)
@@ -474,7 +739,10 @@ class OrdersService {
     });
     const productById = new Map(products.map((p) => [p.id, p]));
 
-    const itemRows = input.items.map((item) => {
+    // Lines are read back ordered by createdAt, then id; rows inserted together tie on createdAt and the random id would then shuffle them.
+    // A strictly increasing createdAt per line keeps the order the salesperson entered (message, Shopify lines, order page).
+    const itemsCreatedAt = Date.now();
+    const itemRows = input.items.map((item, index) => {
       const product = productById.get(item.productId);
       if (!product) throw new ApiError(`Product not found: ${item.productId}`, STATUS_CODES.BAD_REQUEST);
       const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
@@ -483,6 +751,7 @@ class OrdersService {
       const lineTotalCents = toCents(item.unitPrice) * item.quantity - toCents(item.discountAmount);
       return {
         id: randomUUID(),
+        createdAt: new Date(itemsCreatedAt + index),
         productId: product.id,
         variantId: variant?.id ?? null,
         productNameSnapshot: product.name,
@@ -508,15 +777,27 @@ class OrdersService {
     }
     const percentDiscount = input.discountPercent !== undefined ? computePercentDiscount(subtotalCents - itemDiscountCents, input.discountPercent) : null;
     // New selection model: resolved here against the live Fastrr offers and the real subtotal (items after line discounts).
-    const selected: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents) : null;
+    const resolvedDiscount: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents) : null;
+    // Billing rules, decided HERE (the browser's figures are only a preview):
+    //  - the configured default discount (Rs 50 unless the business changes it) is a PREPAID promotion: it never applies to a COD order. A discount chosen on purpose
+    //    (a Fastrr coupon, or a custom value that is not the default) is not "automatic" and is left exactly as it was;
+    //  - shipping is a flat rule (orders.shipping.ts): COD pays exactly INR 50, once per order; a prepaid order is always shipped free. The shippingAmount the request carried
+    //    (a courier quote, or a manipulated value) is IGNORED - the order row, the Cashfree/WhatsApp amounts and the Shopify payload all read what is computed here.
+    const isCod = input.paymentMethod === "COD";
+    const selected: ResolvedDiscount | null = resolvedDiscount && isCod && resolvedDiscount.source === "CUSTOM" && resolvedDiscount.wasDefault ? null : resolvedDiscount;
     const orderDiscountCents = selected ? selected.amountCents : percentDiscount ? percentDiscount.discountCents : toCents(input.discountAmount);
-    const shippingCents = toCents(input.shippingAmount);
+    const shippingCents = shippingChargeCents(isCod);
     const totalCents = Math.max(subtotalCents - itemDiscountCents - orderDiscountCents + shippingCents, 0);
     if (input.expectedTotal !== undefined && toCents(input.expectedTotal) !== totalCents) {
       throw new ApiError("The order total changed. Please review the order again.", STATUS_CODES.CONFLICT);
     }
 
-    const isCod = input.paymentMethod === "COD";
+    // A very recent order for this customer with the same items, total and payment mode is almost always the same sale entered twice (a second dialog, a re-entered form): ask first. A genuine second purchase
+    // is one acknowledgement away - this is a warning, never a ban, and a replay of the SAME idempotency key never gets here.
+    if (input.rejectRecentTwin) await this.assertNoRecentTwin(input.leadId, { isCod, totalCents, items: itemRows });
+    // The user chose to REPLACE an earlier unpaid order (changed price / discount): that order and its payment link are cancelled first, so only one order stays payable for the purchase.
+    if (input.supersedesOrderId) await this.supersedeUnpaidOrder(user, lead.id, isCod, input.supersedesOrderId);
+
     // Prepaid via a Cashfree payment link: no Payment row is created here (below) - CashfreePaymentsService.
     // createPaymentLink is the sole creator of that row (see the call after this transaction), so an order
     // never ends up with two rows for what is really one payment attempt.
@@ -526,10 +807,16 @@ class OrdersService {
 
     // Same "generate, try, retry on the rare collision" idiom as createLeadWithUniqueNumber -
     // orderNumber is @unique, so a clash (astronomically unlikely, but real) must never 500.
+    // Who creates this order: read from the authenticated user's own User row (never from the request) and stored on the order, so the "Order Created by <name>" tag and the
+    // audit of the creator do not depend on who is logged in later. null (user not found) -> no creator is stored and no creator tag is ever made.
+    const creator = await resolveCreatorSnapshot(this.db as never, { id: user.id, role: user.role });
     let createdOrderId: string | null = null;
     for (let attempt = 0; attempt < 5 && !createdOrderId; attempt++) {
       try {
         await this.db.$transaction(async (tx) => {
+          // FIRST statement of the transaction: claim the idempotency key. A concurrent request with the same key blocks on the unique index
+          // until this transaction commits (then loses with a unique violation) or rolls back (then proceeds): exactly one order per key.
+          if (idem) await tx.idempotencyKey.create({ data: { userId: user.id, operation: ORDER_CREATE_OPERATION, key: idem.key, requestHash: idem.hash, orderId, status: IDEMPOTENCY_ORDER_CREATED } });
           await tx.order.create({
             data: {
               id: orderId,
@@ -541,7 +828,7 @@ class OrdersService {
               subtotal: fromCents(subtotalCents),
               discountAmount: fromCents(itemDiscountCents + orderDiscountCents),
               taxAmount: "0",
-              shippingAmount: input.shippingAmount ?? "0",
+              shippingAmount: fromCents(shippingCents),
               totalAmount: fromCents(totalCents),
               discountReason: input.discountReason ?? (selected && selected.source !== "NONE" ? (selected.couponCode ? `Fastrr coupon ${selected.couponCode}` : "Custom discount") : undefined),
               shippingAddress: input.shippingAddress ?? undefined,
@@ -552,6 +839,8 @@ class OrdersService {
               metadata: {
                 paymentMode: isCod ? "COD" : "PREPAID",
                 createdVia: "WHATSAPP_INBOX",
+                ...(abandonmentRef ? { abandonment: { id: abandonmentRef.id, referenceId: abandonmentRef.referenceId } } : {}),
+                ...(creator ? { createdBy: creator as unknown as Prisma.InputJsonValue } : {}),
                 // The discount that was actually applied and why - kept on the order, so the reason for a reduced total never
                 // depends on a coupon row staying the same. originalSubtotal is the pre-discount item total.
                 ...(selected ? { discount: { originalSubtotal: fromCents(subtotalCents), discountType: selected.type, discountValue: selected.value, discountAmount: fromCents(itemDiscountCents + selected.amountCents), couponId: selected.couponId, couponCode: selected.couponCode, couponSource: selected.couponSource, source: selected.source, wasDefault: selected.wasDefault, finalTotal: fromCents(totalCents), appliedById: user.id } } : {}),
@@ -580,11 +869,17 @@ class OrdersService {
               referenceId: orderId,
               source: ActivitySource.USER,
               title: "Order created from WhatsApp Inbox",
+              ...(abandonmentRef ? { description: "Created from an abandoned checkout" } : {}),
             },
           });
         });
         createdOrderId = orderId;
       } catch (error: any) {
+        if (error?.code === "P2002" && idem) {
+          // A unique violation is either the idempotency key (another request committed it first) or the order number (collision).
+          const winner = await this.db.idempotencyKey.findUnique({ where: this.idempotencyWhere(user.id, idem.key) });
+          if (winner && winner.orderId !== orderId) throw new IdempotencyRaceLost();
+        }
         if (error?.code === "P2002" && attempt < 4) continue; // orderNumber collision - retry with a new one
         throw error;
       }
@@ -595,7 +890,8 @@ class OrdersService {
     // what happens here. A Shopify failure is reported, never hidden, and never rolls back or
     // duplicates the CRM order - retrying just calls pushOrderToShopify again (see there for why
     // that's always safe).
-    const shopify = await this.pushOrderToShopify(user, createdOrderId);
+    // PREPAID: the CRM order is only a payment request (PENDING_PAYMENT) until Cashfree verifies the payment; the Shopify order is created then (see orders.prepaid-confirm.ts). COD is pushed at once, as before.
+    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
     const order = await this.getOrder(user, createdOrderId);
 
     // Prepaid: create exactly one Cashfree payment link for this order (best-effort - see
@@ -614,6 +910,8 @@ class OrdersService {
           whatsapp = link.paymentUrl
             ? await this.notify.paymentLink(this.db, user, { leadId: lead.id, orderId: createdOrderId, normalizedMobile: lead.normalizedMobile, orderNumber: order.orderNumber, paymentUrl: link.paymentUrl, amount: link.amount, currency: link.currency, customerName: order.customer.name, items: messageItems(order), ...(whatsappSend?.templateId ? { templateId: whatsappSend.templateId } : {}) })
             : { sent: false, via: null, provider: null, reason: "The payment link has no URL yet." };
+          // The link text went out: send its QR image too (a separate message with its own outcome - a failure here never undoes or hides the link, and the retry reuses this same payment link).
+          if (whatsapp.sent && link.paymentId && this.notify.paymentQr) whatsapp = { ...whatsapp, qr: await this.notify.paymentQr(this.db, user, link.paymentId) };
           // A requested send that did not go through says so plainly; the order and its payment link are kept for the retry.
           if (whatsappSend && !whatsapp.sent && whatsapp.reason && !whatsapp.reason.startsWith("Payment link not sent")) whatsapp = { ...whatsapp, reason: `Payment link not sent — ${whatsapp.reason}` };
         }
@@ -634,29 +932,21 @@ class OrdersService {
   // What the Create Order screen needs for "Send via WhatsApp": the approved Meta payment templates, the customer's recorded WhatsApp consent
   // and whether they have a number. Lead-scoped like every other single-lead lookup; no provider ids or secrets are returned.
   async getWhatsAppPaymentOptions(user: AuthUser, leadId: string): Promise<WhatsAppPaymentOptions> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true, normalizedMobile: true } });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
     return getWhatsAppPaymentOptions(this.db, lead);
   }
 
-  // Prefill for the Create Order form: the shipping address of this customer's most recent order that has one. Leads carry
-  // no address of their own, so a previous order is the only saved address there is. Read-only, lead-scoped like every
-  // other single-lead lookup (out of scope reads as "not found"). Understands both stored shapes: the CRM's own
-  // (line1/state/pincode) and a Shopify-synced order's (address1/province/zip).
-  async getLastShippingAddress(user: AuthUser, leadId: string): Promise<{ address: LastShippingAddress | null }> {
-    const leadScope = await getLeadScope(user, this.db);
+  // Prefill for the Create Order form. The shared resolver (orders.address-resolver.ts) reads the SELECTED customer's latest order address - CRM or Shopify-synced, any stored field
+  // naming - then the address they typed at checkout, then another lead record of the same person; never a different customer who merely shares the phone number. Read-only and
+  // lead-scoped like every other single-lead lookup (out of scope reads as "not found").
+  async getLastShippingAddress(user: AuthUser, leadId: string): Promise<{ address: ResolvedAddress | null; source: AddressSource | null }> {
+    const leadScope = await getOrderFlowScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: { id: true } });
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
-    const orders = await this.db.order.findMany({ where: { leadId: lead.id }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 10, select: { shippingAddress: true, shippingPincode: true } });
-    for (const o of orders) {
-      const a = (o.shippingAddress ?? null) as Record<string, string | null | undefined> | null;
-      if (!a) continue;
-      const pick = (...keys: string[]) => keys.map((k) => (typeof a[k] === "string" ? a[k]!.trim() : "")).find(Boolean) ?? "";
-      const address = { name: pick("name"), line1: pick("line1", "address1"), line2: pick("line2", "address2"), city: pick("city"), state: pick("state", "province"), pincode: pick("pincode", "zip") || (o.shippingPincode ?? ""), phone: pick("phone"), houseNumber: pick("houseNumber"), building: pick("building"), area: pick("area"), street: pick("street"), landmark: pick("landmark"), addressType: pick("addressType") };
-      if (address.line1 || address.city || address.pincode) return { address };
-    }
-    return { address: null };
+    const { address, source } = await resolveAddressForLead(this.db, lead.id);
+    return { address, source };
   }
 
   // Pushes an already-created CRM order to Shopify via the Admin GraphQL orderCreate mutation - the
@@ -664,12 +954,42 @@ class OrdersService {
   // Idempotent by construction: once externalId is set, this only ever returns "already_linked" and
   // never calls Shopify again - the safe way to let a caller "retry" after a failure without ever
   // creating a second Shopify order for the same CRM order.
-  async pushOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
+  async pushOrderToShopify(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
     const result = await this.linkOrderToShopify(user, orderId);
     // Once the order is linked to Shopify, its "CRM Confirmed by <name>" tag is brought in line (best-effort, idempotent). This is
     // also what delivers the tag for an order that was confirmed BEFORE it was linked, whenever the link finally succeeds.
-    if (result.status === "created" || result.status === "already_linked") await this.syncConfirmationTagSafely(orderId);
+    if (result.status === "created" || result.status === "already_linked") {
+      await this.syncConfirmationTagSafely(orderId);
+      await this.syncCreatorTagSafely(orderId);
+      // A prepaid order whose payment was ALREADY verified before it reached Shopify (the normal prepaid lifecycle, or a manual retry of a failed push) is marked paid now - and only then.
+      if (result.status === "created") {
+        await this.settlePaidPrepaidOnShopify(orderId);
+        // The Orders page is a cached live Shopify list: without this a just-created order stays hidden from an already-cached page for up to the cache TTL.
+        clearLiveOrderCaches();
+      }
+    }
     return result;
+  }
+
+  /** Marks the just-created Shopify order paid, but only when the CRM holds a SUCCESSFUL (verified) payment for it. Idempotent (syncShopifyPayment is guarded). Never throws. */
+  private async settlePaidPrepaidOnShopify(orderId: string): Promise<void> {
+    try {
+      const o = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true, payments: { select: { status: true } } } });
+      const prepaid = (o?.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID";
+      if (!o || !prepaid || !o.payments.some((p) => p.status === "SUCCESS")) return;
+      await syncShopifyPayment(this.db as never, orderId, { source: ActivitySource.SYSTEM, getShopifyClient: this.getShopifyClient });
+    } catch (error) {
+      logger.warn(`Shopify payment settle failed for order ${orderId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  // Same contract as syncConfirmationTagSafely: never throws, never undoes the order; a Shopify failure is remembered on the order (Order.metadata.shopifyCreatorTag) for a retry.
+  private async syncCreatorTagSafely(orderId: string): Promise<CreatorTagSyncResult> {
+    try {
+      return await syncCreatorTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient });
+    } catch (error) {
+      return { status: "failed", reason: error instanceof Error ? error.message : "Shopify creator tag sync failed" };
+    }
   }
 
   // Never throws and never touches the confirmation itself: a Shopify failure is remembered on the order (see syncConfirmationTag)
@@ -683,44 +1003,57 @@ class OrdersService {
   }
 
   // Manual "Retry Shopify tag sync" for the order page. Re-checks Shopify even when the CRM believes the tag is in place.
-  async retryConfirmationTagSync(user: AuthUser, orderId: string): Promise<ConfirmationTagSyncResult> {
+  async retryConfirmationTagSync(user: AuthUser, orderId: string): Promise<ConfirmationTagSyncResult & { creator?: CreatorTagSyncResult }> {
     const leadScope = await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    let confirmation: ConfirmationTagSyncResult;
     try {
-      return await syncConfirmationTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
+      confirmation = await syncConfirmationTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
     } catch (error) {
-      return { status: "failed", reason: error instanceof Error ? error.message : "Shopify tag sync failed" };
+      confirmation = { status: "failed", reason: error instanceof Error ? error.message : "Shopify tag sync failed" };
+    }
+    // The same retry also re-syncs the creator tag (add-only, only if it is missing on Shopify), so one safe button repairs both tags.
+    let creatorResult: CreatorTagSyncResult;
+    try {
+      creatorResult = await syncCreatorTag(this.db as never, orderId, { getShopifyClient: this.getShopifyClient, force: true });
+    } catch (error) {
+      creatorResult = { status: "failed", reason: error instanceof Error ? error.message : "Shopify creator tag sync failed" };
+    }
+    const failed = confirmation.status === "failed" || creatorResult.status === "failed";
+    return { ...confirmation, ...(failed ? { status: "failed" as const, reason: confirmation.reason ?? creatorResult.reason } : {}), creator: creatorResult };
+  }
+
+  // Only ONE caller at a time may create the Shopify order for a CRM order (two concurrent retries could otherwise each create one before either links it).
+  // The claim is a conditional UPDATE on the order row, so it holds across processes; a claim older than the lease belongs to a dead process and is taken over.
+  private async linkOrderToShopify(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
+    const leadScope = user ? await getOrderFlowScope(user, this.db) : {}; // null = the system finishing a verified payment (no user in a webhook)
+    const visible = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, externalId: true, externalNumber: true } });
+    if (!visible) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    if (visible.externalId) return { status: "already_linked", shopifyOrderId: visible.externalId, shopifyOrderName: visible.externalNumber ?? undefined };
+    const deadline = Date.now() + idempotencyTuning.waitMs;
+    for (;;) {
+      // Taking over an EXPIRED claim (its holder died, or hung) also marks the order "uncertain": the previous holder may have got as far as creating the Shopify
+      // order, so the order is looked up by its source identifier before anything is created.
+      const claimed = await this.db.$executeRaw`UPDATE orders SET metadata = CASE WHEN metadata->>'shopifyPushClaimedAt' IS NOT NULL THEN jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), '{shopifyPushClaimedAt}', to_jsonb(now()::text)), '{shopifyCreateUncertain}', 'true'::jsonb) ELSE jsonb_set(COALESCE(metadata, '{}'::jsonb), '{shopifyPushClaimedAt}', to_jsonb(now()::text)) END WHERE id = ${orderId}::uuid AND external_id IS NULL AND (metadata->>'shopifyPushClaimedAt' IS NULL OR (metadata->>'shopifyPushClaimedAt')::timestamptz < now() - make_interval(secs => ${idempotencyTuning.leaseSeconds}))`;
+      if (claimed > 0) break;
+      const now = await this.db.order.findUnique({ where: { id: orderId }, select: { externalId: true, externalNumber: true } });
+      if (now?.externalId) return { status: "already_linked", shopifyOrderId: now.externalId, shopifyOrderName: now.externalNumber ?? undefined };
+      if (Date.now() >= deadline) return { status: "failed", reason: "A Shopify sync for this order is already running. Try again in a moment." };
+      await sleep(idempotencyTuning.pollMs);
+    }
+    try {
+      return await this.linkOrderToShopifyClaimed(user, orderId);
+    } finally {
+      await this.db.$executeRaw`UPDATE orders SET metadata = metadata - 'shopifyPushClaimedAt' WHERE id = ${orderId}::uuid AND metadata ? 'shopifyPushClaimedAt'`;
     }
   }
 
-  private async linkOrderToShopify(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
-    const leadScope = await getLeadScope(user, this.db);
+  private async linkOrderToShopifyClaimed(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
+    const leadScope = user ? await getOrderFlowScope(user, this.db) : {};
     const order = await this.db.order.findFirst({
       where: scopedOrderWhere(orderId, leadScope),
-      select: {
-        id: true,
-        orderNumber: true,
-        currency: true,
-        discountAmount: true,
-        totalAmount: true,
-        externalSource: true,
-        externalId: true,
-        externalNumber: true,
-        shippingAddress: true,
-        shippingPincode: true,
-        lead: { select: { firstName: true, lastName: true, mobile: true, normalizedMobile: true, email: true } },
-        items: {
-          select: {
-            quantity: true,
-            unitPrice: true,
-            productNameSnapshot: true,
-            product: { select: { externalId: true } },
-            variant: { select: { externalId: true, externalSource: true } },
-          },
-        },
-        payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" }, take: 1 },
-      },
+      select: SHOPIFY_PUSH_SELECT,
     });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
 
@@ -738,43 +1071,60 @@ class OrdersService {
       throw error;
     }
 
-    const address = (order.shippingAddress ?? {}) as Record<string, string | null | undefined>;
-    const shippingAddress: ShopifyOrderCreateInput["shippingAddress"] = order.shippingAddress
-      ? {
-          firstName: order.lead.firstName,
-          lastName: order.lead.lastName ?? undefined,
-          address1: address.line1 ?? undefined,
-          address2: address.line2 ?? undefined,
-          city: address.city ?? undefined,
-          province: address.state ?? undefined,
-          zip: address.pincode ?? order.shippingPincode ?? undefined,
-          country: "IN",
-          phone: address.phone ?? order.lead.normalizedMobile ?? undefined,
-        }
-      : undefined;
-
-    const input: ShopifyOrderCreateInput = {
-      lineItems: order.items.map((item) =>
-        // Only a variant that really came from Shopify has a Shopify variant id; anything else is sent as a custom line
-        // item, exactly as before. The id itself is converted to a global id inside createShopifyOrder.
-        item.variant?.externalId && item.variant.externalSource === "SHOPIFY"
-          ? { variantId: item.variant.externalId, quantity: item.quantity }
-          : { title: item.productNameSnapshot, quantity: item.quantity, priceAmount: item.unitPrice.toString() },
-      ),
-      email: order.lead.email ?? undefined,
-      phone: order.lead.normalizedMobile ?? undefined,
-      currency: order.currency,
-      // Reflects the CRM's own recorded payment status, not the payment METHOD - a not-yet-collected
-      // prepaid order is exactly as unpaid as a COD one until a payment actually succeeds.
-      financialStatus: order.payments[0]?.status === "SUCCESS" ? "PAID" : "PENDING",
-      // Shopify's orderCreate here is sent at list prices (as it always was for CRM-side discounts), so a CRM discount is
-      // NOT applied on the Shopify order. It is stated in the note so the two systems are never silently inconsistent.
-      note: `Created in the CRM (${order.orderNumber}) via the WhatsApp Inbox.${Number(order.discountAmount) > 0 ? ` CRM discount of ${order.discountAmount} applied; amount to collect in the CRM is ${order.totalAmount}.` : ""}`,
-      shippingAddress,
-    };
+    const prepared = await prepareShopifyPayload(order, client);
+    const { built, customerDecision, extras, crmFiguresAddUp } = prepared;
+    const input: ShopifyOrderCreateInput = built.input;
 
     try {
-      const result = await createShopifyOrder(client, input);
+      let result: Awaited<ReturnType<typeof createShopifyOrder>>;
+      let mirrored = crmFiguresAddUp;
+      const sentOmitted: string[] = Object.entries(built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
+      let verifiedSync: ShopifySyncRecord | null = null;
+      // A fallback that dropped information the CRM HAS (customer / discount) or a customer that could not be attached is never a complete sync.
+      let degraded: string[] = customerDecision.customer ? [] : (customerDecision.note.startsWith("the lead has no phone") ? [] : [`customer not associated: ${customerDecision.note}`]);
+      const earlier = (order.metadata as Record<string, unknown> | null)?.shopifyCreateUncertain === true;
+      // A previous attempt ended without an answer (timeout / dropped connection): Shopify may well have created the order. Look for it by the CRM order number FIRST; creating blindly could make a second one.
+      const existing = earlier ? await findShopifyOrderBySourceIdentifier(client, order.orderNumber) : null;
+      if (existing) {
+        result = existing;
+        mirrored = false; // what that attempt sent is not known here, so the payment sync keeps its safe reconciliation
+      } else {
+        try {
+          result = await createShopifyOrder(client, input);
+        } catch (error) {
+          if (!isShopifyRejection(error)) throw error;
+          // Shopify REFUSED the request (nothing was created). Retry once, dropping the optional parts that most often cause a refusal, and say so in the sync result:
+          // the customer association (a phone/e-mail that belongs to another Shopify customer) and the discount/shipping mirror.
+          const rejection = error instanceof Error ? error.message : "rejected";
+          if (!input.customer && !extras) throw error;
+          if (input.customer) { sentOmitted.push(`customer (Shopify refused it: ${rejection.slice(0, 120)})`); degraded.push("customer: Shopify refused the association"); }
+          if (extras) { mirrored = false; sentOmitted.push("discount/shipping mirror (Shopify refused it)"); degraded.push("discount/shipping were not mirrored"); }
+          input.customer = undefined;
+          if (extras) { input.discount = undefined; input.shippingAmount = undefined; }
+          result = await createShopifyOrder(client, input);
+        }
+      }
+      // Read the order BACK and compare it with what was sent: a 200 with no userErrors does not prove every field was saved. A missing shipping address / metafields is re-sent once with orderUpdate (those
+      // fields only); anything still missing is recorded as a PARTIAL sync - never reported as complete.
+      {
+        const attemptAt = new Date().toISOString();
+        try {
+          let check = await verifyShopifyOrder(client, result.shopifyOrderId, input, mirrored ? order.totalAmount.toString() : undefined);
+          let repaired: string[] = [];
+          let repairErrors: string[] = [];
+          if (check.missing.length > 0) {
+            const fixed = await repairAndVerify(client, result.shopifyOrderId, input, check, mirrored ? order.totalAmount.toString() : undefined);
+            check = fixed.check;
+            repaired = fixed.repaired;
+            repairErrors = fixed.errors.map(sanitizeSyncError);
+            if (repairErrors.length > 0) logger.warn(`Shopify refused the repair of order ${order.orderNumber}: ${repairErrors.join(" | ")}`);
+          }
+          verifiedSync = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted: sentOmitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? customerDecision.note : `no Shopify customer record: ${customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+        } catch (verifyError) {
+          verifiedSync = { status: "partial", missing: ["(could not read the order back to verify it)", ...degraded], omitted: sentOmitted, repaired: [], customer: customerDecision.note, attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(verifyError) };
+          logger.error("Shopify order read-back failed", sanitizeSyncError(verifyError));
+        }
+      }
       // Guarded by the same id + "still unlinked" condition just checked above, so two concurrent
       // pushes can never both win and create two Shopify orders for this one CRM order.
       const { count } = await this.db.order.updateMany({
@@ -787,11 +1137,70 @@ class OrdersService {
         const linked = await this.db.order.findUniqueOrThrow({ where: { id: orderId }, select: { externalId: true, externalNumber: true } });
         return { status: "already_linked", shopifyOrderId: linked.externalId!, shopifyOrderName: linked.externalNumber ?? undefined };
       }
-      return { status: "created", shopifyOrderId: result.shopifyOrderId, shopifyOrderName: result.shopifyOrderName };
+      // Remember what Shopify was given: mirrored = the Shopify order total equals the CRM total (see above). The payment sync relies on it; absent/false (older orders, a refused request) keeps the safe path.
+      const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
+      await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifyTotals: { mirrored, total: order.totalAmount.toString(), at: new Date().toISOString() }, ...(verifiedSync ? { shopifySync: verifiedSync } : {}) } as unknown as Prisma.InputJsonValue } });
+      return { status: "created", shopifyOrderId: result.shopifyOrderId, shopifyOrderName: result.shopifyOrderName, ...(verifiedSync ? { sync: verifiedSync } : {}) };
     } catch (error) {
       if (error instanceof ShopifyOrderCreateError) return { status: "failed", reason: error.message };
+      if (error instanceof ShopifyApiError) {
+        // No answer (timeout / unreachable / throttled): the CRM order stays committed, the failure is reported, and the next retry checks Shopify for the order before creating one.
+        const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
+        await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifyCreateUncertain: true } } });
+        return { status: "failed", reason: `${error.message}. Shopify may have received the order; Retry will look for it before creating another.` };
+      }
       throw error;
     }
+  }
+
+  /**
+   * Re-verify (and, where Shopify allows, repair) an order that is ALREADY linked to Shopify - used after a partial sync. It never creates an order, never touches payment, fulfilment, totals, items or the note,
+   * and repairs only the shipping address, the crm.* metafields and missing tags (add-only). Idempotent: nothing is written when nothing is missing. Admin / manager only (route), within order scope.
+   */
+  async resyncShopifyOrder(user: AuthUser, orderId: string): Promise<ShopifyPushResult> {
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
+    const leadScope = await getOrderFlowScope(user, this.db);
+    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: SHOPIFY_PUSH_SELECT });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    if (!order.externalId) return { status: "failed", reason: "This order is not linked to Shopify yet - use Push to Shopify first." };
+    let client: ShopifyClient;
+    try {
+      client = this.getShopifyClient();
+    } catch (error) {
+      if (error instanceof ShopifyConfigError) return { status: "failed", reason: error.message };
+      throw error;
+    }
+    const attemptAt = new Date().toISOString();
+    const prepared = await prepareShopifyPayload(order, client);
+    const input = prepared.built.input;
+    const mirroredMeta = (order.metadata as Record<string, any> | null)?.shopifyTotals?.mirrored === true;
+    const expectedTotal = mirroredMeta ? order.totalAmount.toString() : undefined;
+    let record: ShopifySyncRecord;
+    try {
+      let check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
+      let repaired: string[] = [];
+      let repairErrors: string[] = [];
+      if (check.missing.length > 0) {
+        const fixed = await repairAndVerify(client, order.externalId, input, check, expectedTotal);
+        check = fixed.check;
+        repaired = fixed.repaired;
+        repairErrors = fixed.errors.map(sanitizeSyncError);
+        if (repairErrors.length > 0) logger.warn(`Shopify refused the repair of order ${order.orderNumber}: ${repairErrors.join(" | ")}`);
+        if (check.missing.includes("tags") && input.tags?.length) {
+          await addShopifyOrderTags(client, order.externalId, input.tags); // add-only: existing tags are kept
+          check = await verifyShopifyOrder(client, order.externalId, input, expectedTotal);
+          if (!check.missing.includes("tags")) repaired.push("tags");
+        }
+      }
+      const degraded = prepared.customerDecision.customer || check.customerAssociated ? [] : [`customer not associated: ${prepared.customerDecision.note}`];
+      const omitted = Object.entries(prepared.built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
+      record = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? "a Shopify customer is attached" : `no Shopify customer record: ${prepared.customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+    } catch (error) {
+      record = { status: "failed", missing: [], omitted: [], repaired: [], customer: "", attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(error) };
+    }
+    const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
+    await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifySync: record } as unknown as Prisma.InputJsonValue } });
+    return { status: record.status === "failed" ? "failed" : "already_linked", shopifyOrderId: order.externalId, shopifyOrderName: order.externalNumber ?? undefined, reason: record.error ?? undefined, sync: record };
   }
 
   // Manual "Retry Shopify payment sync" action for the order page - the same idempotent reconciliation the Cashfree

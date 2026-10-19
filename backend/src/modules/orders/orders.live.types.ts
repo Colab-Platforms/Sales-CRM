@@ -133,6 +133,10 @@ export interface LiveOrderDetailResult {
   /** null = no CRM lead matched this customer's phone. Undefined only when `order` itself is null. */
   crmLink?: LiveOrderCrmLink | null;
   error?: string;
+  /** Why there is no order: it does not exist / is not readable ("not_found"), or Shopify could not be asked ("unavailable" - a real error, not a missing order). */
+  errorKind?: "not_found" | "unavailable";
+  /** The order is already synced into the CRM: open this CRM order instead (never a second copy). Set only when `order` is null for that reason. */
+  crmOrderId?: string;
 }
 
 // The Shopify customer's other orders (Section 11: "Previous Orders") - cursor-paginated, never the

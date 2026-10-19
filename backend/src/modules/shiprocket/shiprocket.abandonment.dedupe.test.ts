@@ -11,11 +11,12 @@ function makeTx(leads: FakeLead[], abandonments: FakeAbandonment[] = []) {
   const locks: string[] = [];
   const tx = {
     lead: {
+      // Evaluates the real `where` the processor builds: phone lookups (`normalizedMobile: { in }`) and email lookups
+      // (`normalizedEmail`) are separate queries, each excluding deactivated leads and ordered oldest-first.
       async findFirst({ where, orderBy }: any) {
-        const matches = leads.filter((l) => (where.workingStatus?.not === undefined || (l.workingStatus ?? "NEW") !== where.workingStatus.not) &&
-          where.OR.some((c: any) =>
-            c.normalizedMobile ? c.normalizedMobile.in.includes(l.normalizedMobile) : c.normalizedEmail ? c.normalizedEmail === l.normalizedEmail : false,
-          ),
+        const matches = leads.filter((l) =>
+          (where.workingStatus?.not === undefined || (l.workingStatus ?? "NEW") !== where.workingStatus.not) &&
+          (where.normalizedMobile ? where.normalizedMobile.in.includes(l.normalizedMobile) : where.normalizedEmail ? where.normalizedEmail === l.normalizedEmail : false),
         );
         if (orderBy?.createdAt === "asc") matches.sort((a, b) => a.createdAt - b.createdAt);
         return matches[0] ? { id: matches[0].id } : null;
@@ -26,7 +27,7 @@ function makeTx(leads: FakeLead[], abandonments: FakeAbandonment[] = []) {
         const row = abandonments.find(
           (a) => a.leadId === where.leadId && a.type === where.type && a.referenceId === where.referenceId && where.status.in.includes(a.status),
         );
-        return row ? { id: row.id } : null;
+        return row ? { id: row.id, detectedAt: new Date(0) } : null;
       },
     },
     async $executeRaw(_strings: TemplateStringsArray, ...values: unknown[]) {
@@ -55,6 +56,18 @@ describe("abandonment lead matching (phone normalization)", () => {
     const { tx } = makeTx([lead("L1", "+919876543210")]);
     assert.equal(await findExistingLead(tx, { phone: "9876543211", email: null }), null);
     assert.equal(await findExistingLead(tx, { phone: "+14155552671", email: null }), null);
+  });
+
+  it("the phone identifies the customer first, the email second: when they belong to two different leads the phone's lead wins every time", async () => {
+    const { tx } = makeTx([lead("BY-EMAIL", null, 1, "a@b.com"), lead("BY-PHONE", "+919876543210", 50)]);
+    for (let i = 0; i < 3; i++) {
+      assert.equal((await findExistingLead(tx, { phone: "9876543210", email: "a@b.com" }))?.id, "BY-PHONE");
+    }
+  });
+
+  it("falls back to the email when the phone matches no lead", async () => {
+    const { tx } = makeTx([lead("BY-EMAIL", null, 1, "a@b.com")]);
+    assert.equal((await findExistingLead(tx, { phone: "9876543210", email: "a@b.com" }))?.id, "BY-EMAIL");
   });
 
   it("matches on email when there is no phone, case-insensitively", async () => {

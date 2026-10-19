@@ -90,6 +90,11 @@ export function RefundQueueTable({
                   {r.paymentMethod ?? "—"}
                   <span className="block">already refunded {money(r.refundedAmount)}</span>
                   <span className="block">remaining refundable {money(r.remainingRefundableAmount)}</span>
+                  {r.status === "APPROVED" && r.executionStatus !== "COMPLETED" ? (
+                    <span className="block" data-testid="approved-hold-note">
+                      {money(r.amount)} is held for this approved refund - not refunded until Cashfree confirms
+                    </span>
+                  ) : null}
                 </td>
                 <td className="max-w-[18rem] px-3 py-2 break-words">
                   {r.reason}

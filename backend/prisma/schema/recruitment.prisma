@@ -1,0 +1,125 @@
+enum ApplicationStatus {
+  NEW
+  ASSIGNED
+  RINGING
+  NOT_REACHABLE
+  CALL_BACK
+  SCREENED
+  SHORTLISTED
+  REJECTED
+  HIRED
+  NOT_INTERESTED
+
+  @@map("application_status")
+}
+
+enum JobStatus {
+  OPEN
+  CLOSED
+
+  @@map("job_status")
+}
+
+model Job {
+  id String @id @default(uuid()) @db.Uuid
+
+  title      String    @map("title") @db.VarChar(200)
+  department String?   @map("department") @db.VarChar(150)
+  location   String?   @map("location") @db.VarChar(150)
+  status     JobStatus @default(OPEN) @map("status")
+
+  createdById String @map("created_by_id") @db.Uuid
+  createdBy   User   @relation("JobCreatedBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  applications  Application[]
+  importBatches ApplicationImportBatch[]
+
+  @@index([status])
+  @@map("jobs")
+}
+
+model Application {
+  id String @id @default(uuid()) @db.Uuid
+
+  jobId String @map("job_id") @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  name             String  @map("name") @db.VarChar(200)
+  mobile           String  @map("mobile") @db.VarChar(30)
+  normalizedMobile String  @map("normalized_mobile") @db.VarChar(20)
+  email            String? @map("email") @db.VarChar(255)
+  resumeUrl        String? @map("resume_url")
+  // Any CSV columns that did not map to a first-class field.
+  extra            Json?   @map("extra")
+
+  status ApplicationStatus @default(NEW) @map("status")
+  notes  String?           @map("notes")
+
+  recruiterId String? @map("recruiter_id") @db.Uuid
+  recruiter   User?   @relation("ApplicationRecruiter", fields: [recruiterId], references: [id])
+
+  importBatchId String?                 @map("import_batch_id") @db.Uuid
+  importBatch   ApplicationImportBatch? @relation(fields: [importBatchId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  assignments ApplicationAssignment[]
+  calls       Call[]
+
+  @@unique([jobId, normalizedMobile])
+  @@index([jobId, status])
+  @@index([recruiterId, status])
+  @@map("applications")
+}
+
+model ApplicationAssignment {
+  id String @id @default(uuid()) @db.Uuid
+
+  applicationId String      @map("application_id") @db.Uuid
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  recruiterId String @map("recruiter_id") @db.Uuid
+  recruiter   User   @relation("ApplicationAssignmentRecruiter", fields: [recruiterId], references: [id])
+
+  assignedById String @map("assigned_by_id") @db.Uuid
+  assignedBy   User   @relation("ApplicationAssignmentBy", fields: [assignedById], references: [id])
+
+  isCurrent  Boolean  @default(true) @map("is_current")
+  assignedAt DateTime @default(now()) @map("assigned_at")
+
+  @@index([applicationId, isCurrent])
+  @@index([recruiterId])
+  @@map("application_assignments")
+}
+
+model ApplicationImportBatch {
+  id String @id @default(uuid()) @db.Uuid
+
+  jobId String @map("job_id") @db.Uuid
+  job   Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  fileName      String @map("file_name") @db.VarChar(255)
+  columnMapping Json   @map("column_mapping")
+  parsedRows    Json   @map("parsed_rows")
+  errorRows     Json   @map("error_rows")
+
+  totalRows      Int @default(0) @map("total_rows")
+  importedCount  Int @default(0) @map("imported_count")
+  duplicateCount Int @default(0) @map("duplicate_count")
+
+  status ImportBatchStatus @default(DRAFT) @map("status")
+
+  createdById String @map("created_by_id") @db.Uuid
+  createdBy   User   @relation("ApplicationImportBatchBy", fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  applications Application[]
+
+  @@index([jobId])
+  @@map("application_import_batches")
+}

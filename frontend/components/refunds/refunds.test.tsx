@@ -242,6 +242,15 @@ describe("approval queue", () => {
     assert.match(h, />Approve</);
     assert.match(h, />Reject</);
   });
+  it("an approved request that reserves the whole payment shows 0 remaining AND says the amount is held, not refunded; a completed one and a pending one do not", () => {
+    const approvedAll = request({ status: "APPROVED", amount: "1.00", paymentAmount: "1.00", refundedAmount: "0.00", remainingRefundableAmount: "0.00", executionStatus: null });
+    const t = text(table([approvedAll], "ADMIN", "u-admin"));
+    assert.ok(t.includes("already refunded ₹0.00"), t);
+    assert.ok(t.includes("remaining refundable ₹0.00"), t);
+    assert.ok(t.includes("₹1.00 is held for this approved refund - not refunded until Cashfree confirms"), t);
+    assert.ok(!text(table([request({ status: "APPROVED", executionStatus: "COMPLETED" })], "ADMIN", "u-admin")).includes("is held for this approved refund"));
+    assert.ok(!text(table([request()], "ADMIN", "u-admin")).includes("is held for this approved refund"));
+  });
   it("an admin gets the controls too", () => {
     assert.match(table([request()], "ADMIN", "u-admin"), />Approve</);
   });

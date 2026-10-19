@@ -1,14 +1,32 @@
 import { AbandonmentStatus, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { fullName } from "../orders/orders.filters.js";
+import { dayBounds, todayString } from "../attendance/attendance.calc.js";
+import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
 import { abandonmentItemsWhere, readSnapshotItems } from "./abandonment.items.js";
-import type { AbandonmentCallItem, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
+import type { AbandonmentCallItem, AbandonmentDateRange, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
 
 // Where-building, row-mapping and summary logic for the abandoned-leads queue. Kept separate from
 // abandonment.service.ts the same way orders.filters.ts / shiprocket.list.filters.ts are kept
 // separate from their services.
 
 const MAX_SEARCH_TERMS = 5;
+
+/**
+ * Whose abandoned checkouts a user may see: the SAME assignment-based rule as a normal lead (a manager sees the ones assigned to them, a salesperson the ones they own), ADMIN and HR everything
+ * (HR for lead distribution only - see ABANDONMENT_WORK_ROLES), and a role this module does not know, nothing. Shared by the queue/detail and by "View Customer Details" on an order, so the
+ * two can never disagree about who may open a customer's abandoned lead.
+ */
+export function abandonmentLeadScope(user: { id: string; role: Role }): Prisma.LeadWhereInput {
+  if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
+  if (user.role === Role.SALESPERSON) return { ownerId: user.id };
+  if (user.role === Role.ADMIN || user.role === Role.HR) return {};
+  return { id: { in: [] } };
+}
+
+/** Who may OPEN (not just list) an abandoned lead: HR distributes them but never works one. */
+export const ABANDONMENT_WORK_ROLES: Role[] = [Role.ADMIN, Role.MANAGER, Role.SALESPERSON];
+
 
 export function abandonmentSearchWhere(search: string): Prisma.AbandonmentWhereInput {
   const terms = search.split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_TERMS);
@@ -28,16 +46,33 @@ export function abandonmentSearchWhere(search: string): Prisma.AbandonmentWhereI
   };
 }
 
-export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role): Prisma.AbandonmentWhereInput {
+/**
+ * The half-open instant range [gte, lt) of a day filter, as UTC instants. A "day" is a calendar day in the reporting timezone (REPORT_TZ_OFFSET_MINUTES = IST, the same
+ * convention attendance and the manager reports use), so "today" starts at 00:00 IST and ends at the next 00:00 IST - never at the server's or the browser's own midnight.
+ * `all` (or no filter) is no restriction at all.
+ */
+export function abandonmentDateRangeBounds(range: AbandonmentDateRange | undefined, now: Date = new Date(), tzOffsetMinutes: number = REPORT_TZ_OFFSET_MINUTES): { gte: Date; lt: Date } | null {
+  if (!range || range === "all") return null;
+  const today = dayBounds(todayString(now, tzOffsetMinutes), tzOffsetMinutes);
+  if (range === "today") return { gte: today.from, lt: today.to };
+  const yesterday = dayBounds(todayString(new Date(today.from.getTime() - 1), tzOffsetMinutes), tzOffsetMinutes);
+  return { gte: yesterday.from, lt: today.from };
+}
+
+export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role, now: Date = new Date()): Prisma.AbandonmentWhereInput {
   const and: Prisma.AbandonmentWhereInput[] = [];
   if (Object.keys(leadScope).length > 0) and.push({ lead: leadScope });
   if (query.search) and.push(abandonmentSearchWhere(query.search));
   if (query.status) and.push({ status: query.status });
   if (query.type) and.push({ type: query.type });
   if (query.dateFrom || query.dateTo) and.push({ detectedAt: { gte: query.dateFrom, lte: query.dateTo } });
+  // By when the checkout was ABANDONED (detectedAt - the delivery's own time), never by updatedAt, which assignments and repeat deliveries also move.
+  const day = abandonmentDateRangeBounds(query.dateRange, now);
+  if (day) and.push({ detectedAt: { gte: day.gte, lt: day.lt } });
   if (query.assignment === "UNASSIGNED") and.push({ lead: { assignedManagerId: null } });
   else if (query.assignment === "ASSIGNED_TO_MANAGER") and.push({ lead: { assignedManagerId: { not: null }, ownerId: null } });
   else if (query.assignment === "ASSIGNED_TO_SALESPERSON") and.push({ lead: { ownerId: { not: null } } });
+  else if (query.assignment === "UNASSIGNED_TELECALLER") and.push({ lead: { ownerId: null } });
   if (query.managerId) and.push({ lead: { assignedManagerId: query.managerId } });
   if (query.salespersonId) and.push({ lead: { ownerId: query.salespersonId } });
   if (query.items && query.items.length > 0) and.push(abandonmentItemsWhere(query.items));

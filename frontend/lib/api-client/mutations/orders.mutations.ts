@@ -3,8 +3,9 @@ import { ordersApi } from "../endpoints/orders.api";
 import { ordersKeys } from "../queries/orders.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
+import { deliveryKeys } from "../queries/delivery.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
+import type { MarkPaidInput, MarkPaidResult, PaymentQrResult, ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -15,10 +16,20 @@ export function useCreateOrderMutation() {
       // (profile + orders list + timeline), and the WhatsApp Inbox's own conversation list (its
       // "latest message" ordering is unaffected, but the underlying lead's data just changed).
       queryClient.invalidateQueries({ queryKey: ordersKeys.all });
+      // The address just used is now this customer's latest one: never offer the previous order's address from the cache.
+      queryClient.invalidateQueries({ queryKey: deliveryKeys.lastAddress(variables.leadId) });
       queryClient.invalidateQueries({ queryKey: customersKeys.detail(variables.leadId) });
       queryClient.invalidateQueries({ queryKey: [...customersKeys.all, "timeline", variables.leadId] });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
+  });
+}
+
+export function useSendPaymentQrMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<PaymentQrResult, unknown, { orderId: string; paymentId: string }>({
+    mutationFn: ({ orderId, paymentId }) => ordersApi.sendPaymentQr(orderId, paymentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ordersKeys.all }),
   });
 }
 
@@ -90,6 +101,16 @@ export function usePushOrderToShopifyMutation() {
   });
 }
 
+export function useResyncShopifyMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<{ status: string; reason?: string; sync?: ShopifySyncRecord }, unknown, string>({
+    mutationFn: (orderId) => ordersApi.resyncShopify(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}
+
 export function useRetryConfirmationTagSyncMutation() {
   const queryClient = useQueryClient();
   return useMutation<{ status: "synced" | "unchanged" | "not_linked" | "not_confirmed" | "failed"; tag?: string; reason?: string }, unknown, string>({
@@ -106,6 +127,20 @@ export function useRetryShopifyPaymentSyncMutation() {
     mutationFn: (orderId) => ordersApi.retryShopifyPaymentSync(orderId),
     onSuccess: (_, orderId) => {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}
+
+export function useMarkOrderPaidMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<MarkPaidResult, unknown, { orderId: string } & MarkPaidInput>({
+    mutationFn: ({ orderId, ...input }) => ordersApi.markPaid(orderId, input),
+    onSuccess: (_, { orderId }) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
+      queryClient.invalidateQueries({ queryKey: ordersKeys.statusHistory(orderId) });
+      queryClient.invalidateQueries({ queryKey: auditKeys.all });
     },
   });
 }

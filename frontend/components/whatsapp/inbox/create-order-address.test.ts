@@ -1,7 +1,7 @@
 // Run with: ../backend/node_modules/.bin/tsx --test components/whatsapp/inbox/create-order-address.test.ts
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { composeLines, formatAddress, structuredFromSaved, validateAddress, type StructuredAddress } from "./create-order-address";
+import { buildAddressDraft, composeLines, formatAddress, structuredFromSaved, validateAddress, type StructuredAddress } from "./create-order-address";
 
 const ok: StructuredAddress = { pincode: "400053", houseNumber: "Flat 4B", building: "Sunrise Apartments", area: "Andheri West", street: "MG Road", landmark: "Near City Mall", city: "Mumbai", state: "Maharashtra", addressType: "HOME" };
 const errs = (patch: Partial<StructuredAddress>) => validateAddress({ ...ok, ...patch });
@@ -58,5 +58,50 @@ describe("structuredFromSaved (existing data compatibility)", () => {
   it("no saved address, or an unknown type, falls back safely", () => {
     assert.equal(structuredFromSaved(null).houseNumber, "");
     assert.equal(structuredFromSaved({ line1: "a", addressType: "OFFICE" }).addressType, "HOME");
+  });
+});
+
+describe("structuredFromSaved - a saved address never loses a part", () => {
+  it("a legacy line1/line2 address (e.g. a checkout address) carries over, and its landmark is kept", () => {
+    assert.deepEqual(structuredFromSaved({ line1: "12 MG Road", line2: "Near Station", landmark: "Opp. metro" }), { houseNumber: "12 MG Road", building: "", area: "Near Station", street: "", landmark: "Opp. metro", addressType: "HOME" });
+  });
+  it("a partly structured address keeps its fields and falls back to the composed lines for the rest", () => {
+    const r = structuredFromSaved({ houseNumber: "Flat 7", building: "Green Heights", line1: "Flat 7, Green Heights", line2: "Baner Road, Baner" });
+    assert.deepEqual([r.houseNumber, r.building, r.area], ["Flat 7", "Green Heights", "Baner Road, Baner"]);
+  });
+  it("a fully structured address maps field for field", () => {
+    const r = structuredFromSaved({ houseNumber: "Flat 7", building: "B", area: "Baner", street: "Baner Road", landmark: "Garden", addressType: "WORK", line1: "x", line2: "y" });
+    assert.deepEqual(r, { houseNumber: "Flat 7", building: "B", area: "Baner", street: "Baner Road", landmark: "Garden", addressType: "WORK" });
+  });
+});
+
+describe("buildAddressDraft - what is shown, and that typing is never overwritten", () => {
+  const saved = { name: "Asha Rao", phone: "9811700001", line1: "12 MG Road", line2: "Near Station", city: "Pune", state: "Maharashtra", pincode: "411001", landmark: "Opp. metro", deliveryInstructions: "Call first" };
+  const base = { customerName: "Selected Customer", customerMobile: "9000000000", resolvedCity: null, resolvedState: null };
+
+  it("prefills every field from the selected customer's saved address", () => {
+    const d = buildAddressDraft({ ...base, saved, edits: {} });
+    assert.deepEqual([d.name, d.phone, d.houseNumber, d.area, d.landmark, d.city, d.state, d.pincode, d.deliveryInstructions], ["Asha Rao", "9811700001", "12 MG Road", "Near Station", "Opp. metro", "Pune", "Maharashtra", "411001", "Call first"]);
+  });
+  it("manually edited fields stay exactly as typed - even cleared ones - and the rest stay prefilled", () => {
+    const d = buildAddressDraft({ ...base, saved, edits: { houseNumber: "Flat 9", landmark: "", city: "Mumbai" } });
+    assert.deepEqual([d.houseNumber, d.landmark, d.city], ["Flat 9", "", "Mumbai"]);
+    assert.deepEqual([d.area, d.state, d.pincode], ["Near Station", "Maharashtra", "411001"]);
+  });
+  it("changing the pincode re-resolves city/state from the pincode but keeps typed lines", () => {
+    const d = buildAddressDraft({ ...base, saved, edits: { pincode: "400053", houseNumber: "Flat 9" }, resolvedCity: "Mumbai", resolvedState: "Maharashtra" });
+    assert.deepEqual([d.city, d.state, d.houseNumber, d.area], ["Mumbai", "Maharashtra", "Flat 9", "Near Station"]);
+  });
+  it("a saved address with a blank city uses the pincode's own city, and a blank name/phone uses the selected customer's", () => {
+    const d = buildAddressDraft({ ...base, saved: { ...saved, name: "", phone: "", city: "" }, edits: {}, resolvedCity: "Pune", resolvedState: "Maharashtra" });
+    assert.deepEqual([d.city, d.name, d.phone], ["Pune", "Selected Customer", "9000000000"]);
+  });
+  it("with nothing saved, the form is empty apart from the customer's own name and phone", () => {
+    const d = buildAddressDraft({ ...base, saved: null, edits: {} });
+    assert.deepEqual([d.name, d.phone, d.houseNumber, d.pincode, d.city], ["Selected Customer", "9000000000", "", "", ""]);
+  });
+  it("a prefilled address that is incomplete reports exactly which fields are missing", () => {
+    const d = buildAddressDraft({ ...base, saved: { ...saved, line2: "", pincode: "" }, edits: {} });
+    assert.deepEqual(Object.keys(validateAddress(d)).sort(), ["area", "pincode"]);
   });
 });

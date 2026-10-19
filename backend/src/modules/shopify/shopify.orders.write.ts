@@ -12,6 +12,11 @@
 // this repo had no prior order-write code to mirror, since the sync path never writes to Shopify.
 import { ShopifyGraphQLError, type ShopifyClient } from "./shopify.client.js";
 
+/** True when Shopify itself REFUSED an orderCreate (a GraphQL validation error or userErrors) - so nothing was created and a corrected request is safe to send. A timeout / transport failure is never this. */
+export function isShopifyRejection(error: unknown): boolean {
+  return error instanceof ShopifyOrderCreateError && (Array.isArray(error.raw) || error.raw instanceof ShopifyGraphQLError);
+}
+
 export class ShopifyOrderCreateError extends Error {
   constructor(
     message: string,
@@ -47,19 +52,33 @@ export interface ShopifyOrderCreateLineItem {
   title?: string;
   quantity: number;
   priceAmount?: string;
+  /** Shopify's default for a line item created through orderCreate is NOT shipping-required (the order then shows "Shipping not required"), whatever the variant says. Physical goods must say true. */
+  requiresShipping?: boolean;
 }
 
-export interface ShopifyOrderCreateShippingAddress {
+/** Shopify's MailingAddressInput. It has provinceCode / countryCode - there is NO `province` or `country` field (confirmed by schema introspection on API 2026-01). */
+export interface ShopifyOrderCreateAddress {
   firstName?: string;
   lastName?: string;
   address1?: string;
   address2?: string;
   city?: string;
-  province?: string;
+  provinceCode?: string;
   zip?: string;
-  country?: string;
+  countryCode?: string;
   phone?: string;
 }
+/** @deprecated kept as an alias; use ShopifyOrderCreateAddress. */
+export type ShopifyOrderCreateShippingAddress = ShopifyOrderCreateAddress;
+
+export interface ShopifyOrderMetafield {
+  namespace: string;
+  key: string;
+  value: string;
+  type: "single_line_text_field" | "multi_line_text_field";
+}
+
+export type ShopifyOrderCustomer = { toAssociate: { id: string } } | { toUpsert: { email?: string; phone?: string; firstName?: string; lastName?: string } };
 
 export interface ShopifyOrderCreateInput {
   lineItems: ShopifyOrderCreateLineItem[];
@@ -70,7 +89,23 @@ export interface ShopifyOrderCreateInput {
    *  Shopify's own two relevant values for a freshly created order. */
   financialStatus: "PENDING" | "PAID";
   note?: string;
-  shippingAddress?: ShopifyOrderCreateShippingAddress;
+  shippingAddress?: ShopifyOrderCreateAddress;
+  billingAddress?: ShopifyOrderCreateAddress;
+  /** Order tags (searchable classification). */
+  tags?: string[];
+  /** Structured CRM data with no native Shopify field, in the `crm` namespace. */
+  metafields?: ShopifyOrderMetafield[];
+  /** A verified association with a Shopify customer, or an upsert that names a new one. Omitted when no safe decision exists. */
+  customer?: ShopifyOrderCustomer;
+  /**
+   * The CRM's order-level discount, as ONE fixed amount off the items. Sent so the Shopify order total is the CRM total (items - discount + shipping); without it Shopify holds the list
+   * price and the two systems disagree about what the customer owes. Omitted (or 0) = no discount.
+   */
+  discount?: { amount: string; description: string };
+  /** The CRM's shipping charge as a Shopify shipping line. Omitted (or 0) = none. */
+  shippingAmount?: string;
+  /** Shopify's own `sourceIdentifier` (the CRM order number): lets a retry find an order whose creation answer was lost instead of creating a second one. */
+  sourceIdentifier?: string;
 }
 
 export interface ShopifyOrderCreateResult {
@@ -110,15 +145,31 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
   const order = {
     lineItems: input.lineItems.map((item) =>
       item.variantId
-        ? { variantId: toShopifyProductVariantGid(item.variantId), quantity: item.quantity }
-        : { title: item.title, quantity: item.quantity, priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } } },
+        ? {
+            variantId: toShopifyProductVariantGid(item.variantId),
+            quantity: item.quantity,
+            // OrderCreateLineItemInput.priceSet (price before discounts) is accepted together with variantId: when the CRM states the unit price it is sent, so Shopify's item subtotal is the CRM's even if the catalog price has changed.
+            ...(item.priceAmount ? { priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } } } : {}),
+            ...(item.requiresShipping !== undefined ? { requiresShipping: item.requiresShipping } : {}),
+          }
+        : { title: item.title, quantity: item.quantity, priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } }, ...(item.requiresShipping !== undefined ? { requiresShipping: item.requiresShipping } : {}) },
     ),
     email: input.email,
     phone: input.phone,
     currency: input.currency,
     financialStatus: input.financialStatus,
     note: input.note,
-    shippingAddress: input.shippingAddress,
+    ...(input.sourceIdentifier ? { sourceIdentifier: input.sourceIdentifier } : {}),
+    ...(input.shippingAddress ? { shippingAddress: input.shippingAddress } : {}),
+    ...(input.billingAddress ? { billingAddress: input.billingAddress } : {}),
+    ...(input.tags && input.tags.length > 0 ? { tags: input.tags } : {}),
+    ...(input.metafields && input.metafields.length > 0 ? { metafields: input.metafields } : {}),
+    ...(input.customer ? { customer: input.customer } : {}),
+    // Shopify's documented OrderCreateOrderInput fields: discountCode.itemFixedDiscountCode (a fixed amount across the items) and shippingLines.
+    ...(input.discount && Number(input.discount.amount) > 0
+      ? { discountCode: { itemFixedDiscountCode: { code: input.discount.description.slice(0, 100), amountSet: { shopMoney: { amount: input.discount.amount, currencyCode: input.currency } } } } }
+      : {}),
+    ...(input.shippingAmount && Number(input.shippingAmount) > 0 ? { shippingLines: [{ title: "Shipping", priceSet: { shopMoney: { amount: input.shippingAmount, currencyCode: input.currency } } }] } : {}),
   };
 
   let data: OrderCreateResponse;
@@ -346,4 +397,142 @@ export async function removeShopifyOrderTags(client: ShopifyClient, shopifyOrder
   if (tags.length === 0) return;
   const data = await runTagCall<{ tagsRemove: { userErrors: { message: string }[] } }>(client, TAGS_REMOVE_MUTATION, { id: orderGid(shopifyOrderId), tags });
   if (data.tagsRemove.userErrors.length > 0) throw new ShopifyOrderTagError(data.tagsRemove.userErrors.map((e) => e.message).join("; "), data.tagsRemove.userErrors);
+}
+
+const ORDER_BY_SOURCE_QUERY = `
+  query crmOrderBySource($query: String!) {
+    orders(first: 2, query: $query) {
+      nodes { id name }
+    }
+  }
+`;
+
+/** The Shopify order previously created for this CRM order number (by sourceIdentifier), or null. Used only after an attempt whose answer was lost. More than one hit is refused: never guess. */
+export async function findShopifyOrderBySourceIdentifier(client: ShopifyClient, sourceIdentifier: string): Promise<{ shopifyOrderId: string; shopifyOrderName: string } | null> {
+  const data = await client.query<{ orders: { nodes: { id: string; name: string }[] } }>(ORDER_BY_SOURCE_QUERY, { query: `source_identifier:${JSON.stringify(sourceIdentifier)}` });
+  const nodes = data.orders?.nodes ?? [];
+  if (nodes.length > 1) throw new ShopifyOrderCreateError(`More than one Shopify order carries the CRM reference ${sourceIdentifier}; resolve it in Shopify before retrying.`);
+  return nodes[0] ? { shopifyOrderId: nodes[0].id, shopifyOrderName: nodes[0].name } : null;
+}
+
+
+// ---- Verification and repair of a just-created order ----------------------------------------------------------------------------------------------------------------------------------------------
+// An HTTP 200 / empty userErrors does not mean every field was saved (Shopify left the shipping address off #AWL103704 without saying so). After orderCreate the order is READ BACK and compared with what was sent.
+
+const ORDER_VERIFY_QUERY = `
+  query crmOrderVerify($id: ID!) {
+    order(id: $id) {
+      id
+      note
+      tags
+      displayFinancialStatus
+      customer { id }
+      totalPriceSet { shopMoney { amount } }
+      shippingAddress { address1 city zip provinceCode countryCodeV2 firstName }
+      billingAddress { address1 city zip }
+      lineItems(first: 100) { nodes { requiresShipping } }
+      metafields(first: 30, namespace: "crm") { nodes { key } }
+    }
+  }
+`;
+
+interface VerifyResponse {
+  order: {
+    id: string;
+    note: string | null;
+    tags: string[];
+    displayFinancialStatus: string | null;
+    customer: { id: string } | null;
+    totalPriceSet?: { shopMoney: { amount: string } } | null;
+    shippingAddress: { address1: string | null; city: string | null; zip: string | null; provinceCode: string | null; countryCodeV2: string | null; firstName: string | null } | null;
+    billingAddress?: { address1: string | null; city: string | null; zip: string | null } | null;
+    lineItems: { nodes: { requiresShipping: boolean }[] };
+    metafields: { nodes: { key: string }[] };
+  } | null;
+}
+
+export interface ShopifyVerification {
+  /** Fields that were sent but are NOT on the Shopify order. Empty = everything verified. */
+  missing: string[];
+  customerAssociated: boolean;
+}
+
+export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNullable<VerifyResponse["order"]>, expectedTotal?: string): ShopifyVerification {
+  const missing: string[] = [];
+  // The CRM and Shopify totals must reconcile to the cent (checked only when the discount/shipping were mirrored, i.e. when they are supposed to be equal).
+  if (expectedTotal !== undefined && found.totalPriceSet) {
+    if (Math.abs(Number(found.totalPriceSet.shopMoney.amount) - Number(expectedTotal)) >= 0.005) missing.push("totals");
+  }
+  if (sent.shippingAddress) {
+    const a = found.shippingAddress;
+    if (!a) missing.push("shippingAddress");
+    else if ((sent.shippingAddress.address1 && !a.address1) || (sent.shippingAddress.city && !a.city) || (sent.shippingAddress.zip && !a.zip)) missing.push("shippingAddress.fields");
+    else if (sent.shippingAddress.firstName && !a.firstName) missing.push("shippingAddress.name");
+  }
+  // The billing address is sent too (it equals the shipping address - the CRM keeps no separate one). Shopify's orderUpdate cannot set it, so a missing one can be REPORTED but not repaired here.
+  if (sent.billingAddress) {
+    const b = found.billingAddress;
+    if (!b) missing.push("billingAddress");
+    else if ((sent.billingAddress.address1 && !b.address1) || (sent.billingAddress.city && !b.city) || (sent.billingAddress.zip && !b.zip)) missing.push("billingAddress.fields");
+  }
+  if (sent.lineItems.some((l) => l.requiresShipping === true) && found.lineItems.nodes.some((n) => !n.requiresShipping)) missing.push("lineItems.requiresShipping");
+  if (sent.tags?.length) {
+    const have = new Set(found.tags.map((t) => t.toLowerCase()));
+    if (sent.tags.some((t) => !have.has(t.toLowerCase()))) missing.push("tags");
+  }
+  if (sent.note && !found.note) missing.push("note");
+  if (sent.metafields?.length) {
+    const have = new Set(found.metafields.nodes.map((m) => m.key));
+    if (sent.metafields.some((m) => !have.has(m.key))) missing.push("metafields");
+  }
+  if (sent.financialStatus === "PENDING" && found.displayFinancialStatus && /^paid$/i.test(found.displayFinancialStatus.trim())) missing.push("financialStatus(unexpectedly paid)");
+  return { missing, customerAssociated: Boolean(found.customer) };
+}
+
+export async function verifyShopifyOrder(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, expectedTotal?: string): Promise<ShopifyVerification> {
+  const data = await client.query<VerifyResponse>(ORDER_VERIFY_QUERY, { id: orderGid(shopifyOrderId) });
+  if (!data.order) throw new ShopifyOrderCreateError("The Shopify order could not be read back to verify it");
+  return compareShopifyOrder(sent, data.order, expectedTotal);
+}
+
+const ORDER_UPDATE_MUTATION = `
+  mutation crmOrderUpdate($input: OrderInput!) {
+    orderUpdate(input: $input) { order { id } userErrors { field message } }
+  }
+`;
+
+/**
+ * Re-sends ONLY the named fields that are missing (shipping address, metafields) with orderUpdate. It never touches note, tags, payment, discounts or line items: tags are added with tagsAdd elsewhere (add-only),
+ * and the note is only ever written at creation. Returns the user errors, if any.
+ */
+export async function repairShopifyOrderFields(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, missing: string[]): Promise<{ attempted: string[]; errors: string[] }> {
+  const input: Record<string, unknown> = { id: orderGid(shopifyOrderId) };
+  const attempted: string[] = [];
+  if ((missing.includes("shippingAddress") || missing.includes("shippingAddress.fields") || missing.includes("shippingAddress.name")) && sent.shippingAddress) { input.shippingAddress = sent.shippingAddress; attempted.push("shippingAddress"); }
+  if (missing.includes("metafields") && sent.metafields?.length) { input.metafields = sent.metafields; attempted.push("metafields"); }
+  if (attempted.length === 0) return { attempted, errors: [] };
+  const data = await client.query<{ orderUpdate: { userErrors: { message: string }[] } }>(ORDER_UPDATE_MUTATION, { input });
+  return { attempted, errors: data.orderUpdate.userErrors.map((e) => e.message) };
+}
+
+export interface ShopifyRepairOutcome {
+  /** The verification AFTER the repair (or the original one when nothing could be repaired). */
+  check: ShopifyVerification;
+  /** Only the repaired fields that Shopify now really has - not merely the ones that were re-sent. */
+  repaired: string[];
+  /** Shopify's own validation messages for the repair (never tokens), so a failed repair is explained instead of silently ignored. */
+  errors: string[];
+}
+
+/**
+ * Repairs what can be repaired (shipping address, metafields), then reads the order back. A field counts as repaired only when the read-back confirms it; Shopify's userErrors are returned, not discarded.
+ * Idempotent: it only re-sends fields that are missing, so repeating it changes nothing once the order is complete.
+ */
+export async function repairAndVerify(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, check: ShopifyVerification, expectedTotal?: string): Promise<ShopifyRepairOutcome> {
+  if (check.missing.length === 0) return { check, repaired: [], errors: [] };
+  const fix = await repairShopifyOrderFields(client, shopifyOrderId, sent, check.missing);
+  if (fix.attempted.length === 0) return { check, repaired: [], errors: fix.errors };
+  const after = await verifyShopifyOrder(client, shopifyOrderId, sent, expectedTotal);
+  const stillMissing = (field: string) => after.missing.some((m) => m === field || m.startsWith(`${field}.`));
+  return { check: after, repaired: fix.attempted.filter((field) => !stillMissing(field)), errors: fix.errors };
 }

@@ -6,6 +6,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/stores/auth-store";
 import { useLoginMutation } from "@/lib/api-client/mutations/auth.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
+import { authApi } from "@/lib/api-client/endpoints/auth.api";
 import { attendanceApi } from "@/lib/api-client/endpoints/attendance.api";
 import type { LoginPayload } from "@/lib/api-client/types/auth.types";
 
@@ -41,6 +42,8 @@ export function useAuth() {
     if (useAuthStore.getState().user?.role === "SALESPERSON") {
       await attendanceApi.end().catch(() => {});
     }
+    // Revoke the refresh cookie server-side too, so a copy of it dies with this logout. Best effort, same reasoning as above.
+    await authApi.logout().catch(() => {});
     queryClient.clear();
     clearSession();
     router.push("/login");

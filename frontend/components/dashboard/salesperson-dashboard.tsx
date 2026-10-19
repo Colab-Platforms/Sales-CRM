@@ -69,7 +69,7 @@ export function SalespersonDashboardView({ data }: { data: SalespersonDashboard 
                 data.recentLeads.map((lead) => (
                   <TableRow key={lead.id}>
                     <TableCell className="pl-5">
-                      <div className="font-semibold">
+                      <div className="font-medium">
                         {lead.firstName} {lead.lastName ?? ""}
                       </div>
                       <div className="font-mono text-xs text-muted-foreground">

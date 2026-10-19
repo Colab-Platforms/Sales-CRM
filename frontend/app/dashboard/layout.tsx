@@ -35,14 +35,16 @@ function DashboardShell({ children }: { children: ReactNode }) {
       {/* <SidebarInset> */}
       {/* <div className="flex flex-1 flex-col gap-6 p-6">{children}</div> */}
       {/* Transparent so the paper dot-grid painted on <body> shows in the gutters. */}
-      <SidebarInset className="bg-transparent">
-        <SiteHeader showFollowUps={user.role !== "HR"} />
+      {/* min-w-0: a flex child otherwise grows to its widest content, so one wide table would stretch the whole
+          page and slide it sideways under the sidebar. With it, wide tables scroll inside their own container. */}
+      <SidebarInset className="min-w-0 bg-transparent">
+        <SiteHeader showFollowUps={user.role !== "HR" && user.role !== "RECRUITER"} />
         {/* Global: call back / follow-up reminders fire on any dashboard page -
             except HR, who has no leads and isn't allowed to hit this endpoint. */}
-        {user.role !== "HR" ? <FollowUpReminders /> : null}
+        {user.role !== "HR" && user.role !== "RECRUITER" ? <FollowUpReminders /> : null}
         {/* Global: starts the salesperson's shift and holds their presence stream open on any page. */}
         <AttendanceProvider />
-        <div className="mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto flex w-full max-w-[1600px] min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
           {children}
         </div>
       </SidebarInset>

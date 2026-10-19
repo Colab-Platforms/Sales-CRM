@@ -9,6 +9,7 @@ import { SalespersonProfileView } from "@/components/profile/salesperson-profile
 import { ManagerProfileView } from "@/components/profile/manager-profile-view";
 import { AdminProfileView } from "@/components/profile/admin-profile-view";
 import { HrProfileView } from "@/components/profile/hr-profile-view";
+import { RecruiterProfileView } from "@/components/profile/recruiter-profile-view";
 
 export default function ProfilePage() {
   const { data: profile, isPending, error } = useQuery(profileQueryOptions());
@@ -37,6 +38,7 @@ export default function ProfilePage() {
           {profile.role === "MANAGER" && <ManagerProfileView profile={profile} />}
           {profile.role === "ADMIN" && <AdminProfileView profile={profile} />}
           {profile.role === "HR" && <HrProfileView profile={profile} />}
+          {profile.role === "RECRUITER" && <RecruiterProfileView profile={profile} />}
         </>
       )}
     </div>

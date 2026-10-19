@@ -3,22 +3,29 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useDashboard } from "@/hooks/useDashboard";
+import { useAuthStore } from "@/stores/auth-store";
+import { HOME_BY_ROLE } from "@/components/app-sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SalespersonDashboardView } from "@/components/dashboard/salesperson-dashboard";
 import { ManagerSalesDashboard } from "@/components/manager-dashboard/manager-sales-dashboard";
 import { AdminDashboardView } from "@/components/dashboard/admin-dashboard";
+import { LeadDistributionDashboard } from "@/components/abandonment/lead-distribution-dashboard";
+import { TelecallerLeadSummary } from "@/components/abandonment/telecaller-lead-summary";
 
 export default function DashboardPage() {
-  const { data, isLoading, error } = useDashboard();
   const router = useRouter();
+  const role = useAuthStore((s) => s.user?.role);
+  const { data, isLoading, error } = useDashboard();
 
+  // HR and recruiters have no dashboard - send them to their main page instead.
+  const home = role ? HOME_BY_ROLE[role] : undefined;
   useEffect(() => {
-    if (data?.role === "HR") {
-      router.replace("/dashboard/groups");
-    }
-  }, [data, router]);
+    if (home) router.replace(home);
+  }, [home, router]);
 
-  if (isLoading || data?.role === "HR") {
+  if (home) return null;
+
+  if (isLoading) {
     return (
       <div className="space-y-6">
         <div className="space-y-2">
@@ -45,9 +52,24 @@ export default function DashboardPage() {
 
   return (
     <>
-      {data.role === "SALESPERSON" && <SalespersonDashboardView data={data} />}
-      {data.role === "MANAGER" && <ManagerSalesDashboard />}
-      {data.role === "ADMIN" && <AdminDashboardView data={data} />}
+      {data.role === "SALESPERSON" && (
+        <div className="space-y-8">
+          <TelecallerLeadSummary />
+          <SalespersonDashboardView data={data} />
+        </div>
+      )}
+      {data.role === "MANAGER" && (
+        <div className="space-y-8">
+          <ManagerSalesDashboard />
+          <LeadDistributionDashboard />
+        </div>
+      )}
+      {data.role === "ADMIN" && (
+        <div className="space-y-8">
+          <AdminDashboardView data={data} />
+          <LeadDistributionDashboard />
+        </div>
+      )}
     </>
   );
 }

@@ -8,6 +8,7 @@ import CallingService from "./calling.service.js";
 import { transcriptEventName, transcriptEvents, type TranscriptEventPayload } from "./calling.events.js";
 import {
   validateLeadIdParamSchema,
+  validateApplicationIdParamSchema,
   validateInitiateCallBodySchema,
   validateVirtualNumberIdParamSchema,
   validateCreateVirtualNumberSchema,
@@ -110,6 +111,39 @@ export const listLeadCalls = async (req: AuthRequest, res: Response): Promise<vo
       return;
     }
     const result = await callingService.listCallsForLead(req.user!, value.leadId);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const initiateApplicationCall = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error: paramError, value: params } = validateApplicationIdParamSchema(req.params);
+    if (paramError) {
+      sendResponse(res, false, null, paramError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const { error: bodyError, value: body } = validateInitiateCallBodySchema(req.body);
+    if (bodyError) {
+      sendResponse(res, false, null, bodyError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await callingService.initiateApplicationCall(req.user!, params.applicationId, body.virtualNumberId);
+    sendResponse(res, true, result, "Call initiated.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listApplicationCalls = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateApplicationIdParamSchema(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await callingService.listCallsForApplication(req.user!, value.applicationId);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);

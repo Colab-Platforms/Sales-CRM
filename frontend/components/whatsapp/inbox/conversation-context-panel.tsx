@@ -19,7 +19,10 @@ import {
   UserX,
   Zap,
 } from "lucide-react";
-import { useCustomer360 } from "@/hooks/useCustomers";
+import { useQueryClient } from "@tanstack/react-query";
+import { useConversationCustomer } from "@/hooks/useConversationCustomer";
+import { whatsappConversationKeys } from "@/lib/api-client/queries/whatsapp-conversation.queries";
+import { whatsappHistoryKeys } from "@/lib/api-client/queries/whatsapp-history.queries";
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
 import { EditLeadDialog } from "@/components/leads/edit-lead-dialog";
 import { useAuthStore } from "@/stores/auth-store";
@@ -180,6 +183,9 @@ function ActionsCard({
   canSendWhatsApp,
   onSendWhatsApp,
   onCreateOrder,
+  canCreateOrder,
+  createOrderBlockedReason,
+  onRetryCreateOrderAccess,
   isArchived,
   onDeleteChat,
   onDeleteCustomer,
@@ -190,6 +196,10 @@ function ActionsCard({
   canSendWhatsApp: boolean;
   onSendWhatsApp: () => void;
   onCreateOrder: () => void;
+  canCreateOrder: boolean;
+  createOrderBlockedReason?: string | null;
+  /** Offered next to the blocked reason when the access decision itself failed to load. */
+  onRetryCreateOrderAccess?: () => void;
   isArchived: boolean;
   onDeleteChat: () => void;
   onDeleteCustomer: () => void;
@@ -220,7 +230,7 @@ function ActionsCard({
           <UserPlus data-icon="inline-start" />
           Add Contact
         </Button>
-        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onEditContact} disabled={!data}>
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onEditContact} disabled={!data || Boolean(data.readOnly)}>
           <Pencil data-icon="inline-start" />
           Rename / Edit Contact
         </Button>
@@ -228,11 +238,11 @@ function ActionsCard({
           <MessageCircle data-icon="inline-start" />
           Send WhatsApp
         </Button>
-        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onCreateOrder} disabled={!data}>
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onCreateOrder} disabled={!canCreateOrder} title={!canCreateOrder ? createOrderBlockedReason ?? undefined : undefined}>
           <ShoppingCart data-icon="inline-start" />
           Create Order
         </Button>
-        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onDeleteChat} disabled={!data}>
+        <Button size="sm" variant="outline" className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal" onClick={onDeleteChat} disabled={!data || Boolean(data.readOnly)}>
           {isArchived ? <ArchiveRestore data-icon="inline-start" /> : <Archive data-icon="inline-start" />}
           {isArchived ? "Restore Chat" : "Delete Chat"}
         </Button>
@@ -241,11 +251,17 @@ function ActionsCard({
           variant="outline"
           className="h-auto min-h-8 w-full min-w-0 justify-center py-1.5 text-center leading-tight whitespace-normal text-destructive hover:bg-destructive/10 hover:text-destructive"
           onClick={onDeleteCustomer}
-          disabled={!data}
+          disabled={!data || Boolean(data.readOnly)}
         >
           <UserX data-icon="inline-start" />
           Delete Customer
         </Button>
+        {!canCreateOrder && createOrderBlockedReason ? (
+          <div className="col-span-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground" data-testid="create-order-blocked">
+            <span>{createOrderBlockedReason}</span>
+            {onRetryCreateOrderAccess ? <button type="button" className="font-medium text-primary hover:underline" onClick={onRetryCreateOrderAccess}>Retry</button> : null}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -311,6 +327,9 @@ export function ConversationContextPanel({
   canSendWhatsApp,
   onSendWhatsApp,
   onCreateOrder,
+  canCreateOrder,
+  createOrderBlockedReason,
+  onRetryCreateOrderAccess,
   isArchived,
   onDeleteChat,
   onDeleteCustomer,
@@ -319,11 +338,16 @@ export function ConversationContextPanel({
   canSendWhatsApp: boolean;
   onSendWhatsApp: () => void;
   onCreateOrder: () => void;
+  /** Server decision for this chat. Omitted = the previous rule (an editable Customer 360 record). */
+  canCreateOrder?: boolean;
+  createOrderBlockedReason?: string | null;
+  onRetryCreateOrderAccess?: () => void;
   isArchived: boolean;
   onDeleteChat: () => void;
   onDeleteCustomer: () => void;
 }) {
-  const { data, isLoading, error } = useCustomer360(leadId);
+  const { data, isLoading, error, notFound, refetch, isFetching } = useConversationCustomer(leadId);
+  const queryClient = useQueryClient();
   const [addContactOpen, setAddContactOpen] = useState(false);
   const [editContactOpen, setEditContactOpen] = useState(false);
 
@@ -337,16 +361,54 @@ export function ConversationContextPanel({
           <Skeleton className="h-24 w-full shrink-0" />
           <Skeleton className="h-28 w-full shrink-0" />
         </>
+      ) : notFound ? (
+        // A genuine contact with no CRM customer: say so honestly and offer to create one (never the misleading "Customer not found").
+        <Card className="shrink-0" data-testid="no-customer-linked">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><UserPlus className="size-4" />No customer record yet</CardTitle>
+            <CardDescription>This WhatsApp contact is not linked to a customer in the CRM.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button size="sm" className="w-full" onClick={() => setAddContactOpen(true)}>Create customer</Button>
+          </CardContent>
+        </Card>
       ) : error || !data ? (
-        <p className="text-sm text-destructive">{error ?? "Could not load customer."}</p>
+        <>
+        <div role="alert" className="shrink-0 space-y-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive" data-testid="customer-panel-error">
+          <p>{error ?? "Could not load this customer."}</p>
+          <Button size="sm" variant="outline" disabled={isFetching} onClick={() => refetch()}>{isFetching ? "Retrying…" : "Try again"}</Button>
+        </div>
+        <ActionsCard
+          data={null}
+          canSendWhatsApp={canSendWhatsApp}
+          onSendWhatsApp={onSendWhatsApp}
+          onCreateOrder={onCreateOrder}
+          canCreateOrder={canCreateOrder ?? false}
+          createOrderBlockedReason={createOrderBlockedReason}
+          onRetryCreateOrderAccess={onRetryCreateOrderAccess}
+          isArchived={isArchived}
+          onDeleteChat={onDeleteChat}
+          onDeleteCustomer={onDeleteCustomer}
+          onAddContact={() => {}}
+          onEditContact={() => {}}
+        />
+        </>
       ) : (
         <>
+          {data.readOnly ? (
+            <p className="shrink-0 rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground" data-testid="read-only-note">
+              This customer belongs to another team. You can see their details and orders and reply on WhatsApp; editing, orders and removing are available to their team.
+            </p>
+          ) : null}
           <CustomerCard customer={data} />
           <ActionsCard
             data={data}
             canSendWhatsApp={canSendWhatsApp}
             onSendWhatsApp={onSendWhatsApp}
             onCreateOrder={onCreateOrder}
+            canCreateOrder={canCreateOrder ?? !data.readOnly}
+            createOrderBlockedReason={createOrderBlockedReason}
+            onRetryCreateOrderAccess={onRetryCreateOrderAccess}
             isArchived={isArchived}
             onDeleteChat={onDeleteChat}
             onDeleteCustomer={onDeleteCustomer}
@@ -361,7 +423,16 @@ export function ConversationContextPanel({
       <AiHandoffCard leadId={leadId} />
       <OrderDraftCard leadId={leadId} />
 
-      <CreateLeadDialog open={addContactOpen} onOpenChange={setAddContactOpen} onDone={() => setAddContactOpen(false)} />
+      <CreateLeadDialog
+        open={addContactOpen}
+        onOpenChange={setAddContactOpen}
+        onDone={() => {
+          setAddContactOpen(false);
+          // a customer created from this panel shows up immediately: refresh this conversation's customer and the Inbox list
+          void queryClient.invalidateQueries({ queryKey: whatsappConversationKeys.all });
+          void queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
+        }}
+      />
       <EditLeadDialog leadId={leadId} open={editContactOpen} onOpenChange={setEditContactOpen} onDone={() => setEditContactOpen(false)} />
     </div>
   );

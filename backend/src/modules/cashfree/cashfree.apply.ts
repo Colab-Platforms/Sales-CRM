@@ -34,6 +34,40 @@ export function canTransition(from: PaymentStatus, to: PaymentStatus): boolean {
   }
 }
 
+/**
+ * Cashfree reports a link as paid (or a delivery claims a payment) for an amount that is NOT the amount the CRM expects. It is never applied as paid - but it must not vanish into a log
+ * line either: the money may really have moved, so an admin has to see it. Writes ONE audit row per payment and distinct reported amount (a retried delivery or a second Refresh adds
+ * nothing) and leaves the payment's status exactly as it was.
+ */
+export async function recordAmountMismatch(tx: Db, paymentId: string, info: { expected: string; reported: string; via: "webhook" | "refresh"; source: ActivitySource; now?: Date }): Promise<"recorded" | "already_recorded" | "not_found"> {
+  const now = info.now ?? new Date();
+  const head = await tx.payment.findUnique({ where: { id: paymentId }, select: { orderId: true } });
+  if (!head) return "not_found";
+  await advisoryLock(tx, orderLockKey(head.orderId));
+  const payment = await tx.payment.findUnique({ where: { id: paymentId }, select: { id: true, orderId: true, externalSource: true, externalId: true, order: { select: { leadId: true, orderNumber: true } } } });
+  if (!payment || payment.externalSource !== "CASHFREE") return "not_found";
+  const already = await tx.activity.findFirst({
+    where: { orderId: payment.orderId, type: ActivityType.PAYMENT_MISMATCH_DETECTED, referenceType: PAYMENT_REFERENCE_TYPE, referenceId: payment.id, metadata: { path: ["reportedAmount"], equals: info.reported } },
+    select: { id: true },
+  });
+  if (already) return "already_recorded";
+  await tx.activity.create({
+    data: {
+      leadId: payment.order.leadId,
+      orderId: payment.orderId,
+      source: info.source,
+      type: ActivityType.PAYMENT_MISMATCH_DETECTED,
+      referenceType: PAYMENT_REFERENCE_TYPE,
+      referenceId: payment.id,
+      title: `Cashfree reported ${info.reported} for a payment link of ${info.expected} - not applied as paid (order ${payment.order.orderNumber})`,
+      description: "The payment was NOT marked paid because the amount differs from the link. Check the Cashfree dashboard for this link and resolve it manually.",
+      metadata: { provider: "CASHFREE", linkId: payment.externalId, linkAmount: info.expected, reportedAmount: info.reported, via: info.via, applied: false } as Prisma.InputJsonValue,
+      createdAt: now,
+    },
+  });
+  return "recorded";
+}
+
 export interface PaymentUpdate {
   /** The status Cashfree reports, or null to only record details. */
   status: "SUCCESS" | "FAILED" | "PROCESSING" | null;

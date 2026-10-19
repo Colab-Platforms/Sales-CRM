@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
+import { getLeadScope, getOrderFlowScope, type DbClient } from "@/lib/leadScope.js";
 import { scopedLeadWhere } from "../customers/customers.filters.js";
 import { canViewAllWhatsAppConversations } from "./whatsapp.history.filters.js";
 import { siblingLeadIds } from "./whatsapp.matching.js";
@@ -163,6 +163,8 @@ class WhatsAppConversationService {
     // The contact the conversation is with, so the Inbox can render its header without the (team-scoped) Customer 360 lookup. Name and phone only - the same the list already shows.
     const lead = await this.db.lead.findUnique({ where: { id: leadId }, select: { firstName: true, lastName: true, mobile: true, normalizedMobile: true, leadNumber: true } });
     if (lead) detail.contact = { name: [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim() || (lead.mobile ?? lead.normalizedMobile ?? "Unknown"), mobile: lead.mobile ?? lead.normalizedMobile, leadNumber: lead.leadNumber };
+    // Whether THIS user may create an order from this chat, decided on the server (never inferred from an optional lookup in the browser). Independent of WhatsApp consent and of the payment-options request.
+    Object.assign(detail, await this.orderEligibility(user, leadId, lead?.normalizedMobile ?? null));
     // One customer = one thread: unread covers every lead that shares this phone, and opening the conversation clears them together (see markRead).
     if (canViewAllWhatsAppConversations(user.role)) {
       const ids = await siblingLeadIds(this.db, leadId);
@@ -173,6 +175,26 @@ class WhatsAppConversationService {
       }
     }
     return detail;
+  }
+
+  /**
+   * Create Order from a chat. The Inbox shows ONE row per customer phone, represented by the newest message's lead - but the same phone can sit on several leads. The order is created under the lead this
+   * user is actually entitled to among the leads that share the phone (the chat's own lead first; otherwise one they own or whose chat is assigned to them), never under a lead they cannot work and never
+   * as a new customer. Needs a usable phone number. Independent of WhatsApp consent and of the payment-options request.
+   */
+  private async orderEligibility(user: AuthUser, leadId: string, normalizedMobile: string | null): Promise<{ canCreateOrder: boolean; createOrderBlockedReason: string | null; orderLead: { id: string; name: string } | null }> {
+    if (!normalizedMobile) return { canCreateOrder: false, createOrderBlockedReason: "This customer has no valid phone number. Add one on the customer record, then try again.", orderLead: null };
+    const scope = await getOrderFlowScope(user, this.db);
+    const siblings = await siblingLeadIds(this.db, leadId); // same canonical phone only, the chat's own lead included
+    const entitled = await this.db.lead.findMany({
+      where: Object.keys(scope).length === 0 ? { id: { in: siblings } } : { AND: [{ id: { in: siblings } }, scope] },
+      select: { id: true, firstName: true, lastName: true, ownerId: true, createdAt: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    // The chat's own lead if allowed; else a lead the user owns; else the oldest allowed one - deterministic, so a retry never picks a different customer record.
+    const pick = entitled.find((l) => l.id === leadId) ?? entitled.find((l) => l.ownerId === user.id) ?? entitled[0];
+    if (pick) return { canCreateOrder: true, createOrderBlockedReason: null, orderLead: { id: pick.id, name: [pick.firstName, pick.lastName].filter(Boolean).join(" ").trim() || "Customer" } };
+    return { canCreateOrder: false, createOrderBlockedReason: "This customer belongs to another team member and has no WhatsApp conversation, so you cannot create an order for them here. Ask a manager or admin to assign the customer to you.", orderLead: null };
   }
 
   async getConversationDetail(user: AuthUser, leadId: string): Promise<ConversationDetail> {

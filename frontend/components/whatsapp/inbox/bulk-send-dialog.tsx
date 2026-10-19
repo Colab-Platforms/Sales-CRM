@@ -25,6 +25,9 @@ const STATUS_LABELS: Record<BulkRecipientStatus, string> = {
   INVALID_PHONE: "No valid phone number",
   TEMPLATE_NOT_SENDABLE: "Template not sendable",
   PROVIDER_ERROR: "Provider issue",
+  NOT_FOUND: "No customer record",
+  NOT_ALLOWED: "No access",
+  DUPLICATE_PHONE: "Duplicate phone",
   CUSTOMER_DEACTIVATED: "Customer deactivated",
 };
 

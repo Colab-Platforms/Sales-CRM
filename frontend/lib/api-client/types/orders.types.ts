@@ -106,10 +106,16 @@ export interface CreateManualOrderItemInput {
 
 export interface CreateManualOrderInput {
   leadId: string;
+  /** The abandoned checkout the form was prefilled from (the server checks it belongs to this customer and records it on the order). */
+  abandonmentId?: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
   // One per order ATTEMPT (reused across retries of that same attempt) - the backend collapses a double submit with the same key into one order.
   idempotencyKey?: string;
+  // Set only after the server warned that a matching recent order exists and the user confirmed this is a separate purchase.
+  acknowledgeDuplicate?: boolean;
+  /** Replace this earlier unpaid prepaid order of the customer (price / discount changed): it is cancelled with its payment link before the new order is created. */
+  supersedesOrderId?: string;
   shippingAddress?: {
     name?: string;
     line1?: string;
@@ -124,6 +130,7 @@ export interface CreateManualOrderInput {
     area?: string;
     street?: string;
     landmark?: string;
+    deliveryInstructions?: string;
     addressType?: "HOME" | "WORK" | "OTHER";
   };
   shippingPincode?: string;
@@ -145,7 +152,8 @@ export interface CreateManualOrderInput {
   discountReason?: string;
 }
 
-export type ShopifyPushStatus = "created" | "already_linked" | "failed";
+/** awaiting_payment = a prepaid order: the Shopify order is created only after Cashfree verifies the payment. */
+export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment";
 
 export interface ShopifyPushResult {
   status: ShopifyPushStatus;
@@ -175,11 +183,22 @@ export interface OrderPaymentLinkResult {
 export type OrderNotifyVia = "FREE_TEXT" | "TEMPLATE";
 export type WhatsAppProviderName = "META" | "AISENSY" | "GUPSHUP";
 
+/** The QR image of a prepaid payment link is its own WhatsApp message with its own outcome (the link text can be sent while the image fails). */
+export interface PaymentQrResult {
+  status: "SENT" | "FAILED" | "NOT_SENT";
+  paymentId: string;
+  reason?: string;
+  messageId?: string;
+  at: string;
+}
+
 export interface OrderNotifyResult {
   sent: boolean;
   via: OrderNotifyVia | null;
   provider: WhatsAppProviderName | null;
   reason?: string;
+  /** Prepaid only: the outcome of the separate QR image message. */
+  qr?: PaymentQrResult;
   /** The approved template that was sent (its name, never the provider id). Present for a template send. */
   templateName?: string;
 }
@@ -382,6 +401,19 @@ export interface PaymentDetail {
   paymentExpiresAt: string | null;
 }
 
+/** The verified outcome of the last CRM -> Shopify sync (see backend ShopifySyncRecord). */
+export interface ShopifySyncRecord {
+  status: "complete" | "partial" | "failed";
+  missing: string[];
+  omitted: string[];
+  repaired: string[];
+  customer: string;
+  attemptedAt: string;
+  verifiedAt: string | null;
+  retryAdvice: "NONE" | "RETRY" | "ADMIN";
+  error: string | null;
+}
+
 export interface OrderDetail {
   id: string;
   orderNumber: string;
@@ -411,6 +443,12 @@ export interface OrderDetail {
   confirmedBy?: { id: string; name: string } | null;
   confirmationTag?: string | null;
   shopifyConfirmationTag?: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // Who created the order (snapshot taken at creation), the "Order Created by <name>" tag derived from it and its Shopify sync state. The same for every viewer.
+  createdByUser?: { id: string; name: string } | null;
+  creatorTag?: string | null;
+  /** Verified outcome of the last Shopify sync; null for orders pushed before this existed. */
+  shopifySync?: ShopifySyncRecord | null;
+  shopifyCreatorTag?: { status: "synced" | "failed"; tag?: string; reason?: string; syncedAt?: string; failedAt?: string } | null;
   // The last customer WhatsApp notification about this order as remembered by the backend (null = never attempted).
   whatsappNotification: (OrderNotifyResult & { at: string }) | null;
   createdAt: string;
@@ -432,6 +470,8 @@ export interface OrderDetail {
     name: string;
     mobile: string | null;
     email: string | null;
+    /** The abandoned lead of THIS customer that the viewer may open (the checkout the order came from, else the latest); null if none / not allowed. */
+    abandonmentId?: string | null;
   };
   leadSource: { id: string; name: string } | null;
   bookedBy: { id: string; name: string; username: string } | null;
@@ -525,7 +565,15 @@ export function parseLiveOrderId(id: string): string | null {
   } catch {
     // Malformed percent-encoding - fall through with the original string (won't match the prefix).
   }
-  return decoded.startsWith(LIVE_ORDER_ID_PREFIX) ? decoded.slice(LIVE_ORDER_ID_PREFIX.length) : null;
+  if (decoded.startsWith(LIVE_ORDER_ID_PREFIX)) return normalizeLiveExternalId(decoded.slice(LIVE_ORDER_ID_PREFIX.length));
+  // A bare Shopify order id (18933143797949) or the full GID (gid://shopify/Order/18933143797949) names the same order. A CRM order id is a UUID, which never matches either form.
+  const bare = /^\d+$/.test(decoded) ? decoded : /^gid:\/\/shopify\/Order\/(\d+)$/.exec(decoded)?.[1];
+  return bare ?? null;
+}
+
+function normalizeLiveExternalId(value: string): string {
+  const gid = /^gid:\/\/shopify\/Order\/(\d+)$/.exec(value.trim());
+  return gid ? gid[1]! : value.trim();
 }
 
 // If the Shopify customer can be matched (by phone) to an existing CRM lead - a pointer to the real
@@ -543,6 +591,8 @@ export interface LiveOrderDetailResult {
   liveTracking: Record<string, LiveTracking>;
   crmLink?: LiveOrderCrmLink | null;
   error?: string;
+  /** Set when the order is already synced into the CRM: open that CRM order instead of this Shopify-only view. */
+  crmOrderId?: string;
 }
 
 // GET /orders/live/customer/:customerId/history - "Previous Orders" on the live detail page, cursor-paginated.
@@ -607,4 +657,21 @@ export interface OrderFilterOptions {
   salespeople: { id: string; name: string }[];
   /** The CRM's own lead sources. */
   leadSources: { id: string; name: string }[];
+}
+
+export interface MarkPaidInput {
+  /** How the payment was verified (required). */
+  reason: string;
+  /** UTR / UPI transaction id / receipt number, when known. */
+  reference?: string;
+}
+
+export interface MarkPaidResult {
+  orderId: string;
+  orderNumber: string;
+  alreadyPaid: boolean;
+  orderStatus: string;
+  payment: { id: string; verification: "MANUAL_EXTERNAL" | "CASHFREE"; amount: string; paidAt: string | null };
+  shopify: { linked: boolean; paymentSync: "synced" | "failed" | "pending"; reason?: string };
+  openCashfreeLink: boolean;
 }

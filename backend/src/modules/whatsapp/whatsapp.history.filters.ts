@@ -93,6 +93,7 @@ export interface MessageHistoryRow {
 export function mapMessageHistoryItem(row: MessageHistoryRow, starred: boolean = false): WhatsAppMessageHistoryItem {
   return {
     starred,
+    media: null, // filled in for inbound files by WhatsAppService (one query per page)
     id: row.id,
     provider: row.provider,
     direction: row.direction,

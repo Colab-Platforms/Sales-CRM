@@ -318,6 +318,7 @@ class LeadService {
           actor: { id: user.id, role: user.role },
           type: resultingStatus === "CALL_BACK" ? TaskType.CALLBACK : TaskType.FOLLOW_UP,
           scheduledAt: followUpAt,
+          note: data.note,
         });
       } else if (statusChanged) {
         // Moved on to another status - any reminder still pending on the lead has been dealt with.
@@ -651,6 +652,37 @@ class LeadService {
       throw new ApiError("Salesperson is not part of your team", STATUS_CODES.BAD_REQUEST);
     }
     return { user: salesperson, groupId: null as string | null };
+  }
+
+  /**
+   * Admin / HR assigning (or reassigning) leads straight to a telecaller. One transaction: the lead rows are locked (in id order, so two concurrent assignments of the same leads queue
+   * up instead of interleaving or deadlocking), a lead that already belongs to that telecaller is left alone (no duplicate history row), and any failure rolls the whole batch back.
+   * A lead nobody manages yet follows the telecaller's team manager (so that manager sees it); an existing manager is never changed.
+   */
+  async bulkAssignSalespersonsByStaff(actorId: string, body: { leadIds: string[]; salespersonId: string }, db: Pick<typeof prisma, "$transaction" | "user" | "groupMember"> = prisma) {
+    const salesperson = await db.user.findUnique({ where: { id: body.salespersonId } });
+    if (!salesperson || salesperson.role !== Role.SALESPERSON || salesperson.status !== UserStatus.ACTIVE) {
+      throw new ApiError("Invalid or inactive telecaller", STATUS_CODES.BAD_REQUEST);
+    }
+    const membership = await db.groupMember.findFirst({ where: { userId: salesperson.id, isActive: true, group: { status: "ACTIVE" } }, select: { groupId: true, group: { select: { managerId: true } } } });
+    const groupId = membership?.groupId ?? null;
+    const teamManagerId = membership?.group.managerId ?? salesperson.reportingManagerId ?? null;
+    const leadIds = [...new Set(body.leadIds)].sort();
+
+    return db.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM leads WHERE id = ANY(${leadIds}::uuid[]) ORDER BY id FOR UPDATE`;
+        const leads = await this.fetchLeadsOrThrow(tx, leadIds);
+        const toAssign = leads.filter((lead) => lead.ownerId !== salesperson.id);
+        if (toAssign.length > 0) {
+          await this.bulkAssignLeadsToSalesperson(tx, toAssign.map((lead) => ({ lead, salesperson, groupId })), actorId, AssignmentType.MANUAL);
+          const unmanaged = toAssign.filter((lead) => !lead.assignedManagerId).map((lead) => lead.id);
+          if (teamManagerId && unmanaged.length > 0) await tx.lead.updateMany({ where: { id: { in: unmanaged } }, data: { assignedManagerId: teamManagerId } });
+        }
+        return { assignedCount: toAssign.length, unchangedCount: leads.length - toAssign.length };
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
   }
 
   async bulkAssignSalespersons(managerId: string, body: BulkAssignSalespersonBody) {

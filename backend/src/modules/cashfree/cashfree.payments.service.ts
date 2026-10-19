@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope } from "@/lib/leadScope.js";
+import { getLeadScope, getOrderFlowScope } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -16,7 +16,7 @@ import type { WhatsAppMessageSummary } from "../whatsapp/whatsapp.types.js";
 import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { readOffer } from "../orders/orders.prepaid-upgrade.hooks.js";
 import { reconcileCashfreePayment } from "./cashfree.reconcile.js";
-import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE } from "./cashfree.apply.js";
+import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE, recordAmountMismatch } from "./cashfree.apply.js";
 import { CashfreeClient, type CashfreeLink, type CashfreeLinkOrder, type CashfreeOrderPayment, type CreateLinkRequest } from "./cashfree.client.js";
 import { CashfreeConfigError, isCashfreeEnabled, loadCashfreeConfig, type CashfreeConfig } from "./cashfree.config.js";
 
@@ -199,7 +199,7 @@ class CashfreePaymentsService {
   private async prepare(tx: Db, user: AuthUser, orderId: string, config: CashfreeConfig, opts: { amountCents?: number; upgradeId?: string } = {}) {
     await advisoryLock(tx, orderLockKey(orderId));
     const now = this.now();
-    const scope = await getLeadScope(user, tx);
+    const scope = await getOrderFlowScope(user, tx);
     const order = await tx.order.findFirst({
       where: scopedOrderWhere(orderId, scope),
       select: {
@@ -417,7 +417,8 @@ class CashfreePaymentsService {
     const config = this.config();
     const payment = await this.runner.$transaction((tx) => tx.payment.findFirst({ where: { id: paymentId, externalSource: "CASHFREE" }, select: PAYMENT_SELECT }));
     if (!payment) return "not_found";
-    if (!OPEN.has(payment.status)) return "unchanged";
+    // An open payment is asked about at Cashfree; so is a SUCCESS one, because its prepaid order may be stuck awaiting payment (the confirmation step never completed) and reconciliation finishes it. Anything else is final.
+    if (!OPEN.has(payment.status) && payment.status !== PaymentStatus.SUCCESS) return "unchanged";
     const result = await this.reconcileFromCashfree(config, payment, { source: ActivitySource.SYSTEM });
     return result.outcome === "updated" ? "updated" : result.outcome === "not_found" ? "not_found" : "unchanged";
   }
@@ -450,6 +451,8 @@ class CashfreePaymentsService {
     if (update.status === "SUCCESS" && toCents(link.linkAmountPaid) !== toCents(payment.amount.toString())) {
       update.status = null;
       update.meta = { ...update.meta, amountMismatch: { expected: payment.amount.toString(), paid: link.linkAmountPaid } };
+      // not applied as paid, but visible to admins in the order's audit trail (once per distinct reported amount)
+      if (link.linkAmountPaid) await this.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount.toString(), reported: link.linkAmountPaid!, via: "refresh", source: ctx.source, now: this.now() }));
     }
     return reconcileCashfreePayment({ runner: this.runner, now: () => this.now(), getShopifyClient: this.deps.getShopifyClient, notifyDeps: this.deps.notifyDeps }, paymentId, update, ctx);
   }

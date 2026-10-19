@@ -63,6 +63,8 @@ const shippingAddressSchema = z
     area: optional(z.string().trim().max(160)),
     street: optional(z.string().trim().max(160)),
     landmark: optional(z.string().trim().max(160)),
+    // What the customer asked for at delivery ("leave with the guard") - kept with the address instead of being dropped.
+    deliveryInstructions: optional(z.string().trim().max(255)),
     addressType: optional(z.enum(["HOME", "WORK", "OTHER"], { error: "Address type must be HOME, WORK or OTHER" })),
   })
   .superRefine((a, ctx) => {
@@ -81,6 +83,7 @@ const shippingAddressSchema = z
 
 const createManualOrderSchema = z.object({
   leadId: z.uuid({ error: "Invalid customer id" }),
+  abandonmentId: optional(z.uuid({ error: "Invalid abandoned checkout id" })),
   items: z.array(createManualOrderItemSchema).min(1, "At least one item is required").max(50, "Too many items"),
   paymentMethod: z.enum(PaymentMethod, { error: "Invalid payment method" }),
   shippingAddress: optional(shippingAddressSchema),
@@ -113,6 +116,8 @@ const createManualOrderSchema = z.object({
   whatsappConsent: z.boolean({ error: "whatsappConsent must be true or false" }).optional(),
   discountReason: optional(z.string().trim().max(255)),
   idempotencyKey: optional(z.string().trim().min(8).max(100)),
+  acknowledgeDuplicate: optional(z.boolean()),
+  supersedesOrderId: optional(z.uuid({ error: "Invalid order id" })),
 });
 
 export const validateCreateManualOrder = (body: unknown) => validateSchema<CreateManualOrderInput>(createManualOrderSchema, body);

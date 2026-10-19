@@ -2,7 +2,7 @@
 // It asks Cashfree (read-only GET) about each still-open CRM link and applies the answer through the SAME reconciliation the webhook and Refresh use, so a payment
 // found here ends in exactly the same state. It never creates a payment, starts a payment or refunds. Still-pending links are left alone.
 //   CASHFREE_RECONCILE_MINUTES  how often, in minutes. OPT-IN: unset or 0 = off (so a local/dev server pointed at a real database never reconciles real payments by accident).
-import { PaymentStatus } from "../../../generated/prisma/enums.js";
+import { OrderStatus, PaymentStatus } from "../../../generated/prisma/enums.js";
 import type { TxRunner } from "../integrations/integrations.common.js";
 
 export const DEFAULT_RECONCILE_MINUTES = 0;
@@ -36,7 +36,15 @@ export function createCashfreeReconciler({ runner, reconcile, now = () => new Da
       const since = new Date(now().getTime() - MAX_AGE_HOURS * 3_600_000);
       const open = await runner.$transaction((tx) =>
         tx.payment.findMany({
-          where: { externalSource: "CASHFREE", status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] }, createdAt: { gte: since } },
+          // Still-open links (a missed webhook), plus payments that are already SUCCESS whose prepaid order is stuck awaiting payment (the confirmation step never completed).
+          where: {
+            externalSource: "CASHFREE",
+            createdAt: { gte: since },
+            OR: [
+              { status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] } },
+              { status: PaymentStatus.SUCCESS, order: { is: { status: OrderStatus.PENDING_PAYMENT, source: "SALESPERSON", metadata: { path: ["paymentMode"], equals: "PREPAID" } } } },
+            ],
+          },
           orderBy: { createdAt: "asc" },
           take: BATCH,
           select: { id: true },

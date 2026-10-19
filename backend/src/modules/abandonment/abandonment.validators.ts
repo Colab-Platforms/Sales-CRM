@@ -21,7 +21,20 @@ const leadIdParams = z.object({ leadId: z.uuid({ error: "Invalid lead id" }) });
 // `?status=` from an unset filter is treated the same as absent - same convention as shiprocket.validators.ts.
 const optional = <T extends z.ZodType>(schema: T) => z.preprocess((value) => (value === "" ? undefined : value), schema.optional());
 
-const assignmentEnum = z.enum(["UNASSIGNED", "ASSIGNED_TO_MANAGER", "ASSIGNED_TO_SALESPERSON"]);
+const assignmentEnum = z.enum(["UNASSIGNED", "ASSIGNED_TO_MANAGER", "ASSIGNED_TO_SALESPERSON", "UNASSIGNED_TELECALLER"]);
+
+// The distribution dashboard: the period defaults to today.
+const distributionQuerySchema = z.object({ dateRange: optional(z.enum(["today", "yesterday", "all"], { error: "dateRange must be today, yesterday or all" })).default("today") });
+const ingestionQuerySchema = z.object({ period: optional(z.enum(["today", "yesterday", "all"], { error: "period must be today, yesterday or all" })).default("today") });
+export const validateIngestionQuery = (query: unknown) => validateSchema<{ period: "today" | "yesterday" | "all" }>(ingestionQuerySchema, query);
+
+const reconcileBodySchema = z.object({
+  sinceHours: z.coerce.number({ error: "sinceHours must be a number" }).int().min(1, "sinceHours must be 1 or more").max(168, "sinceHours must be 168 (7 days) or less").optional(),
+  limit: z.coerce.number({ error: "limit must be a number" }).int().min(1, "limit must be 1 or more").max(200, "limit must be 200 or less").optional(),
+});
+export const validateReconcileBody = (body: unknown) => validateSchema<{ sinceHours?: number; limit?: number }>(reconcileBodySchema, body ?? {});
+
+export const validateDistributionQuery = (query: unknown) => validateSchema<{ dateRange: "today" | "yesterday" | "all" }>(distributionQuerySchema, query);
 
 const listQuerySchema = z
   .object({
@@ -32,6 +45,8 @@ const listQuerySchema = z
     type: optional(z.enum(AbandonmentType, { error: "Invalid abandonment type" })),
     dateFrom: optional(z.iso.datetime({ offset: true, error: "dateFrom must be an ISO date-time" }).transform((v) => new Date(v))),
     dateTo: optional(z.iso.datetime({ offset: true, error: "dateTo must be an ISO date-time" }).transform((v) => new Date(v))),
+    // Calendar-day shortcut computed by the SERVER in the reporting timezone (IST), so the browser's own clock/zone never decides which day is "today".
+    dateRange: optional(z.enum(["today", "yesterday", "all"], { error: "dateRange must be today, yesterday or all" })),
     assignment: optional(assignmentEnum),
     managerId: optional(z.uuid()),
     salespersonId: optional(z.uuid()),

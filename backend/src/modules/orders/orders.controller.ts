@@ -22,6 +22,22 @@ export const listOrders = async (req: AuthRequest, res: Response): Promise<void>
   }
 };
 
+export const listMyOrders = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateListOrdersQuery(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+
+    // Always scoped to the authenticated user inside the service: there is no parameter that selects whose orders are listed.
+    const result = await ordersService.listMyOrders(req.user!, value);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getOrder = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateOrderIdParams(req.params);
@@ -62,10 +78,11 @@ export const createOrder = async (req: AuthRequest, res: Response): Promise<void
       sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
       return;
     }
-    const result = await ordersService.createManualOrder(req.user!, value);
+    // From the UI/API a new order that matches a very recent one for the same customer needs an explicit acknowledgement; internal callers (AI order flow, workers) are unaffected.
+    const result = await ordersService.createManualOrder(req.user!, { ...value, rejectRecentTwin: !value.acknowledgeDuplicate && !value.supersedesOrderId });
     sendResponse(res, true, result, "Order created", STATUS_CODES.CREATED);
   } catch (error: any) {
-    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
 
@@ -95,6 +112,20 @@ export const retryShopifyPaymentSync = async (req: AuthRequest, res: Response): 
     }
     const result = await ordersService.retryShopifyPaymentSync(req.user!, value.id);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Re-verify (and repair supported fields of) an order that is already linked to Shopify. Admin / manager only; never creates an order. RBAC + scope are also enforced in the service.
+export const resyncShopifyOrder = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateOrderIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await ordersService.resyncShopifyOrder(req.user!, value.id), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

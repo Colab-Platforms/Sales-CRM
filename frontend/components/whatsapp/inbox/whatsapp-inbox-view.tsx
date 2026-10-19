@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, MessageCircle, MessagesSquare, Plus, Search, Star } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -12,13 +12,14 @@ import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { customerDetailHref } from "@/components/orders/orders-table";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { cn } from "@/lib/utils";
-import { whatsappConversationListQueryOptions } from "@/lib/api-client/queries/whatsapp-history.queries";
+import { whatsappConversationListQueryOptions, whatsappHistoryKeys } from "@/lib/api-client/queries/whatsapp-history.queries";
 import { conversationDetailQueryOptions, messagingCapabilityQueryOptions } from "@/lib/api-client/queries/whatsapp-conversation.queries";
 import { useArchiveConversationMutation, useMarkConversationReadMutation, useUnarchiveConversationMutation } from "@/lib/api-client/mutations/whatsapp-conversation.mutations";
 import { ConfirmActionDialog } from "@/components/confirm-action-dialog";
 import { toast } from "sonner";
 import { ConversationContextPanel } from "./conversation-context-panel";
-import { useCustomer360 } from "@/hooks/useCustomers";
+import { resolveCreateOrderAccess } from "@/lib/whatsapp-payment";
+import { useConversationCustomer } from "@/hooks/useConversationCustomer";
 import { useAuthStore } from "@/stores/auth-store";
 import { SendWhatsAppDialog } from "@/components/whatsapp/send-whatsapp-dialog";
 import { DeleteCustomerDialog } from "@/components/customers/delete-customer-dialog";
@@ -45,6 +46,8 @@ function ConversationListPanel({
   className?: string;
 }) {
   const token = useAuthStore((s) => s.token);
+  const queryClient = useQueryClient();
+  const [createFor, setCreateFor] = useState<string | null>(null); // an unlinked WhatsApp number a customer is being created for
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -205,12 +208,20 @@ function ConversationListPanel({
                   <span className="font-medium">{u.phone}</span>
                   <span className="text-muted-foreground"> · {u.messageCount} message{u.messageCount === 1 ? "" : "s"}</span>
                   {u.lastMessage.body ? <p className="truncate text-muted-foreground">{u.lastMessage.body}</p> : null}
+                  <Button size="xs" variant="outline" className="mt-1" onClick={() => setCreateFor(u.phone)}>Create customer</Button>
                 </li>
               ))}
             </ul>
           </div>
         ) : null}
       </div>
+
+      <CreateLeadDialog
+        open={createFor !== null}
+        onOpenChange={(o) => { if (!o) setCreateFor(null); }}
+        defaultMobile={createFor ?? undefined}
+        onDone={() => { setCreateFor(null); void queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all }); }}
+      />
 
       {data && data.pagination.totalPages > 1 ? (
         <div className="border-t p-2">
@@ -247,7 +258,7 @@ function ConversationListPanel({
 }
 
 function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: () => void }) {
-  const { data, isLoading, error } = useCustomer360(leadId);
+  const { data, isLoading, error } = useConversationCustomer(leadId);
   const [sendOpen, setSendOpen] = useState(false);
   const [createOrderOpen, setCreateOrderOpen] = useState(false);
   const [replyTarget, setReplyTarget] = useState<WhatsAppMessageHistoryItem | null>(null);
@@ -267,6 +278,11 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
   const headerMobile = data ? data.profile.mobile : contact?.mobile;
   const headerLeadNumber = data?.profile.leadNumber ?? contact?.leadNumber;
   const hasPhone = Boolean(headerMobile);
+  // Create Order is decided by the server on the conversation (scope or assignment, plus a usable phone) - not by the optional Customer 360 lookup or the payment-options request.
+  const orderAccess = resolveCreateOrderAccess(conversation.data, data, { detailFailed: conversation.isError });
+  // The order goes under the lead this user is entitled to among the leads that share this chat's phone (usually the chat's own lead) - never a new customer.
+  const orderLeadId = orderAccess.orderLeadId ?? leadId;
+  const orderCustomerName = orderAccess.orderLeadName ?? headerName;
   const markRead = useMarkConversationReadMutation();
   const unread = conversation.data?.unreadCount ?? 0;
   const archiveMutation = useArchiveConversationMutation();
@@ -371,7 +387,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           {/* Below lg there is no right panel at all (see the Actions card at the bottom of this
               component), so the same actions stay reachable here instead of disappearing. */}
           <div className="flex gap-2 lg:hidden">
-            <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!data}>
+            <Button size="sm" variant="outline" onClick={() => setCreateOrderOpen(true)} disabled={!orderAccess.allowed} title={!orderAccess.allowed ? orderAccess.reason ?? undefined : undefined}>
               Create Order
             </Button>
             <Button size="sm" onClick={() => setSendOpen(true)} disabled={!hasPhone}>
@@ -382,7 +398,7 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
                 {isArchived ? "Restore Chat" : "Delete Chat"}
               </Button>
             ) : null}
-            <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteCustomerOpen(true)} disabled={!data}>
+            <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteCustomerOpen(true)} disabled={!data || Boolean(data.readOnly)}>
               Delete Customer
             </Button>
           </div>
@@ -422,6 +438,9 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
           canSendWhatsApp={hasPhone}
           onSendWhatsApp={() => setSendOpen(true)}
           onCreateOrder={() => setCreateOrderOpen(true)}
+          canCreateOrder={orderAccess.allowed}
+          createOrderBlockedReason={orderAccess.reason}
+          onRetryCreateOrderAccess={orderAccess.canRetry ? () => void conversation.refetch() : undefined}
           isArchived={isArchived}
           onDeleteChat={() => setArchiveOpen(true)}
           onDeleteCustomer={() => setDeleteCustomerOpen(true)}
@@ -442,9 +461,9 @@ function ConversationDetailPanel({ leadId, onBack }: { leadId: string; onBack: (
 
       {/* The template dialog needs only the conversation's own contact; the customer's orders (for order-based variables) exist only when the Customer 360 record is available to this viewer. */}
       {headerName ? <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={headerName} orders={data?.orders ?? []} /> : null}
+      {orderCustomerName && orderAccess.allowed ? <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={orderLeadId} customerName={orderCustomerName} customerMobile={headerMobile ?? null} /> : null}
       {data ? (
         <>
-          <CreateOrderDialog open={createOrderOpen} onOpenChange={setCreateOrderOpen} leadId={leadId} customerName={data.profile.name} customerMobile={data.profile.mobile} />
           <DeleteCustomerDialog open={deleteCustomerOpen} onOpenChange={setDeleteCustomerOpen} leadId={leadId} customerName={data.profile.name} onDeactivated={onBack} />
         </>
       ) : null}

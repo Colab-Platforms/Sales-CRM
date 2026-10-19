@@ -336,3 +336,95 @@ export function StackedBarChart({
     </div>
   );
 }
+
+/** Side-by-side daily columns for overlapping measures (e.g. calls / connected / unique leads) that must not be stacked. */
+export function GroupedBarChart({
+  labels,
+  series,
+  format = (v) => String(v),
+  axisFormat,
+  height = 240,
+  tooltipTitles,
+}: {
+  labels: string[];
+  series: StackSeries[];
+  format?: (v: number) => string;
+  /** Shorter form for the y-axis labels; defaults to `format`. */
+  axisFormat?: (v: number) => string;
+  height?: number;
+  tooltipTitles?: string[];
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const top = niceMax(Math.max(0, ...series.flatMap((s) => s.values)));
+  const labelEvery = labels.length > 21 ? 3 : labels.length > 10 ? 2 : 1;
+
+  if (labels.length === 0) return null;
+
+  return (
+    <div>
+      <div className="flex gap-2">
+        <div className="flex shrink-0 flex-col justify-between pb-6 text-right text-[11px] text-muted-foreground tabular-nums" style={{ height }}>
+          {[1, 0.75, 0.5, 0.25, 0].map((f) => (
+            <span key={f} className="leading-none">
+              {(axisFormat ?? format)(Math.round(top * f))}
+            </span>
+          ))}
+        </div>
+        <div className="relative min-w-0 flex-1" style={{ height }} onMouseLeave={() => setHover(null)}>
+          <div className="pointer-events-none absolute inset-x-0 top-0 bottom-6 flex flex-col justify-between">
+            {[0, 1, 2, 3, 4].map((k) => (
+              <div key={k} className="border-t border-dashed border-border/80" />
+            ))}
+          </div>
+          <div className="absolute inset-0 flex gap-1.5 px-1">
+            {labels.map((l, i) => (
+              <div
+                key={l + i}
+                className={cn("relative flex min-w-0 flex-1 flex-col rounded-md", hover === i && "bg-muted/60")}
+                onMouseEnter={() => setHover(i)}
+                onClick={() => setHover(i)}
+              >
+                <div className="flex flex-1 items-end justify-center gap-0.5 px-[12%] pb-6">
+                  {series.map((s) => (
+                    <div
+                      key={s.key}
+                      className={cn("max-w-6 min-w-0 flex-1 rounded-t-[4px]", bgOf(s.colorClass), hover !== null && hover !== i && "opacity-50")}
+                      style={{ height: `${top > 0 ? ((s.values[i] ?? 0) / top) * 100 : 0}%` }}
+                    />
+                  ))}
+                </div>
+                <span className="absolute inset-x-0 bottom-0 h-6 truncate text-center text-[11px] leading-6 text-muted-foreground">{i % labelEvery === 0 ? l : ""}</span>
+                {hover === i ? (
+                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i > labels.length / 2 ? "right-full mr-1" : "left-full ml-1")}>
+                    <p className="mb-1.5 font-semibold">{tooltipTitles?.[i] ?? l}</p>
+                    <dl className="space-y-1">
+                      {series.map((s) => (
+                        <div key={s.key} className="flex items-center justify-between gap-3">
+                          <dt className="flex items-center gap-1.5 text-muted-foreground">
+                            <span className={cn("size-2 rounded-full", bgOf(s.colorClass))} />
+                            {s.label}
+                          </dt>
+                          <dd className="font-medium tabular-nums">{format(s.values[i] ?? 0)}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {series.length > 1 ? (
+        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          {series.map((s) => (
+            <li key={s.key} className="flex items-center gap-1.5">
+              <span className={cn("size-2.5 rounded-sm", bgOf(s.colorClass))} />
+              {s.label}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}

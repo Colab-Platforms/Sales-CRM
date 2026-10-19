@@ -7,6 +7,7 @@ import { validateSchema } from "@/utils/validate.js";
 import WhatsAppConversationService from "./whatsapp.conversation.service.js";
 import WhatsAppOrderConversationService from "./whatsapp.order-conversation.service.js";
 import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
+import CustomersService from "../customers/customers.service.js";
 import WhatsAppMessagingService from "./whatsapp.messaging.service.js";
 import { prisma } from "@/lib/prisma.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
@@ -15,6 +16,7 @@ import { canViewAllWhatsAppConversations } from "./whatsapp.history.filters.js";
 import { ApiError } from "@/utils/apiError.js";
 
 const conversationService = new WhatsAppConversationService();
+const customersService = new CustomersService();
 const orderConversationService = new WhatsAppOrderConversationService();
 const freeTextService = new WhatsAppFreeTextService();
 const messagingService = new WhatsAppMessagingService();
@@ -151,6 +153,27 @@ export const getMessagingCapability = async (req: AuthRequest, res: Response): P
     // Which provider a template send would use (and why not, if it can't): the Send Template dialog filters on this.
     const templates = await messagingService.describeTemplateProvider(req.user!, lead.id);
     sendResponse(res, true, { ...capability, templates }, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+/**
+ * The customer behind a conversation, for the Inbox's right-hand panel (Customer 360 data: identity, source, owner, activity, Next Best Action, orders). The id is normally the lead id the
+ * Inbox lists; a CONVERSATION id is resolved to its lead too. Read-only across teams (see CustomersService.getCustomer360's inboxRead) - it grants no edit/order/delete.
+ */
+export async function resolveConversationLeadId(idOrConversationId: string, db: DbClient = prisma): Promise<string | null> {
+  const lead = await db.lead.findUnique({ where: { id: idOrConversationId }, select: { id: true } });
+  if (lead) return lead.id;
+  const conversation = await db.whatsAppConversation.findUnique({ where: { id: idOrConversationId }, select: { leadId: true } });
+  return conversation?.leadId ?? null;
+}
+
+export const getConversationCustomer = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const leadId = await resolveConversationLeadId(req.params.leadId as string);
+    if (!leadId) throw new ApiError("No customer is linked to this conversation", STATUS_CODES.NOT_FOUND);
+    sendResponse(res, true, await customersService.getCustomer360(req.user!, leadId, { inboxRead: true }), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

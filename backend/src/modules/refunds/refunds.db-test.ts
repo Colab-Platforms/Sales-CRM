@@ -118,11 +118,24 @@ describe("creating a refund request", () => {
     });
   });
 
-  it("scope: another salesperson's order and a manager outside the team look like 'not found'", async () => {
+  it("a refund request uses the same visibility as the order page: anyone who can open the paid order (even a customer with no owner, e.g. from the WhatsApp Inbox) can raise it; it still needs a manager's approval", async () => {
     await inRollback(async (tx, svc) => {
       const w = await world(tx);
-      await rejects(svc.createRequest(w.sales2, w.orderId, body(w, "100")), 404);
-      await rejects(svc.createRequest(w.outsiderManager, w.orderId, body(w, "100")), 404);
+      const order = await tx.order.findUniqueOrThrow({ where: { id: w.orderId }, select: { leadId: true } });
+      await tx.lead.update({ where: { id: order.leadId }, data: { ownerId: null, groupId: null } }); // the incident: an unowned, ungrouped lead
+      const raised = await svc.createRequest(w.sales, w.orderId, body(w, "100"));
+      assert.deepEqual([raised.status, raised.requestedBy.role], ["PENDING", Role.SALESPERSON]);
+      assert.equal((await svc.createRequest(w.outsiderManager, w.orderId, body(w, "50"))).status, "PENDING", "visibility, not lead ownership");
+      assert.equal(await tx.payment.count({ where: { orderId: w.orderId, status: PaymentStatus.REFUNDED } }), 0, "raising a request moves no money");
+    });
+  });
+
+  it("a genuinely unknown order is still 'not found', and HR (who cannot see orders) is refused", async () => {
+    await inRollback(async (tx, svc) => {
+      const w = await world(tx);
+      await rejects(svc.createRequest(w.sales, "00000000-0000-4000-8000-000000000000", body(w, "100")), 404);
+      const hr = await tx.user.create({ data: { name: "HR", username: `hr-${uid()}`, role: Role.HR }, select: { id: true, username: true } });
+      await rejects(svc.createRequest({ id: hr.id, username: hr.username, role: Role.HR }, w.orderId, body(w, "100")), 403);
       assert.equal(await tx.refundRequest.count({ where: { orderId: w.orderId } }), 0);
     });
   });

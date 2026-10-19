@@ -9,7 +9,7 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { ProviderHttpError, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { loadCashfreeConfig, type CashfreeConfig } from "../cashfree/cashfree.config.js";
 import type { CashfreeRefund } from "../cashfree/cashfree.client.js";
-import RefundsService from "./refunds.service.js";
+import RefundsService, { loadOrderRefundInfo, REQUEST_SELECT, viewsFor } from "./refunds.service.js";
 import RefundExecutionService, { applyRefundOutcome, refundIdFor, type RefundApi } from "./refunds.execution.js";
 
 class Rollback extends Error {}
@@ -403,5 +403,80 @@ describe("concurrency (real simultaneous transactions)", () => {
     } finally {
       await cleanup(w);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Real incident: two cancelled CRM orders, each a successful INR 1 Cashfree payment with an APPROVED INR 1 refund request that was never sent. The UI said "remaining refundable 0" although nothing had been
+// refunded: that figure is what NEW requests may still ask for, and the approved request itself reserves the whole payment. Executing was refused on the production Cashfree (flag not set).
+describe("an approved request that reserves the whole payment (the INR 1 incident)", () => {
+  const prodWith = (runner: TxRunner, f: Fake, flag?: string) => new RefundExecutionService(runner, { config: () => PRODUCTION, client: () => f.api, env: flag === undefined ? {} : { CASHFREE_ALLOW_PRODUCTION_REFUNDS: flag } });
+  const queueView = async (tx: Db, id: string) => (await viewsFor(tx, [await tx.refundRequest.findUniqueOrThrow({ where: { id }, select: REQUEST_SELECT })]))[0]!;
+
+  it("zero refundable for NEW requests is the reservation, not a refund: nothing is issued, and the request is still executable for the full amount", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, "1.00");
+      const r = await approved(runner, w, "1");
+      const view = await queueView(tx, r.id);
+      assert.deepEqual([view.status, view.executionStatus, view.refundedAmount, view.remainingRefundableAmount], ["APPROVED", null, "0.00", "0.00"]);
+      const info = await loadOrderRefundInfo(tx, w.orderId);
+      assert.equal(info.payments[0]!.refundableAmount, "0.00", "a second request for the same money is correctly impossible");
+      assert.equal(await pay(tx, w.paymentId).then((p) => p.refundedAmount), null, "nothing was refunded");
+      // ... yet the approved request can still be executed for the whole INR 1 (execution does not count its own reservation against itself)
+      const f = fake();
+      const out = await exec(runner, f).execute(w.admin, r.id);
+      assert.equal(out.sentToProvider, true);
+      assert.equal(f.creates[0]!.body.refund_amount, 1);
+    });
+  });
+
+  it("production: refused with nothing sent and nothing changed while the flag is unset (or anything but 'true'); the sandbox is unaffected", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, "1.00");
+      const r = await approved(runner, w, "1");
+      const f = fake();
+      for (const flag of [undefined, "", "false", "yes", "1"]) await rejects(prodWith(runner, f, flag).execute(w.admin, r.id), 403, /sandbox/);
+      await rejects(prodWith(runner, f).refresh(w.admin, r.id), 403, /sandbox/);
+      assert.deepEqual([f.creates.length, f.gets.length], [0, 0]);
+      const row = await reqRow(tx, r.id);
+      assert.deepEqual([row.status, row.executionStatus, row.executionAttempts, row.refundId], ["APPROVED", null, 0, null]);
+      const p = await pay(tx, w.paymentId);
+      assert.deepEqual([p.status, p.refundedAmount], ["SUCCESS", null]);
+      // the sandbox needs no flag
+      assert.equal((await exec(runner, f, SANDBOX).execute(w.admin, r.id)).sentToProvider, true);
+    });
+  });
+
+  it("only an explicit 'true' lets the production environment execute - and it still sends exactly the approved amount once, and counts nothing until Cashfree confirms", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, "1.00");
+      const r = await approved(runner, w, "1");
+      const f = fake();
+      const out = await prodWith(runner, f, "true").execute(w.admin, r.id);
+      assert.deepEqual([out.sentToProvider, out.request.executionStatus, f.creates.length, f.creates[0]!.body.refund_amount], [true, "PROCESSING", 1, 1]);
+      assert.equal((await pay(tx, w.paymentId)).refundedAmount, null, "not counted until Cashfree says SUCCESS");
+      const again = await prodWith(runner, f, "true").execute(w.admin, r.id);
+      assert.equal(again.sentToProvider, false);
+      assert.equal(f.creates.length, 1, "a second execute never sends a second refund");
+    });
+  });
+
+  it("once the refund is issued (confirmed by Cashfree) the balance is zero because it IS refunded: no further request or execution can spend it", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, "1.00");
+      const r = await approved(runner, w, "1");
+      const f = fake();
+      f.onGet = async (_o, refundId) => refundAnswer({ refundId, refundStatus: "SUCCESS", refundAmount: "1", processedAt: "2026-10-16T12:00:00+05:30" });
+      await prodWith(runner, f, "true").execute(w.admin, r.id);
+      const done = await prodWith(runner, f, "true").refresh(w.admin, r.id);
+      assert.equal(done.executionStatus, "COMPLETED");
+      const p = await pay(tx, w.paymentId);
+      assert.deepEqual([String(p.refundedAmount), p.status], ["1", "REFUNDED"]);
+      const view = await queueView(tx, r.id);
+      assert.deepEqual([view.refundedAmount, view.remainingRefundableAmount], ["1.00", "0.00"]);
+      await rejects(prodWith(runner, f, "true").execute(w.admin, r.id), 409, /already been completed/);
+      await assert.rejects(new RefundsService(runner).createRequest(w.sales, w.orderId, { paymentId: w.paymentId, amount: "1", reason: "again" }));
+      assert.equal(f.creates.length, 1);
+    });
   });
 });

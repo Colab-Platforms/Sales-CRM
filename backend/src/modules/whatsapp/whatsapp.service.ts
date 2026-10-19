@@ -11,6 +11,9 @@ import { fullName } from "../orders/orders.filters.js";
 import { resolveWhatsAppConfig } from "./whatsapp.config.js";
 import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
+import { WhatsAppMediaError, type FetchedMedia } from "./whatsapp.meta.provider.js";
+import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
+import { contentDisposition, describeMedia, loadMediaDescriptors, mediaActivityMetadata, recoverMediaFromWebhook, safeFilename, servedContentType, type InboundMedia } from "./whatsapp.media.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
 import { legacyMatchCandidates, matchSenderToLead, threadOf } from "./whatsapp.matching.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
@@ -83,6 +86,7 @@ const ACTIVITY_BY_STATUS: Partial<Record<WhatsAppDeliveryStatus, { type: Activit
 };
 
 const REFERENCE_TYPE = "WhatsAppMessage";
+const MAX_LEGACY_RECOVERIES_PER_PAGE = 10;
 
 class WhatsAppService {
   // getProvider is injectable so tests can exercise send/persist logic against a fake provider
@@ -95,6 +99,8 @@ class WhatsAppService {
   constructor(
     private readonly db: DbClient = prisma,
     private readonly getProvider: () => WhatsAppProvider | null = getWhatsAppProvider,
+    // Injectable so tests download media from a fake - never the real Graph API.
+    private readonly getMediaSource: (db: DbClient) => Promise<{ fetchMedia(mediaId: string): Promise<FetchedMedia> } | null> = getMetaWhatsAppProvider,
   ) {
     this.leadService = new LeadService();
     this.conversationService = new WhatsAppConversationService(this.db);
@@ -211,9 +217,63 @@ class WhatsAppService {
       : new Set<string>();
 
     return {
-      items: rows.map((row) => mapMessageHistoryItem(row, starredIds.has(row.id))),
+      items: await this.attachMedia(rows.map((row) => mapMessageHistoryItem(row, starredIds.has(row.id)))),
       pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) },
     };
+  }
+
+  /** Adds the media descriptor to the inbound files of a page - one extra query for the whole page, none when it has no files. */
+  private async attachMedia(items: WhatsAppMessageHistoryItem[]): Promise<WhatsAppMessageHistoryItem[]> {
+    const files = items.filter((i) => i.direction === "INBOUND" && i.messageType === "MEDIA");
+    if (files.length === 0) return items;
+    const found = await loadMediaDescriptors(this.db, files.map((i) => ({ id: i.id, leadId: i.customer?.leadId ?? null })), REFERENCE_TYPE);
+    // A file received before its details were stored on the message (an older server version handled the webhook) still has them in its raw webhook delivery: recover them, a few per page,
+    // so those files get a preview too instead of "details not recorded". Read-only - nothing is written.
+    const legacy = files.filter((i) => !found.has(i.id) && i.provider === "META" && i.providerMessageId).slice(0, MAX_LEGACY_RECOVERIES_PER_PAGE);
+    const recovered = await Promise.all(legacy.map((i) => recoverMediaFromWebhook(this.db, i.providerMessageId!, new Date(i.receivedAt ?? i.createdAt)).catch(() => null)));
+    legacy.forEach((i, n) => { if (recovered[n]) found.set(i.id, recovered[n]!); });
+    for (const item of files) item.media = describeMedia(found.get(item.id) ?? null);
+    return items;
+  }
+
+  /**
+   * The bytes of an inbound file, fetched from the provider now (its URL expires and needs the access token, so the browser can never be handed it). Same access rule as reading the message:
+   * a user only gets media from conversations they may read. The answer carries a content type from a fixed allow-list - never the one the file claims.
+   */
+  async getInboundMedia(user: AuthUser, id: string): Promise<{ buffer: Buffer; contentType: string; contentDisposition: string }> {
+    const leadScope = whatsAppReadScope(user.role, await getLeadScope(user, this.db));
+    const row = await this.db.whatsAppMessage.findFirst({
+      where: scopedMessageWhere(id, leadScope),
+      select: { id: true, direction: true, messageType: true, provider: true, providerMessageId: true, leadId: true, receivedAt: true, createdAt: true },
+    });
+    if (!row) throw new ApiError("Message not found", STATUS_CODES.NOT_FOUND);
+    if (row.direction !== "INBOUND" || row.messageType !== "MEDIA") throw new ApiError("This message has no file", STATUS_CODES.NOT_FOUND);
+    if (row.provider !== "META") throw new ApiError("Files can only be shown for WhatsApp Cloud API messages", STATUS_CODES.NOT_FOUND);
+
+    let media: InboundMedia | null = (await loadMediaDescriptors(this.db, [row], REFERENCE_TYPE)).get(row.id) ?? null;
+    // A file received before its details were stored: its raw webhook delivery still holds them.
+    if (!media && row.providerMessageId) media = await recoverMediaFromWebhook(this.db, row.providerMessageId, row.receivedAt ?? row.createdAt);
+    if (!media) throw new ApiError("The details needed to show this file were not recorded, so it cannot be displayed here.", STATUS_CODES.NOT_FOUND);
+
+    const source = await this.getMediaSource(this.db);
+    if (!source) throw new ApiError("WhatsApp is not configured, so the file cannot be loaded.", STATUS_CODES.SERVICE_UNAVAILABLE);
+
+    let fetched: FetchedMedia;
+    try {
+      fetched = await source.fetchMedia(media.providerMediaId);
+    } catch (error) {
+      if (error instanceof WhatsAppMediaError) {
+        if (error.kind === "NOT_FOUND") throw new ApiError("This file is no longer available from WhatsApp (it may have expired).", STATUS_CODES.NOT_FOUND);
+        if (error.kind === "TOO_LARGE") throw new ApiError("This file is too large to display here.", 413);
+        throw new ApiError("Could not download the file from WhatsApp. Try again in a moment.", 502);
+      }
+      logger.error("WhatsApp media download failed unexpectedly", error instanceof Error ? error.message : String(error));
+      throw new ApiError("Could not download the file from WhatsApp. Try again in a moment.", 502);
+    }
+
+    const served = servedContentType(fetched.mimeType ?? media.mimeType);
+    const name = safeFilename(media.filename, `${media.kind}-${row.id.slice(0, 8)}`);
+    return { buffer: fetched.buffer, contentType: served.contentType, contentDisposition: contentDisposition(served.inline, name) };
   }
 
   async getMessage(user: AuthUser, id: string): Promise<WhatsAppMessageHistoryItem> {
@@ -221,7 +281,7 @@ class WhatsAppService {
     const row = await this.db.whatsAppMessage.findFirst({ where: scopedMessageWhere(id, leadScope), select: HISTORY_SELECT });
     if (!row) throw new ApiError("Message not found", STATUS_CODES.NOT_FOUND);
     const state = await this.db.whatsAppMessageUserState.findUnique({ where: { messageId_userId: { messageId: id, userId: user.id } }, select: { starred: true } });
-    return mapMessageHistoryItem(row, state?.starred ?? false);
+    return (await this.attachMedia([mapMessageHistoryItem(row, state?.starred ?? false)]))[0]!;
   }
 
   // Starred messages for the current user, optionally scoped to one conversation - the same
@@ -239,7 +299,7 @@ class WhatsAppService {
       select: { message: { select: HISTORY_SELECT } },
       orderBy: { updatedAt: "desc" },
     });
-    return states.map((s) => mapMessageHistoryItem(s.message, true));
+    return this.attachMedia(states.map((s) => mapMessageHistoryItem(s.message, true)));
   }
 
   // Central WhatsApp Inbox's conversation list: one row per Lead, carrying only their latest
@@ -442,7 +502,8 @@ class WhatsAppService {
           fromNumber: message.from,
           toNumber: message.to,
           normalizedContact,
-          body: message.text?.slice(0, 4000) ?? null,
+          // The text the customer typed with a file (its caption) is the message body; a plain file has none.
+          body: (message.text ?? message.media?.caption)?.slice(0, 4000) ?? null,
           receivedAt: message.timestamp,
           // Real provider-reported reply reference only (Meta's context.id) - null for the large
           // majority of inbound messages, which is expected, not missing data.
@@ -461,7 +522,9 @@ class WhatsAppService {
           referenceType: REFERENCE_TYPE,
           referenceId: row.id,
           title: "WhatsApp message received",
-          description: message.text?.slice(0, 4000) ?? null,
+          description: (message.text ?? message.media?.caption ?? (message.media ? `${message.media.kind[0]!.toUpperCase()}${message.media.kind.slice(1)} received` : null))?.slice(0, 4000) ?? null,
+          // The file's details (media id, type, name, checksum) - written in this same transaction, so a repeat delivery skips both. The bytes are never stored.
+          ...(message.media ? { metadata: mediaActivityMetadata(message.media) } : {}),
         },
       });
 

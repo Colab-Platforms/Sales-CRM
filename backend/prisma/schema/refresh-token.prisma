@@ -1,0 +1,27 @@
+// Server-side session ledger for the httpOnly refresh cookie. Only the SHA-256 of the token is stored (a DB leak yields nothing usable).
+// Every refresh rotates: the presented row is revoked and a new row in the same family is issued. A revoked token shown again outside the
+// short race grace means it was copied, so the whole family (one login) is revoked.
+model RefreshToken {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String @unique @map("token_hash") @db.VarChar(64)
+
+  /// One login = one family. Rotation keeps the family; reuse detection revokes all of it.
+  familyId String @map("family_id") @db.Uuid
+
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  /// Set when revoked by rotation (vs. logout / reuse / deactivation), which is what the race grace applies to.
+  rotatedAt DateTime? @map("rotated_at")
+
+  userAgent String? @map("user_agent") @db.VarChar(255)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_tokens")
+}

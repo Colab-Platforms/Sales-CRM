@@ -11,19 +11,23 @@ interface Props {
   error?: string | null;
   choice: WhatsAppPaymentChoice;
   onChange: (next: WhatsAppPaymentChoice) => void;
+  /** Offered next to a load error. */
+  onRetry?: () => void;
+  /** A retry is in flight: the button says so and cannot be pressed twice. */
+  retrying?: boolean;
   disabled?: boolean;
 }
 
 // Create Order (prepaid): "Payment Link - Don't send / Send via WhatsApp". With WhatsApp: pick an approved Meta payment template (default
 // prepaid_template, listed from the server - never hardcoded here) and confirm the customer's WhatsApp consent. The block reason explains
 // exactly what is still missing; the server enforces all of it again.
-export function WhatsAppPaymentSection({ options, loading, error, choice, onChange, disabled }: Props) {
+export function WhatsAppPaymentSection({ options, loading, error, choice, onChange, onRetry, retrying, disabled }: Props) {
   const template = selectedTemplate(options, choice);
-  const reason = whatsappBlockReason(options, loading, choice);
+  const reason = whatsappBlockReason(options, loading, choice, Boolean(error));
   const consentRecorded = options?.consent === "OPTED_IN";
 
   return (
-    <div className="grid gap-3 rounded-xl border-[1.5px] border-border bg-card p-4" data-testid="whatsapp-payment">
+    <div className="grid gap-3 rounded-xl border border-border bg-card p-4" data-testid="whatsapp-payment">
       <div className="flex items-center gap-2">
         <MessageCircle className="size-4 text-muted-foreground" aria-hidden />
         <p className="text-sm font-semibold">Payment Link</p>
@@ -50,7 +54,7 @@ export function WhatsAppPaymentSection({ options, loading, error, choice, onChan
           <div className="grid gap-1.5">
             <Label htmlFor="wa-template" className="text-xs">WhatsApp Template</Label>
             <NativeSelect id="wa-template" value={template?.id ?? ""} disabled={disabled || loading || !options || options.templates.length === 0} onChange={(e) => onChange({ ...choice, templateId: e.target.value })}>
-              {options?.templates.length ? null : <option value="">{loading ? "Loading templates…" : "No approved payment template"}</option>}
+              {options?.templates.length ? null : <option value="">{loading ? "Loading templates…" : error ? "Templates unavailable" : "No approved payment template"}</option>}
               {options?.templates.map((t) => (
                 <option key={t.id} value={t.id}>
                   {t.name} · {t.language}
@@ -77,8 +81,13 @@ export function WhatsAppPaymentSection({ options, loading, error, choice, onChan
             )}
           </div>
 
-          {error ? <p role="alert" className="text-xs text-destructive">{error}</p> : null}
-          {reason ? <p role="alert" className="text-xs text-destructive">{reason}</p> : null}
+          {error ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <p role="alert" className="text-xs text-destructive">{error}</p>
+              {onRetry ? <button type="button" className="text-xs font-medium text-primary hover:underline" onClick={onRetry} disabled={disabled || retrying}>{retrying ? "Retrying…" : "Retry"}</button> : null}
+            </div>
+          ) : null}
+          {reason && !(error && !options) ? <p role="alert" className="text-xs text-destructive">{reason}</p> : null}
         </div>
       ) : null}
     </div>

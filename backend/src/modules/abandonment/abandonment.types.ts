@@ -1,11 +1,16 @@
 import type { AbandonmentStatus, AbandonmentType, CallDirection, CallStatus, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
+import type { CustomerContext } from "./abandonment.customer-context.js";
 import type { Pagination } from "../orders/orders.types.js";
 
 // Abandoned-checkout queue ("/dashboard/abandoned-leads"). Reads the Abandonment/RecoveryAction tables
 // E6's Customer 360 timeline already renders (customers.timeline.ts) - this is the first module that
 // writes and lists them directly, rather than only rendering them inside one lead's history.
 
-export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
+/** UNASSIGNED = no manager yet; ASSIGNED_TO_MANAGER = a manager but no telecaller; ASSIGNED_TO_SALESPERSON = has a telecaller; UNASSIGNED_TELECALLER = no telecaller yet (with or without a manager) - the distribution backlog. */
+export type AbandonmentAssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON" | "UNASSIGNED_TELECALLER";
+
+/** Which day(s) of abandoned checkouts to list, by when the checkout was abandoned (Abandonment.detectedAt), in the reporting timezone (IST). Absent / "all" = no restriction. */
+export type AbandonmentDateRange = "today" | "yesterday" | "all";
 
 export interface ListAbandonmentsQuery {
   page: number;
@@ -15,6 +20,7 @@ export interface ListAbandonmentsQuery {
   type?: AbandonmentType;
   dateFrom?: Date;
   dateTo?: Date;
+  dateRange?: AbandonmentDateRange;
   assignment?: AbandonmentAssignmentFilter;
   managerId?: string;
   salespersonId?: string;
@@ -121,7 +127,7 @@ export interface RecoveryActionItem {
   performedBy: { id: string; name: string } | null;
 }
 
-export interface AbandonmentDetail extends AbandonmentListItem {
+export interface AbandonmentDetail extends AbandonmentListItem, CustomerContext {
   reference: { referenceType: string | null; referenceId: string | null };
   recoveryActions: RecoveryActionItem[];
 }

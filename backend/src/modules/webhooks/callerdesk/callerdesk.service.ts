@@ -64,7 +64,7 @@ export type CallerDeskWebhookResult =
       outcome: "PROCESSED";
       webhookEventId: string;
       callId: string;
-      leadId: string;
+      leadId: string | null;
       leadCreated: boolean;
       correlation: CorrelationMethod;
       callCreated: boolean;
@@ -312,7 +312,8 @@ export function createCallerDeskWebhookService(store: CallEventStore, options: C
     }
 
     let activityCreated = false;
-    if (isTerminalCallStatus(call.status) && !(await tx.hasCallActivity(call.leadId, call.id))) {
+    // A call with no lead (a recruiter's call on an Application) has no lead timeline to write to.
+    if (isTerminalCallStatus(call.status) && call.leadId && !(await tx.hasCallActivity(call.leadId, call.id))) {
       const direction = call.direction === CallDirection.INBOUND ? "Inbound" : "Outbound";
       await tx.createCallActivity({
         leadId: call.leadId,
