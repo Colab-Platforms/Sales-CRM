@@ -22,6 +22,8 @@ export class FakeShopifyOrder {
   calls: string[] = [];
   /** Make a step fail once (userErrors) - e.g. "edit_commit", "payment", or a missing scope. */
   failNext: string | null = null;
+  /** The message of the next simulated failure (default: a generic one). Cleared after use. */
+  failMessage: string | null = null;
   lines: FakeLine[];
   /** If set, a staged discount produces this total instead of total - discount (simulates tax/shipping surprises). */
   stagedTotalOverride: number | null = null;
@@ -39,7 +41,9 @@ export class FakeShopifyOrder {
   private maybeFail(step: string) {
     if (this.failNext === step) {
       this.failNext = null;
-      return this.userError(`Simulated Shopify failure at ${step}`);
+      const message = this.failMessage ?? `Simulated Shopify failure at ${step}`;
+      this.failMessage = null;
+      return this.userError(message);
     }
     return null;
   }

@@ -535,3 +535,130 @@ describe("revertCancellation", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Regression: "Order not found" when cancelling an order made by a telecaller for a customer with NO owner / group (every WhatsApp Inbox customer), e.g. an order created with "Payment already received".
+// The strict lead scope (salesperson = lead owner, manager = team's leads) excluded it, even for its own creator.
+describe("cancel / revert of an order on a customer with no owner or group (the '#AWL104692' case)", () => {
+  async function externallyPaidOrder(tx: Prisma.TransactionClient, creator: { id: string }, shopifyId = "5551234567") {
+    const lead = await makeLead(tx); // no owner, no group
+    const order = await tx.order.create({
+      data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: creator.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "1298.00", confirmedAt: new Date(), externalSource: "SHOPIFY", externalId: shopifyId, externalNumber: "#AWL104692", metadata: { paymentMode: "PREPAID", manualPayment: { verifiedById: creator.id } } as never },
+      select: { id: true },
+    });
+    await tx.payment.create({ data: { orderId: order.id, provider: "MANUAL", amount: "1298.00", status: "SUCCESS", method: "OTHER", paidAt: new Date(), transactionReference: "UTR 42", metadata: { manual: { verifiedById: creator.id } } as never } });
+    return { lead, order };
+  }
+  const recordingClient = (sent: string[]) => fakeShopifyClient(async (doc, vars) => { if (doc.includes("orderCancel")) sent.push(String(vars.orderId)); return { orderCancel: { job: { id: "1", done: true }, orderCancelUserErrors: [] } }; });
+
+  it("the telecaller who created the order CAN cancel it: CRM cancelled (not deleted), the linked Shopify order cancelled by its stored numeric id sent as a GID, the paid payment untouched, no refund", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Test Two", username: `t-${uid()}`, role: Role.SALESPERSON } });
+      const { order } = await externallyPaidOrder(tx, rep);
+      const sent: string[] = [];
+      const result = await new OrdersService(tx, () => recordingClient(sent)).cancelOrder(as(rep, Role.SALESPERSON), order.id, { reason: "Customer changed their mind" });
+      assert.deepEqual([result.alreadyCancelled, result.order.status, result.shopify.status], [false, "CANCELLED", "cancelled"]);
+      assert.deepEqual(sent, ["gid://shopify/Order/5551234567"], "the stored numeric id, in GID form - not the displayed #AWL number");
+      assert.equal(await tx.order.count({ where: { id: order.id } }), 1, "never deleted");
+      const pay = await tx.payment.findFirstOrThrow({ where: { orderId: order.id } });
+      assert.deepEqual([pay.status, pay.provider, pay.refundedAmount, pay.refundedAt, pay.transactionReference], ["SUCCESS", "MANUAL", null, null, "UTR 42"], "stays paid, no automatic refund");
+      assert.equal(await tx.payment.count({ where: { orderId: order.id } }), 1, "no new payment / transaction");
+      assert.equal(await tx.refundRequest.count({ where: { orderId: order.id } }), 0);
+      assert.equal(await tx.activity.count({ where: { orderId: order.id, type: ActivityType.ORDER_CANCELLED } }), 1);
+    });
+  });
+
+  it("a Shopify GID stored on the order is sent unchanged; a numeric id is converted; neither is confused with the CRM order number or the #AWL display number", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Test Two", username: `t-${uid()}`, role: Role.SALESPERSON } });
+      const sent: string[] = [];
+      for (const stored of ["gid://shopify/Order/987654321", "987654321"]) {
+        const { order } = await externallyPaidOrder(tx, rep, stored);
+        await new OrdersService(tx, () => recordingClient(sent)).cancelOrder(as(rep, Role.SALESPERSON), order.id, {});
+      }
+      assert.deepEqual(sent, ["gid://shopify/Order/987654321", "gid://shopify/Order/987654321"]);
+    });
+  });
+
+  it("a Shopify failure is reported (never a silent success), the CRM cancellation and paid payment are kept, and the retry cancels Shopify once without duplicating the audit entry or touching payments", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Test Two", username: `t-${uid()}`, role: Role.SALESPERSON } });
+      const { order } = await externallyPaidOrder(tx, rep);
+      const failing = fakeShopifyClient(async () => { throw new Error("Shopify rejected the cancellation"); });
+      const first = await new OrdersService(tx, () => failing).cancelOrder(as(rep, Role.SALESPERSON), order.id, {});
+      assert.deepEqual([first.order.status, first.shopify.status], ["CANCELLED", "failed"]);
+      assert.match(first.shopify.reason ?? "", /Shopify rejected the cancellation/);
+      const sent: string[] = [];
+      const second = await new OrdersService(tx, () => recordingClient(sent)).cancelOrder(as(rep, Role.SALESPERSON), order.id, {});
+      const third = await new OrdersService(tx, () => recordingClient(sent)).cancelOrder(as(rep, Role.SALESPERSON), order.id, {});
+      assert.deepEqual([second.alreadyCancelled, second.shopify.status, sent.length], [true, "cancelled", 1]);
+      assert.equal(third.alreadyCancelled, true);
+      assert.deepEqual([await tx.activity.count({ where: { orderId: order.id, type: ActivityType.ORDER_CANCELLED } }), await tx.payment.count({ where: { orderId: order.id } }), (await tx.payment.findFirstOrThrow({ where: { orderId: order.id } })).status], [1, 1, "SUCCESS"]);
+    });
+  });
+
+  it("reverting restores the previous CRM status for the creator, keeps the payment, and does not pretend Shopify was un-cancelled (no Shopify call)", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Test Two", username: `t-${uid()}`, role: Role.SALESPERSON } });
+      const { order } = await externallyPaidOrder(tx, rep);
+      await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(rep, Role.SALESPERSON), order.id, {});
+      let shopifyCalls = 0;
+      const counting = fakeShopifyClient(async () => { shopifyCalls += 1; return {}; });
+      const reverted = await new OrdersService(tx, () => counting).revertCancellation(as(rep, Role.SALESPERSON), order.id);
+      assert.deepEqual([reverted.order.status, reverted.restoredStatus, reverted.alreadyActive, shopifyCalls], ["CONFIRMED", "CONFIRMED", false, 0]);
+      assert.equal((await tx.payment.findFirstOrThrow({ where: { orderId: order.id } })).status, "SUCCESS");
+      assert.equal((await new OrdersService(tx, () => counting).revertCancellation(as(rep, Role.SALESPERSON), order.id)).alreadyActive, true, "a second revert is a harmless no-op");
+    });
+  });
+
+  it("the rule is narrow: ANOTHER salesperson (not the creator) still gets 404 on that order and nothing changes; a missing CRM order is 404; an order with no Shopify link cancels as not_linked", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Creator", username: `c-${uid()}`, role: Role.SALESPERSON } });
+      const stranger = await tx.user.create({ data: { name: "Stranger", username: `s-${uid()}`, role: Role.SALESPERSON } });
+      const { order } = await externallyPaidOrder(tx, rep);
+      const svc = new OrdersService(tx, () => fakeShopifyClient());
+      await assert.rejects(() => svc.cancelOrder(as(stranger, Role.SALESPERSON), order.id, {}), (e: unknown) => e instanceof ApiError && e.statusCode === 404);
+      await assert.rejects(() => svc.revertCancellation(as(stranger, Role.SALESPERSON), order.id), (e: unknown) => e instanceof ApiError && e.statusCode === 404);
+      await assert.rejects(() => svc.cancelOrder(as(rep, Role.SALESPERSON), uid(), {}), (e: unknown) => e instanceof ApiError && e.statusCode === 404);
+      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: order.id }, select: { status: true } })).status, "CONFIRMED");
+      const unlinked = await tx.order.create({ data: { orderNumber: `CRM-${uid()}`, leadId: (await makeLead(tx)).id, createdById: rep.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "100.00" }, select: { id: true } });
+      assert.equal((await svc.cancelOrder(as(rep, Role.SALESPERSON), unlinked.id, {})).shopify.status, "not_linked");
+    });
+  });
+
+  it("managers follow their team: a manager can cancel an order created by a member of their team (even on an unowned customer); a manager of another team cannot; HR never can", async () => {
+    await inRollback(async (tx) => {
+      const mgr = await tx.user.create({ data: { name: "Mgr", username: `m-${uid()}`, role: Role.MANAGER } });
+      const other = await tx.user.create({ data: { name: "Other Mgr", username: `o-${uid()}`, role: Role.MANAGER } });
+      const hr = await tx.user.create({ data: { name: "HR", username: `h-${uid()}`, role: Role.HR } });
+      const rep = await tx.user.create({ data: { name: "Team Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const group = await tx.group.create({ data: { name: `G-${uid()}`, managerId: mgr.id }, select: { id: true } });
+      await tx.groupMember.create({ data: { groupId: group.id, userId: rep.id, joinedAt: new Date(), isActive: true } });
+      const { order } = await externallyPaidOrder(tx, rep);
+      const svc = new OrdersService(tx, () => fakeShopifyClient());
+      for (const outsider of [as(other, Role.MANAGER), as(hr, Role.HR)]) await assert.rejects(() => svc.cancelOrder(outsider, order.id, {}), (e: unknown) => e instanceof ApiError && e.statusCode === 404);
+      const done = await svc.cancelOrder(as(mgr, Role.MANAGER), order.id, {});
+      assert.deepEqual([done.order.status, done.shopify.status], ["CANCELLED", "cancelled"]);
+      assert.equal((await svc.revertCancellation(as(mgr, Role.MANAGER), order.id)).order.status, "CONFIRMED");
+    });
+  });
+
+  it("the Shopify payment-sync retry (same page) no longer says 'Order not found' for the creator of such an order", async () => {
+    await inRollback(async (tx) => {
+      const rep = await tx.user.create({ data: { name: "Test Two", username: `t-${uid()}`, role: Role.SALESPERSON } });
+      const lead = await makeLead(tx);
+      const order = await tx.order.create({ data: { orderNumber: `CRM-${uid()}`, leadId: lead.id, createdById: rep.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "100.00" }, select: { id: true } }); // not linked to Shopify: answers without calling it
+      const result = await new OrdersService(tx, () => fakeShopifyClient()).retryShopifyPaymentSync(as(rep, Role.SALESPERSON), order.id);
+      assert.equal(result.status, "not_linked");
+    });
+  });
+
+  it("existing flows are unchanged: a COD order and an unpaid prepaid order with a Cashfree link still cancel for an admin exactly as before (covered by the suites above), and an admin is never narrowed", async () => {
+    await inRollback(async (tx) => {
+      const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const { order } = await externallyPaidOrder(tx, rep);
+      assert.equal((await new OrdersService(tx, () => fakeShopifyClient()).cancelOrder(as(admin, Role.ADMIN), order.id, {})).order.status, "CANCELLED");
+    });
+  });
+});

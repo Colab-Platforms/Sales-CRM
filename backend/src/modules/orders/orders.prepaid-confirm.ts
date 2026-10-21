@@ -42,6 +42,8 @@ export async function confirmPaidPrepaidOrder(db: Runner, orderId: string, deps:
   if (meta.paymentMode !== "PREPAID") return { confirmed: false, shopify: "not_applicable" };
   const linked = Boolean(order.externalId);
   if (linked && order.source !== "SALESPERSON") return { confirmed: false, shopify: "not_applicable" };
+  // A cancelled / refunded / returned order is never revived by a late payment: no confirmation and no Shopify order. The payment itself is already recorded (and reported) by the payment reconciliation.
+  if (order.status === OrderStatus.CANCELLED || order.status === OrderStatus.REFUNDED || order.status === OrderStatus.RETURNED) return { confirmed: false, shopify: "not_applicable", reason: "The order is " + order.status.toLowerCase() };
   const successful = order.payments.filter((p) => p.status === "SUCCESS");
   if (successful.length === 0) return { confirmed: false, shopify: "not_applicable", reason: "No verified payment" };
   // The money must be Cashfree's (or a manually verified external payment), in the order's currency, and add up to exactly what the order costs. The webhook and Refresh already refuse a wrong amount, but this runs from

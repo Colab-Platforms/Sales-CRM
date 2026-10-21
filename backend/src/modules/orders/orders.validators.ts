@@ -117,6 +117,10 @@ const createManualOrderSchema = z.object({
   discountReason: optional(z.string().trim().max(255)),
   idempotencyKey: optional(z.string().trim().min(8).max(100)),
   acknowledgeDuplicate: optional(z.boolean()),
+  // Prepaid only: the customer already paid OUTSIDE Cashfree (a personal / company UPI QR, ...). The order is created as paid, with no payment link or QR. Default false.
+  paymentAlreadyReceived: z.boolean({ error: "paymentAlreadyReceived must be true or false" }).optional(),
+  // Optional UTR / transaction reference of that external payment.
+  paymentReference: optional(z.string().trim().max(100)),
   supersedesOrderId: optional(z.uuid({ error: "Invalid order id" })),
 });
 

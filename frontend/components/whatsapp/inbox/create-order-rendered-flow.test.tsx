@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CreateOrderDialog } from "./create-order-dialog";
-import { ResultView } from "./create-order-sections";
+import { ExternalPaymentOption, ResultView } from "./create-order-sections";
 import { SendPaymentLinkBody } from "@/components/orders/send-payment-link-dialog";
 import { whatsAppPaymentOptionsQueryOptions } from "@/lib/api-client/queries/orders.queries";
 import type { WhatsAppPaymentOptions } from "@/lib/whatsapp-payment";
@@ -280,5 +280,89 @@ describe("Create Order (real dialog): product weight -> suggested parcel weight"
     assert.match(text(withProducts({ initialItems: items, initialWeight: "-2" })), /cannot be negative/);
     assert.match(text(withProducts({ initialItems: items, initialWeight: "abc" })), /must be a number/);
     assert.match(text(withProducts({ initialItems: items, initialWeight: "101" })), /100 kg or less/);
+  });
+});
+
+// ---- "Payment already received" (externally collected payment)
+import { useAuthStore } from "@/stores/auth-store";
+
+const asRole = (role: string | null) => useAuthStore.setState({ user: role ? ({ id: "u1", name: "Shreya", role } as never) : null });
+
+describe("Create Order: 'Payment already received'", () => {
+  it("the checkbox shows the required label and helper text; unchecked it shows no reference field and no paid note; checked it says the order will be created as paid and offers the OPTIONAL reference", () => {
+    const off = renderToStaticMarkup(<ExternalPaymentOption checked={false} onChange={() => {}} reference="" onReferenceChange={() => {}} />);
+    const t = text(off);
+    assert.match(t, /Payment already received/);
+    assert.match(t, /Select this if the customer has already paid through a personal\/company UPI QR code or another payment method\./);
+    assert.match(off, /data-testid="payment-received-checkbox"/);
+    assert.doesNotMatch(off, /payment-reference-input/);
+    assert.doesNotMatch(t, /Order will be created as paid/);
+    const on = renderToStaticMarkup(<ExternalPaymentOption checked onChange={() => {}} reference="UTR 12" onReferenceChange={() => {}} />);
+    assert.match(text(on), /Order will be created as paid/);
+    assert.match(text(on), /Payment reference \/ UTR \(optional\)/);
+    assert.match(on, /value="UTR 12"/);
+    assert.doesNotMatch(on, /required/, "the reference is never required");
+  });
+  it("the real dialog, prepaid and unchecked: the existing payment-link choice is exactly as before (and nobody without an allowed role is offered the box)", () => {
+    asRole("SALESPERSON");
+    const t = text(dialog({ initialOrderType: "PAYMENT_LINK" }));
+    assert.match(t, /Don.t send/);
+    assert.doesNotMatch(t, /Order will be created as paid/);
+    asRole(null);
+  });
+  it("COD: no checkbox at all (the COD workflow is unchanged)", () => {
+    asRole("SALESPERSON");
+    const h = dialog({ initialOrderType: "COD" });
+    assert.doesNotMatch(h, /payment-received-checkbox/);
+    assert.doesNotMatch(text(h), /Payment already received/);
+    asRole(null);
+  });
+  it("HR / recruiters (who cannot confirm external payments) are not offered it", () => {
+    for (const role of ["HR", "RECRUITER"]) {
+      asRole(role);
+      assert.doesNotMatch(dialog({ initialOrderType: "PAYMENT_LINK" }), /payment-received-checkbox/, role);
+    }
+    asRole(null);
+  });
+  it("the result of an externally paid order says it was confirmed outside Cashfree, shows the reference, and has no payment link, QR or WhatsApp-link row", () => {
+    const paid = {
+      ...created({ sent: false, via: null, provider: null, reason: "Payment already received: no payment link or QR was created or sent." }),
+      paymentLink: null,
+      manualPayment: { verification: "MANUAL_EXTERNAL", paymentId: "p9", amount: "449.00", reference: "UTR 998877", confirmedAt: "2026-10-21T10:00:00Z", shopifyPayment: "synced" },
+    } as unknown as CreateManualOrderResult;
+    const h = result(paid);
+    const t = text(h);
+    assert.match(t, /Paid - confirmed by you outside Cashfree/);
+    assert.match(t, /Reference UTR 998877/);
+    assert.match(t, /Not a Cashfree-verified payment/);
+    assert.doesNotMatch(t, /Cashfree payment link|Open payment link|Send Payment Link/);
+    assert.doesNotMatch(t, /Payment link not sent/);
+  });
+  it("a Shopify failure on an externally paid order is flagged as needing attention (with the real reason and a retry), never shown as success", () => {
+    const failed = {
+      ...created({ sent: false, via: null, provider: null }),
+      paymentLink: null,
+      shopify: { status: "failed", reason: "Shopify is unavailable" },
+      manualPayment: { verification: "MANUAL_EXTERNAL", paymentId: "p9", amount: "449.00", reference: null, confirmedAt: null, shopifyPayment: "pending" },
+    } as unknown as CreateManualOrderResult;
+    const t = text(result(failed));
+    assert.match(t, /Shopify did not accept the order: Shopify is unavailable/);
+    assert.match(t, /Retry Shopify sync/);
+  });
+});
+
+describe("Create Order: Shopify created the order but did not mark it paid", () => {
+  it("shows the real reason and a retry that re-marks the SAME order paid (never claims Shopify is paid)", () => {
+    const r = {
+      ...created({ sent: false, via: null, provider: null }),
+      paymentLink: null,
+      shopify: { status: "created", shopifyOrderName: "#T1" },
+      manualPayment: { verification: "MANUAL_EXTERNAL", paymentId: "p9", amount: "449.00", reference: "UTR 5", confirmedAt: null, shopifyPayment: "failed", shopifyReason: "Order cannot be marked as paid." },
+    } as unknown as CreateManualOrderResult;
+    const h = result(r);
+    const t = text(h);
+    assert.match(t, /Shopify has not marked the order paid yet: Order cannot be marked as paid\./);
+    assert.match(h, /data-testid="retry-shopify-paid"/);
+    assert.doesNotMatch(t, /Paid - confirmed by you/);
   });
 });
