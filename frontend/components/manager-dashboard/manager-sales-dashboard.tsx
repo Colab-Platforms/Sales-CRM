@@ -68,7 +68,7 @@ export function ManagerSalesDashboard({
   const patch = useCallback((p: Partial<DashboardFilters>) => setFilters((f) => ({ ...f, ...p })), []);
 
   const query = toQuery(filters);
-  const { data, isPending, error, isPlaceholderData } = useQuery(managerAnalyticsQueryOptions(query));
+  const { data, isPending, error, isPlaceholderData, dataUpdatedAt } = useQuery(managerAnalyticsQueryOptions(query));
 
   const [exporting, setExporting] = useState(false);
   const runExport = async (make: () => Promise<void>) => {
@@ -131,6 +131,7 @@ export function ManagerSalesDashboard({
         <div className={isPlaceholderData ? "space-y-6 opacity-60 transition-opacity" : "space-y-6 transition-opacity"} aria-busy={isPlaceholderData}>
           <p className="text-xs text-muted-foreground">
             Showing {rangeLabel(data.range.from, data.range.to)} · {data.range.days} {data.range.days === 1 ? "day" : "days"}
+            {dataUpdatedAt ? <> · updated {new Date(dataUpdatedAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}, refreshes every minute</> : null}
           </p>
 
           {view === "overview" ? (
@@ -171,7 +172,7 @@ export function ManagerSalesDashboard({
               <section className="space-y-4" aria-label="Sales">
                 <SectionHeading
                   title="Sales"
-                  description="Orders confirmed by the team, split by payment type, salesperson and product. Payment and order-status filters apply here."
+                  description="Orders a telecaller confirmed in the CRM, plus orders customers placed within 7 days after a telecaller called or worked them. Payment and order-status filters apply here."
                 />
                 <SalesSummaryTiles data={data} />
                 <RevenuePerDayPanel data={data} />
@@ -228,7 +229,7 @@ function Kpis({ data }: { data: ManagerAnalytics }) {
           delta === null
             ? { text: "No previous period data" }
             : { text: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}% vs previous period`, tone: delta >= 0 ? "positive" : "negative" },
-          { text: "100% of total leads" },
+          ...(k.totalLeads > 0 ? [{ text: "100% of total leads" }] : [{ text: "No leads assigned in this period" }]),
         ]}
       />
       <KpiCard label="Not Contacted" tone="slate" icon={Ban} value={formatNumber(k.notContacted)} lines={[{ text: `${formatPct(pct(k.notContacted, k.totalLeads))} of total leads` }]} />

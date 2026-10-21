@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ShoppingCart } from "lucide-react";
+import { ShoppingCart, Upload } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +25,7 @@ import { parseAbandonedLeadsUrl } from "@/lib/abandoned-leads-href";
 import { assignableTelecallersQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { X } from "lucide-react";
 import { IngestionHealthPanel } from "@/components/abandonment/ingestion-health";
+import { ImportAbandonedLeadsDialog } from "@/components/abandonment/import-abandoned-leads-dialog";
 
 const PAGE_SIZE = 20;
 
@@ -55,6 +56,7 @@ export function AbandonedLeadsView() {
   const [assignManagerOpen, setAssignManagerOpen] = useState(false);
   const [assignSalespersonOpen, setAssignSalespersonOpen] = useState(false);
   const [updateStatusOpen, setUpdateStatusOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const goToPage = useCallback(
     (nextPage: number) => {
@@ -170,6 +172,14 @@ export function AbandonedLeadsView() {
               : isHr
                 ? "Abandoned carts waiting to be distributed. Assign them to telecallers."
                 : "Abandoned carts assigned to you. Reach out while the intent is still fresh."
+        }
+        actions={
+          isAdmin || isManager ? (
+            <Button variant="outline" onClick={() => setImportOpen(true)}>
+              <Upload />
+              Import CSV
+            </Button>
+          ) : undefined
         }
       />
 
@@ -290,6 +300,7 @@ export function AbandonedLeadsView() {
         </Card>
       )}
 
+      <ImportAbandonedLeadsDialog open={importOpen} onOpenChange={setImportOpen} onDone={() => setImportOpen(false)} isManager={isManager} />
       <AssignAbandonmentManagerDialog
         open={assignManagerOpen}
         onOpenChange={setAssignManagerOpen}

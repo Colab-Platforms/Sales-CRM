@@ -84,7 +84,7 @@ export function isAwaitingPayment(order: { status: string; paymentMode: string |
 export function AwaitingPaymentNotice() {
   return (
     <p role="status" className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-200" data-testid="awaiting-payment-notice">
-      <span className="font-semibold">Awaiting payment.</span> This is a payment request, not a confirmed order. The Shopify order is created automatically once Cashfree confirms the payment; a payment link, a screenshot or a customer's message does not confirm it.
+      <span className="font-semibold">Awaiting payment.</span> This is a payment request, not a confirmed order. The Shopify order is created automatically once Cashfree confirms the payment; a payment link, a screenshot or a customer&apos;s message does not confirm it.
     </p>
   );
 }

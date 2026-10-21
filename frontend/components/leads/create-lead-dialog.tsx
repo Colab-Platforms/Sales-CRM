@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { useCreateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -31,9 +31,13 @@ export function CreateLeadDialog({
   const [email, setEmail] = useState("");
   const [requirement, setRequirement] = useState("");
 
-  useEffect(() => {
+  // Prefill the mobile number when the dialog opens with one (adjusting state during render, not in an effect).
+  const prefillKey = open ? (defaultMobile ?? "") : null;
+  const [appliedPrefillKey, setAppliedPrefillKey] = useState(prefillKey);
+  if (prefillKey !== appliedPrefillKey) {
+    setAppliedPrefillKey(prefillKey);
     if (open && defaultMobile) setMobile(defaultMobile);
-  }, [open, defaultMobile]);
+  }
 
   function reset() {
     setFirstName("");

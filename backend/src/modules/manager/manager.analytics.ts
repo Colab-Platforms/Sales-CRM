@@ -3,7 +3,6 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import {
   ActivityType,
-  CallStatus,
   LeadWorkingStatus,
   Role,
   UserStatus,
@@ -11,6 +10,7 @@ import {
 } from "../../../generated/prisma/enums.js";
 import { PRODUCTIVE_TARGET_MS, REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
 import { computeSummary, mergeSummaries } from "../attendance/attendance.calc.js";
+import { classify, leadStages, matchesCallStatus, matchesLeadStatus, ownerProgress, type CallStatusFilter, type LeadStageInput, type LeadStatusFilter } from "./manager.metrics.js";
 import { emptySales, addSale, mergeSales, ordersCsv, salesOut, soldOrders, type SalesCents, type SalesFilters } from "./manager.sales.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -38,12 +38,10 @@ import { emptySales, addSale, mergeSales, ordersCsv, salesOut, soldOrders, type 
 // ---------------------------------------------------------------------------------------------
 
 export const TEAM_CONVERSION_TARGET_PERCENT = 6;
-const CONNECTED_STATUSES = new Set<CallStatus>([CallStatus.CONNECTED, CallStatus.COMPLETED, CallStatus.AGENT_ANSWERED]);
 const MAX_RANGE_DAYS = 92;
 const DAY_MS = 24 * 60 * 60_000;
 
-export type CallStatusFilter = "ALL" | "CONNECTED" | "NOT_CONNECTED" | "FAILED";
-export type LeadStatusFilter = "ALL" | "NOT_CONTACTED" | "CONTACTED" | "INTERESTED" | "CONVERTED";
+export type { CallStatusFilter, LeadStatusFilter } from "./manager.metrics.js";
 
 export interface AnalyticsViewer {
   id: string;
@@ -70,12 +68,6 @@ interface CallCounts {
 
 const emptyCounts = (): CallCounts => ({ calls: 0, connected: 0, notConnected: 0, failed: 0, uniqueLeads: 0, talkTimeSec: 0 });
 
-function classify(status: CallStatus): "connected" | "failed" | "notConnected" {
-  if (CONNECTED_STATUSES.has(status)) return "connected";
-  if (status === CallStatus.FAILED) return "failed";
-  return "notConnected";
-}
-
 function dayKey(date: Date, tz: number): string {
   return new Date(date.getTime() + tz * 60_000).toISOString().slice(0, 10);
 }
@@ -94,32 +86,10 @@ function listDays(f: AnalyticsFilters): string[] {
   return days;
 }
 
-interface LeadRow {
+interface LeadRow extends LeadStageInput {
   id: string;
   ownerId: string | null;
-  workingStatus: LeadWorkingStatus;
-  hasCall: boolean;
-  hasInterestedPeriod: boolean;
   assignedAt: Date;
-}
-
-function leadStages(lead: LeadRow) {
-  const converted = lead.workingStatus === LeadWorkingStatus.CONVERTED;
-  const interested = converted || lead.workingStatus === LeadWorkingStatus.INTERESTED || lead.hasInterestedPeriod;
-  const contacted =
-    interested ||
-    lead.hasCall ||
-    (lead.workingStatus !== LeadWorkingStatus.NEW && lead.workingStatus !== LeadWorkingStatus.ASSIGNED);
-  return { contacted, interested, converted };
-}
-
-function matchesLeadStatus(lead: LeadRow, filter: LeadStatusFilter): boolean {
-  if (filter === "ALL") return true;
-  const s = leadStages(lead);
-  if (filter === "NOT_CONTACTED") return !s.contacted;
-  if (filter === "CONTACTED") return s.contacted;
-  if (filter === "INTERESTED") return s.interested;
-  return s.converted;
 }
 
 class ManagerAnalyticsService {
@@ -156,18 +126,30 @@ class ManagerAnalyticsService {
         createdAt: true,
         lastContactedAt: true,
         assignments: { where: { isCurrent: true }, select: { assignedAt: true }, take: 1 },
-        calls: { select: { id: true }, take: 1 },
-        interestedPeriods: { select: { id: true }, take: 1 },
+        // Only the team's own records: a lead's stage is judged by what its current owner did after being given it.
+        calls: { where: { agentId: { in: ownerIds } }, select: { agentId: true, startedAt: true, createdAt: true } },
+        activities: { where: { actorId: { in: ownerIds } }, select: { actorId: true, type: true, title: true, createdAt: true } },
+        interestedPeriods: { where: { qualifiedById: { in: ownerIds } }, select: { qualifiedById: true, startedAt: true } },
+        orders: { where: { confirmedByUserId: { in: ownerIds } }, select: { confirmedByUserId: true, confirmedAt: true } },
       },
     });
-    return leads.map((l) => ({
-      id: l.id,
-      ownerId: l.ownerId,
-      workingStatus: l.workingStatus,
-      hasCall: l.calls.length > 0 || l.lastContactedAt !== null,
-      hasInterestedPeriod: l.interestedPeriods.length > 0,
-      assignedAt: l.assignments[0]?.assignedAt ?? l.createdAt,
-    }));
+    return leads.map((l) => {
+      const assignedAt = l.assignments[0]?.assignedAt ?? l.createdAt;
+      return {
+        id: l.id,
+        ownerId: l.ownerId,
+        assignedAt,
+        ...ownerProgress({
+          ownerId: l.ownerId ?? "",
+          since: assignedAt,
+          lastContactedAt: l.lastContactedAt,
+          calls: l.calls,
+          activities: l.activities,
+          interestedPeriods: l.interestedPeriods,
+          orders: l.orders,
+        }),
+      };
+    });
   }
 
   private async productivityByDay(userIds: string[], start: Date, end: Date, tz: number) {
@@ -355,11 +337,7 @@ class ManagerAnalyticsService {
     const perPerson = new Map<string, CallCounts & { leadSet: Set<string> }>();
     const perDay = new Map<string, Map<string, CallCounts & { leadSet: Set<string> }>>();
     const blank = () => ({ ...emptyCounts(), leadSet: new Set<string>() });
-    const matchesCall = (kind: ReturnType<typeof classify>) =>
-      f.callStatus === "ALL" ||
-      (f.callStatus === "CONNECTED" && kind === "connected") ||
-      (f.callStatus === "NOT_CONNECTED" && kind === "notConnected") ||
-      (f.callStatus === "FAILED" && kind === "failed");
+    const matchesCall = (kind: ReturnType<typeof classify>) => matchesCallStatus(kind, f.callStatus);
 
     for (const c of calls) {
       const kind = classify(c.status);

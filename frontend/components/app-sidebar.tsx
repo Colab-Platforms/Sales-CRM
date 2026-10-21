@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState, type ComponentType } from "react";
+import { useState, type ComponentType } from "react";
 import {
   LayoutDashboard,
   Users,
@@ -522,12 +522,13 @@ function CollapsibleNavItem({
   );
   const [open, setOpen] = useState(hasActiveChild);
 
-  useEffect(() => {
+  // Only a route change forces this open - a manual collapse must never be undone for an unrelated reason.
+  // (Adjusting state during render when the path changes, rather than in an effect.)
+  const [seenPathname, setSeenPathname] = useState(pathname);
+  if (pathname !== seenPathname) {
+    setSeenPathname(pathname);
     if (hasActiveChild) setOpen(true);
-    // Only route changes should force this open - a manual collapse must never be immediately
-    // undone by this same effect re-running for an unrelated reason.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pathname]);
+  }
 
   return (
     <SidebarMenuItem>

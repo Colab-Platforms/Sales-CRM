@@ -3,6 +3,7 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import AbandonmentService from "./abandonment.service.js";
+import AbandonmentImportService from "./abandonment.import.js";
 import {
   validateBulkAssignManager,
   validateBulkAssignSalesperson,
@@ -18,6 +19,7 @@ import {
 } from "./abandonment.validators.js";
 
 const service = new AbandonmentService();
+const importService = new AbandonmentImportService();
 
 const fail = (res: Response, error: any) => sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
 const bad = (res: Response, message: string) => sendResponse(res, false, null, message, STATUS_CODES.BAD_REQUEST);
@@ -176,6 +178,32 @@ export const bulkUpdateLeadStatus = async (req: AuthRequest, res: Response): Pro
     const { error, value } = validateBulkUpdateLeadStatus(req.body);
     if (error) return void bad(res, error.message);
     sendResponse(res, true, await service.bulkUpdateLeadStatus(req.user!, value), "Lead status updated successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const previewAbandonmentImport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    if (!req.file) return void bad(res, "CSV file is required");
+    let columnMapping: Record<string, string>;
+    try {
+      columnMapping = JSON.parse(req.body.columnMapping ?? "{}");
+    } catch {
+      return void bad(res, "columnMapping must be valid JSON");
+    }
+    if (!columnMapping || typeof columnMapping !== "object" || Array.isArray(columnMapping) || Object.values(columnMapping).some((v) => typeof v !== "string")) {
+      return void bad(res, "columnMapping must map column names to field names");
+    }
+    sendResponse(res, true, await importService.previewImport(req.user!, req.file, columnMapping), "Import previewed successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const confirmAbandonmentImport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await importService.confirmImport(req.user!, req.params.batchId as string), "Abandoned leads imported successfully.", STATUS_CODES.CREATED);
   } catch (error: any) {
     fail(res, error);
   }

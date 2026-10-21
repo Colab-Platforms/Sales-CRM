@@ -71,6 +71,14 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
+  attendanceService.start();
+  // Local development against a copy of live data: set DISABLE_BACKGROUND_JOBS=true so this machine never messages
+  // customers, calls Shopify/Cashfree/Shiprocket, or re-processes webhooks the live server already handles.
+  // Unset (the default, and in production) = every job runs exactly as before.
+  if (process.env.DISABLE_BACKGROUND_JOBS === "true") {
+    console.warn("[jobs] DISABLE_BACKGROUND_JOBS=true: webhook workers, schedulers, syncs and transcription are NOT running");
+    return;
+  }
   startShopifyWebhookWorker();
   startShopifyCatchUp();
   startWhatsAppWebhookWorker();
@@ -84,6 +92,5 @@ app.listen(PORT, () => {
   startMetaWebhookWorker();
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
-  attendanceService.start();
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
 });

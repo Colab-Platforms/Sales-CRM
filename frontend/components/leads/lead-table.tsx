@@ -1,8 +1,12 @@
 "use client";
 
 import { useState } from "react";
+<<<<<<< HEAD
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Phone, Loader2 } from "lucide-react";
+=======
+import { useQuery } from "@tanstack/react-query";
+>>>>>>> 0bed61383e40b377be52ab5bd1139cf7b1df7d2b
 import { AlarmClock } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -27,10 +31,14 @@ import {
 } from "@/components/ui/dialog";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations";
+<<<<<<< HEAD
 import { callingKeys, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { useInitiateCallMutation } from "@/lib/api-client/mutations/calls.mutations";
 import { CallOutcomeForm, CALL_STATUS_VARIANT, TERMINAL_CALL_STATUSES } from "@/components/calling/active-call-dialog";
 import { CallHistoryEntry } from "./calling";
+=======
+import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
+>>>>>>> 0bed61383e40b377be52ab5bd1139cf7b1df7d2b
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import { ScheduleFollowUpDialog } from "@/components/follow-ups/schedule-follow-up-dialog";

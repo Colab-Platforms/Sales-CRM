@@ -2,7 +2,7 @@ import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType, LeadW
 import LeadService from "../lead/lead.service.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
 import { legacyMatchCandidates } from "../whatsapp/whatsapp.matching.js";
-import { safeMessage, type TxRunner } from "../integrations/integrations.common.js";
+import { safeMessage, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import type { WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { logger } from "@/utils/logger.js";
 import { ingestionMetrics } from "./shiprocket.abandonment.metrics.js";
@@ -103,8 +103,6 @@ async function ensureCheckoutSource(tx: import("../integrations/integrations.com
   return created.id;
 }
 
-type Db = import("../integrations/integrations.common.js").Db;
-
 const OPEN_STATUSES = [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS];
 
 /** Serialises everything one customer's deliveries do (find-or-create the Lead, find-or-create the
@@ -176,7 +174,7 @@ export async function saveCheckoutAbandonment(
   tx: Db,
   leadId: string,
   event: ParsedAbandonment,
-  { detectedAt, score, reason }: { detectedAt: Date; score: number | null; reason: string | null },
+  { detectedAt, score, reason, referenceType }: { detectedAt: Date; score: number | null; reason: string | null; referenceType?: string },
 ): Promise<{ abandonment: { id: string }; existing: boolean }> {
   const existing = await findOpenAbandonment(tx, leadId, event.externalId);
   if (existing) {
@@ -193,7 +191,7 @@ export async function saveCheckoutAbandonment(
       leadId,
       type: AbandonmentType.CHECKOUT,
       sourceId: await ensureCheckoutSource(tx),
-      referenceType: "ShiprocketCheckoutCart",
+      referenceType: referenceType ?? "ShiprocketCheckoutCart",
       referenceId: event.externalId,
       detectedAt,
       status: AbandonmentStatus.ACTIVE,
@@ -226,6 +224,40 @@ async function resolveLead(tx: Db, event: ParsedAbandonment): Promise<{ id: stri
   return { id: lead.id };
 }
 
+export interface SaveAbandonmentOptions {
+  /** Provenance of the row. Defaults describe a live Shiprocket Checkout webhook delivery; a CSV import overrides them. */
+  referenceType?: string;
+  activitySource?: ActivitySource;
+  createdTitle?: string;
+  updatedTitle?: string;
+}
+
+/** The SAVE step: resolves (or creates) the lead, then creates or refreshes the one open CHECKOUT abandonment for the cart. Shared by the webhook processor and the CSV import. */
+export async function saveAbandonment(tx: Db, event: ParsedAbandonment, now: Date, options: SaveAbandonmentOptions = {}): Promise<{ leadId: string; created: boolean }> {
+  // The per-customer lock comes first, so two near-simultaneous saves for one person (webhook deliveries or CSV rows) run one after the other.
+  await lockContact(tx, event);
+  const lead = await resolveLead(tx, event);
+  const { score, reason } = priorityFromCartValue(event.cartValue);
+  const detectedAt = event.abandonedAt ?? now;
+
+  const { abandonment, existing } = await saveCheckoutAbandonment(tx, lead.id, event, { detectedAt, score, reason, referenceType: options.referenceType });
+
+  await tx.activity.create({
+    data: {
+      leadId: lead.id,
+      type: ActivityType.ABANDONMENT,
+      referenceType: "Abandonment",
+      referenceId: abandonment.id,
+      source: options.activitySource ?? ActivitySource.SHIPROCKET_WEBHOOK,
+      title: existing ? (options.updatedTitle ?? "Checkout abandonment updated") : (options.createdTitle ?? "Checkout abandoned"),
+      description: summarize(event),
+    },
+  });
+
+  await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
+  return { leadId: lead.id, created: !existing };
+}
+
 export async function processAbandonmentEvent(eventId: string, deps: AbandonmentProcessorDeps): Promise<AbandonmentProcessOutcome> {
   const now = deps.now ?? (() => new Date());
   const stored = await deps.store.claim(eventId, now());
@@ -247,31 +279,9 @@ export async function processClaimedAbandonmentEvent(stored: { id: string; paylo
       return "ignored";
     }
 
-    // 1) THE SAVE - its own transaction, committed before anything else is attempted. The per-customer lock comes first, so two near-simultaneous
-    //    deliveries for one person run one after the other.
-    const saved = await deps.runner.$transaction(async (tx) => {
-      await lockContact(tx, event);
-      const lead = await resolveLead(tx, event);
-      const { score, reason } = priorityFromCartValue(event.cartValue);
-      const detectedAt = event.abandonedAt ?? now();
-
-      const { abandonment, existing } = await saveCheckoutAbandonment(tx, lead.id, event, { detectedAt, score, reason });
-
-      await tx.activity.create({
-        data: {
-          leadId: lead.id,
-          type: ActivityType.ABANDONMENT,
-          referenceType: "Abandonment",
-          referenceId: abandonment.id,
-          source: ActivitySource.SHIPROCKET_WEBHOOK,
-          title: existing ? "Checkout abandonment updated" : "Checkout abandoned",
-          description: summarize(event),
-        },
-      });
-
-      await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
-      return { leadId: lead.id, created: !existing };
-    }, SAVE_TX_OPTIONS);
+    // 1) THE SAVE - its own transaction, committed before anything else is attempted. saveAbandonment takes the per-customer lock first, so two
+    //    near-simultaneous deliveries for one person run one after the other.
+    const saved = await deps.runner.$transaction((tx) => saveAbandonment(tx, event, now()), SAVE_TX_OPTIONS);
 
     // 2) AUTO-ASSIGNMENT - separate and best-effort. Only a genuinely new abandonment tries it (a repeat delivery for the same cart never re-triggers it, matching manual assignment's own
     //    "don't clobber an existing owner" behaviour), and never during a recovery pass. If it fails the checkout is already saved: the lead simply stays unassigned (visible on the

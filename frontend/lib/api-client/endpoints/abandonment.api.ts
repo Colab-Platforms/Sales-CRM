@@ -1,6 +1,7 @@
 import { apiClient } from "../client";
 import { encodeItemKeys, type ItemOption } from "../../abandonment-items";
 import type { ApiEnvelope } from "../types/common.types";
+import type { ImportPreviewResult } from "../types/lead.types";
 import type {
   AbandonmentDetail,
   AutoAssignConfig,
@@ -126,6 +127,21 @@ export const abandonmentApi = {
 
   async setSalespersonAutoAssignConfig(enabled: boolean): Promise<AutoAssignConfig> {
     const res = await apiClient.patch<ApiEnvelope<AutoAssignConfig>>("/abandonments/auto-assign/salesperson-config", { enabled });
+    return res.data.data;
+  },
+
+  async previewImport(file: File, columnMapping: Record<string, string>): Promise<ImportPreviewResult> {
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("columnMapping", JSON.stringify(columnMapping));
+    const res = await apiClient.post<ApiEnvelope<ImportPreviewResult>>("/abandonments/import/preview", formData, {
+      headers: { "Content-Type": "multipart/form-data" },
+    });
+    return res.data.data;
+  },
+
+  async confirmImport(batchId: string): Promise<{ batchId: string; createdCount: number; failedCount: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ batchId: string; createdCount: number; failedCount: number }>>(`/abandonments/import/${batchId}/confirm`);
     return res.data.data;
   },
 };
