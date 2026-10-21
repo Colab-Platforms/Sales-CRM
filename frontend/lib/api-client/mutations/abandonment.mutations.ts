@@ -44,6 +44,22 @@ export function useBulkUpdateLeadStatusMutation() {
   });
 }
 
+export function usePreviewAbandonmentImportMutation() {
+  return useMutation<Awaited<ReturnType<typeof abandonmentApi.previewImport>>, unknown, { file: File; columnMapping: Record<string, string> }>({
+    mutationFn: ({ file, columnMapping }) => abandonmentApi.previewImport(file, columnMapping),
+  });
+}
+
+export function useConfirmAbandonmentImportMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<Awaited<ReturnType<typeof abandonmentApi.confirmImport>>, unknown, string>({
+    mutationFn: (batchId) => abandonmentApi.confirmImport(batchId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
+    },
+  });
+}
+
 export function useSetManagerAutoAssignMutation() {
   const queryClient = useQueryClient();
   return useMutation<ManagerAutoAssignConfig, unknown, { enabled: boolean; managerIds?: string[] }>({

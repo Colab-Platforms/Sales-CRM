@@ -19,6 +19,7 @@ import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, schedu
 // agrees with them, so a lead created here will always be found by the same lookup a WhatsApp reply
 // (or a Shopify/Meta match) uses, with no special-casing needed on either side.
 import { normalizeMobile, normalizeEmail } from "@/lib/leadIdentity.js";
+import { isAbandonedImportBatch } from "@/lib/importBatchKind.js";
 import {
   Role,
   UserStatus,
@@ -865,8 +866,16 @@ class LeadService {
     });
     if (!config?.enabled) return;
 
+    // Only salespeople who are present right now: an open WorkSession (endedAt null) means they are
+    // logged in and heartbeating; logout or a stale timeout closes it. Absent ones are skipped, and if
+    // nobody is present the lead stays with the manager unassigned.
     const salespeople = await tx.user.findMany({
-      where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE, reportingManagerId: lead.assignedManagerId },
+      where: {
+        role: Role.SALESPERSON,
+        status: UserStatus.ACTIVE,
+        reportingManagerId: lead.assignedManagerId,
+        workSessions: { some: { endedAt: null } },
+      },
       orderBy: { id: "asc" },
     });
     if (salespeople.length === 0) return;
@@ -915,6 +924,14 @@ class LeadService {
     await this.bulkAssignLeadsToSalesperson(tx, [{ lead, salesperson, groupId: membership?.groupId ?? null }], null, AssignmentType.MANUAL);
     await tx.activity.create({ data: { leadId: lead.id, type: ActivityType.ASSIGNMENT, referenceType: "Lead", referenceId: lead.id, title: `Routed to ${salesperson.name} by product routing`, description: ruleDescription } });
     return true;
+  }
+
+  /** A manager who uploads abandoned leads keeps them (same rule as the normal CSV import): hands the lead to that manager unless it already has one. */
+  async assignAbandonedLeadToManager(tx: TxClient, lead: Lead, managerId: string): Promise<Lead> {
+    if (lead.assignedManagerId) return lead;
+    const manager = await tx.user.findUniqueOrThrow({ where: { id: managerId } });
+    await this.bulkAssignLeadsToManager(tx, [{ lead, manager }], managerId, AssignmentType.MANUAL);
+    return { ...lead, assignedManagerId: manager.id };
   }
 
   /** Entry point for a newly-created abandoned lead: tries the manager stage, then (whether a
@@ -1041,7 +1058,7 @@ class LeadService {
 
   async confirmImport(user: AuthUser, batchId: string) {
     const batch = await prisma.leadImportBatch.findUnique({ where: { id: batchId } });
-    if (!batch) throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
+    if (!batch || isAbandonedImportBatch(batch.columnMapping)) throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
     this.assertBatchOwnership(user, batch);
     if (batch.status !== ImportBatchStatus.DRAFT) {
       throw new ApiError("Import batch already processed", STATUS_CODES.CONFLICT);
@@ -1169,11 +1186,12 @@ class LeadService {
         createdAt: true,
         committedAt: true,
         uploadedById: true,
+        columnMapping: true,
       },
     });
-    if (!batch) throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
+    if (!batch || isAbandonedImportBatch(batch.columnMapping)) throw new ApiError("Import batch not found", STATUS_CODES.NOT_FOUND);
     this.assertBatchOwnership(user, batch);
-    const { uploadedById: _uploadedById, ...publicBatch } = batch;
+    const { uploadedById: _uploadedById, columnMapping: _columnMapping, ...publicBatch } = batch;
     return publicBatch;
   }
 
