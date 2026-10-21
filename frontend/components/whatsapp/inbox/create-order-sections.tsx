@@ -20,6 +20,7 @@ import { ADDRESS_TYPES, formatAddress, validateAddress, type AddressErrors, type
 import type { PincodeLookup, ServiceabilityResult } from "@/lib/api-client/types/delivery.types";
 
 export { CourierTable, ServiceabilityLine } from "./courier-rates";
+import { EXTERNAL_PAYMENT_HELP, EXTERNAL_PAYMENT_LABEL, EXTERNAL_PAYMENT_NOTE, externalPaymentOutcome } from "@/lib/external-payment";
 import type { CreateManualOrderResult, PaymentMethod, PaymentQrResult } from "@/lib/api-client/types/orders.types";
 import { useSendPaymentQrMutation } from "@/lib/api-client/mutations/orders.mutations";
 import type { ProductListItem } from "@/lib/api-client/types/products.types";
@@ -242,6 +243,31 @@ export function ItemsSection({ children, onAdd }: { children: ReactNode; onAdd: 
 
 // ---------------------------------------------------------------------------------------------------------------------
 // payment
+
+/** "Payment already received": prepaid only. Ticking it means the customer already paid outside Cashfree - no payment link or QR is made and the order is created as paid. */
+export function ExternalPaymentOption({ checked, onChange, reference, onReferenceChange, disabled }: { checked: boolean; onChange: (v: boolean) => void; reference: string; onReferenceChange: (v: string) => void; disabled?: boolean }) {
+  return (
+    <div className="rounded-xl border border-border bg-card p-4" data-testid="external-payment-option">
+      <label className="flex cursor-pointer items-start gap-3">
+        <input type="checkbox" className="mt-1 size-4 accent-primary" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} data-testid="payment-received-checkbox" />
+        <span className="grid gap-0.5">
+          <span className="text-sm font-medium">{EXTERNAL_PAYMENT_LABEL}</span>
+          <span className="text-xs text-muted-foreground">{EXTERNAL_PAYMENT_HELP}</span>
+        </span>
+      </label>
+      {checked ? (
+        <div className="mt-3 grid gap-2 border-t pt-3">
+          <p className="text-sm font-medium text-emerald-700 dark:text-emerald-400" data-testid="paid-order-note">Order will be created as paid</p>
+          <p className="text-xs text-muted-foreground">{EXTERNAL_PAYMENT_NOTE}</p>
+          <label className="grid gap-1 text-xs font-medium" htmlFor="payment-reference">
+            Payment reference / UTR (optional)
+            <Input id="payment-reference" value={reference} maxLength={100} disabled={disabled} onChange={(e) => onReferenceChange(e.target.value)} placeholder="e.g. UPI transaction id" data-testid="payment-reference-input" />
+          </label>
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 export function PaymentSection({ value, onChange }: { value: OrderType; onChange: (v: OrderType) => void }) {
   return (
@@ -741,6 +767,7 @@ export function ResultView({
   onDone: () => void;
 }) {
   const { order, shopify, paymentLink, whatsapp } = result;
+  const external = externalPaymentOutcome(result);
   const [sendOpen, setSendOpen] = useState(false);
   const sendQr = useSendPaymentQrMutation();
   const [qrOverride, setQrOverride] = useState<PaymentQrResult | null>(null);
@@ -794,6 +821,19 @@ export function ResultView({
           )}
         </ResultRow>
 
+        {external ? (
+          <ResultRow label="Payment" state={external.warn ? "warn" : "ok"}>
+            <span className="grid gap-2">
+              <span data-testid="external-payment-result">{external.text}</span>
+              {external.warn && shopify.status !== "failed" ? (
+                <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onRetryShopify} disabled={retrying} data-testid="retry-shopify-paid">
+                  {retrying ? "Retrying…" : "Retry marking paid on Shopify"}
+                </Button>
+              ) : null}
+            </span>
+          </ResultRow>
+        ) : null}
+
         {paymentLink ? (
           <ResultRow label="Cashfree payment link" state={paymentLink.status === "failed" ? "warn" : "ok"}>
             {paymentLink.status === "failed" ? (
@@ -820,7 +860,7 @@ export function ResultView({
           </ResultRow>
         ) : null}
 
-        <ResultRow label="WhatsApp" state={whatsapp.sent ? "ok" : paymentLink || isCod ? "warn" : "info"}>
+        {external ? null : <ResultRow label="WhatsApp" state={whatsapp.sent ? "ok" : paymentLink || isCod ? "warn" : "info"}>
           {whatsapp.sent
             ? `${what} sent to ${customerMobile ?? "the customer"}${providerLabel ? ` via ${providerLabel}` : ""}`
             : `${what} not sent — ${friendlyWhatsApp(whatsapp.reason)}`}
@@ -836,7 +876,7 @@ export function ResultView({
               Template: <code className="font-mono text-foreground">{whatsapp.templateName}</code>
             </span>
           ) : null}
-        </ResultRow>
+        </ResultRow>}
 
         {order.paymentMode !== "COD" && qr ? (
           <ResultRow label="Payment QR" state={qr.status === "SENT" ? "ok" : "warn"}>

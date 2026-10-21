@@ -78,6 +78,21 @@ const MANUAL_PAYMENT = `
   }
 `;
 
+// orderMarkAsPaid (Shopify documents it as the way to record a payment received outside checkout: cash, bank deposit, offline) clears the order's OUTSTANDING balance with a sale transaction. It is used here only
+// after the order's total and outstanding have been verified to equal exactly the amount that was collected, so it records the same amount orderCreateManualPayment would. Unlike orderCreateManualPayment it does
+// not depend on a payment provider / manual payment method being configured on the shop.
+const MARK_AS_PAID = `
+  mutation crmOrderMarkAsPaidAfterReconcile($input: OrderMarkAsPaidInput!) {
+    orderMarkAsPaid(input: $input) {
+      order { id displayFinancialStatus }
+      userErrors { field message }
+    }
+  }
+`;
+
+/** Shopify refused to record a payment because of the SHOP'S payment setup (not because of this order): the only refusal that falls through to the other documented way. */
+export const isPaymentSetupProblem = (errors: { message: string }[]): boolean => errors.some((e) => /payment (provider|gateway|method)|not configured|manual payment/i.test(e.message));
+
 type UserErrors = { field: string[] | null; message: string }[];
 
 async function run<T>(client: ShopifyClient, step: string, query: string, variables: Record<string, unknown>): Promise<T> {
@@ -102,6 +117,8 @@ export interface PrepaidUpgradeReconcileInput {
   upgradeReference: string;
   /** Wording for the order edit and the payment. Defaults describe a Prepaid Upgrade; a CRM order discount (WhatsApp Inbox) passes its own. */
   labels?: { discount: string; payment: string; note: string };
+  /** A payment collected OUTSIDE Cashfree and confirmed by a person: record it with orderMarkAsPaid first (no payment provider needed on the shop). Default: manual payment first, mark-as-paid only if the shop's payment setup refuses it. */
+  preferMarkAsPaid?: boolean;
 }
 
 export interface PrepaidUpgradeReconcileResult {
@@ -109,6 +126,8 @@ export interface PrepaidUpgradeReconcileResult {
   financialStatus: string | null;
   /** What this call actually did: nothing (already reconciled), only the payment, or the edit then the payment. */
   performed: "already_reconciled" | "payment_only" | "edit_and_payment";
+  /** Which documented Shopify mutation recorded the payment (absent when nothing needed recording). */
+  paymentVia?: "manual_payment" | "mark_as_paid";
   /** Net amount Shopify now shows as received on the order. */
   received: string | null;
 }
@@ -170,10 +189,28 @@ export async function reconcilePrepaidUpgrade(client: ShopifyClient, shopifyOrde
 
   // The payment: no explicit amount, so Shopify records exactly the outstanding balance - which must be the prepaid amount.
   if (state.outstanding !== prepaid) throw new ShopifyReconcileError(`Shopify shows ${fromCents(state.outstanding)} outstanding, expected ${fromCents(prepaid)}; no payment was recorded.`, "payment");
-  const paid = await run<{ orderCreateManualPayment: { order: { id: string; displayFinancialStatus: string | null } | null; userErrors: UserErrors } }>(client, "payment", MANUAL_PAYMENT, { id: gid, paymentMethodName: (input.labels?.payment ?? `Cashfree (prepaid upgrade ${input.upgradeReference})`).slice(0, 100) });
-  failIfErrors("payment", paid.orderCreateManualPayment.userErrors);
+  // Two documented ways to record exactly the outstanding balance. The preferred one goes first; the other is tried ONLY when Shopify refused the first because of the shop's payment setup (nothing was written by a
+  // refused call). Any other refusal stops here with Shopify's own reason - never a blind second attempt.
+  type PayAnswer = { order: { id: string; displayFinancialStatus: string | null } | null; userErrors: UserErrors };
+  const viaManual = async (): Promise<PayAnswer> => (await run<{ orderCreateManualPayment: PayAnswer }>(client, "payment", MANUAL_PAYMENT, { id: gid, paymentMethodName: (input.labels?.payment ?? `Cashfree (${input.upgradeReference})`).slice(0, 100) })).orderCreateManualPayment;
+  const viaMark = async (): Promise<PayAnswer> => (await run<{ orderMarkAsPaid: PayAnswer }>(client, "payment", MARK_AS_PAID, { input: { id: gid } })).orderMarkAsPaid;
+  const attempts: ["manual_payment" | "mark_as_paid", () => Promise<PayAnswer>][] = input.preferMarkAsPaid ? [["mark_as_paid", viaMark], ["manual_payment", viaManual]] : [["manual_payment", viaManual], ["mark_as_paid", viaMark]];
+  let paid: PayAnswer | null = null;
+  let paymentVia: "manual_payment" | "mark_as_paid" = attempts[0]![0];
+  let refused: UserErrors = [];
+  for (const [index, [via, attempt]] of attempts.entries()) {
+    const answer = await attempt();
+    if (answer.userErrors.length === 0) {
+      paid = answer;
+      paymentVia = via;
+      break;
+    }
+    refused = answer.userErrors;
+    if (index === 0 && !isPaymentSetupProblem(answer.userErrors)) break;
+  }
+  if (!paid) failIfErrors("payment", refused);
 
   const final = await readState(client, gid);
   if (final.outstanding !== 0 || final.received !== prepaid) throw new ShopifyReconcileError(`After recording the payment Shopify shows ${fromCents(final.received)} received and ${fromCents(final.outstanding)} outstanding.`, "payment");
-  return { shopifyOrderId: gid, financialStatus: paid.orderCreateManualPayment.order?.displayFinancialStatus ?? final.status, performed: needsEdit ? "edit_and_payment" : "payment_only", received: fromCents(final.received) };
+  return { shopifyOrderId: gid, financialStatus: paid?.order?.displayFinancialStatus ?? final.status, performed: needsEdit ? "edit_and_payment" : "payment_only", received: fromCents(final.received), paymentVia };
 }

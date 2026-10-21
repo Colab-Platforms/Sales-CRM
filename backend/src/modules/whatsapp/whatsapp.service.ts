@@ -13,6 +13,7 @@ import { getWhatsAppProvider } from "./whatsapp.factory.js";
 import { WhatsAppSendError } from "./whatsapp.provider.js";
 import { WhatsAppMediaError, type FetchedMedia } from "./whatsapp.meta.provider.js";
 import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
+import { QR_MEDIA_NAME, renderStoredPaymentQr, resolvePaymentQrMessages } from "./whatsapp.payment-qr.js";
 import { contentDisposition, describeMedia, loadMediaDescriptors, mediaActivityMetadata, recoverMediaFromWebhook, safeFilename, servedContentType, type InboundMedia } from "./whatsapp.media.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
 import { legacyMatchCandidates, matchSenderToLead, threadOf } from "./whatsapp.matching.js";
@@ -224,6 +225,7 @@ class WhatsAppService {
 
   /** Adds the media descriptor to the inbound files of a page - one extra query for the whole page, none when it has no files. */
   private async attachMedia(items: WhatsAppMessageHistoryItem[]): Promise<WhatsAppMessageHistoryItem[]> {
+    await this.attachOutboundQrMedia(items);
     const files = items.filter((i) => i.direction === "INBOUND" && i.messageType === "MEDIA");
     if (files.length === 0) return items;
     const found = await loadMediaDescriptors(this.db, files.map((i) => ({ id: i.id, leadId: i.customer?.leadId ?? null })), REFERENCE_TYPE);
@@ -234,6 +236,17 @@ class WhatsAppService {
     legacy.forEach((i, n) => { if (recovered[n]) found.set(i.id, recovered[n]!); });
     for (const item of files) item.media = describeMedia(found.get(item.id) ?? null);
     return items;
+  }
+
+  /** The payment QR images the CRM itself sent get a media descriptor too (the browser then loads them from the same authenticated media route as a customer's file). */
+  private async attachOutboundQrMedia(items: WhatsAppMessageHistoryItem[]): Promise<void> {
+    const candidates = items.filter((i) => i.direction === "OUTBOUND" && i.messageType === "MEDIA");
+    if (candidates.length === 0) return;
+    const found = await resolvePaymentQrMessages(this.db, candidates.map((i) => i.id));
+    for (const item of candidates) {
+      const qr = found.get(item.id);
+      if (qr) item.media = { kind: "image", mimeType: "image/png", filename: QR_MEDIA_NAME(qr.orderNumber) };
+    }
   }
 
   /**
@@ -247,6 +260,13 @@ class WhatsAppService {
       select: { id: true, direction: true, messageType: true, provider: true, providerMessageId: true, leadId: true, receivedAt: true, createdAt: true },
     });
     if (!row) throw new ApiError("Message not found", STATUS_CODES.NOT_FOUND);
+    // A payment QR the CRM sent: drawn again from the payment's stored link (no Meta download, no token) - the same card that went out.
+    if (row.direction === "OUTBOUND" && row.messageType === "MEDIA") {
+      const qr = (await resolvePaymentQrMessages(this.db, [row.id])).get(row.id);
+      const image = qr ? await renderStoredPaymentQr(this.db, qr.paymentId) : null;
+      if (!image) throw new ApiError("This message has no file", STATUS_CODES.NOT_FOUND);
+      return { buffer: image.png, contentType: "image/png", contentDisposition: contentDisposition(true, QR_MEDIA_NAME(image.orderNumber)) };
+    }
     if (row.direction !== "INBOUND" || row.messageType !== "MEDIA") throw new ApiError("This message has no file", STATUS_CODES.NOT_FOUND);
     if (row.provider !== "META") throw new ApiError("Files can only be shown for WhatsApp Cloud API messages", STATUS_CODES.NOT_FOUND);
 

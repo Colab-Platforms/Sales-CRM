@@ -110,6 +110,10 @@ export interface CreateManualOrderInput {
   abandonmentId?: string;
   items: CreateManualOrderItemInput[];
   paymentMethod: PaymentMethod;
+  /** Prepaid only: the customer already paid outside Cashfree. The order is created as paid (CRM + Shopify); no payment link or QR is made. Omitted = false. */
+  paymentAlreadyReceived?: boolean;
+  /** Optional UTR / reference of that external payment. */
+  paymentReference?: string;
   // One per order ATTEMPT (reused across retries of that same attempt) - the backend collapses a double submit with the same key into one order.
   idempotencyKey?: string;
   // Set only after the server warned that a matching recent order exists and the user confirmed this is a separate purchase.
@@ -209,6 +213,18 @@ export interface CreateManualOrderResult {
   // null only when the order's payment method has nothing to collect via Cashfree (e.g. COD).
   paymentLink: OrderPaymentLinkResult | null;
   whatsapp: OrderNotifyResult;
+  /** Set only for an order created with "payment already received" (confirmed by a person outside Cashfree, never Cashfree-verified). */
+  manualPayment?: ExternalPaymentSummary;
+}
+
+export interface ExternalPaymentSummary {
+  verification: "MANUAL_EXTERNAL";
+  paymentId: string;
+  amount: string;
+  reference: string | null;
+  confirmedAt: string | null;
+  shopifyPayment: "synced" | "failed" | "pending";
+  shopifyReason?: string;
 }
 
 // none: no Cashfree link (e.g. COD). cancelled: the unpaid link was cancelled. paid: already paid - nothing cancelled or

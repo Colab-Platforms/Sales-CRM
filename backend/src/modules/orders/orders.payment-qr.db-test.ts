@@ -14,7 +14,8 @@ import type { CashfreeLink } from "../cashfree/cashfree.client.js";
 import type WhatsAppFreeTextService from "../whatsapp/whatsapp.freetext.service.js";
 import express from "express";
 import type { AddressInfo } from "node:net";
-import { ensureQrToken, loadPaymentQrPng, paymentQrImageUrl, renderPaymentQrPng, sendPaymentQr, type PaymentQrDeps } from "../whatsapp/whatsapp.payment-qr.js";
+import WhatsAppService from "../whatsapp/whatsapp.service.js";
+import { buildPaymentQrImage, renderStoredPaymentQr, ensureQrToken, loadPaymentQrPng, paymentQrImageUrl, sendPaymentQr, type PaymentQrDeps } from "../whatsapp/whatsapp.payment-qr.js";
 import { createPublicQrRoutes } from "../whatsapp/whatsapp.payment-qr.routes.js";
 import OrdersService from "./orders.service.js";
 
@@ -33,16 +34,27 @@ const BASE = "https://crm.example.com";
 
 /** Meta provider fake: records every image it is asked to send; can be made to fail. */
 function fakeMeta() {
-  const images: { to: string; link: string; caption?: string }[] = [];
-  const state = { failNext: 0 };
-  const provider = {
-    sendImage: async (input: { to: string; link: string; caption?: string }) => {
+  const images: { to: string; link: string; mediaId?: string; caption?: string }[] = [];
+  const uploads: { mimeType: string; filename: string; png: boolean; data: Buffer }[] = [];
+  const state = { failNext: 0, failUpload: false, upload: false };
+  const provider: Record<string, unknown> = {
+    sendImage: async (input: { to: string; link: string; mediaId?: string; caption?: string }) => {
       images.push(input);
       if (state.failNext > 0) { state.failNext -= 1; throw new Error("Meta rejected the image (token EAAB123456789secretvalue expired)"); }
       return { providerMessageId: `wamid.${images.length}`, raw: {} };
     },
   };
-  return { images, state, provider };
+  provider.uploadMedia = undefined;
+  const enableUpload = (fail = false) => {
+    state.upload = true;
+    state.failUpload = fail;
+    provider.uploadMedia = async (data: Buffer, mimeType: string, filename: string) => {
+      uploads.push({ mimeType, filename, data, png: data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) });
+      if (state.failUpload) throw new Error("Meta rejected the media upload (token EAAB123456789secretvalue)");
+      return `MEDIA-${uploads.length}`;
+    };
+  };
+  return { images, uploads, state, provider, enableUpload };
 }
 
 async function world(tx: Prisma.TransactionClient, opts: { windowOpen?: boolean; publicBase?: string | null; textSent?: boolean } = {}) {
@@ -106,7 +118,7 @@ describe("QR image for a prepaid payment link", () => {
       assert.equal(await ensureQrToken(tx as never, pay.id), sig, "the token is created once and reused (every retry sends the same image URL)");
       const png = await loadPaymentQrPng(tx as never, pay.id, sig);
       assert.ok(png && png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "a PNG");
-      assert.ok(png!.equals(await renderPaymentQrPng(pay.paymentUrl!)), "rendered from the stored payment URL");
+      assert.ok(png!.equals(await buildPaymentQrImage({ paymentUrl: pay.paymentUrl!, currency: "INR", amount: pay.amount }, (await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { orderNumber: true } })).orderNumber)), "the card rendered from the stored payment URL");
       const encoded = QRCode.create(pay.paymentUrl!, {}).segments.map((segment) => Buffer.from(segment.data as never).toString()).join(""); // the library may split a URL into several encoding segments
       assert.equal(encoded, pay.paymentUrl, "and that image encodes exactly the payment URL");
       assert.equal(await loadPaymentQrPng(tx as never, pay.id, "0".repeat(32)), null, "a wrong token gets nothing");
@@ -244,7 +256,7 @@ describe("the public QR image endpoint, over real HTTP (as Meta's servers call i
         const ok = await get(path);
         assert.deepEqual([ok.status, ok.type], [200, "image/png"]);
         assert.ok(ok.body.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), "a valid PNG");
-        assert.ok(ok.body.equals(await renderPaymentQrPng(pay.paymentUrl!)), "the QR of the stored Cashfree URL");
+        assert.ok(ok.body.equals(await buildPaymentQrImage({ paymentUrl: pay.paymentUrl!, currency: "INR", amount: pay.amount }, (await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { orderNumber: true } })).orderNumber)), "the card with the QR of the stored Cashfree URL");
         const parts = path.split("/");
         assert.equal((await get(`/api/public/payment-qr/${pay.id}/${"0".repeat(32)}.png`)).status, 404, "wrong token");
         assert.equal((await get(`/api/public/payment-qr/${uid()}/${parts.at(-1)}`)).status, 404, "another payment id");
@@ -267,6 +279,131 @@ describe("the public QR image endpoint, over real HTTP (as Meta's servers call i
       const retry = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true });
       assert.equal(retry.status, "NOT_SENT", "an expired link is not re-sent as a QR");
       assert.deepEqual([await tx.order.count({ where: { leadId: w.lead.id } }), await tx.payment.count({ where: { orderId: r.order.id } })], [1, 1]);
+    });
+  });
+});
+
+describe("QR delivered by uploading the image to Meta (no public backend address needed)", () => {
+  it("uploads the PNG and sends it by media id: it works with NO PUBLIC_BACKEND_URL, carries order + amount, and the link message and the QR are recorded separately", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { publicBase: null });
+      w.meta.enableUpload();
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      const out = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps);
+      assert.equal(out.status, "SENT");
+      assert.deepEqual(w.meta.uploads.map((u) => [u.mimeType, u.png]), [["image/png", true]]);
+      assert.equal(w.meta.images.at(-1)!.mediaId, "MEDIA-1");
+      assert.equal(w.meta.images.at(-1)!.link, undefined, "nothing for Meta to download from us");
+      assert.match(w.meta.images.at(-1)!.caption ?? "", new RegExp(`${pay.amount.toString()}.*${(await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { orderNumber: true } })).orderNumber}`));
+      assert.equal(await tx.whatsAppMessage.count({ where: { orderId: r.order.id, messageType: "MEDIA", status: { in: ["SENT", "QUEUED"] } } }), 1);
+      assert.equal((await paymentOf(tx, r.order.id)).status, "PENDING", "sending a QR never marks anything paid");
+    });
+  });
+
+  it("an upload that is refused falls back to the public image URL when one exists; with none it reports NOT_SENT and the payment link stays valid", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      w.meta.enableUpload(true);
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      assert.equal((await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps)).status, "SENT");
+      assert.match(w.meta.images.at(-1)!.link, /public\/payment-qr/, "fallback to the public URL");
+      const none = await world(tx, { publicBase: null });
+      none.meta.enableUpload(true);
+      const r2 = await none.create("PAYMENT_LINK");
+      const out = await sendPaymentQr(tx as never, none.as, (await paymentOf(tx, r2.order.id)).id, none.qrDeps);
+      assert.equal(out.status, "NOT_SENT");
+      assert.ok(!/EAAB|secretvalue/.test(out.reason ?? ""), "no credential-like text is shown");
+      assert.deepEqual([(await paymentOf(tx, r2.order.id)).status, (await tx.order.findUniqueOrThrow({ where: { id: r2.order.id }, select: { status: true } })).status], ["PENDING", "PENDING_PAYMENT"]);
+    });
+  });
+
+  it("retrying after a failed image send reuses the order and the Cashfree link: no new order, no new link", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      w.meta.enableUpload();
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      w.meta.state.failNext = 1;
+      assert.equal((await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true })).status, "FAILED");
+      assert.equal((await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true })).status, "SENT");
+      assert.deepEqual([await tx.order.count({ where: { leadId: w.lead.id } }), await tx.payment.count({ where: { orderId: r.order.id } }), w.links.length], [1, 1, 1]);
+    });
+  });
+});
+
+describe("showing the QR in the CRM conversation (history + authenticated media)", () => {
+  const history = (_tx: Prisma.TransactionClient, svc: WhatsAppService, as: { id: string; username: string; role: Role }, leadId: string) => svc.listMessages(as as never, { page: 1, pageSize: 50, leadId } as never);
+
+  it("the QR image the CRM sent is listed with an image descriptor and loads, through the CRM's own route, as the card of the stored Cashfree URL - no Meta token or URL involved", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      w.meta.enableUpload();
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      const sent = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true });
+      assert.equal(sent.status, "SENT");
+      const svc = new WhatsAppService(tx as never, () => null, async () => null);
+      const items = (await history(tx, svc, w.as, w.lead.id)).items;
+      const qrMessage = items.find((i) => i.id === sent.messageId)!;
+      assert.deepEqual([qrMessage.direction, qrMessage.messageType, qrMessage.media?.kind, qrMessage.media?.mimeType], ["OUTBOUND", "MEDIA", "image", "image/png"]);
+      const served = await svc.getInboundMedia(w.as as never, sent.messageId!);
+      assert.equal(served.contentType, "image/png");
+      assert.ok(served.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])));
+      const stored = await tx.payment.findUniqueOrThrow({ where: { id: pay.id }, select: { paymentUrl: true, currency: true, amount: true } });
+      assert.ok(served.buffer.equals(await buildPaymentQrImage({ paymentUrl: stored.paymentUrl!, currency: stored.currency, amount: stored.amount }, (await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { orderNumber: true } })).orderNumber)), "exactly the image that was sent: the same stored URL");
+      assert.match(served.contentDisposition, /^inline/);
+      // viewing changes nothing
+      assert.deepEqual([(await paymentOf(tx, r.order.id)).status, await tx.payment.count({ where: { orderId: r.order.id } }), await tx.order.count({ where: { leadId: w.lead.id } })], ["PENDING", 1, 1]);
+    });
+  });
+
+  it("a QR message sent BEFORE the descriptor existed (no activity row) is recognised by its caption and still shows", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      const sent = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true });
+      await tx.activity.deleteMany({ where: { referenceType: "WhatsAppMessage", referenceId: sent.messageId } });
+      const svc = new WhatsAppService(tx as never, () => null, async () => null);
+      const qrMessage = (await history(tx, svc, w.as, w.lead.id)).items.find((i) => i.id === sent.messageId)!;
+      assert.equal(qrMessage.media?.kind, "image");
+      assert.equal((await svc.getInboundMedia(w.as as never, sent.messageId!)).contentType, "image/png");
+    });
+  });
+
+  it("a failed retrieval is a clear 404, not a crash: an outbound media message that is not a payment QR, a payment with no Cashfree link, and a user who may not read the conversation all get nothing", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      const sent = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true });
+      const svc = new WhatsAppService(tx as never, () => null, async () => null);
+      const other = await tx.whatsAppMessage.create({ data: { provider: "META", direction: "OUTBOUND", messageType: "MEDIA", status: "SENT", leadId: w.lead.id, orderId: r.order.id, toNumber: "+919902575944", body: "A brochure" }, select: { id: true } });
+      await assert.rejects(() => svc.getInboundMedia(w.as as never, other.id), (e: any) => e.statusCode === 404);
+      assert.equal((await history(tx, svc, w.as, w.lead.id)).items.find((i) => i.id === other.id)?.media ?? null, null, "an ordinary outbound file is not mistaken for a QR");
+      await tx.payment.update({ where: { id: pay.id }, data: { paymentUrl: null } });
+      await assert.rejects(() => svc.getInboundMedia(w.as as never, sent.messageId!), (e: any) => e.statusCode === 404);
+      const hr = await tx.user.create({ data: { name: "HR", username: `hr-${uid()}`, role: Role.HR }, select: { id: true, username: true } });
+      await assert.rejects(() => svc.getInboundMedia({ id: hr.id, username: hr.username, role: Role.HR } as never, sent.messageId!), (e: any) => e.statusCode === 404);
+    });
+  });
+
+  it("renderStoredPaymentQr only serves a payment of THAT order and only a real Cashfree link; resending the image (retry) adds a second message for the SAME order and link", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("PAYMENT_LINK");
+      const pay = await paymentOf(tx, r.order.id);
+      assert.ok(await renderStoredPaymentQr(tx as never, pay.id, r.order.id));
+      assert.equal(await renderStoredPaymentQr(tx as never, pay.id, uid()), null);
+      assert.equal(await renderStoredPaymentQr(tx as never, uid()), null);
+      const a = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true });
+      const b = await sendPaymentQr(tx as never, w.as, pay.id, w.qrDeps, { force: true });
+      const svc = new WhatsAppService(tx as never, () => null, async () => null);
+      const items = (await history(tx, svc, w.as, w.lead.id)).items;
+      assert.ok([a.messageId, b.messageId].every((id) => items.find((i) => i.id === id)?.media?.kind === "image"), "every QR message, old and new, shows the same way");
+      assert.deepEqual([await tx.order.count({ where: { leadId: w.lead.id } }), await tx.payment.count({ where: { orderId: r.order.id } }), w.links.length], [1, 1, 1]);
     });
   });
 });

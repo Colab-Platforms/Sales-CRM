@@ -14,6 +14,7 @@ import { formatDateTime, formatMoney } from "@/lib/order-status";
 import { useAuthStore } from "@/stores/auth-store";
 import { DetailField } from "./detail-field";
 import { SendPaymentLinkDialog } from "./send-payment-link-dialog";
+import { PaymentQrPreview } from "./payment-qr-preview";
 
 // Orders that are over cannot be collected on (the backend refuses too; this only avoids offering the button).
 const CLOSED_ORDER_STATUSES = new Set(["CANCELLED", "REFUNDED", "RETURNED"]);
@@ -22,6 +23,7 @@ const CLOSED_ORDER_STATUSES = new Set(["CANCELLED", "REFUNDED", "RETURNED"]);
 export function isOpenPaymentLink(payment: PaymentDetail, now = Date.now()): boolean {
   return (
     payment.source === "CASHFREE" &&
+
     (payment.status === "PENDING" || payment.status === "PROCESSING") &&
     (!payment.paymentExpiresAt || new Date(payment.paymentExpiresAt).getTime() > now)
   );
@@ -141,6 +143,8 @@ export function PaymentLinkPanel({ payment, order }: { payment: PaymentDetail; o
           ) : null}
         </div>
       ) : null}
+
+      {open && payment.paymentUrl ? <PaymentQrPreview orderId={order.id} paymentId={payment.id} /> : null}
 
       <SendPaymentLinkDialog
         open={sendOpen}

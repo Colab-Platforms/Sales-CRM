@@ -6,7 +6,9 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { useCreateOrderMutation, usePushOrderToShopifyMutation } from "@/lib/api-client/mutations/orders.mutations";
+import { useCreateOrderMutation, useMarkOrderPaidMutation, usePushOrderToShopifyMutation } from "@/lib/api-client/mutations/orders.mutations";
+import { canMarkPaymentReceived, externalPaymentFields } from "@/lib/external-payment";
+import { useAuthStore } from "@/stores/auth-store";
 import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
 import { productsApi } from "@/lib/api-client/endpoints/products.api";
 import { productListQueryOptions } from "@/lib/api-client/queries/products.queries";
@@ -54,6 +56,7 @@ import {
   cents,
   emptyItem,
   fromCents,
+  ExternalPaymentOption,
   lineTotalCents,
   ORDER_TYPES,
   pincodeUiState,
@@ -102,6 +105,12 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   const [shipmentOpen, setShipmentOpen] = useState(false);
   // Prepaid only: "Don't send" (default) or send the Cashfree link on WhatsApp with an approved template + the customer's consent.
   const [whatsapp, setWhatsapp] = useState<WhatsAppPaymentChoice>(initialSendViaWhatsApp ? { ...NO_WHATSAPP, send: true } : NO_WHATSAPP);
+  // Prepaid only: "Payment already received" - the customer already paid outside Cashfree, so the order is created as paid and no payment link / QR is made.
+  const role = useAuthStore((st) => st.user?.role);
+  const [paymentReceived, setPaymentReceived] = useState(false);
+  const [paymentReference, setPaymentReference] = useState("");
+  const externallyPaid = canMarkPaymentReceived(orderType, role) && paymentReceived;
+  const markPaid = useMarkOrderPaidMutation();
 
   // One key per order ATTEMPT, reused by every submit of that attempt (so a double click / Enter / retry after a slow
   // response is collapsed into one order by the backend) and replaced only once that attempt has succeeded or the
@@ -147,7 +156,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
   const waOptionsQuery = useQuery({ ...whatsAppPaymentOptionsQueryOptions(leadId), enabled: open && orderType !== "COD" });
   const waOptions = waOptionsQuery.data ?? null;
-  const sendingWhatsApp = orderType !== "COD" && whatsapp.send;
+  const sendingWhatsApp = orderType !== "COD" && !externallyPaid && whatsapp.send;
   const whatsappBlocked = sendingWhatsApp ? whatsappBlockReason(waOptions, waOptionsQuery.isPending, whatsapp, Boolean(waOptionsQuery.error)) : null;
 
   const createOrder = useCreateOrderMutation();
@@ -403,7 +412,9 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         // The entered parcel weight is recorded on the order; nothing is sent when none was entered.
         ...(parcel.ok ? { parcelWeightKg: parcel.kg } : {}),
         // COD orders send nothing extra (unchanged). Prepaid: an explicit "Dont send", or the WhatsApp send with template + consent.
-        ...(orderType !== "COD" ? toApiWhatsApp(waOptions, whatsapp) : {}),
+        ...(orderType !== "COD" && !externallyPaid ? toApiWhatsApp(waOptions, whatsapp) : {}),
+        // "Payment already received": only when ticked on a prepaid order; an unticked box sends exactly what was sent before.
+        ...(externallyPaid ? externalPaymentFields(orderType, true, paymentReference) : {}),
         idempotencyKey: idempotencyKey.current,
         // Only after the server warned about a matching recent order and the user chose "create anyway" (the refused request created nothing, so the same key is reused).
         ...(acknowledgeDuplicate ? { acknowledgeDuplicate: true } : {}),
@@ -427,6 +438,17 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
   function handleRetryShopify() {
     if (!result) return;
+    if (result.manualPayment) {
+      // An externally paid order: the retry re-runs the idempotent "record payment + create the Shopify order + mark it paid" step (never a bare push, which would leave Shopify unpaid, and never a second order).
+      markPaid.mutate(
+        { orderId: result.order.id, reason: "Payment already received - confirmed at order creation", ...(result.manualPayment.reference ? { reference: result.manualPayment.reference } : {}) },
+        {
+          onSuccess: (r) => setResult({ ...result, shopify: r.shopify.linked ? { status: "created" } : { status: "failed", reason: r.shopify.reason ?? "Shopify did not accept the order" }, manualPayment: { ...result.manualPayment!, shopifyPayment: r.shopify.paymentSync, shopifyReason: r.shopify.reason } }),
+          onError: (error) => toast.error(getErrorMessage(error, "Could not retry the Shopify sync.")),
+        },
+      );
+      return;
+    }
     pushToShopify.mutate(result.order.id, {
       onSuccess: (shopify) => setResult({ ...result, shopify }),
       onError: (error) => toast.error(getErrorMessage(error, "Could not retry the Shopify sync.")),
@@ -441,7 +463,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
         <CustomerBar name={customerName} mobile={customerMobile} />
 
         {step === "done" && result ? (
-          <ResultView result={result} customerMobile={customerMobile} onRetryShopify={handleRetryShopify} retrying={pushToShopify.isPending} onCreateShipment={() => setShipmentOpen(true)} onDone={() => handleOpenChange(false)} />
+          <ResultView result={result} customerMobile={customerMobile} onRetryShopify={handleRetryShopify} retrying={pushToShopify.isPending || markPaid.isPending} onCreateShipment={() => setShipmentOpen(true)} onDone={() => handleOpenChange(false)} />
         ) : step === "review" ? (
           <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
             <div className="grid content-start gap-4">
@@ -473,18 +495,20 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
               <div className="rounded-xl border border-border bg-card p-4">
                 <dl className="grid gap-1.5">
                   <SummaryRow label="Payment method" value={`${typeInfo.title} · ${typeInfo.subtitle}`} />
-                  <SummaryRow label="Payment status" value={orderType === "COD" ? "Pending (collected on delivery)" : "Pending (until the customer pays)"} />
+                  <SummaryRow label="Payment status" value={orderType === "COD" ? "Pending (collected on delivery)" : externallyPaid ? "Paid (collected outside Cashfree - confirmed by you)" : "Pending (until the customer pays)"} />
                   <SummaryRow label="Ship to" value={<span className="break-words">{formatAddress(address)}</span>} />
                 </dl>
               </div>
               <p className="rounded-lg bg-muted/60 p-3 text-xs text-muted-foreground">
                 {orderType === "COD"
                   ? "The order is confirmed, sent to Shopify, and the customer gets a WhatsApp confirmation."
+                  : externallyPaid
+                    ? "Order will be created as paid: it is confirmed and created in Shopify as paid. No payment link or QR is generated or sent, and the payment is recorded as confirmed by you, not verified by Cashfree."
                   : whatsapp.send
                     ? "A Cashfree payment link will be generated for this order and sent to the customer on WhatsApp with the template you chose."
                     : "A Cashfree payment link will be generated for this order. It is not sent automatically - use Send via WhatsApp above, or share it from the order."}
               </p>
-              {orderType !== "COD" ? (
+              {orderType !== "COD" && !externallyPaid ? (
                 <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? describeOptionsLoadError(waOptionsQuery.error) : null} onRetry={() => void waOptionsQuery.refetch()} retrying={waOptionsQuery.isFetching} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
               ) : null}
               {createOrder.error ? (
@@ -508,7 +532,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                   Back
                 </Button>
                 <Button type="button" onClick={() => submit()} disabled={createOrder.isPending || Boolean(whatsappBlocked)}>
-                  {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : sendingWhatsApp ? "Create Order & Send Payment Link" : "Create prepaid order"}
+                  {createOrder.isPending ? "Creating…" : orderType === "COD" ? "Create COD order" : externallyPaid ? "Create paid order" : sendingWhatsApp ? "Create Order & Send Payment Link" : "Create prepaid order"}
                 </Button>
               </div>
             </div>
@@ -543,8 +567,12 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
 
               <PaymentSection value={orderType} onChange={setOrderType} />
 
+              {canMarkPaymentReceived(orderType, role) ? (
+                <ExternalPaymentOption checked={paymentReceived} onChange={setPaymentReceived} reference={paymentReference} onReferenceChange={setPaymentReference} disabled={createOrder.isPending} />
+              ) : null}
+
               {/* Prepaid: the payment-link / WhatsApp template choice is right here under the payment method, and again on Review. */}
-              {orderType !== "COD" ? (
+              {orderType !== "COD" && !externallyPaid ? (
                 <WhatsAppPaymentSection options={waOptions} loading={waOptionsQuery.isPending} error={waOptionsQuery.error ? describeOptionsLoadError(waOptionsQuery.error) : null} onRetry={() => void waOptionsQuery.refetch()} retrying={waOptionsQuery.isFetching} choice={whatsapp} onChange={setWhatsapp} disabled={createOrder.isPending} />
               ) : null}
 

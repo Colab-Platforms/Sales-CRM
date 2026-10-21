@@ -93,6 +93,18 @@ export function scopedOrderWhere(id: string, leadScope: Prisma.LeadWhereInput): 
 }
 
 /**
+ * One order an ACTION may touch (cancel, revert a cancellation, retry a Shopify sync): the strict lead scope exactly as before, OR an order the person CREATED themselves, OR - for a manager - one created by a member
+ * of their team. Seeing an order never grants this (HR and recruiters get the strict scope only, and the routes are role-gated as well). Without the creator rule, an order made for a customer who has no owner or
+ * group (every WhatsApp Inbox customer) lies outside every strict lead scope, so even the telecaller who created it was told "Order not found" when cancelling it.
+ */
+export function orderActionWhere(user: { id: string; role: string }, id: string, leadScope: Prisma.LeadWhereInput, teamMemberIds: string[] = []): Prisma.OrderWhereInput {
+  if (Object.keys(leadScope).length === 0) return { id }; // admin: unrestricted, as before
+  if (user.role !== "SALESPERSON" && user.role !== "MANAGER") return scopedOrderWhere(id, leadScope);
+  const creators = [user.id, ...(user.role === "MANAGER" ? teamMemberIds : [])];
+  return { AND: [{ id }, { OR: [{ lead: leadScope }, { createdById: { in: creators } }] }] };
+}
+
+/**
  * Order VISIBILITY is company-wide for ADMIN, MANAGER and SALESPERSON (telecaller): the Orders list, search, filters, counts and the order page are not narrowed by
  * team, group or lead owner. HR still sees no orders. This is read access only - every ACTION on an order (cancel, refund, edit, prepaid upgrade, Shopify
  * operations) keeps using scopedOrderWhere / its own role check, so seeing an order never lets someone act on it.
