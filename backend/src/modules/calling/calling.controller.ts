@@ -135,6 +135,44 @@ export const initiateApplicationCall = async (req: AuthRequest, res: Response): 
   }
 };
 
+export const initiateWebCall = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error: paramError, value: params } = validateLeadIdParamSchema(req.params);
+    if (paramError) {
+      sendResponse(res, false, null, paramError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const { error: bodyError, value: body } = validateInitiateCallBodySchema(req.body);
+    if (bodyError) {
+      sendResponse(res, false, null, bodyError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await callingService.initiateWebCall(req.user!, params.leadId, body.virtualNumberId);
+    sendResponse(res, true, result, "Web call ready.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const initiateApplicationWebCall = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error: paramError, value: params } = validateApplicationIdParamSchema(req.params);
+    if (paramError) {
+      sendResponse(res, false, null, paramError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const { error: bodyError, value: body } = validateInitiateCallBodySchema(req.body);
+    if (bodyError) {
+      sendResponse(res, false, null, bodyError.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await callingService.initiateApplicationWebCall(req.user!, params.applicationId, body.virtualNumberId);
+    sendResponse(res, true, result, "Web call ready.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const listApplicationCalls = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateApplicationIdParamSchema(req.params);

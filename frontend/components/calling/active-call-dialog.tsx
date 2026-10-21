@@ -2,7 +2,7 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Phone, PhoneCall, PhoneMissed, PhoneOff } from "lucide-react";
+import { Loader2, Mic, MicOff, Phone, PhoneCall, PhoneMissed, PhoneOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -196,6 +196,7 @@ const CONNECTED_OR_LATER: ReadonlySet<CallStatus> = new Set(["CONNECTED", ...TER
 
 // The three stages a live call walks through, in order. Terminal statuses are past the last one.
 const CALL_STAGES = ["Your phone", "Customer", "Connected"] as const;
+const WEB_CALL_STAGES = ["Browser", "Customer", "Connected"] as const;
 
 function stageIndex(status: CallStatus | undefined): number {
   switch (status) {
@@ -305,12 +306,12 @@ function CallHero({ lead, call }: { lead: ActiveCallLead; call: Call | undefined
   );
 }
 
-function CallStepper({ status }: { status: CallStatus | undefined }) {
+function CallStepper({ status, stages = CALL_STAGES }: { status: CallStatus | undefined; stages?: readonly string[] }) {
   const ended = Boolean(status && TERMINAL_CALL_STATUSES.has(status));
   const current = stageIndex(status);
   return (
     <ol className="flex items-center gap-2" aria-label="Call progress">
-      {CALL_STAGES.map((label, i) => {
+      {stages.map((label, i) => {
         const done = ended ? i <= current : i < current;
         const active = !ended && i === current;
         return (
@@ -330,6 +331,29 @@ function CallStepper({ status }: { status: CallStatus | undefined }) {
   );
 }
 
+/** Present for a browser (WebRTC) call: the in-call controls the dialog should offer. */
+export interface WebCallControls {
+  hangup: () => void;
+  /** Flips mute and returns whether the call is now muted. */
+  toggleMute: () => boolean;
+}
+
+function WebCallButtons({ controls }: { controls: WebCallControls }) {
+  const [muted, setMuted] = useState(false);
+  return (
+    <div className="flex items-center justify-center gap-2">
+      <Button variant="outline" size="sm" onClick={() => setMuted(controls.toggleMute())} aria-pressed={muted}>
+        {muted ? <MicOff className="size-3.5" /> : <Mic className="size-3.5" />}
+        {muted ? "Unmute" : "Mute"}
+      </Button>
+      <Button variant="destructive" size="sm" onClick={controls.hangup}>
+        <PhoneOff className="size-3.5" />
+        Hang up
+      </Button>
+    </div>
+  );
+}
+
 export interface ActiveCallLead {
   id: string;
   firstName: string;
@@ -344,11 +368,14 @@ export function ActiveCallDialog({
   lead,
   callId,
   currentFollowUp,
+  webControls,
   onClose,
 }: {
   lead: ActiveCallLead;
   callId: string;
   currentFollowUp?: LeadFollowUp | null;
+  /** Set for a browser call so the dialog shows mute / hang up while the call is live. */
+  webControls?: WebCallControls;
   onClose: () => void;
 }) {
   const { data: calls } = useQuery({
@@ -397,7 +424,8 @@ export function ActiveCallDialog({
         </DialogHeader>
 
         <CallHero lead={lead} call={call} />
-        <CallStepper status={call?.status} />
+        <CallStepper status={call?.status} stages={webControls ? WEB_CALL_STAGES : CALL_STAGES} />
+        {webControls && !ended ? <WebCallButtons controls={webControls} /> : null}
 
         {noAnswer ? (
           <p className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2.5 text-center text-sm text-muted-foreground">

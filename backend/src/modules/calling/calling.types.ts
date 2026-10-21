@@ -3,6 +3,21 @@ export interface ClickToCallResult {
   status: string;
 }
 
+// Returned to the browser, which logs into the Plivo Browser SDK with `token` and dials `destination`.
+// The number actually dialed is looked up server-side from the Call row on the answer URL, never trusted
+// from the browser.
+export interface WebCallResult {
+  callId: string;
+  status: string;
+  token: string;
+  username: string;
+  tokenExpiresInSeconds: number;
+  destination: string;
+}
+
+// Plivo posts form-encoded fields; custom SDK headers arrive as X-PH-* fields.
+export type PlivoWebhookParams = Record<string, string | undefined>;
+
 export interface SubmitCallOutcomeBody {
   outcomeId: string;
   notes?: string;

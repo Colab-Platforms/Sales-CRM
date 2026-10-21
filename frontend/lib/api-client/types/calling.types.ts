@@ -49,6 +49,14 @@ export interface ClickToCallResult {
   status: CallStatus;
 }
 
+/** Browser (Plivo WebRTC) call: log into the SDK with `token`, then dial `destination` carrying `callId`. */
+export interface WebCallResult extends ClickToCallResult {
+  token: string;
+  username: string;
+  tokenExpiresInSeconds: number;
+  destination: string;
+}
+
 export interface SubmitCallOutcomePayload {
   outcomeId: string;
   notes?: string;

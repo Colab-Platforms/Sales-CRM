@@ -2,19 +2,21 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FileText, Mic, Phone, PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { FileText, Headphones, Mic, Phone, PhoneIncoming, PhoneOutgoing } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import { Badge } from "@/components/ui/badge";
 import { NativeSelect } from "@/components/ui/native-select";
-import { useInitiateCallMutation } from "@/lib/api-client/mutations/calling.mutations";
+import { useInitiateCallMutation, useInitiateWebCallMutation } from "@/lib/api-client/mutations/calling.mutations";
 import { virtualNumbersQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
+import { startWebCall } from "@/lib/calling/webphone";
 import {
   ActiveCallDialog,
   CallOutcomeForm,
   CALL_STATUS_VARIANT,
   TERMINAL_CALL_STATUSES,
+  type WebCallControls,
 } from "@/components/calling/active-call-dialog";
 import { Button } from "@/components/ui/button";
 import { useCallTranscriptStream } from "./use-call-transcript-stream";
@@ -138,9 +140,20 @@ export function CallHistoryEntry({ leadId, call, currentFollowUp }: { leadId: st
   );
 }
 
+// Browser calling is opt-in per deployment until Plivo is configured on the backend.
+const WEB_CALLING_ENABLED = process.env.NEXT_PUBLIC_WEB_CALLING === "true";
+
 export function ClickToCallButton({ lead }: { lead: CallableLead }) {
   const initiateCall = useInitiateCallMutation(lead.id);
-  const { data: virtualNumbers = [] } = useQuery(virtualNumbersQueryOptions());
+  const initiateWebCall = useInitiateWebCallMutation(lead.id);
+  const [webControls, setWebControls] = useState<WebCallControls | undefined>();
+  const [startingWebCall, setStartingWebCall] = useState(false);
+  const { data: allVirtualNumbers = [] } = useQuery(virtualNumbersQueryOptions());
+  // Plivo only accepts its own rented numbers as caller ID, so browser calls always use the PLIVO line and the
+  // phone-bridge (CallerDesk) picker never offers it. Salespeople never choose between them.
+  const isPlivo = (provider: string) => provider.toUpperCase() === "PLIVO";
+  const virtualNumbers = allVirtualNumbers.filter((vn) => !isPlivo(vn.provider));
+  const webLine = allVirtualNumbers.find((vn) => isPlivo(vn.provider));
   const [virtualNumberId, setVirtualNumberId] = useState("");
   const [activeCallId, setActiveCallId] = useState<string | null>(null);
   const selected = virtualNumberId || virtualNumbers[0]?.id || "";
@@ -155,7 +168,7 @@ export function ClickToCallButton({ lead }: { lead: CallableLead }) {
         className="text-xs"
         wrapperClassName="w-28"
         value={selected}
-        disabled={initiateCall.isPending || virtualNumbers.length === 0}
+        disabled={initiateCall.isPending || startingWebCall || virtualNumbers.length === 0}
         onChange={(e) => setVirtualNumberId(e.target.value)}
       >
         {virtualNumbers.length === 0 ? <option value="">No line</option> : null}
@@ -170,7 +183,7 @@ export function ClickToCallButton({ lead }: { lead: CallableLead }) {
         size="icon"
         className="size-6"
         aria-label={`Call ${lead.firstName}`}
-        disabled={initiateCall.isPending || !selected}
+        disabled={initiateCall.isPending || startingWebCall || !selected}
         onClick={() =>
           initiateCall.mutate(selected, {
             onSuccess: (result) => {
@@ -184,12 +197,54 @@ export function ClickToCallButton({ lead }: { lead: CallableLead }) {
       >
         <Phone className="size-3.5" />
       </Button>
+      {WEB_CALLING_ENABLED ? (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="size-6"
+          aria-label={`Call ${lead.firstName} from browser`}
+          title={webLine ? `Call from browser (${webLine.displayName ?? webLine.number})` : "No browser-calling line set up"}
+          disabled={initiateWebCall.isPending || startingWebCall || !webLine}
+          onClick={() =>
+            webLine &&
+            initiateWebCall.mutate(webLine.id, {
+              onSuccess: async (result) => {
+                setStartingWebCall(true);
+                try {
+                  const handle = await startWebCall({
+                    token: result.token,
+                    tokenExpiresInSeconds: result.tokenExpiresInSeconds,
+                    callId: result.callId,
+                    destination: result.destination,
+                    onEnded: () => setWebControls(undefined),
+                    onError: (message) => toast.error(message),
+                  });
+                  setWebControls({ hangup: handle.hangup, toggleMute: handle.toggleMute });
+                  setActiveCallId(result.callId);
+                } catch {
+                  // startWebCall already toasted the reason.
+                } finally {
+                  setStartingWebCall(false);
+                }
+              },
+              onError: (error) => toast.error(getErrorMessage(error, "Failed to start browser call.")),
+            })
+          }
+        >
+          <Headphones className="size-3.5" />
+        </Button>
+      ) : null}
       {activeCallId ? (
         <ActiveCallDialog
           lead={{ id: lead.id, firstName: lead.firstName, lastName: lead.lastName ?? null }}
           callId={activeCallId}
           currentFollowUp={lead.tasks?.[0]}
-          onClose={() => setActiveCallId(null)}
+          webControls={webControls}
+          onClose={() => {
+            webControls?.hangup(); // closing the dialog must never leave a live browser call running
+            setActiveCallId(null);
+            setWebControls(undefined);
+          }}
         />
       ) : null}
     </div>

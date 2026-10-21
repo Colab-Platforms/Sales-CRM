@@ -19,6 +19,7 @@ import legalRoutes from "./modules/legal/legal.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startIdempotencyPruneJob } from "./modules/orders/orders.idempotency.prune.js";
+import plivoWebhookRoutes from "./modules/calling/plivo.webhook.routes.js";
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
 import { attendanceService } from "./modules/attendance/attendance.service.js";
 
@@ -50,6 +51,9 @@ app.use("/api/webhooks/aisensy", express.raw({ type: "*/*", limit: "5mb" }), ais
 // async - see whatsapp.meta.webhook.routes.ts). Meta signs the exact bytes it sends, same reason as
 // every other raw-body route here.
 app.use("/api/webhooks/whatsapp-cloud", express.raw({ type: "*/*", limit: "5mb" }), whatsappMetaWebhookRoutes);
+// Plivo (browser calling) posts form-encoded fields and signs them (V3), so it's parsed here, ahead of the
+// JSON parser and sanitizer, and each route verifies the signature itself.
+app.use("/api/webhooks/plivo", express.urlencoded({ extended: false, limit: "1mb" }), plivoWebhookRoutes);
 
 app.use(
   express.json({

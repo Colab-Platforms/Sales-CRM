@@ -7,11 +7,21 @@ import { ApplicationStatus, CallDirection, CallStatus, VirtualNumberStatus, Acti
 import { OUTCOME_APPLICATION_STATUS, OUTCOME_LEAD_STATUS } from "./calling.outcomes.js";
 import { completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 import { enqueueTranscription } from "./calling.transcription.js";
+import { normalizeMobile } from "@/lib/leadIdentity.js";
+import {
+  agentIdMatchesPlivoFrom,
+  buildDialXml,
+  buildHangupXml,
+  createBrowserToken,
+  publicBackendUrl,
+} from "./plivo.client.js";
 import { attendanceService } from "../attendance/attendance.service.js";
 import { ENDED_CALL_STATUSES } from "../attendance/attendance.constants.js";
 import type {
   CallerDeskWebhookPayload,
   ClickToCallResult,
+  WebCallResult,
+  PlivoWebhookParams,
   VirtualNumberSummary,
   CreateVirtualNumberBody,
   UpdateVirtualNumberBody,
@@ -20,6 +30,9 @@ import type {
 import type { AuthUser } from "@/middlewares/auth.js";
 
 const PROVIDER = "CALLERDESK";
+const PLIVO_PROVIDER = "PLIVO";
+// A web call row is single-use: the browser must reach the answer URL within this window of creating it.
+const WEB_CALL_ANSWER_WINDOW_MS = 2 * 60 * 1000;
 
 // CallerDesk's webhook `Status` values mapped to our CallStatus enum. Confirmed from real webhook
 // traffic (2026-09-25): a `live_call` ping fires "Transferring Call to Agent" right after the agent's
@@ -160,6 +173,9 @@ class CallingService {
     const virtualNumber = await prisma.virtualNumber.findUnique({ where: { id: virtualNumberId } });
     if (!virtualNumber || virtualNumber.status !== VirtualNumberStatus.ACTIVE) {
       throw new ApiError("Virtual number not found or inactive", STATUS_CODES.BAD_REQUEST);
+    }
+    if (virtualNumber.provider.toUpperCase() === PLIVO_PROVIDER) {
+      throw new ApiError("This number is for browser calls only - use the browser call button", STATUS_CODES.BAD_REQUEST);
     }
 
     const call = await prisma.call.create({
@@ -373,6 +389,9 @@ class CallingService {
     if (!virtualNumber || virtualNumber.status !== VirtualNumberStatus.ACTIVE) {
       throw new ApiError("Virtual number not found or inactive", STATUS_CODES.BAD_REQUEST);
     }
+    if (virtualNumber.provider.toUpperCase() === PLIVO_PROVIDER) {
+      throw new ApiError("This number is for browser calls only - use the browser call button", STATUS_CODES.BAD_REQUEST);
+    }
 
     const call = await prisma.call.create({
       data: {
@@ -464,6 +483,236 @@ class CallingService {
       where: { id: call.id },
       include: { agent: { select: { id: true, name: true } }, recording: true, outcome: true },
     });
+  }
+
+  // ---- Browser (Plivo WebRTC) calling ----
+
+  // Plivo only accepts numbers it rents to us as caller ID (anything else fails with PLIVO_UNKNOWN_CALLER_ID),
+  // so a browser call must use a PLIVO virtual number.
+  private async getActiveVirtualNumberOrThrow(virtualNumberId: string) {
+    const virtualNumber = await prisma.virtualNumber.findUnique({ where: { id: virtualNumberId } });
+    if (!virtualNumber || virtualNumber.status !== VirtualNumberStatus.ACTIVE) {
+      throw new ApiError("Virtual number not found or inactive", STATUS_CODES.BAD_REQUEST);
+    }
+    if (virtualNumber.provider.toUpperCase() !== PLIVO_PROVIDER) {
+      throw new ApiError("Browser calls need a Plivo number as caller ID", STATUS_CODES.BAD_REQUEST);
+    }
+    return virtualNumber;
+  }
+
+  // Plivo wants digits only with the country code (919876543210), no "+".
+  private toDialNumber(raw: string | null | undefined): string {
+    const normalized = normalizeMobile(raw);
+    if (!normalized) throw new ApiError("Phone number is not valid for calling", STATUS_CODES.BAD_REQUEST);
+    return normalized.replace(/\D/g, "");
+  }
+
+  private async createWebCall(
+    agentId: string,
+    target: { leadId: string } | { applicationId: string },
+    dialNumber: string,
+    virtualNumber: { id: string },
+  ): Promise<WebCallResult> {
+    const call = await prisma.call.create({
+      data: {
+        ...target,
+        agentId,
+        virtualNumberId: virtualNumber.id,
+        provider: PLIVO_PROVIDER,
+        direction: CallDirection.OUTBOUND,
+        status: CallStatus.INITIATED,
+        customerNumber: dialNumber,
+        startedAt: new Date(),
+      },
+    });
+
+    try {
+      const { token, username, expiresInSeconds } = await createBrowserToken(agentId);
+      return {
+        callId: call.id,
+        status: call.status,
+        token,
+        username,
+        tokenExpiresInSeconds: expiresInSeconds,
+        destination: dialNumber,
+      };
+    } catch (error: any) {
+      await prisma.call.update({
+        where: { id: call.id },
+        data: { status: CallStatus.FAILED, notes: error.message ?? "Failed to start web call" },
+      });
+      throw error;
+    }
+  }
+
+  async initiateWebCall(user: AuthUser, leadId: string, virtualNumberId: string): Promise<WebCallResult> {
+    const lead = await this.getLeadOrThrow(leadId);
+    if (user.role === Role.MANAGER && lead.assignedManagerId !== user.id) {
+      throw new ApiError("Lead not found", STATUS_CODES.NOT_FOUND);
+    }
+    if (user.role === Role.SALESPERSON && lead.ownerId !== user.id) {
+      throw new ApiError("Lead not found", STATUS_CODES.NOT_FOUND);
+    }
+    const dialNumber = this.toDialNumber(lead.mobile);
+    const virtualNumber = await this.getActiveVirtualNumberOrThrow(virtualNumberId);
+
+    const result = await this.createWebCall(user.id, { leadId: lead.id }, dialNumber, virtualNumber);
+
+    await prisma.activity.create({
+      data: {
+        leadId: lead.id,
+        actorId: user.id,
+        type: ActivityType.CALL,
+        referenceType: "CALL",
+        referenceId: result.callId,
+        title: "Call initiated",
+        description: `Browser call to ${lead.mobile} via ${virtualNumber.displayName ?? virtualNumber.number}`,
+      },
+    });
+    return result;
+  }
+
+  async initiateApplicationWebCall(user: AuthUser, applicationId: string, virtualNumberId: string): Promise<WebCallResult> {
+    const application = await this.getApplicationForUserOrThrow(user, applicationId);
+    if (user.role !== Role.RECRUITER) throw new ApiError("Only the assigned recruiter can call an applicant", STATUS_CODES.FORBIDDEN);
+    const dialNumber = this.toDialNumber(application.mobile);
+    const virtualNumber = await this.getActiveVirtualNumberOrThrow(virtualNumberId);
+    return this.createWebCall(user.id, { applicationId: application.id }, dialNumber, virtualNumber);
+  }
+
+  // Plivo hits this when the browser dials. The number to ring comes from our Call row, found through the
+  // X-PH-CallId header the browser sent - the row must belong to the dialing endpoint's agent, still be
+  // untouched (INITIATED) and fresh, and is claimed atomically so a replay can't dial twice.
+  async handlePlivoAnswer(params: PlivoWebhookParams): Promise<string> {
+    const callId = params["X-PH-CallId"] ?? params["X-PH-Callid"] ?? params["X-Ph-Callid"];
+    const base = publicBackendUrl();
+    if (!callId || !base) return buildHangupXml("Call could not be placed.");
+
+    const call = await prisma.call.findFirst({
+      where: { id: callId, provider: PLIVO_PROVIDER, status: CallStatus.INITIATED },
+      include: { virtualNumber: true },
+    });
+    const fresh = call?.startedAt && Date.now() - call.startedAt.getTime() <= WEB_CALL_ANSWER_WINDOW_MS;
+    if (!call || !fresh || !call.customerNumber || !call.virtualNumber || !agentIdMatchesPlivoFrom(call.agentId, params.From)) {
+      logger.warn(`[plivo] rejected answer-url request callId=${callId} from=${params.From}`);
+      return buildHangupXml("Call could not be placed.");
+    }
+
+    const claimed = await prisma.call.updateMany({
+      where: { id: call.id, status: CallStatus.INITIATED },
+      data: { status: CallStatus.RINGING_CUSTOMER, providerCallId: params.CallUUID ?? null },
+    });
+    if (claimed.count === 0) return buildHangupXml("Call could not be placed.");
+
+    attendanceService
+      .setSystemStatus(call.agentId, WorkStatus.ON_CALL)
+      .catch((e) => logger.error("[attendance] could not set ON_CALL", e));
+
+    return buildDialXml({
+      customerNumber: call.customerNumber,
+      callerId: this.toDialNumber(call.virtualNumber.number),
+      dialCallbackUrl: `${base}/api/webhooks/plivo/dial?callId=${call.id}`,
+      recordingCallbackUrl: `${base}/api/webhooks/plivo/recording?callId=${call.id}`,
+    });
+  }
+
+  // Mid-call state from the <Dial> callback: customer's phone ringing / picked up.
+  async handlePlivoDialEvent(callId: string, params: PlivoWebhookParams): Promise<void> {
+    const call = await prisma.call.findFirst({ where: { id: callId, provider: PLIVO_PROVIDER } });
+    if (!call) return;
+    if (TERMINAL_STATUSES.has(call.status)) return;
+
+    const raw = `${params.Event ?? ""} ${params.DialStatus ?? ""} ${params.DialBLegStatus ?? ""} ${params.DialAction ?? ""}`.toLowerCase();
+    // The customer leg ended; the hangup webhook sets the final status. Log why, since a rejected leg
+    // (e.g. PLIVO_UNKNOWN_CALLER_ID for a caller ID Plivo doesn't own) is otherwise invisible.
+    if (/hangup/.test(raw)) {
+      logger.info(
+        `[plivo] customer leg ended call=${call.id} cause=${params.DialBLegHangupCauseName ?? params.DialBLegHangupCause ?? "unknown"} ` +
+          `from=${params.DialBLegFrom} to=${params.DialBLegTo}`,
+      );
+      return;
+    }
+    let status: CallStatus | null = null;
+    if (/answer|connect/.test(raw)) status = CallStatus.CONNECTED;
+    else if (/ring/.test(raw)) status = CallStatus.RINGING_CUSTOMER;
+
+    if (!status) {
+      logger.warn(`[plivo] unrecognized dial event for call=${call.id}: ${JSON.stringify(params)}`);
+      return;
+    }
+    if (status === CallStatus.RINGING_CUSTOMER && call.status === CallStatus.CONNECTED) return;
+
+    await prisma.call.update({
+      where: { id: call.id },
+      data: { status, answeredAt: status === CallStatus.CONNECTED ? (call.answeredAt ?? new Date()) : call.answeredAt },
+    });
+  }
+
+  // Final word on the call (hangup_url on the Plivo application).
+  async handlePlivoHangup(params: PlivoWebhookParams): Promise<void> {
+    const callUuid = params.CallUUID;
+    if (!callUuid) return;
+    const call = await prisma.call.findFirst({ where: { provider: PLIVO_PROVIDER, providerCallId: callUuid } });
+    if (!call) {
+      logger.warn(`[plivo] hangup for unknown CallUUID=${callUuid} - ignoring`);
+      return;
+    }
+
+    const endedAt = new Date();
+    const spoke = Boolean(call.answeredAt) || call.status === CallStatus.CONNECTED;
+    const cause = (params.CallStatus ?? params.HangupCause ?? "").toLowerCase();
+
+    let status: CallStatus;
+    if (spoke) status = CallStatus.COMPLETED;
+    else if (cause.includes("busy")) status = CallStatus.BUSY;
+    else if (cause.includes("fail") || cause.includes("reject") || cause.includes("unreach")) status = CallStatus.FAILED;
+    else status = CallStatus.NO_ANSWER;
+
+    const answeredAt = call.answeredAt ?? (spoke ? endedAt : null);
+    const durationSeconds = spoke && call.answeredAt ? Math.max(0, Math.round((endedAt.getTime() - call.answeredAt.getTime()) / 1000)) : 0;
+
+    await prisma.call.update({
+      where: { id: call.id },
+      data: { status, answeredAt, endedAt, durationSeconds },
+    });
+
+    attendanceService
+      .restoreFromCall(call.agentId)
+      .catch((e) => logger.error("[attendance] could not restore status after call", e));
+
+    if (status === CallStatus.NO_ANSWER && !call.outcomeId) {
+      await this.autoLogNoAnswer(call.id, call.leadId, call.applicationId, call.agentId).catch((e) =>
+        logger.error("[plivo] could not auto-log no-answer outcome", e),
+      );
+    }
+
+    if (!call.leadId) return;
+    await prisma.activity.create({
+      data: {
+        leadId: call.leadId,
+        actorId: call.agentId,
+        type: ActivityType.CALL,
+        referenceType: "CALL",
+        referenceId: call.id,
+        title: `Call ${status.toLowerCase().replace("_", " ")}`,
+        description: durationSeconds ? `Duration: ${durationSeconds}s` : undefined,
+      },
+    });
+  }
+
+  async handlePlivoRecording(callId: string, params: PlivoWebhookParams): Promise<void> {
+    const recordUrl = params.RecordUrl;
+    if (!recordUrl) return;
+    const call = await prisma.call.findFirst({ where: { id: callId, provider: PLIVO_PROVIDER } });
+    if (!call) return;
+
+    const durationSeconds = toSeconds(params.RecordingDuration);
+    await prisma.callRecording.upsert({
+      where: { callId: call.id },
+      create: { callId: call.id, providerRecordingId: params.RecordingID, recordingUrl: recordUrl, durationSeconds },
+      update: { providerRecordingId: params.RecordingID, recordingUrl: recordUrl, durationSeconds },
+    });
+    void enqueueTranscription(call.id);
   }
 
   verifyWebhookSecret(headers: Record<string, unknown>, query: Record<string, unknown>): boolean {

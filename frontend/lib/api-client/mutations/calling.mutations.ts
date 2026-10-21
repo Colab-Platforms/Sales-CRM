@@ -8,6 +8,7 @@ import type {
   Call,
   ClickToCallResult,
   SubmitCallOutcomePayload,
+  WebCallResult,
   VirtualNumberRecord,
   CreateVirtualNumberPayload,
   UpdateVirtualNumberPayload,
@@ -18,6 +19,17 @@ export function useInitiateCallMutation(leadId: string) {
 
   return useMutation<ClickToCallResult, unknown, string>({
     mutationFn: (virtualNumberId) => callingApi.initiateCall(leadId, virtualNumberId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(leadId) });
+    },
+  });
+}
+
+export function useInitiateWebCallMutation(leadId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation<WebCallResult, unknown, string>({
+    mutationFn: (virtualNumberId) => callingApi.initiateWebCall(leadId, virtualNumberId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: callingKeys.leadCalls(leadId) });
     },

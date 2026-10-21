@@ -48,6 +48,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
     "pg-boss": "^12.35.0",
+    "plivo": "^4.79.0",
     "qrcode": "^1.5.4",
     "tsc-alias": "^1.9.5",
     "xss": "^1.0.15",

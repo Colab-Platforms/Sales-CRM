@@ -3,6 +3,8 @@ import {
   initiateCall,
   listLeadCalls,
   initiateApplicationCall,
+  initiateWebCall,
+  initiateApplicationWebCall,
   listApplicationCalls,
   listVirtualNumbers,
   listAllVirtualNumbers,
@@ -27,12 +29,15 @@ router.use(requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON, 
 // Recruitment: a recruiter calls applicants of the jobs they are assigned. The service enforces ownership;
 // leads stay closed to recruiter/HR below.
 router.post("/applications/:applicationId/click-to-call", requireRole(Role.RECRUITER), initiateApplicationCall);
+router.post("/applications/:applicationId/web-call", requireRole(Role.RECRUITER), initiateApplicationWebCall);
 router.get("/applications/:applicationId/calls", requireRole(Role.ADMIN, Role.HR, Role.RECRUITER), listApplicationCalls);
 
 router.use(requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON, Role.RECRUITER));
 
 router.get("/virtual-numbers", listVirtualNumbers);
 router.post("/leads/:leadId/click-to-call", initiateCall);
+// Browser (Plivo WebRTC) calling; leads stay closed to recruiters.
+router.post("/leads/:leadId/web-call", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), initiateWebCall);
 router.get("/leads/:leadId/calls", listLeadCalls);
 router.get("/call-outcomes", listCallOutcomes);
 router.patch("/calls/:id/outcome", submitCallOutcome);

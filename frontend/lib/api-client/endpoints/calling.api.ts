@@ -5,6 +5,7 @@ import type {
   CallOutcomeOption,
   ClickToCallResult,
   SubmitCallOutcomePayload,
+  WebCallResult,
   VirtualNumber,
   VirtualNumberRecord,
   CreateVirtualNumberPayload,
@@ -38,6 +39,13 @@ export const callingApi = {
 
   async initiateCall(leadId: string, virtualNumberId: string): Promise<ClickToCallResult> {
     const res = await apiClient.post<ApiEnvelope<ClickToCallResult>>(`/calling/leads/${leadId}/click-to-call`, {
+      virtualNumberId,
+    });
+    return res.data.data;
+  },
+
+  async initiateWebCall(leadId: string, virtualNumberId: string): Promise<WebCallResult> {
+    const res = await apiClient.post<ApiEnvelope<WebCallResult>>(`/calling/leads/${leadId}/web-call`, {
       virtualNumberId,
     });
     return res.data.data;
