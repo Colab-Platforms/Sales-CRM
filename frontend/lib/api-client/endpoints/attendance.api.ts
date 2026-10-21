@@ -2,6 +2,7 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
   AttendanceReport,
+  BreakLimit,
   ManualWorkStatus,
   MyShift,
   TeamStatus,
@@ -38,6 +39,16 @@ export const attendanceApi = {
 
   async getReport(params: { date?: string; userId?: string }): Promise<AttendanceReport> {
     const res = await apiClient.get<ApiEnvelope<AttendanceReport>>("/attendance/report", { params });
+    return res.data.data;
+  },
+
+  async getBreakLimit(): Promise<BreakLimit> {
+    const res = await apiClient.get<ApiEnvelope<BreakLimit>>("/attendance/break-limit");
+    return res.data.data;
+  },
+
+  async setBreakLimit(maxConcurrentBreaks: number | null): Promise<BreakLimit> {
+    const res = await apiClient.put<ApiEnvelope<BreakLimit>>("/attendance/break-limit", { maxConcurrentBreaks });
     return res.data.data;
   },
 };

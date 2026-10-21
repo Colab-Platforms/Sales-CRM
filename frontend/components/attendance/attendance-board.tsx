@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -10,9 +12,12 @@ import { Badge } from "@/components/ui/badge";
 import { useNow } from "@/components/follow-ups/use-now";
 import { useSseStream } from "@/hooks/use-sse-stream";
 import { useAuthStore } from "@/stores/auth-store";
+import { getErrorMessage } from "@/lib/api-client/client";
+import { useSetBreakLimitMutation } from "@/lib/api-client/mutations/attendance.mutations";
 import {
   attendanceKeys,
   attendanceReportQueryOptions,
+  breakLimitQueryOptions,
   teamStatusQueryOptions,
 } from "@/lib/api-client/queries/attendance.queries";
 import type {
@@ -54,8 +59,54 @@ function TableSkeleton() {
   );
 }
 
+/** Manager's cap on how many of their team can be on a break at once. Empty = no cap. */
+function BreakLimitControl() {
+  const { data } = useQuery(breakLimitQueryOptions());
+  const save = useSetBreakLimitMutation();
+  const [value, setValue] = useState("");
+
+  useEffect(() => {
+    if (data) setValue(data.maxConcurrentBreaks === null ? "" : String(data.maxConcurrentBreaks));
+  }, [data]);
+
+  const trimmed = value.trim();
+  const parsed = trimmed === "" ? null : Number(trimmed);
+  const invalid = parsed !== null && (!Number.isInteger(parsed) || parsed < 0);
+  const unchanged = data !== undefined && parsed === data.maxConcurrentBreaks;
+
+  return (
+    <div className="flex items-center gap-2">
+      <label htmlFor="break-limit" className="text-sm whitespace-nowrap text-muted-foreground">
+        Max on break at once
+      </label>
+      <Input
+        id="break-limit"
+        type="number"
+        min={0}
+        placeholder="No limit"
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        className="w-24"
+      />
+      <Button
+        size="sm"
+        disabled={!data || invalid || unchanged || save.isPending}
+        onClick={() =>
+          save.mutate(parsed, {
+            onSuccess: () => toast.success(parsed === null ? "Break limit removed." : `Break limit set to ${parsed}.`),
+            onError: (error) => toast.error(getErrorMessage(error, "Could not save break limit.")),
+          })
+        }
+      >
+        Save
+      </Button>
+    </div>
+  );
+}
+
 function LiveBoard() {
   const queryClient = useQueryClient();
+  const role = useAuthStore((s) => s.user?.role);
   const { data, isLoading, isError, dataUpdatedAt } = useQuery(teamStatusQueryOptions());
   const now = useNow(1000);
 
@@ -82,8 +133,9 @@ function LiveBoard() {
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
         <CardTitle>Live team status</CardTitle>
+        {role === "MANAGER" ? <BreakLimitControl /> : null}
       </CardHeader>
       <CardContent className="px-0">
         {isLoading ? (

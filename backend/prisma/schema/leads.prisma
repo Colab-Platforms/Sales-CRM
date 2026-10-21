@@ -228,6 +228,21 @@ model SalespersonAutoAssignConfig {
   @@map("salesperson_auto_assign_config")
 }
 
+// Per-manager cap on how many of their salespeople may be on a tea/lunch/bio break at the same
+// time. One row per manager, created on first save - a manager with no row has no cap.
+model BreakLimitConfig {
+  id String @id @default(uuid()) @db.Uuid
+
+  managerId String @unique @map("manager_id") @db.Uuid
+  manager   User   @relation("BreakLimitConfigManager", fields: [managerId], references: [id])
+
+  maxConcurrentBreaks Int @map("max_concurrent_breaks")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("break_limit_config")
+}
+
 model CommunicationPreference {
   id String @id @default(uuid()) @db.Uuid
 

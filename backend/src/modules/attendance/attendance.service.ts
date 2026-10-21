@@ -5,6 +5,7 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { Role, SessionEndReason, UserStatus, WorkStatus } from "../../../generated/prisma/enums.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import {
+  BREAK_STATUSES,
   DISCONNECT_GRACE_MS,
   ENDED_CALL_STATUSES,
   MANUAL_STATUSES,
@@ -148,8 +149,93 @@ class AttendanceService {
     }
     const session = await findOpenSession(userId);
     if (!session) throw new ApiError("Clock in to start your shift first", STATUS_CODES.CONFLICT);
-    await this.transition(session.id, userId, session.currentStatus, status);
+
+    // Going from a break straight to another break doesn't add to the number of people away.
+    const startsBreak = BREAK_STATUSES.has(status) && !BREAK_STATUSES.has(session.currentStatus);
+    if (!startsBreak) {
+      await this.transition(session.id, userId, session.currentStatus, status);
+      return this.getMine(userId);
+    }
+
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { reportingManagerId: true } });
+    const managerId = user?.reportingManagerId;
+    if (!managerId) {
+      await this.transition(session.id, userId, session.currentStatus, status);
+      return this.getMine(userId);
+    }
+
+    // The check and the transition run under one per-manager lock, so two people tapping "break" at
+    // the same moment can't both slip under the cap.
+    await this.withBreakLock(managerId, async () => {
+      const limit = await this.getBreakLimit(managerId);
+      if (limit !== null) {
+        const onBreak = await prisma.workSession.count({
+          where: {
+            endedAt: null,
+            userId: { not: userId },
+            currentStatus: { in: [...BREAK_STATUSES] },
+            user: { reportingManagerId: managerId },
+          },
+        });
+        if (onBreak >= limit) {
+          throw new ApiError(
+            `Break not available - ${onBreak} of ${limit} allowed teammates are already on a break. Try again shortly.`,
+            STATUS_CODES.CONFLICT,
+          );
+        }
+      }
+      await this.transition(session.id, userId, session.currentStatus, status);
+    });
     return this.getMine(userId);
+  }
+
+  // ---- break cap ----------------------------------------------------------------------------
+
+  private breakLocks = new Map<string, Promise<unknown>>();
+
+  private withBreakLock<T>(managerId: string, fn: () => Promise<T>): Promise<T> {
+    const previous = this.breakLocks.get(managerId) ?? Promise.resolve();
+    const run = previous.catch(() => {}).then(fn);
+    this.breakLocks.set(managerId, run);
+    void run
+      .catch(() => {})
+      .finally(() => {
+        if (this.breakLocks.get(managerId) === run) this.breakLocks.delete(managerId);
+      });
+    return run;
+  }
+
+  // null = no cap.
+  async getBreakLimit(managerId: string): Promise<number | null> {
+    const row = await prisma.breakLimitConfig.findUnique({ where: { managerId } });
+    return row?.maxConcurrentBreaks ?? null;
+  }
+
+  // The manager's own cap (managers) or, for admins, the cap of the manager they name.
+  async getBreakLimitFor(user: AuthUser, managerId?: string) {
+    const target = this.resolveManagerId(user, managerId);
+    return { managerId: target, maxConcurrentBreaks: await this.getBreakLimit(target) };
+  }
+
+  // maxConcurrentBreaks null removes the cap.
+  async setBreakLimit(user: AuthUser, maxConcurrentBreaks: number | null, managerId?: string) {
+    const target = this.resolveManagerId(user, managerId);
+    if (maxConcurrentBreaks === null) {
+      await prisma.breakLimitConfig.deleteMany({ where: { managerId: target } });
+    } else {
+      await prisma.breakLimitConfig.upsert({
+        where: { managerId: target },
+        create: { managerId: target, maxConcurrentBreaks },
+        update: { maxConcurrentBreaks },
+      });
+    }
+    return { managerId: target, maxConcurrentBreaks };
+  }
+
+  private resolveManagerId(user: AuthUser, managerId?: string): string {
+    if (user.role === Role.MANAGER) return user.id;
+    if (!managerId) throw new ApiError("managerId is required", STATUS_CODES.BAD_REQUEST);
+    return managerId;
   }
 
   // Set by the system (ON_CALL from click-to-call, IDLE from lost connection) - a no-op without a shift.

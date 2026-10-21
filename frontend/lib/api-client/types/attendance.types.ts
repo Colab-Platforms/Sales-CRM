@@ -85,3 +85,9 @@ export interface StatusEvent {
   statusSince: string;
   sessionEnded: boolean;
 }
+
+/** Max salespeople under a manager allowed on a break at once; null = no cap. */
+export interface BreakLimit {
+  managerId: string;
+  maxConcurrentBreaks: number | null;
+}
