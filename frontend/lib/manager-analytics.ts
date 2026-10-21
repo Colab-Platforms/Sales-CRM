@@ -142,7 +142,7 @@ export function presetRange(preset: RangePreset, customFrom: string, customTo: s
 
 export function defaultFilters(): DashboardFilters {
   const today = toYmd(new Date());
-  return { preset: "7d", customFrom: today, customTo: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
+  return { preset: "today", customFrom: today, customTo: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
 }
 
 export function toQuery(f: DashboardFilters): AnalyticsQuery {
