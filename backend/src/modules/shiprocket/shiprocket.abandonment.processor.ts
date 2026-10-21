@@ -110,11 +110,21 @@ const OPEN_STATUSES = [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS];
 /** Serialises everything one customer's deliveries do (find-or-create the Lead, find-or-create the
  *  Abandonment). Without it two near-simultaneous deliveries for the same person both see "nothing
  *  there yet" and both insert - the schema has no unique constraint to stop them. Transaction-scoped,
- *  so it is released on commit/rollback. */
+ *  so it is released on commit/rollback.
+ *
+ *  The lead is matched on phone OR email (findExistingLead), so the lock must cover BOTH identifiers: keyed on
+ *  the phone alone, a delivery with phone + email and a concurrent one with only the email took different locks,
+ *  resolved to the same lead and both inserted. Keys are taken in a fixed (sorted) order so two deliveries
+ *  sharing some identifiers can never deadlock each other. */
+export function contactLockKeys(event: Pick<ParsedAbandonment, "phone" | "email">): string[] {
+  const keys = [normalizeMobile(event.phone), normalizeEmail(event.email)].filter((k): k is string => !!k);
+  return [...new Set(keys)].map((k) => `lead-identity:${k}`).sort();
+}
+
 export async function lockContact(tx: Db, event: Pick<ParsedAbandonment, "phone" | "email">): Promise<void> {
-  const key = normalizeMobile(event.phone) ?? normalizeEmail(event.email);
-  if (!key) return;
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`lead-identity:${key}`}))`;
+  for (const key of contactLockKeys(event)) {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${key}))`;
+  }
 }
 
 /** The existing Lead for this person, if any - the oldest one, so a pre-existing duplicate never makes
@@ -157,6 +167,42 @@ export async function findOpenAbandonment(tx: Db, leadId: string, externalId: st
     orderBy: { createdAt: "asc" },
     select: { id: true, detectedAt: true },
   });
+}
+
+/** One open (ACTIVE/IN_PROGRESS) CHECKOUT abandonment per cart: a repeat delivery for the same cart (Shiprocket
+ *  Checkout may resend as the customer keeps stalling) refreshes it in place instead of flooding the queue with
+ *  duplicates for a lead who has not been called yet. Must run under lockContact in the same transaction. */
+export async function saveCheckoutAbandonment(
+  tx: Db,
+  leadId: string,
+  event: ParsedAbandonment,
+  { detectedAt, score, reason }: { detectedAt: Date; score: number | null; reason: string | null },
+): Promise<{ abandonment: { id: string }; existing: boolean }> {
+  const existing = await findOpenAbandonment(tx, leadId, event.externalId);
+  if (existing) {
+    const previousSnapshot = (await tx.abandonment.findUnique({ where: { id: existing.id }, select: { cartSnapshot: true } }))?.cartSnapshot;
+    const cartSnapshot = buildCartSnapshot(event, previousSnapshot) as Prisma.InputJsonObject;
+    const abandonment = await tx.abandonment.update({
+      where: { id: existing.id },
+      data: { detectedAt: detectedAt.getTime() >= existing.detectedAt.getTime() ? detectedAt : existing.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
+    });
+    return { abandonment, existing: true };
+  }
+  const abandonment = await tx.abandonment.create({
+    data: {
+      leadId,
+      type: AbandonmentType.CHECKOUT,
+      sourceId: await ensureCheckoutSource(tx),
+      referenceType: "ShiprocketCheckoutCart",
+      referenceId: event.externalId,
+      detectedAt,
+      status: AbandonmentStatus.ACTIVE,
+      priorityScore: score,
+      priorityReason: reason,
+      cartSnapshot: buildCartSnapshot(event) as Prisma.InputJsonObject,
+    },
+  });
+  return { abandonment, existing: false };
 }
 
 async function resolveLead(tx: Db, event: ParsedAbandonment): Promise<{ id: string }> {
@@ -209,35 +255,7 @@ export async function processClaimedAbandonmentEvent(stored: { id: string; paylo
       const { score, reason } = priorityFromCartValue(event.cartValue);
       const detectedAt = event.abandonedAt ?? now();
 
-      // One open (ACTIVE/IN_PROGRESS) CHECKOUT abandonment per cart: a repeat delivery for the same
-      // cart (Shiprocket Checkout may resend as the customer keeps stalling) refreshes it in place
-      // instead of flooding the queue with duplicates for a lead who has not been called yet.
-      const existing = await findOpenAbandonment(tx, lead.id, event.externalId);
-
-      const previousSnapshot = existing
-        ? (await tx.abandonment.findUnique({ where: { id: existing.id }, select: { cartSnapshot: true } }))?.cartSnapshot
-        : undefined;
-      const cartSnapshot = buildCartSnapshot(event, previousSnapshot) as Prisma.InputJsonObject;
-
-      const abandonment = existing
-        ? await tx.abandonment.update({
-            where: { id: existing.id },
-            data: { detectedAt: detectedAt.getTime() >= existing.detectedAt.getTime() ? detectedAt : existing.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
-          })
-        : await tx.abandonment.create({
-            data: {
-              leadId: lead.id,
-              type: AbandonmentType.CHECKOUT,
-              sourceId: await ensureCheckoutSource(tx),
-              referenceType: "ShiprocketCheckoutCart",
-              referenceId: event.externalId,
-              detectedAt,
-              status: AbandonmentStatus.ACTIVE,
-              priorityScore: score,
-              priorityReason: reason,
-              cartSnapshot,
-            },
-          });
+      const { abandonment, existing } = await saveCheckoutAbandonment(tx, lead.id, event, { detectedAt, score, reason });
 
       await tx.activity.create({
         data: {
