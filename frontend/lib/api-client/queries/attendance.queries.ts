@@ -5,6 +5,7 @@ export const attendanceKeys = {
   all: ["attendance"] as const,
   me: () => [...attendanceKeys.all, "me"] as const,
   team: () => [...attendanceKeys.all, "team"] as const,
+  breakLimit: () => [...attendanceKeys.all, "break-limit"] as const,
   report: (date: string | undefined) => [...attendanceKeys.all, "report", date ?? "today"] as const,
 };
 
@@ -30,5 +31,12 @@ export function attendanceReportQueryOptions(date: string | undefined) {
   return queryOptions({
     queryKey: attendanceKeys.report(date),
     queryFn: () => attendanceApi.getReport({ date }),
+  });
+}
+
+export function breakLimitQueryOptions() {
+  return queryOptions({
+    queryKey: attendanceKeys.breakLimit(),
+    queryFn: attendanceApi.getBreakLimit,
   });
 }

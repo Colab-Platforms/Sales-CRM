@@ -31,7 +31,7 @@ export const markPaidSchema = z.object({
   /** Why the payment is believed to have arrived (required: this is a financial statement made by a person). */
   reason: z.string().trim().min(3, "Say how the payment was verified").max(300),
   /** The external payment reference (UTR / UPI transaction id / receipt number), when the person has one. */
-  reference: z.string().trim().max(100).optional(),
+  reference: z.string().trim().max(100).optional().transform((v) => (v ? v : undefined)),
 });
 export type MarkPaidInput = z.infer<typeof markPaidSchema>;
 

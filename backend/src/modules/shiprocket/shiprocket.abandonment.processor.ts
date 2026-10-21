@@ -1,7 +1,7 @@
 import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType } from "../../../generated/prisma/enums.js";
 import LeadService from "../lead/lead.service.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
-import { safeMessage, type TxRunner } from "../integrations/integrations.common.js";
+import { safeMessage, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import type { WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { logger } from "@/utils/logger.js";
 import { ingestionMetrics } from "./shiprocket.abandonment.metrics.js";
@@ -133,6 +133,71 @@ async function resolveLead(tx: import("../integrations/integrations.common.js").
   return { id: lead.id };
 }
 
+export interface SaveAbandonmentOptions {
+  /** Provenance of the row. Defaults describe a live Shiprocket Checkout webhook delivery; a CSV import overrides them. */
+  referenceType?: string;
+  activitySource?: ActivitySource;
+  createdTitle?: string;
+  updatedTitle?: string;
+}
+
+/** The SAVE step: resolves (or creates) the lead, then creates or refreshes the one open CHECKOUT abandonment for the cart. Shared by the webhook processor and the CSV import. */
+export async function saveAbandonment(tx: Db, event: ParsedAbandonment, now: Date, options: SaveAbandonmentOptions = {}): Promise<{ leadId: string; created: boolean }> {
+  const lead = await resolveLead(tx, event);
+  const { score, reason } = priorityFromCartValue(event.cartValue);
+  const detectedAt = event.abandonedAt ?? now;
+
+  // One open (ACTIVE/IN_PROGRESS) CHECKOUT abandonment per cart: a repeat delivery for the same
+  // cart (Shiprocket Checkout may resend as the customer keeps stalling) refreshes it in place
+  // instead of flooding the queue with duplicates for a lead who has not been called yet.
+  const existing = event.externalId
+    ? await tx.abandonment.findFirst({
+        where: { leadId: lead.id, type: AbandonmentType.CHECKOUT, referenceId: event.externalId, status: { in: [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS] } },
+        select: { id: true, detectedAt: true },
+      })
+    : null;
+
+  const previousSnapshot = existing
+    ? (await tx.abandonment.findUnique({ where: { id: existing.id }, select: { cartSnapshot: true } }))?.cartSnapshot
+    : undefined;
+  const cartSnapshot = buildCartSnapshot(event, previousSnapshot) as Prisma.InputJsonObject;
+
+  const abandonment = existing
+    ? await tx.abandonment.update({
+        where: { id: existing.id },
+        data: { detectedAt: detectedAt.getTime() >= existing.detectedAt.getTime() ? detectedAt : existing.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
+      })
+    : await tx.abandonment.create({
+        data: {
+          leadId: lead.id,
+          type: AbandonmentType.CHECKOUT,
+          sourceId: await ensureCheckoutSource(tx),
+          referenceType: options.referenceType ?? "ShiprocketCheckoutCart",
+          referenceId: event.externalId,
+          detectedAt,
+          status: AbandonmentStatus.ACTIVE,
+          priorityScore: score,
+          priorityReason: reason,
+          cartSnapshot,
+        },
+      });
+
+  await tx.activity.create({
+    data: {
+      leadId: lead.id,
+      type: ActivityType.ABANDONMENT,
+      referenceType: "Abandonment",
+      referenceId: abandonment.id,
+      source: options.activitySource ?? ActivitySource.SHIPROCKET_WEBHOOK,
+      title: existing ? (options.updatedTitle ?? "Checkout abandonment updated") : (options.createdTitle ?? "Checkout abandoned"),
+      description: summarize(event),
+    },
+  });
+
+  await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
+  return { leadId: lead.id, created: !existing };
+}
+
 export async function processAbandonmentEvent(eventId: string, deps: AbandonmentProcessorDeps): Promise<AbandonmentProcessOutcome> {
   const now = deps.now ?? (() => new Date());
   const stored = await deps.store.claim(eventId, now());
@@ -155,61 +220,7 @@ export async function processClaimedAbandonmentEvent(stored: { id: string; paylo
     }
 
     // 1) THE SAVE - its own transaction, committed before anything else is attempted.
-    const saved = await deps.runner.$transaction(async (tx) => {
-      const lead = await resolveLead(tx, event);
-      const { score, reason } = priorityFromCartValue(event.cartValue);
-      const detectedAt = event.abandonedAt ?? now();
-
-      // One open (ACTIVE/IN_PROGRESS) CHECKOUT abandonment per cart: a repeat delivery for the same
-      // cart (Shiprocket Checkout may resend as the customer keeps stalling) refreshes it in place
-      // instead of flooding the queue with duplicates for a lead who has not been called yet.
-      const existing = event.externalId
-        ? await tx.abandonment.findFirst({
-            where: { leadId: lead.id, type: AbandonmentType.CHECKOUT, referenceId: event.externalId, status: { in: [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS] } },
-            select: { id: true, detectedAt: true },
-          })
-        : null;
-
-      const previousSnapshot = existing
-        ? (await tx.abandonment.findUnique({ where: { id: existing.id }, select: { cartSnapshot: true } }))?.cartSnapshot
-        : undefined;
-      const cartSnapshot = buildCartSnapshot(event, previousSnapshot) as Prisma.InputJsonObject;
-
-      const abandonment = existing
-        ? await tx.abandonment.update({
-            where: { id: existing.id },
-            data: { detectedAt: detectedAt.getTime() >= existing.detectedAt.getTime() ? detectedAt : existing.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
-          })
-        : await tx.abandonment.create({
-            data: {
-              leadId: lead.id,
-              type: AbandonmentType.CHECKOUT,
-              sourceId: await ensureCheckoutSource(tx),
-              referenceType: "ShiprocketCheckoutCart",
-              referenceId: event.externalId,
-              detectedAt,
-              status: AbandonmentStatus.ACTIVE,
-              priorityScore: score,
-              priorityReason: reason,
-              cartSnapshot,
-            },
-          });
-
-      await tx.activity.create({
-        data: {
-          leadId: lead.id,
-          type: ActivityType.ABANDONMENT,
-          referenceType: "Abandonment",
-          referenceId: abandonment.id,
-          source: ActivitySource.SHIPROCKET_WEBHOOK,
-          title: existing ? "Checkout abandonment updated" : "Checkout abandoned",
-          description: summarize(event),
-        },
-      });
-
-      await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
-      return { leadId: lead.id, created: !existing };
-    }, SAVE_TX_OPTIONS);
+    const saved = await deps.runner.$transaction((tx) => saveAbandonment(tx, event, now()), SAVE_TX_OPTIONS);
 
     // 2) AUTO-ASSIGNMENT - separate and best-effort. Only a genuinely new abandonment tries it (a repeat delivery for the same cart never re-triggers it, matching manual assignment's own
     //    "don't clobber an existing owner" behaviour), and never during a recovery pass. If it fails the checkout is already saved: the lead simply stays unassigned (visible on the

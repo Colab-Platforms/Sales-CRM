@@ -66,6 +66,12 @@ export const ordersApi = {
     return res.data.data;
   },
 
+  /** The payment QR card as an image (display only; loaded as a blob because an <img> cannot send the login header). */
+  async getPaymentQrImage(orderId: string, paymentId: string): Promise<Blob> {
+    const res = await apiClient.get<Blob>(`/orders/${orderId}/payment-links/${paymentId}/qr`, { responseType: "blob" });
+    return res.data;
+  },
+
   /** Re-sends ONLY the QR image of an existing payment link (same order, same link). A delivery problem comes back as status NOT_SENT / FAILED with a reason, not as an error. */
   async sendPaymentQr(orderId: string, paymentId: string): Promise<PaymentQrResult> {
     const res = await apiClient.post<ApiEnvelope<PaymentQrResult>>(`/orders/${orderId}/payment-links/${paymentId}/qr`);

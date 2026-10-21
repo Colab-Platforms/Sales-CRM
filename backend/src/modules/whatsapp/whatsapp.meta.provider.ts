@@ -65,8 +65,10 @@ export interface MetaTextMessage {
 
 export interface MetaMediaMessage {
   to: string;
-  /** Must already be a publicly accessible https URL - this module has no file-hosting service of its own. */
-  link: string;
+  /** A publicly accessible https URL Meta downloads the file from (this module has no file-hosting service of its own). Give this OR mediaId. */
+  link?: string;
+  /** A media id returned by uploadMedia: Meta already holds the file, so nothing has to be reachable from the internet. */
+  mediaId?: string;
   caption?: string;
   filename?: string;
 }
@@ -230,8 +232,26 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
     return { providerMessageId: firstMessageId(body), raw: body };
   }
 
+  /** POST /{phoneNumberId}/media: uploads the file to Meta and returns its media id (usable in sendImage). The token is never part of any thrown message. */
+  async uploadMedia(data: Buffer, mimeType: string, filename: string): Promise<string> {
+    const form = new FormData();
+    form.append("messaging_product", "whatsapp");
+    form.append("type", mimeType);
+    form.append("file", new Blob([new Uint8Array(data)], { type: mimeType }), filename);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`https://graph.facebook.com/${this.config.graphApiVersion}/${this.config.phoneNumberId}/media`, { method: "POST", headers: { Authorization: `Bearer ${this.config.accessToken}` }, body: form, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    } catch (error) {
+      throw new WhatsAppSendError(this.safe(`Could not reach Meta Cloud API to upload media: ${error instanceof Error ? error.message : String(error)}`), null);
+    }
+    const parsed = await response.json().catch(() => null);
+    const id = isObject(parsed) && typeof parsed.id === "string" ? parsed.id : null;
+    if (!response.ok || !id) throw new WhatsAppSendError(this.safe(`Meta Cloud API rejected the media upload (HTTP ${response.status}): ${describeMetaError(parsed)}`), null);
+    return id;
+  }
+
   async sendImage(input: MetaMediaMessage): Promise<SendTemplateMessageResult> {
-    const body = await this.post({ to: input.to, type: "image", image: { link: input.link, caption: input.caption } }, "image");
+    const body = await this.post({ to: input.to, type: "image", image: { ...(input.mediaId ? { id: input.mediaId } : { link: input.link }), caption: input.caption } }, "image");
     return { providerMessageId: firstMessageId(body), raw: body };
   }
 

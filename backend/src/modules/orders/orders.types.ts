@@ -38,6 +38,10 @@ export interface CreateManualOrderInput {
   idempotencyKey?: string;
   /** The user confirmed that this is a separate purchase although a matching recent order exists. */
   acknowledgeDuplicate?: boolean;
+  /** Prepaid only: the payment was already collected outside Cashfree. The order is created paid (CRM + Shopify) through the audited manual-payment path; no link or QR is made. */
+  paymentAlreadyReceived?: boolean;
+  /** Optional UTR / reference of that external payment (never required). */
+  paymentReference?: string;
   /** With acknowledgeDuplicate: the earlier UNPAID prepaid order of this customer that this order replaces (a changed price / discount). It is cancelled - with its Cashfree link - before this one is created. */
   supersedesOrderId?: string;
   /** Set by the HTTP controller only (not by the request body): refuse a new order that matches a recent one for the same customer unless acknowledged. */
@@ -122,6 +126,20 @@ export interface CreateManualOrderResult {
   shopify: ShopifyPushResult;
   paymentLink: OrderPaymentLinkResult | null;
   whatsapp: OrderNotifyResult;
+  /** Set only for an order created with "payment already received": what was recorded, and how far Shopify got. */
+  manualPayment?: ExternalPaymentSummary;
+}
+
+/** An externally collected payment confirmed by a person at order creation - never a Cashfree-verified payment. */
+export interface ExternalPaymentSummary {
+  verification: "MANUAL_EXTERNAL";
+  paymentId: string;
+  amount: string;
+  reference: string | null;
+  confirmedAt: string | null;
+  /** Whether the paid status reached Shopify. */
+  shopifyPayment: "synced" | "failed" | "pending";
+  shopifyReason?: string;
 }
 
 // Kept intentionally narrow (not the full CashfreePaymentsService PaymentLinkResult, which this

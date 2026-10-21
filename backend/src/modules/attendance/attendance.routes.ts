@@ -3,10 +3,12 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import {
   endShift,
+  getBreakLimit,
   getMyShift,
   getReport,
   getTeam,
   heartbeat,
+  setBreakLimit,
   setStatus,
   startShift,
   streamMyPresence,
@@ -28,6 +30,10 @@ router.get("/stream", requireRole(Role.SALESPERSON), streamMyPresence);
 // Manager (direct reports) / admin (everyone): live board.
 router.get("/team", requireRole(Role.ADMIN, Role.MANAGER), getTeam);
 router.get("/team/stream", requireRole(Role.ADMIN, Role.MANAGER), streamTeam);
+
+// Max teammates allowed on a break at once (per manager).
+router.get("/break-limit", requireRole(Role.ADMIN, Role.MANAGER), getBreakLimit);
+router.put("/break-limit", requireRole(Role.ADMIN, Role.MANAGER), setBreakLimit);
 
 // Daily report; a salesperson is limited to their own row by the service.
 router.get("/report", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getReport);

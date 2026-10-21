@@ -5,7 +5,12 @@ import { logger } from "@/utils/logger.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import { attendanceService } from "./attendance.service.js";
 import { presence } from "./attendance.presence.js";
-import { validateReportQuerySchema, validateSetStatusSchema } from "./attendance.validators.js";
+import {
+  validateBreakLimitBodySchema,
+  validateBreakLimitQuerySchema,
+  validateReportQuerySchema,
+  validateSetStatusSchema,
+} from "./attendance.validators.js";
 
 function fail(res: Response, error: any): void {
   sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
@@ -104,6 +109,33 @@ export const getReport = async (req: AuthRequest, res: Response): Promise<void> 
     }
     const result = await attendanceService.getReport(req.user!, value.date, value.userId);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getBreakLimit = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateBreakLimitQuerySchema(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await attendanceService.getBreakLimitFor(req.user!, value.managerId), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const setBreakLimit = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateBreakLimitBodySchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await attendanceService.setBreakLimit(req.user!, value.maxConcurrentBreaks, value.managerId);
+    sendResponse(res, true, result, "Break limit updated.", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

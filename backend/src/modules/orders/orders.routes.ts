@@ -7,7 +7,7 @@ import { cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopi
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
-import { sendPaymentLinkQr } from "../whatsapp/whatsapp.payment-qr.routes.js";
+import { sendPaymentLinkQr, viewPaymentLinkQr } from "../whatsapp/whatsapp.payment-qr.routes.js";
 import { markOrderPaid, MANUAL_PAYMENT_ROLES } from "./orders.manual-payment.js";
 import { createShipment } from "../shiprocket/shiprocket.controller.js";
 import { createRefundRequest, resolveCashfreeReferences } from "../refunds/refunds.controller.js";
@@ -80,6 +80,7 @@ router.post("/:orderId/payment-links", requireAuth, createPaymentLink);
 router.post("/:id/mark-paid", requireAuth, requireRole(...MANUAL_PAYMENT_ROLES), markOrderPaid);
 // Re-send ONLY the QR image of an existing payment link (same order, same link) after a failed or skipped delivery.
 router.post("/:orderId/payment-links/:paymentId/qr", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), sendPaymentLinkQr);
+router.get("/:orderId/payment-links/:paymentId/qr", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), viewPaymentLinkQr);
 // Refund APPROVAL workflow: raise a request (no refund is executed here or on approval). Same role set + lead scope as order creation.
 router.post("/:orderId/payments/:paymentId/resolve-cashfree", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), resolveCashfreeReferences);
 router.post("/:orderId/refund-requests", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createRefundRequest);

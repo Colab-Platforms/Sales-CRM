@@ -1,7 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { attendanceApi } from "../endpoints/attendance.api";
 import { attendanceKeys } from "../queries/attendance.queries";
-import type { ManualWorkStatus, MyShift } from "../types/attendance.types";
+import type { BreakLimit, ManualWorkStatus, MyShift } from "../types/attendance.types";
 
 export function useStartShiftMutation() {
   const queryClient = useQueryClient();
@@ -28,5 +28,14 @@ export function useEndShiftMutation() {
     mutationFn: attendanceApi.end,
     // The server answers with no body, so refetch the (now ended) shift.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: attendanceKeys.me() }),
+  });
+}
+
+export function useSetBreakLimitMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<BreakLimit, unknown, number | null>({
+    mutationFn: attendanceApi.setBreakLimit,
+    onSuccess: (data) => queryClient.setQueryData(attendanceKeys.breakLimit(), data),
   });
 }

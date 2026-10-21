@@ -40,6 +40,7 @@ import { creatorOf, creatorTagFor, resolveCreatorSnapshot, syncCreatorTag, type 
 import { syncShopifyPayment, type ShopifyPaymentSyncResult } from "../cashfree/cashfree.payment-success.js";
 import { notifyOrderConfirmation, notifyPaymentLink, recordOrderNotification, type OrderNotifyResult } from "../whatsapp/whatsapp.order-notify.service.js";
 import { sendPaymentQr } from "../whatsapp/whatsapp.payment-qr.js";
+import { MANUAL_PAYMENT_ROLES, markPrepaidOrderPaid } from "./orders.manual-payment.js";
 import { loadOrderRefundInfo } from "../refunds/refunds.service.js";
 import {
   buildOrderWhere,
@@ -47,6 +48,7 @@ import {
   derivePaymentMode,
   derivePaymentStatus,
   fullName,
+  orderActionWhere,
   orderReadWhere,
   orderVisibilityScope,
   scopedOrderWhere,
@@ -58,6 +60,7 @@ import {
   type RevertCancellationResult,
   type CreateManualOrderInput,
   type CreateManualOrderResult,
+  type ExternalPaymentSummary,
   type ListOrdersQuery,
   type OrderDetail,
   type OrderFilterOptions,
@@ -568,7 +571,36 @@ class OrdersService {
   // only an optimisation: it lets a same-process double click wait for its twin instead of racing it to the unique index.
   private static readonly inFlight = new Map<string, Promise<CreateManualOrderResult>>();
 
+  /**
+   * "Payment already received": only for a PREPAID order, only for the roles allowed to confirm an external payment, decided on the server from the authenticated user. Checked before anything is created.
+   * COD can never enter this path, and the flag cannot be used to mark any EXISTING order paid (it only exists on order creation).
+   */
+  private assertExternalPaymentAllowed(user: AuthUser, input: CreateManualOrderInput): void {
+    if (input.paymentAlreadyReceived !== true) return;
+    if (input.paymentMethod !== "PAYMENT_LINK") throw new ApiError("Payment already received only applies to prepaid orders. Cash on Delivery is collected on delivery.", STATUS_CODES.BAD_REQUEST);
+    if (!MANUAL_PAYMENT_ROLES.includes(user.role)) throw new ApiError("You are not allowed to confirm a payment that was collected outside Cashfree.", STATUS_CODES.FORBIDDEN);
+  }
+
+  /**
+   * Records the externally collected payment of a just-created prepaid order through the existing audited manual-payment path (MANUAL provider, no Cashfree id, who / when / reference), confirms the order and
+   * creates the Shopify order and marks it paid there. Idempotent (a repeat finds the payment and only finishes what is missing). Never throws: a Shopify problem is returned, not hidden.
+   */
+  private async recordExternalPayment(user: AuthUser, orderId: string, input: CreateManualOrderInput): Promise<{ shopify: ShopifyPushResult; manualPayment: ExternalPaymentSummary | undefined }> {
+    try {
+      const out = await markPrepaidOrderPaid(this.db as never, user, orderId, { reason: "Payment already received - confirmed at order creation", ...(input.paymentReference ? { reference: input.paymentReference } : {}) }, { getShopifyClient: this.getShopifyClient });
+      const row = await this.db.order.findUnique({ where: { id: orderId }, select: { externalId: true, externalNumber: true } });
+      const shopify: ShopifyPushResult = row?.externalId
+        ? { status: "created", shopifyOrderId: row.externalId, shopifyOrderName: row.externalNumber ?? undefined }
+        : { status: "failed", reason: out.shopify.reason ?? "Shopify did not accept the order" };
+      const reference = (await this.db.payment.findUnique({ where: { id: out.payment.id }, select: { transactionReference: true } }))?.transactionReference ?? null;
+      return { shopify, manualPayment: { verification: "MANUAL_EXTERNAL", paymentId: out.payment.id, amount: out.payment.amount, reference, confirmedAt: out.payment.paidAt, shopifyPayment: out.shopify.paymentSync, ...(out.shopify.reason ? { shopifyReason: out.shopify.reason } : {}) } };
+    } catch (error) {
+      return { shopify: { status: "failed", reason: error instanceof Error ? error.message : "The payment could not be recorded" }, manualPayment: undefined };
+    }
+  }
+
   async createManualOrder(user: AuthUser, input: CreateManualOrderInput): Promise<CreateManualOrderResult> {
+    this.assertExternalPaymentAllowed(user, input);
     if (!input.idempotencyKey) return this.createManualOrderOnce(user, input);
 
     const mapKey = `${user.id}:${input.idempotencyKey}`;
@@ -653,7 +685,7 @@ class OrdersService {
   }
 
   private async completeIdempotency(userId: string, key: string, result: CreateManualOrderResult): Promise<void> {
-    const stored = JSON.parse(JSON.stringify({ shopify: result.shopify, paymentLink: result.paymentLink, whatsapp: result.whatsapp }));
+    const stored = JSON.parse(JSON.stringify({ shopify: result.shopify, paymentLink: result.paymentLink, whatsapp: result.whatsapp, ...(result.manualPayment ? { manualPayment: result.manualPayment } : {}) }));
     await this.db.idempotencyKey.updateMany({ where: { userId, operation: ORDER_CREATE_OPERATION, key, status: { not: IDEMPOTENCY_COMPLETED } }, data: { status: IDEMPOTENCY_COMPLETED, result: stored } });
   }
 
@@ -679,13 +711,18 @@ class OrdersService {
       if (fresh) current = fresh;
     }
     const order = await this.getOrder(user, current.orderId!); // scoped: a user who cannot see this order never gets it
-    const stored = (current.result && typeof current.result === "object" ? current.result : {}) as { shopify?: ShopifyPushResult; paymentLink?: OrderPaymentLinkResult | null; whatsapp?: OrderNotifyResult };
+    const stored = (current.result && typeof current.result === "object" ? current.result : {}) as { shopify?: ShopifyPushResult; paymentLink?: OrderPaymentLinkResult | null; whatsapp?: OrderNotifyResult; manualPayment?: ExternalPaymentSummary };
     // The original answer said the Shopify step FAILED (possibly an ambiguous one: a timeout after Shopify had created the order). Retrying the same request
     // reconciles that step - through the claim and the lookup by source identifier, never a blind second create - and remembers the outcome.
     if (stored.shopify?.status === "failed") {
       const unlinked = await this.db.order.findUnique({ where: { id: order.id }, select: { externalId: true } });
       if (!unlinked?.externalId) {
-        stored.shopify = await this.pushOrderToShopify(user, order.id);
+        if (input.paymentAlreadyReceived === true) {
+          // an externally paid order: the retry re-runs the idempotent payment + Shopify path (creates the ONE Shopify order and marks it paid), never a bare unpaid push
+          const again = await this.recordExternalPayment(user, order.id, input);
+          stored.shopify = again.shopify;
+          stored.manualPayment = again.manualPayment;
+        } else stored.shopify = await this.pushOrderToShopify(user, order.id);
         await this.db.idempotencyKey.updateMany({ where: { userId: user.id, operation: ORDER_CREATE_OPERATION, key }, data: { result: JSON.parse(JSON.stringify(stored)) } });
       }
     }
@@ -694,13 +731,18 @@ class OrdersService {
       linked?.externalId && stored.shopify?.status !== "created"
         ? { status: "already_linked", shopifyOrderId: linked.externalId, shopifyOrderName: linked.externalNumber ?? undefined }
         : (stored.shopify ?? { status: "failed", reason: "Shopify status unknown for this request" });
-    return { order, shopify, paymentLink: stored.paymentLink ?? null, whatsapp: stored.whatsapp ?? { sent: false, via: null, provider: null, reason: "Nothing to notify for this payment method." } };
+    return { order, shopify, paymentLink: stored.paymentLink ?? null, whatsapp: stored.whatsapp ?? { sent: false, via: null, provider: null, reason: "Nothing to notify for this payment method." }, ...(stored.manualPayment ? { manualPayment: stored.manualPayment } : {}) };
   }
 
   // The original request committed the order but never finished its follow-ups (process crash, client timeout, lost Shopify answer).
   // Finish them ONCE, idempotently: the Shopify link goes through the claim + lookup-by-source-identifier path (never a blind second
   // create), a prepaid order's payment link is the existing reuse-or-create, and notifications are NOT resent (they may already have gone).
   private async finishInterrupted(user: AuthUser, input: CreateManualOrderInput, orderId: string): Promise<void> {
+    if (input.paymentAlreadyReceived === true) {
+      const done = await this.recordExternalPayment(user, orderId, input);
+      await this.completeIdempotency(user.id, input.idempotencyKey!, { shopify: done.shopify, paymentLink: null, whatsapp: { sent: false, via: null, provider: null, reason: "Payment already received: no payment link or QR was sent." }, manualPayment: done.manualPayment } as CreateManualOrderResult);
+      return;
+    }
     const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
     let paymentLink: OrderPaymentLinkResult | null = null;
     if (input.paymentMethod === "PAYMENT_LINK") {
@@ -730,7 +772,8 @@ class OrdersService {
 
     // "Send via WhatsApp": number, consent and template are validated BEFORE anything is created, so a telecaller who can fix it is told
     // at once and no order is left half-done. (A send that fails AFTER the order exists is handled below and never undoes it.)
-    const whatsappSend = input.sendPaymentLinkViaWhatsApp === true ? await validateWhatsAppPaymentSend(this.db, lead, input) : null;
+    const externallyPaid = input.paymentAlreadyReceived === true && input.paymentMethod === "PAYMENT_LINK"; // already authorised in createManualOrder; nothing is sent to the customer for it
+    const whatsappSend = input.sendPaymentLinkViaWhatsApp === true && !externallyPaid ? await validateWhatsAppPaymentSend(this.db, lead, input) : null;
 
     const productIds = [...new Set(input.items.map((i) => i.productId))];
     const products = await this.db.product.findMany({
@@ -891,7 +934,9 @@ class OrdersService {
     // duplicates the CRM order - retrying just calls pushOrderToShopify again (see there for why
     // that's always safe).
     // PREPAID: the CRM order is only a payment request (PENDING_PAYMENT) until Cashfree verifies the payment; the Shopify order is created then (see orders.prepaid-confirm.ts). COD is pushed at once, as before.
-    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
+    // "Payment already received": the payment is recorded and the Shopify order created AND marked paid right here, through the audited manual-payment path (see recordExternalPayment).
+    const external = externallyPaid ? await this.recordExternalPayment(user, createdOrderId, input) : null;
+    const shopify: ShopifyPushResult = external ? external.shopify : input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
     const order = await this.getOrder(user, createdOrderId);
 
     // Prepaid: create exactly one Cashfree payment link for this order (best-effort - see
@@ -899,7 +944,9 @@ class OrdersService {
     // COD: send the existing order confirmation. Neither ever rolls back or fails the order above.
     let paymentLink: OrderPaymentLinkResult | null = null;
     let whatsapp: OrderNotifyResult = { sent: false, via: null, provider: null, reason: "Nothing to notify for this payment method." };
-    if (isPaymentLink) {
+    if (externallyPaid) {
+      whatsapp = { sent: false, via: null, provider: null, reason: "Payment already received: no payment link or QR was created or sent." };
+    } else if (isPaymentLink) {
       try {
         const link = await this.getCashfree().createPaymentLink(user, createdOrderId);
         paymentLink = { status: link.reused ? "reused" : "created", paymentId: link.paymentId, paymentUrl: link.paymentUrl, expiresAt: link.expiresAt };
@@ -924,9 +971,9 @@ class OrdersService {
     }
 
     // Remembered on the order so its page still shows what happened after a reload (COD confirmation or payment link).
-    if (isPaymentLink || isCod) await recordOrderNotification(this.db, createdOrderId, whatsapp);
+    if ((isPaymentLink && !externallyPaid) || isCod) await recordOrderNotification(this.db, createdOrderId, whatsapp);
 
-    return { order: isPaymentLink || isCod ? await this.getOrder(user, createdOrderId) : order, shopify, paymentLink, whatsapp };
+    return { order: isPaymentLink || isCod ? await this.getOrder(user, createdOrderId) : order, shopify, paymentLink, whatsapp, ...(external?.manualPayment ? { manualPayment: external.manualPayment } : {}) };
   }
 
   // What the Create Order screen needs for "Send via WhatsApp": the approved Meta payment templates, the customer's recorded WhatsApp consent
@@ -1004,8 +1051,7 @@ class OrdersService {
 
   // Manual "Retry Shopify tag sync" for the order page. Re-checks Shopify even when the CRM believes the tag is in place.
   async retryConfirmationTagSync(user: AuthUser, orderId: string): Promise<ConfirmationTagSyncResult & { creator?: CreatorTagSyncResult }> {
-    const leadScope = await getLeadScope(user, this.db);
-    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
+    const order = await this.db.order.findFirst({ where: await this.orderActionWhere(user, orderId), select: { id: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     let confirmation: ConfirmationTagSyncResult;
     try {
@@ -1209,8 +1255,7 @@ class OrdersService {
   // action here; syncShopifyPayment itself is the single choke point, so this can never diverge from what the
   // webhook does or double-sync.
   async retryShopifyPaymentSync(user: AuthUser, orderId: string): Promise<ShopifyPaymentSyncResult> {
-    const leadScope = await getLeadScope(user, this.db);
-    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true } });
+    const order = await this.db.order.findFirst({ where: await this.orderActionWhere(user, orderId), select: { id: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     return syncShopifyPayment(this.db, orderId, { source: ActivitySource.USER, actor: { id: user.id, role: user.role } });
   }
@@ -1231,11 +1276,17 @@ class OrdersService {
   // real refund is actually performed - see cashfree.apply.ts).
   private static readonly retryingCancellations = new Set<string>();
 
+  /** The WHERE for an order this user may ACT on (cancel / revert / retry sync): see orderActionWhere. */
+  private async orderActionWhere(user: AuthUser, orderId: string): Promise<Prisma.OrderWhereInput> {
+    const leadScope = await getLeadScope(user, this.db);
+    const team = user.role === "MANAGER" ? await getManagerTeam(user.id, this.db) : undefined;
+    return orderActionWhere(user, orderId, leadScope, team?.members.map((m) => m.id) ?? []);
+  }
+
   async cancelOrder(user: AuthUser, orderId: string, input: CancelOrderInput, opts: { approverScope?: boolean } = {}): Promise<CancelOrderResult> {
     // approverScope: the refund approval (manager/admin only, decided in RefundsService.approve) cancels the order whichever team it belongs to.
-    const leadScope = opts.approverScope ? {} : await getLeadScope(user, this.db);
     const order = await this.db.order.findFirst({
-      where: scopedOrderWhere(orderId, leadScope),
+      where: opts.approverScope ? { id: orderId } : await this.orderActionWhere(user, orderId),
       select: { id: true, leadId: true, status: true, externalId: true, metadata: true, payments: { select: { id: true, status: true, externalSource: true, failureReason: true } } },
     });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
@@ -1368,8 +1419,7 @@ class OrdersService {
   // the customer are not touched. Shopify (and any Cashfree link) cancelled at cancel time stay cancelled - neither
   // can be undone from here - which shopifyCancellation in metadata keeps recording truthfully.
   async revertCancellation(user: AuthUser, orderId: string): Promise<RevertCancellationResult> {
-    const leadScope = await getLeadScope(user, this.db);
-    const order = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, leadId: true, status: true, metadata: true } });
+    const order = await this.db.order.findFirst({ where: await this.orderActionWhere(user, orderId), select: { id: true, leadId: true, status: true, metadata: true } });
     if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     if (order.status !== "CANCELLED") {
       return { order: await this.getOrder(user, orderId), restoredStatus: order.status, alreadyActive: true };

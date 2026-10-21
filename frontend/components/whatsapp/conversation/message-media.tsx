@@ -53,7 +53,7 @@ export function MediaFrame({ media, state, url, onLoad }: { media: MessageMediaI
       return (
         <a href={url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
           {/* eslint-disable-next-line @next/next/no-img-element -- a blob: URL of an authenticated download; next/image cannot optimise it */}
-          <img data-testid="media-image" src={url} alt={media.filename ?? "Image sent by the customer"} className="max-h-72 max-w-full rounded-md border object-contain" />
+          <img data-testid="media-image" src={url} alt={media.filename ?? "Image"} className="max-h-72 max-w-full rounded-md border object-contain" />
         </a>
       );
     }

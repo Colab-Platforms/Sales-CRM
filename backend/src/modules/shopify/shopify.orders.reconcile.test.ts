@@ -81,3 +81,47 @@ describe("reconcilePrepaidUpgrade: 699 original, 100 prepaid discount, 599 colle
     assert.equal(o.calls.length, 0);
   });
 });
+
+describe("reconcilePrepaidUpgrade: recording the payment on a shop that has no payment provider configured", () => {
+  const NOT_CONFIGURED = "Payment provider is not configured on shop.";
+
+  it("manual payment refused because of the shop's payment setup -> falls back to orderMarkAsPaid, which records exactly the 599 outstanding once; the order reads PAID", async () => {
+    const o = new FakeShopifyOrder();
+    o.failNext = "payment";
+    o.failMessage = NOT_CONFIGURED;
+    const r = await run(o);
+    assert.deepEqual([r.paymentVia, r.performed, o.total, o.received, o.outstanding, o.status, r.received], ["mark_as_paid", "edit_and_payment", 59900, 59900, 0, "PAID", "599.00"]);
+    assert.deepEqual(o.paymentsRecorded, [{ amount: 59900, method: "markAsPaid" }], "one payment, for the collected 599 - never 699");
+    assert.equal(o.committedDiscounts.length, 1, "the discount was applied once");
+  });
+
+  it("preferMarkAsPaid (an externally collected payment) uses orderMarkAsPaid first and never touches the provider-dependent manual payment", async () => {
+    const o = new FakeShopifyOrder();
+    const r = await reconcilePrepaidUpgrade(o.client, o.orderId, { ...INPUT, preferMarkAsPaid: true });
+    assert.deepEqual([r.paymentVia, o.status, o.received, o.markAsPaidCalls, o.calls.includes("payment")], ["mark_as_paid", "PAID", 59900, 1, false]);
+  });
+
+  it("any OTHER refusal is not retried with a different mutation: it stops with Shopify's own reason and records nothing", async () => {
+    const o = new FakeShopifyOrder();
+    o.failNext = "payment";
+    o.failMessage = "Something else went wrong";
+    await assert.rejects(() => run(o), (e: unknown) => e instanceof ShopifyReconcileError && e.step === "payment" && /Something else went wrong/.test(e.message));
+    assert.deepEqual([o.markAsPaidCalls, o.received, o.status], [0, 0, "PENDING"]);
+  });
+
+  it("both documented ways refused: the reason is reported, nothing is recorded, and a later retry records the payment once without re-applying the discount", async () => {
+    const o = new FakeShopifyOrder();
+    o.failNext = "payment";
+    o.failMessage = NOT_CONFIGURED;
+    let refuseMark = true;
+    const base = o.client as unknown as { query: (d: string, v: Record<string, unknown>) => Promise<unknown> };
+    const client = { query: async (doc: string, vars: Record<string, unknown>) => (refuseMark && doc.includes("crmOrderMarkAsPaidAfterReconcile") ? { orderMarkAsPaid: { order: null, userErrors: [{ field: ["id"], message: "Order cannot be marked as paid." }] } } : base.query(doc, vars)) } as unknown as typeof o.client;
+    await assert.rejects(() => reconcilePrepaidUpgrade(client, o.orderId, INPUT), (e: unknown) => e instanceof ShopifyReconcileError && /cannot be marked as paid/.test(e.message));
+    assert.deepEqual([o.received, o.status, o.committedDiscounts.length], [0, "PENDING", 1], "discount applied, no payment");
+    refuseMark = false;
+    const retry = await reconcilePrepaidUpgrade(client, o.orderId, INPUT);
+    assert.deepEqual([retry.performed, o.received, o.status, o.committedDiscounts.length, o.paymentsRecorded.length], ["payment_only", 59900, "PAID", 1, 1]);
+    const again = await reconcilePrepaidUpgrade(client, o.orderId, INPUT);
+    assert.deepEqual([again.performed, o.paymentsRecorded.length], ["already_reconciled", 1]);
+  });
+});

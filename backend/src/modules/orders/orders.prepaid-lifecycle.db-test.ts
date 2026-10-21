@@ -34,7 +34,8 @@ const uid = () => randomUUID();
 const CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_CLIENT_ID: "TEST_APP", CASHFREE_CLIENT_SECRET: "test-secret", PUBLIC_BACKEND_URL: "https://crm.example.com" });
 
 /** A scripted Shopify: records every create and mark-as-paid; reports the order as it would be saved. */
-function fakeShopify(opts: { failCreate?: { times: number }; total?: number; rejectManualPayment?: boolean } = {}) {
+function fakeShopify(opts: { failCreate?: { times: number }; total?: number; rejectManualPayment?: boolean; rejectMarkAsPaid?: { times: number; message?: string } } = {}) {
+  let markRefusals = opts.rejectMarkAsPaid?.times ?? 0;
   const total = opts.total ?? 1298;
   const calls = { create: 0, markPaid: 0, update: 0, manual: 0 };
   let failures = opts.failCreate?.times ?? 0;
@@ -60,6 +61,7 @@ function fakeShopify(opts: { failCreate?: { times: number }; total?: number; rej
       }
       if (/crmPrepaidUpgradeOrderState/.test(doc)) return { order: { id: String(vars.id), displayFinancialStatus: paid ? "PAID" : "PENDING", cancelledAt: null, currentTotalPriceSet: money(total), totalOutstandingSet: money(paid ? 0 : total), totalReceivedSet: money(paid ? total : 0) } };
       if (/crmPrepaidUpgradeManualPayment/.test(doc)) { calls.manual += 1; return opts.rejectManualPayment ? { orderCreateManualPayment: { order: null, userErrors: [{ field: null, message: "Payment provider is not configured on shop." }] } } : { orderCreateManualPayment: { order: { id: "x", displayFinancialStatus: "PAID" }, userErrors: [] } }; }
+      if (/crmOrderMarkAsPaid/.test(doc) && markRefusals > 0) { markRefusals -= 1; return { orderMarkAsPaid: { order: null, userErrors: [{ field: ["id"], message: opts.rejectMarkAsPaid?.message ?? "Order cannot be marked as paid." }] } }; }
       if (/crmOrderMarkAsPaid/.test(doc)) { calls.markPaid += 1; paid = true; return { orderMarkAsPaid: { order: { id: "x", displayFinancialStatus: "PAID" }, userErrors: [] } }; }
       if (/orderUpdate/.test(doc)) { calls.update += 1; return { orderUpdate: { order: { id: "x" }, userErrors: [] } }; }
       return { order: { id: "gid://shopify/Order/1", tags: [] }, tagsAdd: { userErrors: [] }, tagsRemove: { userErrors: [] } };
@@ -658,6 +660,199 @@ describe("a CRM order already linked to Shopify whose status never caught up wit
       await tx.order.update({ where: { id: r.order.id }, data: { source: "SHOPIFY" } });
       await tx.payment.update({ where: { id: paymentId }, data: { amount: "1298.00" } });
       assert.equal((await confirmPaidPrepaidOrder(tx, r.order.id, { getShopifyClient: () => w.shop.client })).shopify, "not_applicable");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// "PAYMENT ALREADY RECEIVED" at order creation: the customer paid OUTSIDE Cashfree (a personal / company UPI QR, ...). Audited manual payment, never a Cashfree payment.
+describe("create order with 'payment already received' (prepaid, externally collected)", () => {
+  const externalRows = (tx: Db, orderId: string) => tx.payment.findMany({ where: { orderId }, select: { id: true, status: true, provider: true, externalSource: true, externalId: true, providerOrderId: true, providerPaymentId: true, transactionReference: true, method: true, amount: true, paidAt: true, metadata: true } });
+  const paidInput = (extra: Record<string, unknown> = {}) => ({ paymentAlreadyReceived: true, idempotencyKey: `key-${uid()}`, ...extra });
+
+  it("unchecked: the existing prepaid flow is unchanged - a payment request (Cashfree link), awaiting payment, NO Shopify order, nothing recorded as manual", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const r = await w.create("PAYMENT_LINK", { paymentAlreadyReceived: false });
+      assert.deepEqual([r.order.status, r.paymentLink?.status, r.manualPayment, r.shopify.status, w.shop.calls.create, w.cf.calls.create], ["PENDING_PAYMENT", "created", undefined, "awaiting_payment", 0, 1]);
+      const omitted = await w.create("PAYMENT_LINK");
+      assert.equal(omitted.order.status, "PENDING_PAYMENT", "omitted = false (backward compatible)");
+      assert.equal((await externalRows(tx, r.order.id)).some((p) => p.provider === "MANUAL"), false);
+    });
+  });
+
+  it("checked: the order is created PAID - confirmed CRM order, ONE manual payment (no Cashfree identity), the Shopify order created AND marked paid, no Cashfree link, no QR, no WhatsApp message", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const r = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 4455667788" }));
+      assert.deepEqual([r.order.status, r.order.paymentStatus, r.paymentLink, r.shopify.status, r.whatsapp.sent], ["CONFIRMED", "SUCCESS", null, "created", false]);
+      assert.deepEqual([w.cf.calls.create, w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [0, 1, 1, true], "no Cashfree link; Shopify order created once and actually paid");
+      assert.deepEqual([r.manualPayment?.verification, r.manualPayment?.reference, r.manualPayment?.shopifyPayment], ["MANUAL_EXTERNAL", "UTR 4455667788", "synced"]);
+      const rows = await externalRows(tx, r.order.id);
+      assert.equal(rows.length, 1, "exactly one payment row");
+      const p = rows[0]!;
+      assert.deepEqual([p.provider, p.status, p.method, p.externalSource, p.externalId, p.providerOrderId, p.providerPaymentId, p.transactionReference, String(p.amount)], ["MANUAL", "SUCCESS", "OTHER", null, null, null, null, "UTR 4455667788", "1298"], "never presented as a Cashfree payment");
+      assert.equal(await tx.whatsAppMessage.count({ where: { orderId: r.order.id } }), 0, "no payment link / QR message is sent for an already paid order");
+      const s = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { externalId: true, confirmedByName: true, metadata: true } });
+      assert.deepEqual([!!s.externalId, s.confirmedByName, (s.metadata as any).shopifyConfirmationTag?.tag], [true, "Aayush Tiwari", "CRM Confirmed by Aayush Tiwari"], "the existing confirmation rule: one 'CRM Confirmed by' tag, no extra tag");
+    });
+  });
+
+  it("the UTR is optional: without one the order is still created paid, with an empty reference", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const r = await w.create("PAYMENT_LINK", paidInput());
+      assert.deepEqual([r.order.status, r.manualPayment?.reference, (await externalRows(tx, r.order.id))[0]!.transactionReference], ["CONFIRMED", null, null]);
+      const blank = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "   ", acknowledgeDuplicate: true }));
+      assert.equal(blank.manualPayment?.reference, null);
+    });
+  });
+
+  it("audit: the AUTHENTICATED user, their role and the time are recorded - never anything from the request - and the payment is labelled as verified outside Cashfree", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const before = Date.now();
+      const r = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 1", verifiedBy: "someone-else", confirmedById: w.admin.id }));
+      const audit = await tx.activity.findFirstOrThrow({ where: { orderId: r.order.id, title: { contains: "manually marked as paid" } }, select: { actorId: true, actorRole: true, source: true, title: true, description: true, metadata: true, createdAt: true } });
+      assert.deepEqual([audit.actorId, audit.actorRole, audit.source], [w.userRep.id, "SALESPERSON", "USER"]);
+      assert.match(audit.title ?? "", /verified outside Cashfree/);
+      assert.match(audit.description ?? "", /UTR 1/);
+      assert.equal((audit.metadata as any).cashfreeVerified, false);
+      assert.ok(audit.createdAt.getTime() >= before - 5000 && audit.createdAt.getTime() <= Date.now() + 5000);
+      const m = ((await externalRows(tx, r.order.id))[0]!.metadata as any).manual;
+      assert.deepEqual([m.verifiedById, m.verifiedByRole, m.reference], [w.userRep.id, "SALESPERSON", "UTR 1"]);
+      assert.ok(Math.abs(Date.parse(m.verifiedAt) - Date.parse(r.manualPayment!.confirmedAt ?? "")) < 1000);
+    });
+  });
+
+  it("permissions: HR and recruiters cannot use it (403, nothing created); COD can never enter it (400, nothing created); an admin can (managers and salespeople are covered by the manual-payment roles)", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const product = await tx.product.findFirstOrThrow({ select: { id: true } });
+      const base = (extra: Record<string, unknown>) => ({ leadId: w.lead.id, items: [{ productId: product.id, quantity: 1, unitPrice: "649.00" }], paymentMethod: "PAYMENT_LINK", sendPaymentLinkViaWhatsApp: false, shippingAddress: { name: "Anil", line1: "Flat 7", city: "Pune", state: "Maharashtra", pincode: "411045", phone: "9811950001" }, shippingPincode: "411045", ...extra }) as never;
+      for (const role of [Role.HR, Role.RECRUITER]) {
+        const u = await tx.user.create({ data: { name: role, username: `u-${uid()}`, role }, select: { id: true, username: true } });
+        await assert.rejects(() => w.svc.createManualOrder({ id: u.id, username: u.username, role }, base({ paymentAlreadyReceived: true })), (e: any) => e.statusCode === 403, role);
+      }
+      await assert.rejects(() => w.svc.createManualOrder(w.userRep, base({ paymentMethod: "COD", paymentAlreadyReceived: true, shippingAmount: "0" })), (e: any) => e.statusCode === 400 && /prepaid/i.test(e.message));
+      assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 0, "every refusal created nothing");
+      const admin = await w.svc.createManualOrder({ id: w.admin.id, username: w.admin.username, role: Role.ADMIN }, base({ paymentAlreadyReceived: true }));
+      assert.equal(admin.order.status, "CONFIRMED");
+    });
+  });
+
+  it("COD is unchanged: confirmed at once, pushed to Shopify pending, no payment recorded as manual", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const r = await w.create("COD");
+      assert.deepEqual([r.order.status, r.shopify.status, r.manualPayment, w.shop.calls.markPaid, (await externalRows(tx, r.order.id)).some((p) => p.provider === "MANUAL")], ["CONFIRMED", "created", undefined, 0, false]);
+    });
+  });
+
+  it("a double click / retry / simultaneous submission creates ONE order, ONE payment and ONE Shopify order", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const extra = paidInput({ paymentReference: "UTR 9" });
+      const a = await w.create("PAYMENT_LINK", extra);
+      const b = await w.create("PAYMENT_LINK", extra);
+      const [c, d] = await Promise.all([w.create("PAYMENT_LINK", extra), w.create("PAYMENT_LINK", extra)]);
+      assert.ok([b, c, d].every((x) => x.order.id === a.order.id));
+      assert.deepEqual([await tx.order.count({ where: { leadId: w.lead.id } }), (await externalRows(tx, a.order.id)).length, w.shop.calls.create, w.shop.calls.markPaid, b.manualPayment?.reference], [1, 1, 1, 1, "UTR 9"]);
+      assert.equal(await tx.activity.count({ where: { orderId: a.order.id, title: { contains: "manually marked as paid" } } }), 1);
+    });
+  });
+
+  it("a Shopify failure is reported (never a silent success), the order and payment are kept, and the retry creates the ONE Shopify order and marks it paid without duplicating anything", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner, { failCreate: { times: 2 } });
+      const extra = paidInput({ paymentReference: "UTR 5" });
+      const first = await w.create("PAYMENT_LINK", extra);
+      assert.equal(first.shopify.status, "failed");
+      assert.ok(first.shopify.reason, "the real reason is shown");
+      assert.deepEqual([first.order.status, first.order.paymentStatus, (await externalRows(tx, first.order.id)).length], ["CONFIRMED", "SUCCESS", 1], "the payment is not lost");
+      const retry = await w.create("PAYMENT_LINK", extra);
+      assert.equal(retry.order.id, first.order.id);
+      assert.deepEqual([retry.shopify.status, !!w.shop.shopifyId, w.shop.paid, await tx.order.count({ where: { leadId: w.lead.id } }), (await externalRows(tx, first.order.id)).length], ["created", true, true, 1, 1]);
+      const again = await w.create("PAYMENT_LINK", extra);
+      assert.equal(again.shopify.status === "created" || again.shopify.status === "already_linked", true);
+      assert.equal(w.shop.calls.markPaid, 1, "paid once");
+    });
+  });
+
+  it("delayed / duplicate Cashfree events cannot touch an externally paid order: no second Shopify order, the manual payment is not overwritten, reconciliation and catch-up leave it alone", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const r = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 7" }));
+      const manual = (await externalRows(tx, r.order.id))[0]!;
+      const ghost = `crm_${uid().replace(/-/g, "")}`;
+      for (const status of ["PAID", "PAID", "EXPIRED"]) assert.equal(await w.deliver(linkEvent(ghost, "1298.00", status)), "ignored");
+      assert.equal(await w.cfSvc.reconcileOpenPayment(manual.id), "not_found", "reconciliation does not treat the manual payment as a Cashfree payment");
+      const pass = await createCashfreeReconciler({ runner, reconcile: (id) => w.cfSvc.reconcileOpenPayment(id) }).tick();
+      assert.equal(pass?.checked, 0);
+      const after = await externalRows(tx, r.order.id);
+      assert.deepEqual([after.length, after[0]!.status, after[0]!.provider, after[0]!.transactionReference, (await w.state(r.order.id)).status], [1, "SUCCESS", "MANUAL", "UTR 7", "CONFIRMED"]);
+      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, await tx.order.count({ where: { leadId: w.lead.id } })], [1, 1, 1]);
+    });
+  });
+
+  it("an ordinary prepaid order and a separate externally paid order for the same customer do not interfere", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner);
+      const normal = await w.create("PAYMENT_LINK", { acknowledgeDuplicate: true, idempotencyKey: `k-${uid()}` });
+      const paid = await w.create("PAYMENT_LINK", paidInput({ acknowledgeDuplicate: true }));
+      assert.deepEqual([normal.order.status, paid.order.status, w.cf.calls.create], ["PENDING_PAYMENT", "CONFIRMED", 1]);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// Shopify payment marking for an EXTERNALLY paid order: orderMarkAsPaid (documented for payments received outside checkout) needs no payment provider on the shop; a refusal is shown and retried safely.
+describe("'payment already received': Shopify paid status, success and rejection", () => {
+  const paidInput = (extra: Record<string, unknown> = {}) => ({ paymentAlreadyReceived: true, idempotencyKey: `key-${uid()}`, ...extra });
+
+  it("a shop with NO manual payment method / provider (manual payments rejected) still gets the order marked paid: orderMarkAsPaid is used, the manual-payment mutation never is", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner, { rejectManualPayment: true });
+      const r = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 31" }));
+      assert.deepEqual([r.shopify.status, r.manualPayment?.shopifyPayment, w.shop.calls.markPaid, w.shop.calls.manual, w.shop.paid], ["created", "synced", 1, 0, true]);
+      assert.equal(((await w.state(r.order.id)).metadata as any).shopifyPaymentSync.status, "synced");
+    });
+  });
+
+  it("Shopify REFUSES to mark it paid: the CRM payment is kept, the order is NOT reported as Shopify-paid, the real reason is shown, and nothing is duplicated", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner, { rejectMarkAsPaid: { times: 2, message: "Order cannot be marked as paid." } /* both attempts inside one create (link step + confirm step) are refused */ });
+      const r = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 32" }));
+      assert.deepEqual([r.order.status, r.order.paymentStatus, !!w.shop.shopifyId, w.shop.paid, r.manualPayment?.shopifyPayment], ["CONFIRMED", "SUCCESS", true, false, "failed"]);
+      assert.match(r.manualPayment?.shopifyReason ?? "", /cannot be marked as paid/);
+      const meta = (await w.state(r.order.id)).metadata as any;
+      assert.equal(meta.shopifyPaymentSync.status, "failed");
+      assert.match(meta.shopifyPaymentSync.reason, /cannot be marked as paid/);
+      const mp = await tx.payment.findMany({ where: { orderId: r.order.id }, select: { provider: true, status: true, transactionReference: true } });
+      assert.deepEqual(mp, [{ provider: "MANUAL", status: "SUCCESS", transactionReference: "UTR 32" }], "the CRM payment record is intact and single");
+    });
+  });
+
+  it("the retry (the order's mark-paid action, repeated) marks the SAME Shopify order paid exactly once - no second Shopify order, payment row, audit entry or transaction", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner, { rejectMarkAsPaid: { times: 2 } });
+      const first = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 33" }));
+      assert.equal(first.manualPayment?.shopifyPayment, "failed");
+      const shopifyId = w.shop.shopifyId;
+      const viaAction = await markPrepaidOrderPaid(runner, w.userRep, first.order.id, { reason: "Payment already received - confirmed at order creation", reference: "UTR 33" }, { getShopifyClient: () => w.shop.client });
+      assert.deepEqual([viaAction.alreadyPaid, viaAction.shopify.paymentSync, w.shop.paid, w.shop.calls.markPaid, w.shop.calls.create, w.shop.shopifyId === shopifyId], [true, "synced", true, 1, 1, true]);
+      const again = await markPrepaidOrderPaid(runner, w.userRep, first.order.id, { reason: "Payment already received - confirmed at order creation" }, { getShopifyClient: () => w.shop.client });
+      assert.equal(again.shopify.paymentSync, "synced");
+      assert.deepEqual([w.shop.calls.markPaid, w.shop.calls.create, await tx.payment.count({ where: { orderId: first.order.id } }), await tx.activity.count({ where: { orderId: first.order.id, title: { contains: "manually marked as paid" } } }), await tx.order.count({ where: { leadId: w.lead.id } })], [1, 1, 1, 1, 1]);
+    });
+  });
+
+  it("the CRM never claims Shopify is paid while it is not: a refusal on every attempt leaves the sync state failed and the order visibly unsynced", async () => {
+    await inRollback(async (tx, runner) => {
+      const w = await world(tx, runner, { rejectMarkAsPaid: { times: 4 } });
+      const r = await w.create("PAYMENT_LINK", paidInput());
+      await markPrepaidOrderPaid(runner, w.userRep, r.order.id, { reason: "Payment already received - confirmed at order creation" }, { getShopifyClient: () => w.shop.client });
+      assert.deepEqual([w.shop.paid, ((await w.state(r.order.id)).metadata as any).shopifyPaymentSync.status], [false, "failed"]);
     });
   });
 });

@@ -1,10 +1,12 @@
 import { Router } from "express";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
+import { csvUpload } from "@/middlewares/upload.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import {
   bulkAssignManager,
   bulkAssignSalesperson,
   bulkUpdateLeadStatus,
+  confirmAbandonmentImport,
   createRecoveryAction,
   getAbandonment,
   getAbandonmentByLead,
@@ -17,6 +19,7 @@ import {
   listAbandonmentIds,
   listAbandonmentItems,
   listAbandonments,
+  previewAbandonmentImport,
   updateAbandonmentStatus,
 } from "./abandonment.controller.js";
 import {
@@ -56,6 +59,10 @@ router.get("/auto-assign/manager-config", requireAuth, requireRole(Role.ADMIN), 
 router.patch("/auto-assign/manager-config", requireAuth, requireRole(Role.ADMIN), updateManagerAutoAssignConfig);
 router.get("/auto-assign/salesperson-config", requireAuth, requireRole(Role.MANAGER), getSalespersonAutoAssignConfig);
 router.patch("/auto-assign/salesperson-config", requireAuth, requireRole(Role.MANAGER), updateSalespersonAutoAssignConfig);
+
+// CSV upload (admin / manager), same preview-then-confirm shape as the normal lead import. Registered ahead of "/:id".
+router.post("/import/preview", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), csvUpload.single("file"), previewAbandonmentImport);
+router.post("/import/:batchId/confirm", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), confirmAbandonmentImport);
 
 router.get("/:id", requireAuth, allRoles, getAbandonment);
 // The saved cart + address of this one checkout, for the Create Order form.

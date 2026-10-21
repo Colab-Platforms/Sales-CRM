@@ -4,6 +4,15 @@ export interface SetStatusBody {
   status: WorkStatus;
 }
 
+export interface BreakLimitQuery {
+  managerId?: string;
+}
+
+export interface BreakLimitBody {
+  maxConcurrentBreaks: number | null;
+  managerId?: string;
+}
+
 export interface ReportQuery {
   date?: string;
   userId?: string;
