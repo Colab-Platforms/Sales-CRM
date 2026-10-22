@@ -16,6 +16,7 @@ import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.typ
 import type { Role } from "@/lib/api-client/types/auth.types";
 import { cartLines, lineLabel, type ItemOption } from "@/lib/abandonment-items";
 import { ItemsFilter } from "./items-filter";
+import { AbandonmentColumnFilter, type AbandonmentFilterState } from "./abandonment-column-filters";
 
 const COLUMN_COUNT = 9;
 const HEADERS = [
@@ -104,8 +105,15 @@ export interface ItemsFilterConfig {
   onChange: (next: string[]) => void;
 }
 
+export interface ColumnFiltersConfig {
+  value: AbandonmentFilterState;
+  onChange: (next: AbandonmentFilterState) => void;
+}
+
 interface AbandonmentTableProps {
   items: AbandonmentListItem[];
+  /** When given, every column header except Items gets its own filter (Items uses itemsFilter). */
+  columnFilters?: ColumnFiltersConfig;
   /** When given, the Items column header gets the product filter. */
   itemsFilter?: ItemsFilterConfig;
   isFetching: boolean;
@@ -115,7 +123,7 @@ interface AbandonmentTableProps {
   role: Role;
 }
 
-export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, onToggleOne, onToggleAll, role }: AbandonmentTableProps) {
+export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching, selectedIds, onToggleOne, onToggleAll, role }: AbandonmentTableProps) {
   // HR distributes leads but cannot open them (lead pages, carts and addresses are not HR's to see).
   const canOpenLead = role !== "HR";
   const router = useRouter();
@@ -143,6 +151,7 @@ export function AbandonmentTable({ items, itemsFilter, isFetching, selectedIds, 
             <TableHead key={header.label} className={header.className}>
               {header.label}
               {header.label === "Items" && itemsFilter ? <ItemsFilter {...itemsFilter} /> : null}
+              {header.label !== "Items" && columnFilters ? <AbandonmentColumnFilter column={header.label} value={columnFilters.value} onChange={columnFilters.onChange} role={role} /> : null}
             </TableHead>
           ))}
           <TableHead className="w-[50px] sr-only">Actions</TableHead>

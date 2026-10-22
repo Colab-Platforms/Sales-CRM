@@ -1,5 +1,6 @@
 import { AbandonmentStatus, Role } from "../../../generated/prisma/enums.js";
-import type { Prisma } from "../../../generated/prisma/client.js";
+import { Prisma } from "../../../generated/prisma/client.js";
+import type { DbClient } from "@/lib/leadScope.js";
 import { fullName } from "../orders/orders.filters.js";
 import { dayBounds, todayString } from "../attendance/attendance.calc.js";
 import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
@@ -27,6 +28,39 @@ export function abandonmentLeadScope(user: { id: string; role: Role }): Prisma.L
 /** Who may OPEN (not just list) an abandoned lead: HR distributes them but never works one. */
 export const ABANDONMENT_WORK_ROLES: Role[] = [Role.ADMIN, Role.MANAGER, Role.SALESPERSON];
 
+
+/** Every whitespace-separated term must match at least one of the fields `fields` lists for it. */
+function abandonmentTermsWhere(text: string, fields: (contains: { contains: string; mode: "insensitive" }) => Prisma.AbandonmentWhereInput[]): Prisma.AbandonmentWhereInput {
+  const terms = text.split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_TERMS);
+  return { AND: terms.map((term): Prisma.AbandonmentWhereInput => ({ OR: fields({ contains: term, mode: "insensitive" }) })) };
+}
+
+/**
+ * Filters that cannot be expressed as a Prisma where: the cart value (a decimal STRING inside the cartSnapshot JSON) and the type of the LATEST recovery action.
+ * Returns the matching ids as a where (null when neither filter is set), to be ANDed with buildAbandonmentListWhere - so they apply to the whole result set, never to the loaded page.
+ * The query is narrowed by the same detected-at bounds as the list so it stays small; the lead scope is applied by the list where it is ANDed with.
+ */
+export async function abandonmentDerivedWhere(db: DbClient, query: ListAbandonmentsQuery, now: Date = new Date()): Promise<Prisma.AbandonmentWhereInput | null> {
+  const hasValue = query.valueMin !== undefined || query.valueMax !== undefined;
+  if (!hasValue && !query.lastAction) return null;
+  const conds: Prisma.Sql[] = [];
+  if (hasValue) {
+    // A cart value that is not a plain decimal is never matched (and never cast, so a malformed one cannot fail the query).
+    const value = Prisma.sql`(CASE WHEN a.cart_snapshot->>'cartValue' ~ '^[0-9]+([.][0-9]+)?$' THEN (a.cart_snapshot->>'cartValue')::numeric END)`;
+    if (query.valueMin !== undefined) conds.push(Prisma.sql`${value} >= ${query.valueMin}`);
+    if (query.valueMax !== undefined) conds.push(Prisma.sql`${value} <= ${query.valueMax}`);
+  }
+  if (query.lastAction) {
+    const latest = Prisma.sql`(SELECT r.type::text FROM recovery_actions r WHERE r.abandonment_id = a.id ORDER BY r.created_at DESC LIMIT 1)`;
+    conds.push(query.lastAction === "NONE" ? Prisma.sql`${latest} IS NULL` : Prisma.sql`${latest} = ${query.lastAction}`);
+  }
+  const day = abandonmentDateRangeBounds(query.dateRange, now);
+  if (day) conds.push(Prisma.sql`a.detected_at >= ${day.gte} AND a.detected_at < ${day.lt}`);
+  if (query.dateFrom) conds.push(Prisma.sql`a.detected_at >= ${query.dateFrom}`);
+  if (query.dateTo) conds.push(Prisma.sql`a.detected_at <= ${query.dateTo}`);
+  const rows = await db.$queryRaw<{ id: string }[]>(Prisma.sql`SELECT a.id FROM abandonments a WHERE ${Prisma.join(conds, " AND ")}`);
+  return { id: { in: rows.map((r) => r.id) } };
+}
 
 export function abandonmentSearchWhere(search: string): Prisma.AbandonmentWhereInput {
   const terms = search.split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_TERMS);
@@ -76,6 +110,10 @@ export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScop
   if (query.managerId) and.push({ lead: { assignedManagerId: query.managerId } });
   if (query.salespersonId) and.push({ lead: { ownerId: query.salespersonId } });
   if (query.items && query.items.length > 0) and.push(abandonmentItemsWhere(query.items));
+  // Column filters. Each term is "contains", case-insensitive, and every filter ANDs with all the others.
+  if (query.lead) and.push(abandonmentTermsWhere(query.lead, (contains) => [{ lead: { firstName: contains } }, { lead: { lastName: contains } }, { lead: { leadNumber: contains } }]));
+  if (query.contact) and.push(abandonmentTermsWhere(query.contact, (contains) => [{ lead: { mobile: contains } }, { lead: { email: contains } }]));
+  if (query.assignee) and.push(abandonmentTermsWhere(query.assignee, (contains) => [{ lead: { owner: { name: contains } } }, { lead: { assignedManager: { name: contains } } }]));
   if (query.workingStatus) {
     // A salesperson's "NEW" filter includes leads that are ASSIGNED underneath (they never see ASSIGNED
     // itself) - same rule lead.service.ts's listLeads applies.

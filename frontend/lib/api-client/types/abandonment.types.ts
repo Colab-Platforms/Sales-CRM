@@ -33,6 +33,13 @@ export interface ListAbandonmentsParams {
   workingStatus?: LeadWorkingStatus;
   /** Item keys from GET /abandonments/items; any of them (OR). */
   items?: string[];
+  /** Table column filters (server-side, over the whole result set). */
+  lead?: string;
+  contact?: string;
+  assignee?: string;
+  lastAction?: "CALL" | "CALLBACK" | "CONTINUE_ORDER" | "NONE";
+  valueMin?: number;
+  valueMax?: number;
 }
 
 export interface AbandonmentSummary {
