@@ -43,7 +43,8 @@ test("a state is sent as Shopify's own code (Odisha is OR, Telangana TS, Uttarak
 
 test("without a delivery name the lead's name is used; nothing populated is replaced by a blank", () => {
   const { input } = build(crm({ shippingAddress: { line1: "1 Road", city: "Pune", state: "Maharashtra", pincode: "411001" } }));
-  assert.equal(input.shippingAddress?.firstName, "Anil");
+  // the lead has one name only: it goes in the LAST name field (the one Shopify requires) - nothing is dropped
+  assert.equal(input.shippingAddress?.lastName, "Anil");
   assert.equal(input.shippingAddress?.phone, "+919811700001", "the lead's phone fills a missing address phone");
   assert.equal(input.shippingAddress?.zip, "411001");
 });
@@ -208,4 +209,43 @@ test("repairAndVerify: a refused repair is returned with Shopify's message, neve
   // and a complete order is left alone
   assert.deepEqual((await repairAndVerify(none.client, "1", input, { missing: [], customerAssociated: true })).repaired, []);
   assert.equal(none.calls.length, 0);
+});
+
+// ---- Shopify refuses an address whose LAST name is blank (it saves the order with NO address): the one-word name regression
+test("a one-word recipient name is sent as the LAST name, with no first name - never dropped, never invented", () => {
+  const { input, report } = build(crm({ shippingAddress: { name: "Radhe", line1: "Flat 4", city: "Pune", state: "Maharashtra", pincode: "411045" }, lead: { ...crm().lead, firstName: "Radhe", lastName: null } }));
+  const a = JSON.parse(JSON.stringify(input.shippingAddress)) as Record<string, unknown>; // what goes over the wire
+  assert.equal(a.lastName, "Radhe");
+  assert.ok(!("firstName" in a), "no empty or invented first name");
+  assert.deepEqual(input.billingAddress, input.shippingAddress, "billing carries the same name (the CRM keeps one address)");
+  assert.match(report.fields["shippingAddress.firstName"]!.reason!, /one word.*last name/);
+});
+
+test("two and three word names, and a name taken from the lead, keep their first / last split", () => {
+  const two = build(crm({ shippingAddress: { name: "Asha Rao", line1: "x", city: "Pune", state: "Maharashtra", pincode: "411045" } })).input.shippingAddress as Record<string, unknown>;
+  assert.deepEqual([two.firstName, two.lastName], ["Asha", "Rao"]);
+  const three = build(crm({ shippingAddress: { name: "Radhe Shyam Sharma", line1: "x", city: "Pune", state: "Maharashtra", pincode: "411045" } })).input.shippingAddress as Record<string, unknown>;
+  assert.deepEqual([three.firstName, three.lastName], ["Radhe Shyam", "Sharma"]);
+  const fromLead = build(crm({ shippingAddress: { line1: "x", city: "Pune", state: "Maharashtra", pincode: "411045" }, lead: { ...crm().lead, firstName: "Asha", lastName: "Rao" } })).input.shippingAddress as Record<string, unknown>;
+  assert.deepEqual([fromLead.firstName, fromLead.lastName], ["Asha", "Rao"]);
+});
+
+test("a recipient with no name anywhere sends no name fields and says so in the mapping report (the read-back then refuses to call the sync complete)", () => {
+  const { input, report } = build(crm({ shippingAddress: { line1: "x", city: "Pune", state: "Maharashtra", pincode: "411045" }, lead: { ...crm().lead, firstName: "", lastName: null } }));
+  const a = JSON.parse(JSON.stringify(input.shippingAddress)) as Record<string, unknown>;
+  assert.ok(!("firstName" in a) && !("lastName" in a));
+  assert.match(report.fields["shippingAddress.name"]!.reason!, /requires a last name/);
+});
+
+test("the Indian address parts all survive the one-word-name case (state code, PIN, country, phone, both lines)", () => {
+  const a = build(crm({ shippingAddress: { name: "Radhe", line1: "Flat 4, Green Park", line2: "Baner", city: "Pune", state: "Maharashtra", pincode: "411045", phone: "9811950001" } })).input.shippingAddress as Record<string, unknown>;
+  assert.deepEqual([a.address1, a.address2, a.city, a.provinceCode, a.zip, a.countryCode, a.phone], ["Flat 4, Green Park", "Baner", "Pune", "MH", "411045", "IN", "9811950001"]);
+});
+
+test("mergeShippingForRepair keeps every non-blank value Shopify already has and fills only the blank ones", async () => {
+  const { mergeShippingForRepair } = await import("./shopify.orders.write.js");
+  const mapped = { firstName: "Asha", lastName: "Rao", address1: "CRM line 1", address2: "CRM line 2", city: "Pune", zip: "411045", provinceCode: "MH", countryCode: "IN", phone: "+919811950001" };
+  const out = mergeShippingForRepair(mapped, { firstName: "Asha", lastName: "", address1: "Staff corrected", address2: null, city: " ", zip: "411046", provinceCode: "MH", countryCodeV2: "IN", phone: null });
+  assert.deepEqual([out.address1, out.zip, out.city, out.lastName, out.address2, out.phone], ["Staff corrected", "411046", "Pune", "Rao", "CRM line 2", "+919811950001"]);
+  assert.deepEqual(mergeShippingForRepair(mapped, null), mapped, "no existing address: the CRM address as is");
 });

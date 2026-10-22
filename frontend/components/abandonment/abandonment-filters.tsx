@@ -10,13 +10,9 @@ import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
 import { itemKeyLabel } from "@/lib/abandonment-items";
+import { hasAnyFilter, LAST_ACTION_LABELS, type AbandonmentFilterState } from "./abandonment-column-filters";
 
-export interface AbandonmentFilterState {
-  search?: string;
-  workingStatus?: LeadWorkingStatus;
-  /** Item keys chosen in the table's Items column filter (any of them). */
-  items?: string[];
-}
+export type { AbandonmentFilterState };
 
 export function AbandonmentFilters({
   value,
@@ -29,7 +25,17 @@ export function AbandonmentFilters({
 }) {
   const [search, setSearch] = useState(value.search ?? "");
 
-  const hasFilters = Boolean(value.search || value.workingStatus || (value.items && value.items.length > 0));
+  const hasFilters = hasAnyFilter(value);
+  const money = (n: number) => n.toLocaleString("en-IN");
+  // One removable chip per active column filter, so every filter set from a table header is visible and can be undone in one click.
+  const chips: { label: string; clear: Partial<AbandonmentFilterState> }[] = [
+    ...(value.lead ? [{ label: `Lead: ${value.lead}`, clear: { lead: undefined } }] : []),
+    ...(value.contact ? [{ label: `Contact: ${value.contact}`, clear: { contact: undefined } }] : []),
+    ...(value.valueMin !== undefined || value.valueMax !== undefined ? [{ label: `Value: ${value.valueMin !== undefined ? money(value.valueMin) : "any"} – ${value.valueMax !== undefined ? money(value.valueMax) : "any"}`, clear: { valueMin: undefined, valueMax: undefined } }] : []),
+    ...(value.detectedFrom || value.detectedTo ? [{ label: `Detected: ${value.detectedFrom ?? "any"} → ${value.detectedTo ?? "any"}`, clear: { detectedFrom: undefined, detectedTo: undefined } }] : []),
+    ...(value.lastAction ? [{ label: `Last action: ${LAST_ACTION_LABELS[value.lastAction]}`, clear: { lastAction: undefined } }] : []),
+    ...(value.assignee ? [{ label: `Assigned to: ${value.assignee}`, clear: { assignee: undefined } }] : []),
+  ];
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -100,6 +106,17 @@ export function AbandonmentFilters({
               aria-label={`Remove ${itemKeyLabel(key)}`}
             >
               {itemKeyLabel(key)}
+              <X className="size-3" aria-hidden />
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {chips.length > 0 ? (
+        <div className="flex w-full flex-wrap items-center gap-1.5" aria-label="Active column filters">
+          {chips.map((chip) => (
+            <button key={chip.label} type="button" onClick={() => onChange({ ...value, ...chip.clear })} className="inline-flex items-center gap-1 rounded-full border bg-background px-2.5 py-0.5 text-xs font-medium hover:bg-muted" aria-label={`Remove filter ${chip.label}`}>
+              {chip.label}
               <X className="size-3" aria-hidden />
             </button>
           ))}

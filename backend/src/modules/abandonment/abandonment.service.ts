@@ -14,7 +14,7 @@ import { getDistribution, getTelecallerSummary, listTelecallers, type Distributi
 import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
 import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
 import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
-import { buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
+import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
 import { loadCustomerContext } from "./abandonment.customer-context.js";
 import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
 import type {
@@ -138,10 +138,17 @@ class AbandonmentService {
     return map;
   }
 
+  /** The list where plus the value / last-action column filters, so the list, its total, its summary and "Select all" always agree. */
+  private async listWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role): Promise<Prisma.AbandonmentWhereInput> {
+    const where = buildAbandonmentListWhere(query, leadScope, role);
+    const derived = await abandonmentDerivedWhere(this.db, query);
+    return derived ? { AND: [where, derived] } : where;
+  }
+
   async listAbandonments(user: AuthUser, query: ListAbandonmentsQuery): Promise<AbandonmentListResult> {
     this.assertOwnTelecallerFilter(user, query);
     const leadScope = this.scopeWhere(user);
-    const where = buildAbandonmentListWhere(query, leadScope, user.role);
+    const where = await this.listWhere(query, leadScope, user.role);
 
     const [rows, totalItems, counts] = await Promise.all([
       this.db.abandonment.findMany({
@@ -191,7 +198,7 @@ class AbandonmentService {
   /** Ids of EVERY abandonment matching the filters (not just the current page), so "Select all N" can feed the existing bulk-assign. */
   async listMatchingIds(user: AuthUser, query: ListAbandonmentsQuery): Promise<{ ids: string[]; total: number; capped: boolean }> {
     this.assertOwnTelecallerFilter(user, query);
-    const where = buildAbandonmentListWhere(query, this.scopeWhere(user), user.role);
+    const where = await this.listWhere(query, this.scopeWhere(user), user.role);
     const [rows, total] = await Promise.all([
       this.db.abandonment.findMany({ where, select: { id: true }, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], take: MAX_SELECT_ALL }),
       this.db.abandonment.count({ where }),

@@ -11,7 +11,8 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { abandonmentItemOptionsQueryOptions, abandonmentListQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { abandonmentApi } from "@/lib/api-client/endpoints/abandonment.api";
 import { Button } from "@/components/ui/button";
-import { AbandonmentFilters, type AbandonmentFilterState } from "@/components/abandonment/abandonment-filters";
+import { AbandonmentFilters } from "@/components/abandonment/abandonment-filters";
+import { hasAnyFilter, toApiFilters, type AbandonmentFilterState } from "@/components/abandonment/abandonment-column-filters";
 import { AbandonmentTable, AbandonmentTableSkeleton } from "@/components/abandonment/abandonment-table";
 import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { LeadSelectionToolbar } from "@/components/leads/lead-selection-toolbar";
@@ -92,11 +93,14 @@ export function AbandonedLeadsView() {
     [router, pathname],
   );
 
-  const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize: PAGE_SIZE, ...filters, dateRange: range, ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, filters, range, salespersonId, assignment]);
+  // A custom Detected range from the column filter replaces the Today / Yesterday / All tabs (see toApiFilters).
+  const customDates = Boolean(filters.detectedFrom || filters.detectedTo);
+  const effectiveRange: AbandonmentDateRange = customDates ? "all" : range;
+  const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize: PAGE_SIZE, ...toApiFilters(filters, range), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, filters, range, salespersonId, assignment]);
   // Rows of another day are never kept on screen while a new range loads (they would be selectable under the wrong heading); page/filter changes within a day still are.
   const { data, isPending, isFetching, error } = useQuery({
     ...abandonmentListQueryOptions(params),
-    placeholderData: (previous, previousQuery) => ((previousQuery?.queryKey[2] as ListAbandonmentsParams | undefined)?.dateRange === range ? previous : undefined),
+    placeholderData: (previous, previousQuery) => ((previousQuery?.queryKey[2] as ListAbandonmentsParams | undefined)?.dateRange === effectiveRange ? previous : undefined),
   });
   const itemOptions = useQuery(abandonmentItemOptionsQueryOptions());
   const [selectingAll, setSelectingAll] = useState(false);
@@ -104,7 +108,7 @@ export function AbandonedLeadsView() {
 
   if (!user) return null;
 
-  const hasActiveFilters = Boolean(filters.search || filters.workingStatus || (filters.items && filters.items.length > 0) || salespersonId || assignment);
+  const hasActiveFilters = Boolean(hasAnyFilter(filters) || salespersonId || assignment);
   const isAdmin = user.role === "ADMIN";
   const isManager = user.role === "MANAGER";
   const isHr = user.role === "HR";
@@ -140,7 +144,7 @@ export function AbandonedLeadsView() {
     setSelectingAll(true);
     setSelectAllError(null);
     try {
-      const result = await abandonmentApi.listMatchingIds({ ...filters, dateRange: range, ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) });
+      const result = await abandonmentApi.listMatchingIds({ ...toApiFilters(filters, range), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) });
       setSelectedIds(new Set(result.ids));
       if (result.capped) setSelectAllError(`Only the first ${result.ids.length} of ${result.total} matches were selected. Narrow the filters to assign the rest.`);
     } catch (e) {
@@ -283,6 +287,14 @@ export function AbandonedLeadsView() {
                     selected: filters.items ?? [],
                     onChange: (next) => {
                       setFilters({ ...filters, items: next.length > 0 ? next : undefined });
+                      resetPage();
+                      clearSelectionForFilterChange();
+                    },
+                  }}
+                  columnFilters={{
+                    value: filters,
+                    onChange: (next) => {
+                      setFilters(next);
                       resetPage();
                       clearSelectionForFilterChange();
                     },

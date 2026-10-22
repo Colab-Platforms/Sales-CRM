@@ -28,6 +28,15 @@ export interface ListAbandonmentsQuery {
   workingStatus?: LeadWorkingStatus;
   /** Item keys from GET /abandonments/items (see abandonment.items.ts). Several keys mean "any of these" (OR). */
   items?: string[];
+  /** Column filters of the table: lead name / lead number, mobile / email, assigned telecaller or manager name (all "contains", case-insensitive). */
+  lead?: string;
+  contact?: string;
+  assignee?: string;
+  /** The type of the LATEST recovery action, or "NONE" for a lead nobody has acted on. */
+  lastAction?: "CALL" | "CALLBACK" | "CONTINUE_ORDER" | "NONE";
+  /** Cart value range (inclusive), in the cart's own currency. */
+  valueMin?: number;
+  valueMax?: number;
 }
 
 // Structured cart detail written by the ingesting processor (e.g. shiprocket.abandonment.processor.ts)

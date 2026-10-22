@@ -1,0 +1,17 @@
+{
+  "generatedAt": "2026-10-22T11:41:04.013Z",
+  "since": "2026-08-01T00:00:00.000Z",
+  "summary": {
+    "mode": "DRY RUN",
+    "examined": 2,
+    "ok": 2,
+    "would_repair": 0,
+    "repaired": 0,
+    "skipped": 0,
+    "failed": 0,
+    "billingMissing_notRepairable": 2,
+    "differsFromCrm_leftUnchanged": 0,
+    "stoppedEarly": false
+  },
+  "orders": []
+}

@@ -1242,6 +1242,35 @@ class OrdersService {
   }
 
   /**
+   * READ-ONLY preview for the address reconciliation (src/scripts/repair-shopify-addresses.ts): is this linked order's Shopify SHIPPING address missing or incomplete compared with what the CRM would send now?
+   * It only reads (the CRM row and the Shopify order); it never writes anything anywhere. The repair itself is resyncShopifyOrder, which re-sends only what is missing and never overwrites an address Shopify has.
+   */
+  async previewShopifyAddress(orderId: string): Promise<{ state: "ok" | "needs_repair" | "skip"; reason?: string; missing: string[]; differs: string[]; billingMissing: boolean }> {
+    const none = { missing: [] as string[], differs: [] as string[], billingMissing: false };
+    const order = await this.db.order.findFirst({ where: { id: orderId }, select: SHOPIFY_PUSH_SELECT });
+    if (!order) return { state: "skip", reason: "order not found", ...none };
+    if (!order.externalId) return { state: "skip", reason: "not linked to Shopify", ...none };
+    const client = this.getShopifyClient();
+    // VERIFIED IDENTITY: the stored Shopify id must point at THIS order - the order number the CRM stamped on it at creation (sourceIdentifier) and its Shopify name must match, and it must not be cancelled.
+    const identity = await client.query<{ order: { name: string | null; sourceIdentifier: string | null; cancelledAt: string | null } | null }>("query crmOrderIdentity($id: ID!) { order(id: $id) { name sourceIdentifier cancelledAt } }", { id: toShopifyOrderGid(order.externalId) });
+    if (!identity.order) return { state: "skip", reason: "the linked Shopify order no longer exists", ...none };
+    if (identity.order.sourceIdentifier ? identity.order.sourceIdentifier !== order.orderNumber : Boolean(order.externalNumber) && identity.order.name !== order.externalNumber) return { state: "skip", reason: "identifier mismatch: the Shopify order does not carry this CRM order's number", ...none };
+    if (identity.order.cancelledAt) return { state: "skip", reason: "the Shopify order is cancelled", ...none };
+    const prepared = await prepareShopifyPayload(order, client);
+    const input = prepared.built.input;
+    if (!input.shippingAddress) return { state: "skip", reason: "the CRM order has no shipping address to send", ...none };
+    if (!input.shippingAddress.firstName && !input.shippingAddress.lastName) return { state: "skip", reason: "the CRM has no recipient name (Shopify requires a last name); nothing is invented", ...none };
+    if (!input.shippingAddress.address1 || !input.shippingAddress.city || !input.shippingAddress.zip) return { state: "skip", reason: "the CRM address is incomplete (line 1, city and PIN code are needed)", ...none };
+    const check = await verifyShopifyOrder(client, order.externalId, input);
+    const missing = check.missing.filter((m) => m === "shippingAddress" || m.startsWith("shippingAddress."));
+    // fields Shopify HAS that differ from the CRM: reported for a person to review, never overwritten
+    const norm = (v: unknown) => (typeof v === "string" ? v.trim().toLowerCase().replace(/\s+/g, " ") : "");
+    const have = check.existingShipping;
+    const differs = have ? (["address1", "address2", "city", "zip", "provinceCode"] as const).filter((f) => norm(have[f]) !== "" && norm((input.shippingAddress as Record<string, unknown>)[f]) !== "" && norm(have[f]) !== norm((input.shippingAddress as Record<string, unknown>)[f])) : [];
+    return { state: missing.length > 0 ? "needs_repair" : "ok", missing, differs: [...differs], billingMissing: check.missing.some((m) => m === "billingAddress" || m.startsWith("billingAddress.")) };
+  }
+
+  /**
    * Re-verify (and, where Shopify allows, repair) an order that is ALREADY linked to Shopify - used after a partial sync. It never creates an order, never touches payment, fulfilment, totals, items or the note,
    * and repairs only the shipping address, the crm.* metafields and missing tags (add-only). Idempotent: nothing is written when nothing is missing. Admin / manager only (route), within order scope.
    */

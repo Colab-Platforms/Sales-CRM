@@ -1,0 +1,34 @@
+{
+  "generatedAt": "2026-10-22T11:40:51.578Z",
+  "since": "2026-08-01T00:00:00.000Z",
+  "summary": {
+    "mode": "APPLY",
+    "examined": 2,
+    "ok": 0,
+    "would_repair": 0,
+    "repaired": 2,
+    "skipped": 0,
+    "failed": 0,
+    "billingMissing_notRepairable": 2,
+    "differsFromCrm_leftUnchanged": 0,
+    "stoppedEarly": false
+  },
+  "orders": [
+    {
+      "orderNumber": "CRM-MVJ4INJZ-QF6K",
+      "outcome": "repaired",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJ2F9CI-LMBN",
+      "outcome": "repaired",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    }
+  ]
+}

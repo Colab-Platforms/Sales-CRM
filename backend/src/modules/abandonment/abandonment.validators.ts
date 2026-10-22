@@ -51,6 +51,12 @@ const listQuerySchema = z
     managerId: optional(z.uuid()),
     salespersonId: optional(z.uuid()),
     workingStatus: optional(z.enum(LeadWorkingStatus, { error: "Invalid lead status" })),
+    lead: optional(z.string().trim().max(100, "lead filter must be 100 characters or fewer")),
+    contact: optional(z.string().trim().max(100, "contact filter must be 100 characters or fewer")),
+    assignee: optional(z.string().trim().max(100, "assignee filter must be 100 characters or fewer")),
+    lastAction: optional(z.enum(["CALL", "CALLBACK", "CONTINUE_ORDER", "NONE"], { error: "Invalid last action" })),
+    valueMin: optional(z.coerce.number({ error: "valueMin must be a number" }).min(0, "valueMin must be 0 or more")),
+    valueMax: optional(z.coerce.number({ error: "valueMax must be a number" }).min(0, "valueMax must be 0 or more")),
     // Comma list of URL-encoded item keys ("s:SKU1,p:123%7CName"); decoded and validated by parseItemKeys.
     items: optional(z.string().max(4000, "items filter is too long").transform((v, ctx) => {
       const keys = parseItemKeys(v);
@@ -61,7 +67,8 @@ const listQuerySchema = z
       return keys;
     })),
   })
-  .refine((q) => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, { error: "dateFrom must not be after dateTo" });
+  .refine((q) => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, { error: "dateFrom must not be after dateTo" })
+  .refine((q) => q.valueMin === undefined || q.valueMax === undefined || q.valueMin <= q.valueMax, { error: "valueMin must not be above valueMax" });
 
 const bulkAssignManagerSchema = z
   .object({

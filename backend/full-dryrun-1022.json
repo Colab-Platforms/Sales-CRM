@@ -1,0 +1,459 @@
+{
+  "generatedAt": "2026-10-22T11:52:17.928Z",
+  "since": "2026-08-01T00:00:00.000Z",
+  "summary": {
+    "mode": "DRY RUN",
+    "examined": 137,
+    "ok": 65,
+    "would_repair": 27,
+    "repaired": 0,
+    "skipped": 45,
+    "failed": 0,
+    "billingMissing_notRepairable": 41,
+    "differsFromCrm_leftUnchanged": 2,
+    "stoppedEarly": false
+  },
+  "orders": [
+    {
+      "orderNumber": "CRM-MVJGG8FV-1LTN",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJFUXH1-IW10",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJFQOXQ-V5EL",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJ47OO1-VY06",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJ3Q2L5-IRSK",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVJ34BNC-VN43",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJ2T86G-MVES",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVJ1KW23-8XSG",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVI3N87S-JPCV",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVI3L5YC-CBL0",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVI2TNO6-4ZK0",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVI0XMG1-949M",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVI0R5V9-A07F",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVI087RO-REBE",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHTLXV9-GV9U",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHT4IY7-I5DS",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVHSVTAT-0LAS",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVHS91JG-CTMY",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHS5HYP-WD2N",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVHQQ36C-M6BJ",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHQGXB2-YHUD",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHQFFUL-C2DK",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHNIDFY-T31Z",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVHLSMQJ-0GKI",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVF7TPH8-OJDQ",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVEQR9VJ-0VTI",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVCBK81V-ZPXF",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVARZPSI-65NJ",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVAPWQZ6-RNJ5",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVAMI1F2-D2Y4",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVAL98KD-9OQP",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVAKC4J0-LI8M",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVAK6SAY-EDTB",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVAJMESZ-HEUP",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVAJI0OP-5XDV",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVAJF6P8-VNI2",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVAJE3N1-OEHB",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVAJCEKA-Y1NE",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MVAJAJ4R-8YAQ",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MV9DV6F5-2WN9",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MV96NPNQ-3NIG",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MV95IBCG-H04P",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MV9541CL-I73F",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MV0KJP86-FHSQ",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUZH8SUF-507Z",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUY23GTX-TR3W",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUY201CP-NFP4",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUY1YKW1-88RK",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWQHVXF-FUIE",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWLODR9-7TOY",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWLEGSO-D1CG",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWJNN7Z-QVWO",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWI68ZJ-F8IU",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWH0PSC-RO9V",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWGV6BV-4CQE",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUWG8QLG-SJZ1",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUSD0U2N-UL0O",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUSCY7AH-NU6S",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUS9NFZG-ULER",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUS8NVZP-P3B3",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUS8M4SY-WJLB",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUS8KCJM-I4R1",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUP1KCS9-L4CR",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUP1ISO5-DP20",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUO37647-9QQ5",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MUO32LIM-NS2E",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MUMMS440-R23N",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUMMQ9HV-2P8D",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUGVMWX5-5OP8",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUGTXF0Y-3GIP",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUGSNXSC-OPFQ",
+      "outcome": "skipped",
+      "reason": "the Shopify order is cancelled"
+    },
+    {
+      "orderNumber": "CRM-MUFJL4Q6-KO2B",
+      "outcome": "skipped",
+      "reason": "the CRM order has no shipping address to send"
+    }
+  ]
+}
