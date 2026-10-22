@@ -1,0 +1,34 @@
+{
+  "generatedAt": "2026-10-22T11:48:46.772Z",
+  "since": "2026-08-01T00:00:00.000Z",
+  "summary": {
+    "mode": "DRY RUN",
+    "examined": 2,
+    "ok": 0,
+    "would_repair": 2,
+    "repaired": 0,
+    "skipped": 0,
+    "failed": 0,
+    "billingMissing_notRepairable": 2,
+    "differsFromCrm_leftUnchanged": 0,
+    "stoppedEarly": false
+  },
+  "orders": [
+    {
+      "orderNumber": "CRM-MVJ47OO1-VY06",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    },
+    {
+      "orderNumber": "CRM-MVJ34BNC-VN43",
+      "outcome": "would_repair",
+      "billingMissing": true,
+      "fields": [
+        "shippingAddress"
+      ]
+    }
+  ]
+}
