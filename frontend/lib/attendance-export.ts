@@ -78,7 +78,7 @@ function sheets(data: AttendanceRecords, employeeName: string): SheetSpec[] {
         ["Talk Time (hours)", hours(s.talkTimeSec * 1000)],
         ["Talk time", "Duration of connected calls, by the day each call started (same as the sales reports)"],
         ["Late rule", `First clock-in after ${data.policy.lateAfter} IST`],
-        ["Codes", "P = Present, L = Late, A = Absent, - = not clocked in yet today, blank = before joining or before attendance tracking began"],
+        ["Codes", `P = Present, L = Late, A = Absent, - = today, not clocked in yet (before ${data.policy.lateAfter} IST), blank = before joining or before attendance tracking began`],
         ["Tracking began", data.policy.trackingStartedOn ?? "No attendance recorded yet"],
         ["Not tracked", "Half-day, leave, holidays and weekly offs (every day is a working day)"],
         ["Generated", new Date().toLocaleString("en-IN")],

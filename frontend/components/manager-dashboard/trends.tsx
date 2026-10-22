@@ -124,7 +124,7 @@ export function SalespersonTrendLines({ data }: { data: ManagerAnalytics }) {
         area={false}
         labels={dayLabels(data.daily)}
         tooltipTitles={dayTitles(data.daily)}
-        format={(v) => (metric === "productive" ? `${v.toFixed(1)}h` : formatNumber(Math.round(v)))}
+        format={(v) => (metric === "productive" ? `${v.toFixed(1)}h` : formatNumber(v))}
         series={people.map((p, i) => ({
           key: p.id,
           label: p.name.split(" ")[0]!,

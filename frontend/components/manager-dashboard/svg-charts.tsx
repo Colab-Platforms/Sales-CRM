@@ -23,6 +23,15 @@ function niceMax(max: number): number {
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * exp;
 }
 
+/** Axis top for whole-number counts drawn with 4 gridlines: every tick (top/4 steps) is an integer, so no label is rounded. */
+function countMax(max: number): number {
+  if (max <= 0) return 4;
+  const raw = max / 4;
+  const exp = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = ([1, 2, 2.5, 3, 4, 5, 6, 8, 10].find((c) => c * exp >= raw) ?? 10) * exp;
+  return Math.max(1, Math.ceil(step)) * 4;
+}
+
 export interface LineSeries {
   key: string;
   label: string;
@@ -266,7 +275,7 @@ export function StackedBarChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const totals = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] ?? 0), 0));
-  const top = niceMax(Math.max(0, ...totals));
+  const top = countMax(Math.max(0, ...totals));
   const labelEvery = labels.length > 21 ? 3 : labels.length > 10 ? 2 : 1;
 
   return (
@@ -355,7 +364,7 @@ export function GroupedBarChart({
   tooltipTitles?: string[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const top = niceMax(Math.max(0, ...series.flatMap((s) => s.values)));
+  const top = countMax(Math.max(0, ...series.flatMap((s) => s.values)));
   const labelEvery = labels.length > 21 ? 3 : labels.length > 10 ? 2 : 1;
 
   if (labels.length === 0) return null;

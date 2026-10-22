@@ -301,7 +301,7 @@ function Summary({ data }: { data: AttendanceRecords }) {
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard label="Total Employees" tone="blue" icon={Users} value={String(s.totalEmployees)} lines={[{ text: multi ? `${data.range.days.length} days` : data.range.from }]} />
+        <KpiCard label="Employees"tone="blue" icon={Users} value={String(s.totalEmployees)} lines={[{ text: multi ? `${data.range.days.length} days` : data.range.from }]} />
         <KpiCard label="Present" tone="emerald" icon={UserCheck} value={String(s.present + s.late)} lines={[{ text: `${unit} · incl. ${s.late} late` }]} />
         <KpiCard label="On Time" tone="teal" icon={CalendarCheck} value={String(s.present)} lines={[{ text: unit }]} />
         <KpiCard label="Late Arrivals" tone="amber" icon={Clock} value={String(s.late)} lines={[{ text: `after ${data.policy.lateAfter} IST` }]} />
@@ -388,7 +388,7 @@ function Matrix({ data, onOpen }: { data: AttendanceRecords; onOpen: (id: string
         </tbody>
       </table>
       <p className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
-        P = Present · L = Late · A = Absent · – = not clocked in yet today · · = before joining or before attendance tracking began. Present and Late totals are separate; both count as attended.
+        P = Present · L = Late · A = Absent · – = today, not clocked in yet (before {data.policy.lateAfter}) · · = before joining or before attendance tracking began. Present and Late totals are separate; both count as attended.
       </p>
     </div>
   );
@@ -401,42 +401,58 @@ function RecordsTable({ mode, data, onOpen }: { mode: "day" | "history"; data: A
       ? data.employees.map((e) => ({ id: e.id, name: e.name, employeeId: e.employeeId, r: e.records[0]! }))
       : data.employees.flatMap((e) => [...e.records].reverse().map((r) => ({ id: e.id, name: e.name, employeeId: e.employeeId, r })));
   const shown = rows.filter((x) => x.r.status !== "NOT_JOINED" && x.r.status !== "NOT_TRACKED" && (data.filters.status === "ALL" || x.r.status === data.filters.status));
-  const head = ["Employee ID", "Employee", "Date", "Check-In", "Check-Out", "Working", "Productive", "Calls", "Talk Time", "Status", "Late By", "Remarks"];
+  // Durations and counts are right-aligned so their digits line up; everything else reads left to right.
+  const head: { label: string; right?: boolean }[] = [
+    { label: "Employee ID" },
+    { label: "Employee" },
+    { label: "Date" },
+    { label: "Check-In" },
+    { label: "Check-Out" },
+    { label: "Working", right: true },
+    { label: "Productive", right: true },
+    { label: "Calls", right: true },
+    { label: "Talk Time", right: true },
+    { label: "Status" },
+    { label: "Late By", right: true },
+    { label: "Remarks" },
+  ];
+  const cell = "px-3 py-2.5 align-middle whitespace-nowrap";
+  const num = `${cell} text-right tabular-nums`;
   return (
     <div className="overflow-x-auto rounded-md border border-border">
       <table className="w-full text-sm">
         <thead className="bg-muted/60 text-xs text-muted-foreground">
           <tr>
             {head.map((h) => (
-              <th key={h} className="px-3 py-2 text-left font-medium whitespace-nowrap">
-                {h}
+              <th key={h.label} className={cn("px-3 py-2 font-medium whitespace-nowrap", h.right ? "text-right" : "text-left")}>
+                {h.label}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {shown.map(({ id, name, employeeId, r }) => (
-            <tr key={`${id}-${r.date}`} className="border-t border-border/60">
-              <td className="px-3 py-2 text-muted-foreground">{employeeId}</td>
-              <td className="px-3 py-2">
-                <button type="button" onClick={() => onOpen(id)} className="font-medium hover:underline">
+            <tr key={`${id}-${r.date}`} className="border-t border-border/60 hover:bg-muted/30">
+              <td className={cn(cell, "text-muted-foreground")}>{employeeId}</td>
+              <td className={cell}>
+                <button type="button" onClick={() => onOpen(id)} className="text-left font-medium hover:underline">
                   {name}
                 </button>
               </td>
-              <td className="px-3 py-2 whitespace-nowrap">
+              <td className={cell}>
                 {weekday(r.date)} {dayLabel(r.date)}
               </td>
-              <td className="px-3 py-2 tabular-nums">{istTime(r.checkIn) || "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.stillWorking ? "Working" : istTime(r.checkOut) || "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.checkIn ? formatHours(r.workingMs) : "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.checkIn ? formatHours(r.productiveMs) : "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.calls || "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.talkTimeSec ? formatHours(r.talkTimeSec * 1000) : "—"}</td>
-              <td className="px-3 py-2">
+              <td className={cn(cell, "tabular-nums")}>{istTime(r.checkIn) || "—"}</td>
+              <td className={cn(cell, "tabular-nums")}>{r.stillWorking ? "Working" : istTime(r.checkOut) || "—"}</td>
+              <td className={num}>{r.checkIn ? formatHours(r.workingMs) : "—"}</td>
+              <td className={num}>{r.checkIn ? formatHours(r.productiveMs) : "—"}</td>
+              <td className={num}>{r.calls || "—"}</td>
+              <td className={num}>{r.talkTimeSec ? formatHours(r.talkTimeSec * 1000) : "—"}</td>
+              <td className={cell}>
                 <StatusBadge status={r.status} />
               </td>
-              <td className="px-3 py-2 tabular-nums">{r.lateByMs > 0 ? formatHours(r.lateByMs) : "—"}</td>
-              <td className="px-3 py-2 text-xs text-muted-foreground">{r.remarks.join(" · ") || "—"}</td>
+              <td className={num}>{r.lateByMs > 0 ? formatHours(r.lateByMs) : "—"}</td>
+              <td className="min-w-48 px-3 py-2.5 align-middle text-xs text-muted-foreground">{r.remarks.join(" · ") || "—"}</td>
             </tr>
           ))}
         </tbody>
