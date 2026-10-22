@@ -183,6 +183,8 @@ export interface ItemRow {
   discount: string;
   tax: string;
   total: string;
+  /** A free-form custom item (no product / variant): shown with its flags instead of a variant. */
+  customFlags?: string;
 }
 
 export function ItemsCard({ rows, taxHeader = "Tax", emptyMessage, footnote }: { rows: ItemRow[]; taxHeader?: string; emptyMessage: string; footnote?: string }) {
@@ -224,7 +226,7 @@ export function ItemsCard({ rows, taxHeader = "Tax", emptyMessage, footnote }: {
               rows.map((r) => (
                 <TableRow key={r.id}>
                   <TableCell className="font-semibold">{r.product}</TableCell>
-                  <TableCell className="text-muted-foreground">{r.variant ?? "—"}</TableCell>
+                  <TableCell className="text-muted-foreground">{r.customFlags ? <span data-testid="custom-item-flags">{r.customFlags}</span> : (r.variant ?? "—")}</TableCell>
                   <TableCell>{r.sku ? <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{r.sku}</span> : "—"}</TableCell>
                   <TableCell className="text-right">
                     <Badge variant="secondary" className="tabular-nums">

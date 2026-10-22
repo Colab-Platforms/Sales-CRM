@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useCreateOrderMutation, useMarkOrderPaidMutation, usePushOrderToShopifyMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { canMarkPaymentReceived, externalPaymentFields } from "@/lib/external-payment";
+import { customDraftFromForm, customItemFlags, customItemRequest, customUnitWeightKg, isCustomLineValid, type CustomItemForm } from "@/lib/custom-item";
+import { AddCustomItemDialog, CustomItemCard } from "./custom-item-dialog";
 import { useAuthStore } from "@/stores/auth-store";
 import { lastAddressQueryOptions, pincodeQueryOptions } from "@/lib/api-client/queries/delivery.queries";
 import { productsApi } from "@/lib/api-client/endpoints/products.api";
@@ -108,6 +110,8 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // Prepaid only: "Payment already received" - the customer already paid outside Cashfree, so the order is created as paid and no payment link / QR is made.
   const role = useAuthStore((st) => st.user?.role);
   const [paymentReceived, setPaymentReceived] = useState(false);
+  // "Add custom item": a free-form line that is not in the Shopify catalogue (no product / variant). Appended to the unsaved order only.
+  const [customOpen, setCustomOpen] = useState(false);
   const [paymentReference, setPaymentReference] = useState("");
   const externallyPaid = canMarkPaymentReceived(orderType, role) && paymentReceived;
   const markPaid = useMarkOrderPaidMutation();
@@ -188,8 +192,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // ---- serviceability (COD and prepaid can differ; weight is an estimate typed in by the salesperson).
   // The parcel weight is typed by the telecaller; 0, negative or non-numeric input is rejected and never replaced by a default.
   const weightLines = items
-    .filter((i) => i.productId)
+    .filter((i) => i.productId || i.custom)
     .map((i) => {
+      // A custom item contributes only its own typed weight (physical items only); none typed = unknown, never a guess.
+      if (i.custom) return { unitKg: customUnitWeightKg(i.custom), quantity: Number(i.quantity), label: i.custom.name };
       const p = products.find((x) => x.id === i.productId);
       const v = p?.variants.find((x) => x.id === i.variantId);
       return { unitKg: unitWeightKg(p, v), quantity: Number(i.quantity), label: p ? (v ? `${p.name} — ${v.name}` : p.name) : "" };
@@ -235,6 +241,12 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
       idempotencyKey.current = crypto.randomUUID();
     }
     onOpenChange(next);
+  }
+
+  /** Appends the custom item to the unsaved order (an untouched empty product row is replaced by it, so the form does not keep a blank line). */
+  function addCustomItem(form: CustomItemForm) {
+    const line: DraftItem = { key: crypto.randomUUID(), productId: "", variantId: "", quantity: form.quantity.trim(), unitPrice: form.price.trim(), custom: customDraftFromForm(form) };
+    setItems((prev) => [...prev.filter((i) => i.custom || i.productId || i.unitPrice.trim() !== ""), line]);
   }
 
   function updateItem(key: string, patch: Partial<DraftItem>) {
@@ -295,12 +307,13 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   }, [prefill, productsQuery.data, productsQuery.isError]);
 
   const itemValid = (i: DraftItem) => {
+    if (i.custom) return isCustomLineValid({ quantity: i.quantity, unitPrice: i.unitPrice, custom: i.custom });
     const product = products.find((p) => p.id === i.productId);
     return Boolean(product) && (product!.variants.length === 0 || Boolean(i.variantId)) && Number(i.quantity) > 0 && Number.isInteger(Number(i.quantity)) && i.unitPrice.trim() !== "";
   };
   const itemsValid = items.length > 0 && items.every(itemValid);
 
-  const validItems: CreateManualOrderItemInput[] = items.filter(itemValid).map((i) => ({
+  const validItems: CreateManualOrderItemInput[] = items.filter(itemValid).map((i) => i.custom ? customItemRequest({ quantity: i.quantity, unitPrice: i.unitPrice, custom: i.custom }) : ({
     productId: i.productId,
     variantId: i.variantId || undefined,
     quantity: Number(i.quantity),
@@ -357,8 +370,9 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
     customerName,
     customerMobile,
     lines: items
-      .filter((i) => i.productId)
+      .filter((i) => i.productId || i.custom)
       .map((i) => {
+        if (i.custom) return { key: i.key, name: i.custom.name, variant: null, quantity: Number(i.quantity) || 0, total: fromCents(lineTotalCents(i)), custom: true, flags: customItemFlags({ taxable: i.custom.taxable, requiresShipping: i.custom.physical, weightGrams: i.custom.physical && i.custom.weight ? String(i.custom.weightUnit === "KG" ? Number(i.custom.weight) * 1000 : Number(i.custom.weight)) : null }) };
         const product = products.find((p) => p.id === i.productId);
         const variant = product?.variants.find((v) => v.id === i.variantId);
         return { key: i.key, name: product?.name ?? "Product", variant: variant?.name ?? null, quantity: Number(i.quantity) || 0, total: fromCents(lineTotalCents(i)) };
@@ -548,8 +562,10 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
           >
             <div className="grid min-w-0 content-start gap-4">
               {abandonmentId ? <AbandonedCheckoutPrefill prefill={prefill} loading={prefillQuery.isPending && prefillQuery.fetchStatus !== "idle"} failed={prefillQuery.isError} /> : null}
-              <ItemsSection onAdd={() => setItems((prev) => [...prev, emptyItem()])}>
-                {items.map((item, index) => (
+              <ItemsSection onAdd={() => setItems((prev) => [...prev, emptyItem()])} onAddCustom={() => setCustomOpen(true)}>
+                {items.map((item, index) => item.custom ? (
+                  <CustomItemCard key={item.key} item={{ key: item.key, quantity: item.quantity, unitPrice: item.unitPrice, custom: item.custom }} index={index} invalid={!itemValid(item)} canRemove={items.length > 1} onChange={(patch) => updateItem(item.key, patch)} onRemove={() => setItems((prev) => prev.filter((i) => i.key !== item.key))} />
+                ) : (
                   <ItemCard
                     key={item.key}
                     item={item}
@@ -564,6 +580,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                   />
                 ))}
               </ItemsSection>
+              <AddCustomItemDialog open={customOpen} onOpenChange={setCustomOpen} onAdd={addCustomItem} />
 
               <PaymentSection value={orderType} onChange={setOrderType} />
 

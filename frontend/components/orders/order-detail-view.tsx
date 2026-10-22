@@ -35,6 +35,7 @@ import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { CancelOrderButton, OrderPaymentSummary } from "./cancel-order-button";
 import { MarkPaidButton } from "./mark-paid-button";
+import { customItemFlags } from "@/lib/custom-item";
 import { CreatePaymentLinkButton, PaymentLinkPanel, ShopifyPaymentSyncStatus } from "./payment-link-panel";
 import { PrepaidUpgradeAction } from "./prepaid-upgrade-action";
 import { PrepaidUpgradeCard } from "./prepaid-upgrade-card";
@@ -180,6 +181,7 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
     discount: Number(item.discountAmount) > 0 ? `−${money(item.discountAmount)}` : money(item.discountAmount),
     tax: money(item.taxAmount),
     total: money(item.totalPrice),
+    ...(item.itemType === "CUSTOM" ? { customFlags: customItemFlags({ taxable: item.taxable ?? null, requiresShipping: item.requiresShipping ?? null, weightGrams: item.weightGrams }) } : {}),
   }));
 
   return (
