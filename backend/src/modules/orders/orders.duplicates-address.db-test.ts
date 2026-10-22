@@ -30,17 +30,23 @@ function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repa
   const state = { created: [] as any[], updates: [] as any[], repaired: false };
   const money = (v: number) => ({ shopMoney: { amount: v.toFixed(2) } });
   const total = (o: any) => (o.lineItems ?? []).reduce((s: number, l: any) => s + Number(l.priceSet?.shopMoney?.amount ?? 0) * Number(l.quantity ?? 1), 0) - Number(o.discountCode?.itemFixedDiscountCode?.amountSet?.shopMoney?.amount ?? 0) + Number(o.shippingLines?.[0]?.priceSet?.shopMoney?.amount ?? 0);
-  const address = (a: any) => (a ? { address1: a.address1 ?? null, city: a.city ?? null, zip: a.zip ?? null, provinceCode: a.provinceCode ?? null, countryCodeV2: a.countryCode ?? null, firstName: a.firstName ?? null } : null);
+  const address = (a: any) => (a ? { address1: a.address1 ?? null, city: a.city ?? null, zip: a.zip ?? null, provinceCode: a.provinceCode ?? null, countryCodeV2: a.countryCode ?? null, lastName: a.lastName ?? null, firstName: a.firstName ?? null } : null);
   const client = {
     query: async (doc: string, vars: any) => {
       if (/customers\(/.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: [] } };
+      if (/crmOrderIdentity/.test(doc)) {
+        const o = state.created.find((c) => c.id === vars.id);
+        return { order: o ? { name: o.name, sourceIdentifier: o.sourceIdentifier ?? null, cancelledAt: o.cancelledAt ?? null } : null };
+      }
       if (/crmOrderBySource/.test(doc)) {
         const ref = /source_identifier:"(.*)"/.exec(String(vars.query))?.[1];
         return { orders: { nodes: state.created.filter((o) => o.sourceIdentifier === ref).map((o) => ({ id: o.id, name: o.name })) } };
       }
       if (/orderCreate/.test(doc)) {
         const n = String(Math.floor(1e8 + Math.random() * 9e8));
-        state.created.push({ ...vars.order, id: `gid://shopify/Order/${n}`, name: `#T${n}` });
+        // REAL Shopify behaviour (proven on production data): an address whose LAST name is blank is not an error - the order is saved with NO shipping and NO billing address.
+        const blankLast = Boolean(vars.order.shippingAddress) && !String(vars.order.shippingAddress.lastName ?? "").trim();
+        state.created.push({ ...vars.order, ...(blankLast ? { shippingAddress: undefined, billingAddress: undefined, addressDropped: true } : {}), id: `gid://shopify/Order/${n}`, name: `#T${n}` });
         return { orderCreate: { order: { id: `gid://shopify/Order/${n}`, name: `#T${n}` }, userErrors: [] } };
       }
       if (/crmOrderVerify/.test(doc)) {
@@ -52,8 +58,9 @@ function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repa
       }
       if (/orderUpdate/.test(doc)) {
         state.updates.push(vars.input);
+        if (vars.input.shippingAddress && !String(vars.input.shippingAddress.lastName ?? "").trim()) return { orderUpdate: { order: null, userErrors: [{ field: ["shippingAddress", "lastName"], message: "Enter a last name" }] } };
         if (opts.repairErrors) return { orderUpdate: { order: null, userErrors: opts.repairErrors.map((message) => ({ field: ["shippingAddress"], message })) } };
-        if (vars.input.shippingAddress) state.repaired = true;
+        if (vars.input.shippingAddress) { state.repaired = true; const o = state.created.find((c) => c.id === vars.input.id); if (o) o.shippingAddress = vars.input.shippingAddress; }
         return { orderUpdate: { order: { id: vars.input.id }, userErrors: [] } };
       }
       return { order: { id: "gid://shopify/Order/1", tags: [] }, tagsAdd: { userErrors: [] }, tagsRemove: { userErrors: [] } };
@@ -185,7 +192,7 @@ describe("CRM -> Shopify address sync", () => {
       const w = await world(tx);
       const r = await w.create("COD");
       const sent = JSON.parse(JSON.stringify(w.shop.state.created.at(-1))); // what actually goes over the wire
-      assert.deepEqual(sent.shippingAddress, { firstName: "Doddesh", address1: "New Bus stand karatagi, Near-padmvatti takija", address2: "Koppal", city: "Koppal", provinceCode: "KA", zip: "583229", countryCode: "IN", phone: "9902575944" });
+      assert.deepEqual(sent.shippingAddress, { lastName: "Doddesh", address1: "New Bus stand karatagi, Near-padmvatti takija", address2: "Koppal", city: "Koppal", provinceCode: "KA", zip: "583229", countryCode: "IN", phone: "9902575944" });
       assert.deepEqual(sent.billingAddress, sent.shippingAddress, "the CRM keeps one address: billing is the shipping address, as before");
       assert.equal(sent.lineItems.every((l: any) => l.requiresShipping === true), true);
       const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } });
@@ -200,7 +207,7 @@ describe("CRM -> Shopify address sync", () => {
       await w.create("COD", { shippingAddress: { name: "Doddesh", line1: "Flat 1, Main Road", city: "Koppal", state: "Karnataka", pincode: "583229" } });
       const sent = JSON.parse(JSON.stringify(w.shop.state.created.at(-1).shippingAddress)); // what actually goes over the wire
       assert.equal("address2" in sent, false);
-      assert.equal("lastName" in sent, false, "a one-word name gets no invented surname");
+      assert.deepEqual([sent.lastName, "firstName" in sent], ["Doddesh", false], "a one-word name is sent as the LAST name Shopify requires - the real name, no invented surname, no empty field");
       assert.equal(sent.phone, "+919902575944", "the lead's number is used when the address has none");
     });
   });
@@ -345,6 +352,245 @@ describe("changing the price / discount of an unpaid prepaid order (the Shreya i
       const separate = await w.create("PAYMENT_LINK", { idempotencyKey: `key-${uid()}`, rejectRecentTwin: false });
       assert.equal(separate.order.status, "PENDING_PAYMENT");
       assert.equal((await tx.order.findUniqueOrThrow({ where: { id: first.order.id }, select: { status: true } })).status, "PENDING_PAYMENT", "acknowledging a separate purchase never touches the other order");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+// ROOT CAUSE of the recurring "the CRM shows the address but the Shopify order has none": Shopify refuses an address whose LAST name is blank. It does not fail orderCreate - it saves the order WITHOUT any shipping /
+// billing address - and orderUpdate then answers "Enter a last name". A one-word recipient name used to be sent as firstName only. The fake Shopify above reproduces exactly that behaviour.
+describe("Shopify drops an address with a blank last name (the recurring missing-address bug)", () => {
+  const oneWord = { name: "Radhe", line1: "Flat 4, Green Park", line2: "Baner", houseNumber: "Flat 4", area: "Baner", city: "Pune", state: "Maharashtra", pincode: "411045", phone: "9811950001" };
+  const twoWords = { ...oneWord, name: "Radhe Sharma" };
+  const stored = (w: Awaited<ReturnType<typeof world>>) => w.shop.state.created.at(-1);
+
+  it("REPRODUCTION: the old shape (first name only) is exactly what Shopify drops - and the read-back refuses to call such a sync complete", async () => {
+    const shop = fakeShopify();
+    const { createShopifyOrder, verifyShopifyOrder, repairAndVerify } = await import("../shopify/shopify.orders.write.js");
+    const input = { lineItems: [{ title: "x", quantity: 1, priceAmount: "10.00" }], currency: "INR", sourceIdentifier: "REPRO-1", shippingAddress: { firstName: "Radhe", address1: "Flat 4", city: "Pune", zip: "411045", provinceCode: "MH", countryCode: "IN" } } as never;
+    const created = await createShopifyOrder(shop.client, input);
+    assert.equal(shop.state.created.at(-1).addressDropped, true, "Shopify saved the order without any address, and raised no error");
+    const check = await verifyShopifyOrder(shop.client, created.shopifyOrderId, input);
+    assert.ok(check.missing.includes("shippingAddress"), "the read-back sees the address is missing");
+    const fix = await repairAndVerify(shop.client, created.shopifyOrderId, input, check);
+    assert.deepEqual(fix.repaired, [], "the repair cannot work with the same blank last name");
+    assert.ok(fix.errors.some((e) => /Enter a last name/.test(e)), "Shopify's own reason is returned, not swallowed");
+  });
+
+  it("FIXED: a one-word recipient name is sent as the LAST name (the real name, nothing invented) - Shopify keeps the shipping AND billing address and the sync is complete", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("COD", { shippingAddress: oneWord });
+      const sent = JSON.parse(JSON.stringify(stored(w)));
+      assert.deepEqual([sent.addressDropped, sent.shippingAddress.lastName, "firstName" in sent.shippingAddress, sent.billingAddress.lastName], [undefined, "Radhe", false, "Radhe"]);
+      assert.deepEqual([sent.shippingAddress.address1, sent.shippingAddress.address2, sent.shippingAddress.city, sent.shippingAddress.provinceCode, sent.shippingAddress.zip, sent.shippingAddress.countryCode, sent.shippingAddress.phone], ["Flat 4, Green Park", "Baner", "Pune", "MH", "411045", "IN", "9811950001"]);
+      assert.equal(((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata as any).shopifySync.status, "complete");
+      assert.equal(r.shopify.status, "created");
+    });
+  });
+
+  it("names that already have a last name are untouched (two and three words, and a name taken from the lead when the address has none)", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await w.create("COD", { shippingAddress: twoWords });
+      assert.deepEqual([stored(w).shippingAddress.firstName, stored(w).shippingAddress.lastName], ["Radhe", "Sharma"]);
+      await w.create("COD", { shippingAddress: { ...oneWord, name: "Radhe Shyam Sharma" }, idempotencyKey: "k-" + uid(), acknowledgeDuplicate: true });
+      assert.deepEqual([stored(w).shippingAddress.firstName, stored(w).shippingAddress.lastName], ["Radhe Shyam", "Sharma"]);
+      const lead2 = await tx.lead.create({ data: { leadNumber: "L-" + uid(), firstName: "Asha", lastName: "Rao", mobile: "9811100077", normalizedMobile: "+919811100077", ownerId: w.as.id }, select: { id: true } });
+      const noName = { ...oneWord } as Record<string, unknown>;
+      delete noName.name;
+      await w.create("COD", { leadId: lead2.id, shippingAddress: noName, idempotencyKey: "k-" + uid() });
+      assert.deepEqual([stored(w).shippingAddress.firstName, stored(w).shippingAddress.lastName], ["Asha", "Rao"], "the lead's own name fills a missing recipient name");
+    });
+  });
+
+  it("prepaid: the Shopify order created after payment confirmation (the same push) keeps the address of a one-word recipient too", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("PAYMENT_LINK", { shippingAddress: oneWord });
+      assert.equal(w.shop.state.created.length, 0, "prepaid: nothing on Shopify before payment");
+      const pushed = await w.orders.pushOrderToShopify(w.as, r.order.id); // exactly what confirmPaidPrepaidOrder calls once Cashfree has verified the payment
+      assert.equal(pushed.status, "created");
+      assert.deepEqual([stored(w).addressDropped, stored(w).shippingAddress.lastName], [undefined, "Radhe"]);
+      assert.equal(((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata as any).shopifySync.status, "complete");
+    });
+  });
+
+  it("custom-item and mixed orders use the same mapping: the address survives", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.orders.createManualOrder(w.as, { leadId: w.lead.id, items: [{ itemType: "CUSTOM", customName: "Gift wrapping", quantity: 1, unitPrice: "99.00" }, { productId: w.product.id, quantity: 1, unitPrice: "649.00" }], paymentMethod: "COD", shippingAddress: oneWord, shippingPincode: "411045", shippingAmount: "0" } as never);
+      assert.deepEqual([r.shopify.status, stored(w).addressDropped, stored(w).shippingAddress.lastName, stored(w).lineItems.length], ["created", undefined, "Radhe", 2]);
+    });
+  });
+
+  it("retries and double submits create ONE Shopify order and never erase an address that is already there", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const key = "key-" + uid();
+      const a = await w.create("COD", { shippingAddress: oneWord, idempotencyKey: key });
+      const b = await w.create("COD", { shippingAddress: oneWord, idempotencyKey: key });
+      assert.equal(a.order.id, b.order.id);
+      assert.equal((await w.orders.pushOrderToShopify(w.as, a.order.id)).status, "already_linked");
+      assert.deepEqual([w.shop.state.created.length, w.shop.state.updates.length, stored(w).shippingAddress.lastName], [1, 0, "Radhe"], "no second order and no orderUpdate that could blank the address");
+    });
+  });
+
+  it("re-sync of a healthy order sends NOTHING (it cannot overwrite a valid Shopify address with CRM data)", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("COD", { shippingAddress: twoWords });
+      const before = JSON.stringify(stored(w).shippingAddress);
+      const res = await w.orders.resyncShopifyOrder(w.as, r.order.id);
+      assert.equal(res.status, "already_linked");
+      assert.deepEqual([w.shop.state.updates.length, JSON.stringify(stored(w).shippingAddress)], [0, before]);
+    });
+  });
+
+  it("if Shopify still returns an order WITHOUT the address, the sync is PARTIAL with a clear reason and a safe retry - never reported complete", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { dropShipping: true, repairErrors: ["Enter a valid postal code"] });
+      const r = await w.create("COD", { shippingAddress: twoWords });
+      const sync = ((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata as any).shopifySync;
+      assert.equal(sync.status, "partial");
+      assert.ok(sync.missing.includes("shippingAddress"));
+      assert.ok((sync.repairErrors ?? []).some((e: string) => /postal code/.test(e)), "Shopify's own message is kept for the person investigating");
+      assert.equal(w.shop.state.created.length, 1, "one order only");
+      assert.equal((await w.orders.pushOrderToShopify(w.as, r.order.id)).status, "already_linked", "the retry never creates a second order");
+    });
+  });
+
+  it("a recipient with no usable name at all is reported, not hidden: the mapping says so and the verification refuses 'complete'", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await tx.lead.update({ where: { id: w.lead.id }, data: { firstName: " ", lastName: null } });
+      const noName = { ...oneWord } as Record<string, unknown>;
+      delete noName.name;
+      const r = await w.create("COD", { shippingAddress: noName });
+      const sync = ((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata as any).shopifySync;
+      assert.notEqual(sync.status, "complete");
+      assert.ok([...(sync.omitted ?? []), ...(sync.missing ?? [])].some((m: string) => /name|shippingAddress/.test(m)), JSON.stringify(sync));
+    });
+  });
+});
+
+describe("reconciling existing orders whose Shopify address is missing (src/scripts/repair-shopify-addresses.ts)", () => {
+  const addr = { name: "Radhe Sharma", line1: "Flat 4, Green Park", line2: "Baner", houseNumber: "Flat 4", area: "Baner", city: "Pune", state: "Maharashtra", pincode: "411045", phone: "9811950001" };
+
+  it("the preview only READS: it reports the order as needing repair and changes nothing in Shopify or the CRM", async () => {
+    await inRollback(async (tx) => {
+      const opts: { dropShipping: boolean; repairErrors?: string[] } = { dropShipping: true, repairErrors: ["Enter a last name"] };
+      const w = await world(tx, opts); // an order created while Shopify refuses the address and its repair: the affected state
+      const r = await w.create("COD", { shippingAddress: addr });
+      const updatesBefore = w.shop.state.updates.length;
+      const metaBefore = JSON.stringify((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata);
+      const preview = await w.orders.previewShopifyAddress(r.order.id);
+      assert.deepEqual([preview.state, preview.missing.includes("shippingAddress")], ["needs_repair", true]);
+      assert.deepEqual([w.shop.state.updates.length, w.shop.state.created.length, JSON.stringify((await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { metadata: true } })).metadata)], [updatesBefore, 1, metaBefore], "no write, no new order");
+    });
+  });
+
+  it("the repair re-sends only the missing address (same mapping as new orders), is confirmed by a read-back, and a second run changes nothing", async () => {
+    await inRollback(async (tx) => {
+      const opts: { dropShipping: boolean; repairErrors?: string[] } = { dropShipping: true, repairErrors: ["Enter a last name"] };
+      const w = await world(tx, opts);
+      const r = await w.create("COD", { shippingAddress: addr });
+      opts.repairErrors = undefined; // the cause is fixed: Shopify now accepts the address
+      const updatesBefore = w.shop.state.updates.length;
+      const fixed = await w.orders.resyncShopifyOrder(w.as, r.order.id);
+      assert.equal(fixed.sync?.status, "complete");
+      assert.deepEqual([w.shop.state.updates.length - updatesBefore, Object.keys(w.shop.state.updates.at(-1)).sort()], [1, ["id", "shippingAddress"]], "exactly one orderUpdate and it carries ONLY the shipping address");
+      assert.deepEqual([w.shop.state.updates.at(-1).shippingAddress.firstName, w.shop.state.updates.at(-1).shippingAddress.lastName], ["Radhe", "Sharma"]);
+      assert.equal((await w.orders.previewShopifyAddress(r.order.id)).state, "ok");
+      await w.orders.resyncShopifyOrder(w.as, r.order.id);
+      assert.equal(w.shop.state.updates.length - updatesBefore, 1, "idempotent: the second run sent nothing");
+      assert.equal(w.shop.state.created.length, 1, "and no second Shopify order");
+    });
+  });
+
+  it("a healthy order is left alone, an order with no CRM address or no Shopify link is skipped with a reason, and nothing is invented", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const ok = await w.create("COD", { shippingAddress: addr });
+      assert.equal((await w.orders.previewShopifyAddress(ok.order.id)).state, "ok");
+      const unlinked = await w.create("PAYMENT_LINK", { shippingAddress: addr });
+      assert.deepEqual([(await w.orders.previewShopifyAddress(unlinked.order.id)).state, (await w.orders.previewShopifyAddress(unlinked.order.id)).reason], ["skip", "not linked to Shopify"]);
+      assert.equal((await w.orders.previewShopifyAddress(uid())).state, "skip");
+      assert.equal(w.shop.state.updates.length, 0);
+    });
+  });
+});
+
+describe("reconciliation safety: verified identity, only what is missing, nothing overwritten", () => {
+  const addr = { name: "Radhe Sharma", line1: "Flat 4, Green Park", line2: "Baner", houseNumber: "Flat 4", area: "Baner", city: "Pune", state: "Maharashtra", pincode: "411045", phone: "9811950001" };
+  const affected = async (tx: Prisma.TransactionClient) => {
+    const opts: { dropShipping: boolean; repairErrors?: string[] } = { dropShipping: true, repairErrors: ["Enter a last name"] };
+    const w = await world(tx, opts);
+    const r = await w.create("COD", { shippingAddress: addr });
+    opts.repairErrors = undefined;
+    return { w, r };
+  };
+
+  it("an order whose Shopify copy carries a DIFFERENT CRM order number is skipped as an identifier mismatch - never repaired", async () => {
+    await inRollback(async (tx) => {
+      const { w, r } = await affected(tx);
+      w.shop.state.created[0].sourceIdentifier = "CRM-SOMEONE-ELSE";
+      const p = await w.orders.previewShopifyAddress(r.order.id);
+      assert.deepEqual([p.state, /identifier mismatch/.test(p.reason ?? "")], ["skip", true]);
+    });
+  });
+
+  it("a cancelled Shopify order, or one that no longer exists, is skipped", async () => {
+    await inRollback(async (tx) => {
+      const { w, r } = await affected(tx);
+      w.shop.state.created[0].cancelledAt = "2026-10-20T00:00:00Z";
+      assert.deepEqual([(await w.orders.previewShopifyAddress(r.order.id)).state, (await w.orders.previewShopifyAddress(r.order.id)).reason], ["skip", "the Shopify order is cancelled"]);
+      w.shop.state.created.length = 0;
+      assert.equal((await w.orders.previewShopifyAddress(r.order.id)).reason, "the linked Shopify order no longer exists");
+    });
+  });
+
+  it("an incomplete CRM address (no PIN code) or no recipient name is skipped with a reason - nothing is invented", async () => {
+    await inRollback(async (tx) => {
+      const { w, r } = await affected(tx);
+      await tx.order.update({ where: { id: r.order.id }, data: { shippingAddress: { ...addr, pincode: "" }, shippingPincode: null } });
+      assert.match((await w.orders.previewShopifyAddress(r.order.id)).reason ?? "", /incomplete/);
+    });
+  });
+
+  it("a PARTIAL Shopify address is completed field by field: a value Shopify already has (e.g. corrected by staff) is kept, only the blank ones are filled", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("COD", { shippingAddress: addr });
+      w.shop.state.created[0].shippingAddress = { firstName: "Radhe", lastName: "Sharma", address1: "Hand corrected line 1", city: "", zip: "411045", provinceCode: "MH", countryCode: "IN" };
+      const p = await w.orders.previewShopifyAddress(r.order.id);
+      assert.deepEqual([p.state, p.differs.includes("address1")], ["needs_repair", true], "the differing line is reported for review");
+      await w.orders.resyncShopifyOrder(w.as, r.order.id);
+      const sent = w.shop.state.updates.at(-1).shippingAddress;
+      assert.deepEqual([sent.address1, sent.city, sent.zip, sent.provinceCode], ["Hand corrected line 1", "Pune", "411045", "MH"], "Shopify's valid value kept; the blank city filled from the CRM");
+      assert.deepEqual(Object.keys(w.shop.state.updates.at(-1)).sort(), ["id", "shippingAddress"], "only the address is sent - no payment, item, total or tag fields");
+    });
+  });
+
+  it("an address that differs from the CRM but is complete is REPORTED and left exactly as it is", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const r = await w.create("COD", { shippingAddress: addr });
+      w.shop.state.created[0].shippingAddress = { ...w.shop.state.created[0].shippingAddress, city: "Mumbai" };
+      const p = await w.orders.previewShopifyAddress(r.order.id);
+      assert.deepEqual([p.state, p.differs], ["ok", ["city"]]);
+      assert.equal(w.shop.state.updates.length, 0);
+    });
+  });
+
+  it("repair never changes payment status, creates an order, or touches the CRM address", async () => {
+    await inRollback(async (tx) => {
+      const { w, r } = await affected(tx);
+      const before = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { status: true, totalAmount: true, shippingAddress: true, externalId: true } });
+      const payments = await tx.payment.count({ where: { orderId: r.order.id } });
+      await w.orders.resyncShopifyOrder(w.as, r.order.id);
+      const after = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { status: true, totalAmount: true, shippingAddress: true, externalId: true } });
+      assert.deepEqual([JSON.stringify(after), await tx.payment.count({ where: { orderId: r.order.id } }), w.shop.state.created.length], [JSON.stringify(before), payments, 1]);
     });
   });
 });

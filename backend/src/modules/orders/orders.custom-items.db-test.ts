@@ -33,7 +33,7 @@ function fakeShopify(opts: { failCreate?: number; taxPercent?: number } = {}) {
   // A shop with tax rates configured adds tax to TAXABLE lines (tax-exclusive pricing); the CRM never does.
   const tax = (o: any) => ((o.lineItems ?? []) as any[]).filter((l) => l.taxable !== false && l.taxable === true).reduce((s2: number, l: any) => s2 + Number(l.priceSet?.shopMoney?.amount ?? 0) * Number(l.quantity ?? 1), 0) * (opts.taxPercent ?? 0) / 100;
   const total = (o: any) => tax(o) + (o.lineItems ?? []).reduce((s: number, l: any) => s + Number(l.priceSet?.shopMoney?.amount ?? 0) * Number(l.quantity ?? 1), 0) - Number(o.discountCode?.itemFixedDiscountCode?.amountSet?.shopMoney?.amount ?? 0) + Number((o.shippingLines ?? []).reduce((s: number, l: any) => s + Number(l.priceSet?.shopMoney?.amount ?? 0), 0));
-  const address = (a: any) => (a ? { address1: a.address1 ?? null, city: a.city ?? null, zip: a.zip ?? null, provinceCode: a.provinceCode ?? null, countryCodeV2: a.countryCode ?? null, firstName: a.firstName ?? null } : null);
+  const address = (a: any) => (a ? { address1: a.address1 ?? null, city: a.city ?? null, zip: a.zip ?? null, provinceCode: a.provinceCode ?? null, countryCodeV2: a.countryCode ?? null, lastName: a.lastName ?? null, firstName: a.firstName ?? null } : null);
   const client = {
     query: async (doc: string, vars: any) => {
       if (/customers\(/.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: [] } };

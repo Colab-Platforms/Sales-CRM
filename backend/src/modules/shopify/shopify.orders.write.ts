@@ -432,7 +432,7 @@ const ORDER_VERIFY_QUERY = `
       displayFinancialStatus
       customer { id }
       totalPriceSet { shopMoney { amount } }
-      shippingAddress { address1 city zip provinceCode countryCodeV2 firstName }
+      shippingAddress { address1 address2 city zip provinceCode countryCodeV2 firstName lastName phone }
       billingAddress { address1 city zip }
       lineItems(first: 100) { nodes { requiresShipping } }
       metafields(first: 30, namespace: "crm") { nodes { key } }
@@ -448,7 +448,7 @@ interface VerifyResponse {
     displayFinancialStatus: string | null;
     customer: { id: string } | null;
     totalPriceSet?: { shopMoney: { amount: string } } | null;
-    shippingAddress: { address1: string | null; city: string | null; zip: string | null; provinceCode: string | null; countryCodeV2: string | null; firstName: string | null } | null;
+    shippingAddress: { address1: string | null; city: string | null; zip: string | null; provinceCode: string | null; countryCodeV2: string | null; firstName: string | null; lastName?: string | null; address2?: string | null; phone?: string | null } | null;
     billingAddress?: { address1: string | null; city: string | null; zip: string | null } | null;
     lineItems: { nodes: { requiresShipping: boolean }[] };
     metafields: { nodes: { key: string }[] };
@@ -459,6 +459,8 @@ export interface ShopifyVerification {
   /** Fields that were sent but are NOT on the Shopify order. Empty = everything verified. */
   missing: string[];
   customerAssociated: boolean;
+  /** The shipping address Shopify currently HAS (null when it has none). A repair keeps every non-blank value in it. */
+  existingShipping?: Record<string, string | null> | null;
 }
 
 export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNullable<VerifyResponse["order"]>, expectedTotal?: string): ShopifyVerification {
@@ -472,6 +474,8 @@ export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNul
     if (!a) missing.push("shippingAddress");
     else if ((sent.shippingAddress.address1 && !a.address1) || (sent.shippingAddress.city && !a.city) || (sent.shippingAddress.zip && !a.zip)) missing.push("shippingAddress.fields");
     else if (sent.shippingAddress.firstName && !a.firstName) missing.push("shippingAddress.name");
+    // A one-word recipient is sent as the LAST name only (Shopify requires a last name): it must have been saved as such.
+    else if (!sent.shippingAddress.firstName && sent.shippingAddress.lastName && !a.lastName) missing.push("shippingAddress.name");
   }
   // The billing address is sent too (it equals the shipping address - the CRM keeps no separate one). Shopify's orderUpdate cannot set it, so a missing one can be REPORTED but not repaired here.
   if (sent.billingAddress) {
@@ -490,7 +494,7 @@ export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNul
     if (sent.metafields.some((m) => !have.has(m.key))) missing.push("metafields");
   }
   if (sent.financialStatus === "PENDING" && found.displayFinancialStatus && /^paid$/i.test(found.displayFinancialStatus.trim())) missing.push("financialStatus(unexpectedly paid)");
-  return { missing, customerAssociated: Boolean(found.customer) };
+  return { missing, customerAssociated: Boolean(found.customer), existingShipping: found.shippingAddress ? { ...found.shippingAddress } : null };
 }
 
 export async function verifyShopifyOrder(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, expectedTotal?: string): Promise<ShopifyVerification> {
@@ -509,10 +513,23 @@ const ORDER_UPDATE_MUTATION = `
  * Re-sends ONLY the named fields that are missing (shipping address, metafields) with orderUpdate. It never touches note, tags, payment, discounts or line items: tags are added with tagsAdd elsewhere (add-only),
  * and the note is only ever written at creation. Returns the user errors, if any.
  */
-export async function repairShopifyOrderFields(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, missing: string[]): Promise<{ attempted: string[]; errors: string[] }> {
+/**
+ * What a shipping-address repair sends: the CRM's address with every NON-BLANK value Shopify already has kept as it is (a hand-corrected or already valid field is never overwritten; only blank ones are filled).
+ * Shopify names the country code countryCodeV2 on read and countryCode on input; empty values are never sent.
+ */
+export function mergeShippingForRepair(mapped: ShopifyOrderCreateAddress, existing: Record<string, string | null> | null | undefined): ShopifyOrderCreateAddress {
+  if (!existing) return mapped;
+  const keep = (value: string | null | undefined) => (typeof value === "string" && value.trim() !== "" ? value : undefined);
+  const out: Record<string, string | undefined> = { ...(mapped as Record<string, string | undefined>) };
+  const have: Record<string, string | undefined> = { firstName: keep(existing.firstName), lastName: keep(existing.lastName), address1: keep(existing.address1), address2: keep(existing.address2), city: keep(existing.city), zip: keep(existing.zip), provinceCode: keep(existing.provinceCode), countryCode: keep(existing.countryCodeV2), phone: keep(existing.phone) };
+  for (const [field, value] of Object.entries(have)) if (value !== undefined) out[field] = value;
+  return out as ShopifyOrderCreateAddress;
+}
+
+export async function repairShopifyOrderFields(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, missing: string[], existingShipping?: Record<string, string | null> | null): Promise<{ attempted: string[]; errors: string[] }> {
   const input: Record<string, unknown> = { id: orderGid(shopifyOrderId) };
   const attempted: string[] = [];
-  if ((missing.includes("shippingAddress") || missing.includes("shippingAddress.fields") || missing.includes("shippingAddress.name")) && sent.shippingAddress) { input.shippingAddress = sent.shippingAddress; attempted.push("shippingAddress"); }
+  if ((missing.includes("shippingAddress") || missing.includes("shippingAddress.fields") || missing.includes("shippingAddress.name")) && sent.shippingAddress) { input.shippingAddress = mergeShippingForRepair(sent.shippingAddress, existingShipping); attempted.push("shippingAddress"); }
   if (missing.includes("metafields") && sent.metafields?.length) { input.metafields = sent.metafields; attempted.push("metafields"); }
   if (attempted.length === 0) return { attempted, errors: [] };
   const data = await client.query<{ orderUpdate: { userErrors: { message: string }[] } }>(ORDER_UPDATE_MUTATION, { input });
@@ -534,7 +551,7 @@ export interface ShopifyRepairOutcome {
  */
 export async function repairAndVerify(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, check: ShopifyVerification, expectedTotal?: string): Promise<ShopifyRepairOutcome> {
   if (check.missing.length === 0) return { check, repaired: [], errors: [] };
-  const fix = await repairShopifyOrderFields(client, shopifyOrderId, sent, check.missing);
+  const fix = await repairShopifyOrderFields(client, shopifyOrderId, sent, check.missing, check.existingShipping);
   if (fix.attempted.length === 0) return { check, repaired: [], errors: fix.errors };
   const after = await verifyShopifyOrder(client, shopifyOrderId, sent, expectedTotal);
   const stillMissing = (field: string) => after.missing.some((m) => m === field || m.startsWith(`${field}.`));

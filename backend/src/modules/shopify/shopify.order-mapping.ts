@@ -94,8 +94,17 @@ export function mapAddress(order: CrmOrderForShopify, report: MappingReport): { 
   const extras = { landmark: text(a?.landmark), instructions: text(a?.deliveryInstructions), addressType: text(a?.addressType), houseNumber: text(a?.houseNumber) };
   if (!a) { omitted(report, "shippingAddress", "the CRM order has no shipping address"); return { shipping: undefined, extras }; }
   const named = splitName(text(a.name));
-  const first = named.first || order.lead.firstName;
-  const last = named.first ? named.last : order.lead.lastName ?? "";
+  let first = named.first || order.lead.firstName;
+  let last = named.first ? named.last : order.lead.lastName ?? "";
+  // ROOT CAUSE of the recurring "order has no address in Shopify": Shopify refuses an address whose LAST name is blank ("Enter a last name"). On orderCreate it does not fail - it silently saves the order WITHOUT
+  // any shipping / billing address (and orderUpdate then answers the same error). A recipient with a one-word name ("Radhe") used to be split into firstName = "Radhe", lastName = "" and lost the address.
+  // The name is never changed or invented: a single word is sent as the LAST name (the field Shopify requires) and no first name. See also the read-back in shopify.orders.write.ts.
+  if (!text(last) && text(first)) {
+    last = first;
+    first = "";
+    omitted(report, "shippingAddress.firstName", "the recipient name is one word, so it is sent as the last name (Shopify refuses an address with a blank last name and would drop the whole address)");
+  }
+  if (!text(last) && !text(first)) omitted(report, "shippingAddress.name", "the CRM has no recipient name for this address; Shopify requires a last name, so it may not keep the address");
   const state = text(a.state ?? a.province);
   const code = provinceCodeFor(state);
   const zip = text(a.pincode ?? a.zip) || order.shippingPincode || "";
