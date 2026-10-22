@@ -7,6 +7,7 @@ import {
   formatMs,
   formatNumber,
   formatPct,
+  initials,
   QUADRANT_INFO,
   type Quadrant,
 } from "@/lib/manager-analytics";
@@ -44,32 +45,43 @@ export function ProductivityVsResults({ people, onOpen }: { people: SalespersonS
       {plotted.length === 0 ? (
         <EmptyState>No productivity or lead data for the selected filters.</EmptyState>
       ) : (
-        <div className="grid gap-6 lg:grid-cols-[minmax(0,22rem)_1fr]">
+        // Chart above the table: the panel is often half-width, too narrow to put them side by side.
+        <div className="space-y-6">
           <div>
-            <div className="relative aspect-[4/3] w-full rounded-md border border-border bg-muted/30">
-              <div className="absolute inset-y-0 border-l border-dashed border-border" style={{ left: `${(avgProd / maxX) * 100}%` }} />
-              <div className="absolute inset-x-0 border-t border-dashed border-border" style={{ bottom: `${(avgConv / maxY) * 100}%` }} />
-              {plotted.map((p) => (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => onOpen(p.id)}
-                  title={`${p.name}: ${formatMs(p.productiveMs)}, ${formatPct(conversionRate(p))}`}
-                  className={cn(
-                    "absolute size-3.5 -translate-x-1/2 translate-y-1/2 rounded-full ring-2 ring-card transition-transform hover:scale-125",
-                    DOT_STYLE[map.get(p.id)!],
-                  )}
-                  style={{ left: `${(p.productiveMs / maxX) * 100}%`, bottom: `${(conversionRate(p) / maxY) * 100}%` }}
-                  aria-label={p.name}
-                />
-              ))}
+            <div className="flex gap-2">
+              <div className="flex shrink-0 flex-col justify-between py-4 text-right text-[11px] text-muted-foreground tabular-nums">
+                <span>{formatPct(maxY)}</span>
+                <span>0%</span>
+              </div>
+              {/* The padded inner box is the 0..max area, so a dot at 0 or at the maximum stays fully inside the frame. */}
+              <div className="relative h-64 min-w-0 flex-1 rounded-md border border-border bg-muted/30">
+                <div className="absolute inset-4">
+                  <div className="absolute inset-y-0 border-l border-dashed border-border" style={{ left: `${(avgProd / maxX) * 100}%` }} />
+                  <div className="absolute inset-x-0 border-t border-dashed border-border" style={{ bottom: `${(avgConv / maxY) * 100}%` }} />
+                  {plotted.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => onOpen(p.id)}
+                      title={`${p.name}: ${formatMs(p.productiveMs)} productive, ${formatPct(conversionRate(p))} conversion`}
+                      className={cn(
+                        "absolute flex size-6 -translate-x-1/2 translate-y-1/2 items-center justify-center rounded-full text-[9px] font-semibold text-white ring-2 ring-card transition-transform hover:z-10 hover:scale-125",
+                        DOT_STYLE[map.get(p.id)!],
+                      )}
+                      style={{ left: `${(p.productiveMs / maxX) * 100}%`, bottom: `${(conversionRate(p) / maxY) * 100}%` }}
+                      aria-label={`${p.name}: ${formatMs(p.productiveMs)}, ${formatPct(conversionRate(p))}`}
+                    >
+                      {initials(p.name)}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </div>
-            <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
+            <div className="mt-1 flex justify-between pl-10 text-[11px] text-muted-foreground">
               <span>0h</span>
-              <span>Productive time →</span>
+              <span>Productive time → · ↑ Conversion rate</span>
               <span>{formatMs(maxX)}</span>
             </div>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">↑ Conversion rate (max {formatPct(maxY)})</p>
           </div>
 
           <div className="overflow-x-auto">

@@ -3,11 +3,12 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { logger } from "@/utils/logger.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
-import { attendanceService } from "./attendance.service.js";
+import { attendanceRecords, attendanceService } from "./attendance.service.js";
 import { presence } from "./attendance.presence.js";
 import {
   validateBreakLimitBodySchema,
   validateBreakLimitQuerySchema,
+  validateRecordsQuerySchema,
   validateReportQuerySchema,
   validateSetStatusSchema,
 } from "./attendance.validators.js";
@@ -109,6 +110,19 @@ export const getReport = async (req: AuthRequest, res: Response): Promise<void> 
     }
     const result = await attendanceService.getReport(req.user!, value.date, value.userId);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const getRecords = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateRecordsQuerySchema(req.query);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await attendanceRecords(req.user!, value), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

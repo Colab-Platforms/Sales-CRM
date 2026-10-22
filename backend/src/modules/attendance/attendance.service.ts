@@ -10,13 +10,17 @@ import {
   ENDED_CALL_STATUSES,
   MANUAL_STATUSES,
   MAX_ON_CALL_MS,
+  LATE_AFTER_MINUTES,
+  MAX_ATTENDANCE_RANGE_DAYS,
   REPORT_TZ_OFFSET_MINUTES,
   STALE_SESSION_MS,
   SWEEP_INTERVAL_MS,
 } from "./attendance.constants.js";
 import { computeSummary, dayBounds, mergeSummaries, todayString } from "./attendance.calc.js";
 import { presence } from "./attendance.presence.js";
-import type { AttendanceSummary, LogInterval, StatusEvent } from "./attendance.types.js";
+import { dayRecord, listDays, matchesStatus, totalsOf, zoneDay, type DayCalls, type SessionForDay } from "./attendance.records.js";
+import { classify } from "../manager/manager.metrics.js";
+import type { AttendanceSummary, LogInterval, RecordsQuery, StatusEvent } from "./attendance.types.js";
 
 const sessionInclude = { statusLogs: { orderBy: { startedAt: "asc" as const } } };
 
@@ -480,6 +484,133 @@ class AttendanceService {
       }),
     };
   }
+}
+
+// Attendance records over a date range (see attendance.records.ts for the status rules). Scope: a manager sees
+// their active direct reports, an admin every active salesperson. Sessions are read from the database for
+// exactly these people and days; statuses are derived, never stored or altered.
+export async function attendanceRecords(user: AuthUser, q: RecordsQuery) {
+  const tz = REPORT_TZ_OFFSET_MINUTES;
+  const now = new Date();
+  const today = todayString(now, tz);
+  if (q.from > q.to) throw new ApiError("From date must not be after To date", STATUS_CODES.BAD_REQUEST);
+  if (q.to > today) throw new ApiError("The range cannot end in the future", STATUS_CODES.BAD_REQUEST);
+  const days = listDays(q.from, q.to);
+  if (days.length > MAX_ATTENDANCE_RANGE_DAYS) {
+    throw new ApiError(`Choose a range of at most ${MAX_ATTENDANCE_RANGE_DAYS} days`, STATUS_CODES.BAD_REQUEST);
+  }
+
+  const people = await prisma.user.findMany({
+    where: {
+      role: Role.SALESPERSON,
+      status: UserStatus.ACTIVE,
+      ...(user.role === Role.MANAGER ? { reportingManagerId: user.id } : {}),
+      ...(q.userId ? { id: q.userId } : {}),
+    },
+    select: { id: true, name: true, username: true, createdAt: true },
+    orderBy: { name: "asc" },
+  });
+  if (q.userId && people.length === 0) throw new ApiError("Employee not found", STATUS_CODES.NOT_FOUND);
+
+  // Attendance tracking began with the first session ever recorded; days before it are not absences.
+  const firstEver = await prisma.workSession.findFirst({ orderBy: { startedAt: "asc" }, select: { startedAt: true } });
+  const trackingStartedOn = firstEver ? zoneDay(firstEver.startedAt, tz) : null;
+
+  const start = dayBounds(q.from, tz).from;
+  const end = dayBounds(q.to, tz).to;
+  const sessions = await prisma.workSession.findMany({
+    where: { userId: { in: people.map((p) => p.id) }, startedAt: { gte: start, lt: end } },
+    select: { userId: true, startedAt: true, endedAt: true, endReason: true, lastSeenAt: true, ...sessionInclude },
+    orderBy: { startedAt: "asc" },
+  });
+  const byPersonDay = new Map<string, SessionForDay[]>();
+  for (const s of sessions) {
+    const key = `${s.userId}|${zoneDay(s.startedAt, tz)}`;
+    const list = byPersonDay.get(key) ?? [];
+    list.push({
+      startedAt: s.startedAt,
+      endedAt: s.endedAt,
+      endReason: s.endReason,
+      lastSeenAt: s.lastSeenAt,
+      logs: s.statusLogs.map((l) => ({ status: l.status, startedAt: l.startedAt, endedAt: l.endedAt })),
+    });
+    byPersonDay.set(key, list);
+  }
+
+  // Calls per employee per day (by when the call started, report zone); talk time counts connected calls only,
+  // matching the sales reports' Talk Time.
+  const calls = await prisma.call.findMany({
+    where: {
+      agentId: { in: people.map((p) => p.id) },
+      OR: [{ startedAt: { gte: start, lt: end } }, { startedAt: null, createdAt: { gte: start, lt: end } }],
+    },
+    select: { agentId: true, status: true, startedAt: true, createdAt: true, durationSeconds: true },
+  });
+  const callsByPersonDay = new Map<string, DayCalls>();
+  for (const c of calls) {
+    const key = `${c.agentId}|${zoneDay(c.startedAt ?? c.createdAt, tz)}`;
+    const row = callsByPersonDay.get(key) ?? { calls: 0, talkTimeSec: 0 };
+    row.calls += 1;
+    if (classify(c.status) === "connected") row.talkTimeSec += c.durationSeconds ?? 0;
+    callsByPersonDay.set(key, row);
+  }
+
+  const everyone = people.map((p) => {
+    const joinedOn = zoneDay(p.createdAt, tz);
+    const records = days.map((date) =>
+      dayRecord({
+        date,
+        today,
+        joinedOn,
+        trackingStartedOn,
+        sessions: byPersonDay.get(`${p.id}|${date}`) ?? [],
+        callStats: callsByPersonDay.get(`${p.id}|${date}`),
+        now,
+        tzOffsetMinutes: tz,
+      }),
+    );
+    const matching = records.filter((r) => matchesStatus(r.status, q.status));
+    return { id: p.id, name: p.name, employeeId: p.username, joinedOn, records, matching };
+  });
+  // A status filter keeps the employee-days with that status (and the employees who have at least one).
+  const employees = q.status === "ALL" ? everyone : everyone.filter((e) => e.matching.length > 0);
+  const counted = employees.flatMap((e) => e.matching);
+
+  const daily = days.map((date) => {
+    const onDay = employees.map((e) => e.records.find((r) => r.date === date)!).filter((r) => matchesStatus(r.status, q.status));
+    const t = totalsOf(onDay);
+    return { date, present: t.present, late: t.late, absent: t.absent, expected: t.expected, attendancePct: t.attendancePct };
+  });
+
+  const pageSize = q.pageSize;
+  const pages = Math.max(1, Math.ceil(employees.length / pageSize));
+  const page = Math.min(q.page, pages);
+  const slice = employees.slice((page - 1) * pageSize, page * pageSize);
+
+  return {
+    range: { from: q.from, to: q.to, days, today, tzOffsetMinutes: tz },
+    filters: { userId: q.userId ?? null, status: q.status },
+    policy: {
+      trackingStartedOn,
+      lateAfter: `${String(Math.floor(LATE_AFTER_MINUTES / 60)).padStart(2, "0")}:${String(LATE_AFTER_MINUTES % 60).padStart(2, "0")}`,
+      weeklyOff: null,
+      halfDay: false,
+      leaveAndHolidays: false,
+    },
+    summary: { totalEmployees: employees.length, ...totalsOf(counted) },
+    daily,
+    employees: slice.map((e) => ({
+      id: e.id,
+      name: e.name,
+      employeeId: e.employeeId,
+      joinedOn: e.joinedOn,
+      totals: totalsOf(e.matching),
+      records: e.records,
+    })),
+    pagination: { page, pageSize, pages, total: employees.length },
+    // Everyone in scope (for the employee filter), independent of the status filter and paging.
+    team: people.map((p) => ({ id: p.id, name: p.name, employeeId: p.username })),
+  };
 }
 
 export const attendanceService = new AttendanceService();

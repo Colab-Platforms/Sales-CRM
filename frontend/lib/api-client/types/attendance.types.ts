@@ -91,3 +91,57 @@ export interface BreakLimit {
   managerId: string;
   maxConcurrentBreaks: number | null;
 }
+
+// ---- Attendance records (filters & reports) ----
+
+export type DayStatus = "PRESENT" | "LATE" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED";
+export type AttendanceStatusFilter = "ALL" | "PRESENT" | "LATE" | "ABSENT";
+
+export interface AttendanceDayRecord {
+  date: string;
+  status: DayStatus;
+  checkIn: string | null;
+  checkOut: string | null;
+  stillWorking: boolean;
+  workingMs: number;
+  productiveMs: number;
+  breakMs: number;
+  lateByMs: number;
+  sessions: number;
+  calls: number;
+  talkTimeSec: number;
+  remarks: string[];
+}
+
+export interface AttendanceTotals {
+  present: number;
+  late: number;
+  absent: number;
+  expected: number;
+  attended: number;
+  workingMs: number;
+  productiveMs: number;
+  calls: number;
+  talkTimeSec: number;
+  attendancePct: number | null;
+}
+
+export interface AttendanceRecordsQuery {
+  from: string;
+  to: string;
+  userId?: string;
+  status: AttendanceStatusFilter;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface AttendanceRecords {
+  range: { from: string; to: string; days: string[]; today: string; tzOffsetMinutes: number };
+  filters: { userId: string | null; status: AttendanceStatusFilter };
+  policy: { trackingStartedOn: string | null; lateAfter: string; weeklyOff: null; halfDay: boolean; leaveAndHolidays: boolean };
+  summary: AttendanceTotals & { totalEmployees: number };
+  daily: { date: string; present: number; late: number; absent: number; expected: number; attendancePct: number | null }[];
+  employees: { id: string; name: string; employeeId: string; joinedOn: string; totals: AttendanceTotals; records: AttendanceDayRecord[] }[];
+  pagination: { page: number; pageSize: number; pages: number; total: number };
+  team: { id: string; name: string; employeeId: string }[];
+}

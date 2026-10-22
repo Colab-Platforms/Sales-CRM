@@ -5,6 +5,7 @@ import {
   endShift,
   getBreakLimit,
   getMyShift,
+  getRecords,
   getReport,
   getTeam,
   heartbeat,
@@ -34,6 +35,9 @@ router.get("/team/stream", requireRole(Role.ADMIN, Role.MANAGER), streamTeam);
 // Max teammates allowed on a break at once (per manager).
 router.get("/break-limit", requireRole(Role.ADMIN, Role.MANAGER), getBreakLimit);
 router.put("/break-limit", requireRole(Role.ADMIN, Role.MANAGER), setBreakLimit);
+
+// Attendance records over a date range (Present / Late / Absent per employee per day), for filters and reports.
+router.get("/records", requireRole(Role.ADMIN, Role.MANAGER), getRecords);
 
 // Daily report; a salesperson is limited to their own row by the service.
 router.get("/report", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getReport);

@@ -11,8 +11,8 @@ import {
   type DashboardFilters,
 } from "@/lib/manager-analytics";
 
-type Cell = string | number;
-interface SheetSpec {
+export type Cell = string | number;
+export interface SheetSpec {
   name: string;
   header: string[];
   rows: Cell[][];
@@ -91,14 +91,19 @@ function sheets(data: ManagerAnalytics, filters?: DashboardFilters): SheetSpec[]
 const THIN = { style: "thin" as const, color: { argb: "FF000000" } };
 const BORDER = { top: THIN, left: THIN, bottom: THIN, right: THIN };
 
-/** Builds the team report as a formatted .xlsx (bold yellow header, bordered cells, fitted columns) and downloads it. */
+/** Builds the team report as a formatted .xlsx and downloads it. */
 export async function exportReportXlsx(filename: string, data: ManagerAnalytics, filters?: DashboardFilters) {
-  // Loaded on click so the spreadsheet library never weighs on the dashboard bundle.
+  await downloadXlsx(filename, sheets(data, filters));
+}
+
+/** Writes sheets as a formatted .xlsx (bold yellow header, bordered cells, fitted columns) and downloads it. */
+export async function downloadXlsx(filename: string, specs: SheetSpec[]) {
+  // Loaded on click so the spreadsheet library never weighs on the page bundle.
   const { default: ExcelJS } = await import("exceljs");
   const wb = new ExcelJS.Workbook();
   wb.created = new Date();
 
-  for (const spec of sheets(data, filters)) {
+  for (const spec of specs) {
     const ws = wb.addWorksheet(spec.name, { views: [{ state: "frozen", ySplit: 1 }] });
     ws.addRow(spec.header);
     spec.rows.forEach((r) => ws.addRow(r));
