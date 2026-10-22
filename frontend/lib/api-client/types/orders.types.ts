@@ -97,11 +97,21 @@ export interface ShipmentDetail {
 
 // E7.8 (WhatsApp -> CRM Order): manual order entry, same fields the backend's createManualOrder accepts.
 export interface CreateManualOrderItemInput {
-  productId: string;
+  /** CATALOG (default) = a product line; CUSTOM = a free-form line with no product / variant. */
+  itemType?: "CATALOG" | "CUSTOM";
+  /** Required for a catalogue item; never sent for a custom one. */
+  productId?: string;
   variantId?: string;
+  /** Custom items only. */
+  customName?: string;
   quantity: number;
   unitPrice: string;
   discountAmount?: string;
+  /** Custom items only: taxable flag, physical product, and the optional weight with its unit. */
+  taxable?: boolean;
+  requiresShipping?: boolean;
+  weight?: string;
+  weightUnit?: "KG" | "G";
 }
 
 export interface CreateManualOrderInput {
@@ -390,6 +400,12 @@ export interface OrderItemDetail {
   discountAmount: string;
   taxAmount: string;
   totalPrice: string;
+  /** CATALOG or CUSTOM (a free-form line with no product / variant). Absent on older responses = CATALOG. */
+  itemType?: "CATALOG" | "CUSTOM";
+  /** Custom items only (null for catalogue items). */
+  taxable?: boolean | null;
+  requiresShipping?: boolean | null;
+  weightGrams?: string | null;
   /** Recorded catalog weight of one unit (kg); null/absent = not recorded. Never the parcel weight. */
   unitWeightKg?: string | null;
   /** Recorded per-unit product dimensions (cm), or null. Product dimensions only - never the packed parcel size. */

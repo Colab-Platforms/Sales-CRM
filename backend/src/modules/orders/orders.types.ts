@@ -19,11 +19,23 @@ export const ORDER_REFERENCE_TYPE = "Order";
 // action in the WhatsApp Inbox. Reuses the exact same Order/OrderItem/Payment models and OrderDetail
 // response every other order path already uses - never a parallel/WhatsApp-only order record.
 export interface CreateManualOrderItemInput {
-  productId: string;
+  /** CATALOG (default) = a product line; CUSTOM = a free-form line with no product / variant. */
+  itemType?: "CATALOG" | "CUSTOM";
+  /** Required for a catalogue item; never for a custom one. */
+  productId?: string;
   variantId?: string;
+  /** Custom items only: the item name. */
+  customName?: string;
   quantity: number;
   unitPrice: Money;
   discountAmount?: Money;
+  /** Custom items only: flagged taxable (default false: the CRM adds no tax of its own). */
+  taxable?: boolean;
+  /** Custom items only: a physical product (default true) or a service. */
+  requiresShipping?: boolean;
+  /** Custom physical items only: optional weight, with its unit; normalised to grams on save. */
+  weight?: string;
+  weightUnit?: "KG" | "G";
 }
 
 export interface CreateManualOrderInput {
@@ -351,6 +363,12 @@ export interface OrderItemDetail {
   discountAmount: Money;
   taxAmount: Money;
   totalPrice: Money;
+  /** CATALOG or CUSTOM (a free-form line with no product / variant). */
+  itemType: "CATALOG" | "CUSTOM";
+  /** Custom items only (null for catalogue items): flagged taxable, a physical product, and the optional weight in grams. */
+  taxable: boolean | null;
+  requiresShipping: boolean | null;
+  weightGrams: string | null;
   /** Recorded catalog weight of one unit (kg); null = not recorded. Never the parcel weight. */
   unitWeightKg: string | null;
   /** Recorded per-unit product dimensions (cm), or null. Product dimensions only - never the packed parcel size. */

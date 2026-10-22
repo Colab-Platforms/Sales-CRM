@@ -30,6 +30,10 @@ import { shippingChargeCents } from "./orders.shipping.js";
 
 /** How recent an identical order for the same customer has to be to be treated as "probably the same sale entered twice" (see assertNoRecentTwin). */
 const RECENT_TWIN_WINDOW_MS = 60 * 60_000;
+/** What makes two CUSTOM lines the same line for the duplicate-order guard: the same name and price (they have no product id). */
+const customKey = (name: string, unitPrice: string): string => `${name.trim().toLowerCase()}@${toCents(unitPrice)}`;
+/** Custom item weight -> grams (decimal-safe for up to 3 decimals). */
+const weightToGrams = (value: string, unit: "KG" | "G"): string => String(Math.round(Number(value) * (unit === "KG" ? 1000 : 1) * 1000) / 1000);
 const SUPERSEDE_REASON_PREFIX = "Replaced by";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
@@ -250,6 +254,10 @@ const SHOPIFY_PUSH_SELECT = {
         quantity: true,
         unitPrice: true,
         productNameSnapshot: true,
+        itemType: true,
+        isTaxable: true,
+        requiresShipping: true,
+        weightGrams: true,
         variantNameSnapshot: true,
         skuSnapshot: true,
         product: { select: { externalId: true, type: true } },
@@ -299,7 +307,10 @@ async function prepareShopifyPayload(order: PushOrder, client: ShopifyClient) {
         sku: item.skuSnapshot,
         // Only a variant that really came from Shopify has a Shopify variant id; anything else is sent as a custom line item.
         shopifyVariantId: item.variant?.externalId && item.variant.externalSource === "SHOPIFY" ? item.variant.externalId : null,
-        physical: item.product?.type !== "SERVICE",
+        physical: item.itemType === "CUSTOM" ? item.requiresShipping !== false : item.product?.type !== "SERVICE",
+        custom: item.itemType === "CUSTOM",
+        taxable: item.itemType === "CUSTOM" ? item.isTaxable === true : null,
+        weightGrams: item.weightGrams?.toString() ?? null,
       })),
     };
     const built = buildShopifyOrderPayload(crmForShopify, { figuresMirror: Boolean(extras), customer: customerDecision.customer, customerNote: customerDecision.note });
@@ -509,8 +520,12 @@ class OrdersService {
         discountAmount: money(item.discountAmount),
         taxAmount: money(item.taxAmount),
         totalPrice: money(item.totalPrice),
-        // Weight of one unit as RECORDED in the catalog (variant first, else product); null when nobody recorded one. Informational only.
-        unitWeightKg: (item.variant?.weightKg ?? item.product?.weightKg)?.toString() ?? null,
+        itemType: item.itemType === "CUSTOM" ? ("CUSTOM" as const) : ("CATALOG" as const),
+        taxable: item.itemType === "CUSTOM" ? item.isTaxable : null,
+        requiresShipping: item.itemType === "CUSTOM" ? item.requiresShipping : null,
+        weightGrams: item.weightGrams?.toString() ?? null,
+        // Weight of one unit as RECORDED in the catalog (variant first, else product); a custom item's own recorded weight; null when nobody recorded one. Informational only.
+        unitWeightKg: item.itemType === "CUSTOM" ? (item.weightGrams ? String(Number(item.weightGrams) / 1000) : null) : ((item.variant?.weightKg ?? item.product?.weightKg)?.toString() ?? null),
         // Same rule as the weight: the variant's recorded dimensions, else the product's; only when all three sides are recorded.
         unitDimensionsCm: (item.variant ? unitDims(item.variant) : null) ?? (item.product ? unitDims(item.product) : null),
       })),
@@ -632,20 +647,20 @@ class OrdersService {
     if (cancelled.paymentLink.status === "failed") throw new ApiError("The old order was cancelled but its payment link could not be cancelled, so no new order was created. Retry in a moment.", STATUS_CODES.SERVICE_UNAVAILABLE);
   }
 
-  private async assertNoRecentTwin(leadId: string, want: { isCod: boolean; totalCents: number; items: { productId: string | null; variantId: string | null; quantity: number }[] }): Promise<void> {
+  private async assertNoRecentTwin(leadId: string, want: { isCod: boolean; totalCents: number; items: { productId: string | null; variantId: string | null; quantity: number; custom?: string | null }[] }): Promise<void> {
     const since = new Date(Date.now() - RECENT_TWIN_WINDOW_MS);
-    const signature = (items: { productId: string | null; variantId: string | null; quantity: number }[]) => items.map((i) => `${i.productId ?? ""}|${i.variantId ?? ""}|${i.quantity}`).sort().join(",");
+    const signature = (items: { productId: string | null; variantId: string | null; quantity: number; custom?: string | null }[]) => items.map((i) => `${i.productId ?? ""}|${i.variantId ?? ""}|${i.quantity}|${i.custom ?? ""}`).sort().join(",");
     const recent = await this.db.order.findMany({
       where: { leadId, createdAt: { gte: since }, status: { not: "CANCELLED" } },
       orderBy: { createdAt: "desc" },
       take: 10,
-      select: { id: true, orderNumber: true, status: true, totalAmount: true, createdAt: true, metadata: true, items: { select: { productId: true, variantId: true, quantity: true } } },
+      select: { id: true, orderNumber: true, status: true, totalAmount: true, createdAt: true, metadata: true, items: { select: { productId: true, variantId: true, quantity: true, itemType: true, productNameSnapshot: true, unitPrice: true } } },
     });
     const mode = want.isCod ? "COD" : "PREPAID";
-    const twin = recent.find((o) => (o.metadata as Record<string, unknown> | null)?.paymentMode === mode && toCents(o.totalAmount.toString()) === want.totalCents && signature(o.items) === signature(want.items));
+    const twin = recent.find((o) => (o.metadata as Record<string, unknown> | null)?.paymentMode === mode && toCents(o.totalAmount.toString()) === want.totalCents && signature(o.items.map((i) => ({ ...i, custom: i.itemType === "CUSTOM" ? customKey(i.productNameSnapshot, i.unitPrice.toString()) : null }))) === signature(want.items));
     // The same items for the same customer, still awaiting payment, but at a DIFFERENT total: the price or discount was changed and the order entered again. Not an exact twin, so it used to slip through
     // and leave two live orders (and two payable links) for one purchase. It is offered as a replacement of the unpaid order instead.
-    const repriced = twin ? undefined : want.isCod ? undefined : recent.find((o) => o.status === "PENDING_PAYMENT" && (o.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID" && signature(o.items) === signature(want.items));
+    const repriced = twin ? undefined : want.isCod ? undefined : recent.find((o) => o.status === "PENDING_PAYMENT" && (o.metadata as Record<string, unknown> | null)?.paymentMode === "PREPAID" && signature(o.items.map((i) => ({ ...i, custom: i.itemType === "CUSTOM" ? customKey(i.productNameSnapshot, i.unitPrice.toString()) : null }))) === signature(want.items));
     if (repriced) {
       const ago = Math.max(Math.round((Date.now() - repriced.createdAt.getTime()) / 60_000), 0);
       throw new ApiError(
@@ -775,7 +790,7 @@ class OrdersService {
     const externallyPaid = input.paymentAlreadyReceived === true && input.paymentMethod === "PAYMENT_LINK"; // already authorised in createManualOrder; nothing is sent to the customer for it
     const whatsappSend = input.sendPaymentLinkViaWhatsApp === true && !externallyPaid ? await validateWhatsAppPaymentSend(this.db, lead, input) : null;
 
-    const productIds = [...new Set(input.items.map((i) => i.productId))];
+    const productIds = [...new Set(input.items.filter((i) => i.itemType !== "CUSTOM").map((i) => i.productId!))];
     const products = await this.db.product.findMany({
       where: { id: { in: productIds } },
       select: { id: true, name: true, sku: true, variants: { select: { id: true, name: true, sku: true } } },
@@ -786,7 +801,30 @@ class OrdersService {
     // A strictly increasing createdAt per line keeps the order the salesperson entered (message, Shopify lines, order page).
     const itemsCreatedAt = Date.now();
     const itemRows = input.items.map((item, index) => {
-      const product = productById.get(item.productId);
+      if (item.itemType === "CUSTOM") {
+        // A free-form line: no product, no variant, no catalogue record is created. Every figure is computed here; the browser's line total is never read.
+        const customTotal = toCents(item.unitPrice) * item.quantity - toCents(item.discountAmount);
+        const physical = item.requiresShipping !== false; // default: physical
+        return {
+          id: randomUUID(),
+          createdAt: new Date(itemsCreatedAt + index),
+          productId: null as string | null,
+          variantId: null as string | null,
+          productNameSnapshot: item.customName!.trim().slice(0, 200),
+          variantNameSnapshot: null as string | null,
+          skuSnapshot: null as string | null,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice,
+          discountAmount: item.discountAmount ?? "0",
+          taxAmount: "0",
+          totalPrice: fromCents(Math.max(customTotal, 0)),
+          itemType: "CUSTOM",
+          isTaxable: item.taxable === true,
+          requiresShipping: physical,
+          weightGrams: physical && item.weight !== undefined && item.weightUnit !== undefined ? weightToGrams(item.weight, item.weightUnit) : null,
+        };
+      }
+      const product = productById.get(item.productId!);
       if (!product) throw new ApiError(`Product not found: ${item.productId}`, STATUS_CODES.BAD_REQUEST);
       const variant = item.variantId ? product.variants.find((v) => v.id === item.variantId) : undefined;
       if (item.variantId && !variant) throw new ApiError(`Variant not found on this product: ${item.variantId}`, STATUS_CODES.BAD_REQUEST);
@@ -805,6 +843,10 @@ class OrdersService {
         discountAmount: item.discountAmount ?? "0",
         taxAmount: "0",
         totalPrice: fromCents(Math.max(lineTotalCents, 0)),
+        itemType: "CATALOG",
+        isTaxable: null as boolean | null,
+        requiresShipping: null as boolean | null,
+        weightGrams: null as string | null,
       };
     });
 
@@ -837,7 +879,7 @@ class OrdersService {
 
     // A very recent order for this customer with the same items, total and payment mode is almost always the same sale entered twice (a second dialog, a re-entered form): ask first. A genuine second purchase
     // is one acknowledgement away - this is a warning, never a ban, and a replay of the SAME idempotency key never gets here.
-    if (input.rejectRecentTwin) await this.assertNoRecentTwin(input.leadId, { isCod, totalCents, items: itemRows });
+    if (input.rejectRecentTwin) await this.assertNoRecentTwin(input.leadId, { isCod, totalCents, items: itemRows.map((r) => ({ productId: r.productId, variantId: r.variantId, quantity: r.quantity, custom: r.itemType === "CUSTOM" ? customKey(r.productNameSnapshot, r.unitPrice) : null })) });
     // The user chose to REPLACE an earlier unpaid order (changed price / discount): that order and its payment link are cancelled first, so only one order stays payable for the purchase.
     if (input.supersedesOrderId) await this.supersedeUnpaidOrder(user, lead.id, isCod, input.supersedesOrderId);
 

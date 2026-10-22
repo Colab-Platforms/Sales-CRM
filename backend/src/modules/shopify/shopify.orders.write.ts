@@ -54,6 +54,10 @@ export interface ShopifyOrderCreateLineItem {
   priceAmount?: string;
   /** Shopify's default for a line item created through orderCreate is NOT shipping-required (the order then shows "Shipping not required"), whatever the variant says. Physical goods must say true. */
   requiresShipping?: boolean;
+  /** Custom line items only. */
+  taxable?: boolean;
+  /** Custom line items only: WeightInput. */
+  weight?: { value: number; unit: "GRAMS" | "KILOGRAMS" | "POUNDS" | "OUNCES" };
 }
 
 /** Shopify's MailingAddressInput. It has provinceCode / countryCode - there is NO `province` or `country` field (confirmed by schema introspection on API 2026-01). */
@@ -152,7 +156,7 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
             ...(item.priceAmount ? { priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } } } : {}),
             ...(item.requiresShipping !== undefined ? { requiresShipping: item.requiresShipping } : {}),
           }
-        : { title: item.title, quantity: item.quantity, priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } }, ...(item.requiresShipping !== undefined ? { requiresShipping: item.requiresShipping } : {}) },
+        : { title: item.title, quantity: item.quantity, priceSet: { shopMoney: { amount: item.priceAmount, currencyCode: input.currency } }, ...(item.taxable !== undefined ? { taxable: item.taxable } : {}), ...(item.weight ? { weight: item.weight } : {}), ...(item.requiresShipping !== undefined ? { requiresShipping: item.requiresShipping } : {}) },
     ),
     email: input.email,
     phone: input.phone,

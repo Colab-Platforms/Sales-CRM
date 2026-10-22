@@ -20,6 +20,7 @@ import { ADDRESS_TYPES, formatAddress, validateAddress, type AddressErrors, type
 import type { PincodeLookup, ServiceabilityResult } from "@/lib/api-client/types/delivery.types";
 
 export { CourierTable, ServiceabilityLine } from "./courier-rates";
+import type { CustomItemDraft } from "@/lib/custom-item";
 import { EXTERNAL_PAYMENT_HELP, EXTERNAL_PAYMENT_LABEL, EXTERNAL_PAYMENT_NOTE, externalPaymentOutcome } from "@/lib/external-payment";
 import type { CreateManualOrderResult, PaymentMethod, PaymentQrResult } from "@/lib/api-client/types/orders.types";
 import { useSendPaymentQrMutation } from "@/lib/api-client/mutations/orders.mutations";
@@ -38,6 +39,8 @@ export interface DraftItem {
   unitPrice: string;
   /** true once the person typed a price: the catalogue price is then never written over it. */
   priceEdited?: boolean;
+  /** Set for a CUSTOM item (a free-form line with no product / variant): its name and flags. productId / variantId stay empty. */
+  custom?: CustomItemDraft;
 }
 
 export interface AddressDraft extends StructuredAddress {
@@ -227,7 +230,7 @@ export function ItemCard({
   );
 }
 
-export function ItemsSection({ children, onAdd }: { children: ReactNode; onAdd: () => void }) {
+export function ItemsSection({ children, onAdd, onAddCustom }: { children: ReactNode; onAdd: () => void; onAddCustom?: () => void }) {
   return (
     <SectionCard title="Order items" description="Search a product, choose its variant and quantity.">
       <div className="grid gap-3">
@@ -236,6 +239,12 @@ export function ItemsSection({ children, onAdd }: { children: ReactNode; onAdd: 
           <Plus data-icon="inline-start" />
           Add another product
         </Button>
+        {onAddCustom ? (
+          <Button type="button" variant="outline" size="sm" className="w-fit" onClick={onAddCustom} data-testid="add-custom-item">
+            <Plus data-icon="inline-start" />
+            Add custom item
+          </Button>
+        ) : null}
       </div>
     </SectionCard>
   );
@@ -591,7 +600,7 @@ export function SummaryRow({ label, value, strong }: { label: string; value: Rea
 export interface SummaryData {
   customerName: string;
   customerMobile: string | null;
-  lines: { key: string; name: string; variant: string | null; quantity: number; total: string }[];
+  lines: { key: string; name: string; variant: string | null; quantity: number; total: string; /** A free-form custom item (not in the Shopify catalogue). */ custom?: boolean; flags?: string }[];
   subtotal: string;
   discount: string;
   shipping: string;
@@ -629,6 +638,7 @@ export function SummaryCard({ data, action, className }: { data: SummaryData; ac
                   <span className="block text-xs text-muted-foreground">
                     {l.variant ? `${l.variant} × ${l.quantity}` : `Qty ${l.quantity}`}
                   </span>
+                  {l.custom ? <span className="block text-xs text-muted-foreground" data-testid="summary-custom-flags">{l.flags}</span> : null}
                 </span>
                 <span className="shrink-0 tabular-nums">{formatMoney(l.total)}</span>
               </li>

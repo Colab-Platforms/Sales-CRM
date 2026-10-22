@@ -36,13 +36,41 @@ const orderIdParamsSchema = z.object({
 // one shape check every money field in a manual order shares.
 const money = (field: string) => z.string().regex(/^\d+(\.\d{1,2})?$/, `${field} must be a non-negative decimal amount`);
 
-const createManualOrderItemSchema = z.object({
-  productId: z.uuid({ error: "Invalid product id" }),
-  variantId: z.uuid({ error: "Invalid variant id" }).optional(),
-  quantity: z.coerce.number({ error: "quantity must be a number" }).int().min(1, "quantity must be at least 1"),
-  unitPrice: money("unitPrice"),
-  discountAmount: optional(money("discountAmount")),
-});
+// An order line is either a CATALOGUE item (a product, optionally a variant - exactly as before; itemType may be omitted) or a CUSTOM item (a free-form line with a name and a price and NO product / variant).
+// Nothing monetary is trusted from the browser: the server recomputes every line, subtotal and total. A custom item's weight is optional, only for physical items, and is normalised to grams by the service.
+export const CUSTOM_ITEM_MAX_QUANTITY = 999;
+const createManualOrderItemSchema = z
+  .object({
+    itemType: z.enum(["CATALOG", "CUSTOM"], { error: "itemType must be CATALOG or CUSTOM" }).optional(),
+    productId: z.uuid({ error: "Invalid product id" }).optional(),
+    variantId: z.uuid({ error: "Invalid variant id" }).optional(),
+    customName: z.string({ error: "Item name is required" }).trim().min(1, "Item name is required").max(200, "Item name must be 200 characters or fewer").optional(),
+    quantity: z.coerce.number({ error: "quantity must be a number" }).int().min(1, "quantity must be at least 1"),
+    unitPrice: money("unitPrice"),
+    discountAmount: optional(money("discountAmount")),
+    taxable: z.boolean({ error: "taxable must be true or false" }).optional(),
+    requiresShipping: z.boolean({ error: "requiresShipping must be true or false" }).optional(),
+    weight: z.string().trim().regex(/^\d+(\.\d{1,3})?$/, "Weight must be a positive number with up to 3 decimals").optional(),
+    weightUnit: z.enum(["KG", "G"], { error: "Weight unit must be KG or G" }).optional(),
+  })
+  .superRefine((item, ctx) => {
+    const type = item.itemType ?? "CATALOG";
+    const issue = (path: string, message: string) => ctx.addIssue({ code: "custom", path: [path], message });
+    if (type === "CATALOG") {
+      if (!item.productId) issue("productId", "Invalid product id");
+      for (const field of ["customName", "taxable", "requiresShipping", "weight", "weightUnit"] as const) if (item[field] !== undefined) issue(field, "Only a custom item can have this field");
+      return;
+    }
+    if (item.productId || item.variantId) issue("productId", "A custom item has no product or variant");
+    if (!item.customName) issue("customName", "Item name is required");
+    if (item.quantity > CUSTOM_ITEM_MAX_QUANTITY) issue("quantity", `Quantity must be ${CUSTOM_ITEM_MAX_QUANTITY} or fewer`);
+    if (item.weight !== undefined || item.weightUnit !== undefined) {
+      if (item.weight === undefined || item.weightUnit === undefined) issue("weight", "Give both the weight and its unit");
+      else if (item.requiresShipping === false) issue("weight", "Only a physical item has a weight");
+      else if (!(Number(item.weight) > 0)) issue("weight", "Weight must be greater than 0");
+      else if ((item.weightUnit === "KG" ? Number(item.weight) * 1000 : Number(item.weight)) > 1_000_000) issue("weight", "Weight is too large");
+    }
+  });
 
 // Structured delivery address. line1/line2 stay the composed lines every downstream integration (Shopify, Shiprocket) already
 // reads; the structured fields (houseNumber, building, area, street, landmark, addressType) are stored alongside them.

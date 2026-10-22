@@ -62,7 +62,7 @@ export interface CrmOrderForShopify {
   /** true when the order came from the AI order conversation. */
   fromAiConversation: boolean;
   lead: { firstName: string; lastName: string | null; leadNumber: string; email: string | null; normalizedMobile: string | null; mobile: string | null };
-  items: { quantity: number; unitPrice: string; productName: string; variantName: string | null; sku: string | null; shopifyVariantId: string | null; physical: boolean }[];
+  items: { quantity: number; unitPrice: string; productName: string; variantName: string | null; sku: string | null; shopifyVariantId: string | null; physical: boolean; /** A free-form (custom) line: no product / variant, sent to Shopify as a custom line item. */ custom?: boolean; taxable?: boolean | null; weightGrams?: string | null }[];
 }
 
 export type FieldOutcome = "sent" | "omitted";
@@ -133,9 +133,13 @@ export function buildShopifyOrderPayload(order: CrmOrderForShopify, opts: { figu
 
   const lineItems = order.items.map((i) => {
     const base = i.shopifyVariantId ? { variantId: i.shopifyVariantId } : { title: i.productName };
-    return { ...base, quantity: i.quantity, priceAmount: i.unitPrice, requiresShipping: i.physical };
+    // A CUSTOM item is a Shopify custom line item (title + price + quantity): its taxable flag and optional weight (in grams) ride along. No catalogue product is ever created for it.
+    const custom = i.custom ? { taxable: i.taxable === true, ...(i.weightGrams && Number(i.weightGrams) > 0 ? { weight: { value: Number(i.weightGrams), unit: "GRAMS" as const } } : {}) } : {};
+    return { ...base, quantity: i.quantity, priceAmount: i.unitPrice, requiresShipping: i.physical, ...custom };
   });
   sent(report, "lineItems");
+  if (order.items.some((i) => i.custom && i.taxable === true)) omitted(report, "lineItems.taxable", "custom items flagged taxable are sent with taxable = true; Shopify applies tax only if the shop has tax rates configured, and the read-back does not confirm per-line tax flags");
+  if (order.items.some((i) => i.custom && i.weightGrams && Number(i.weightGrams) > 0)) omitted(report, "lineItems.weight", "custom item weights are sent to Shopify, which does not return a line-item weight, so it cannot be verified (the CRM keeps it)");
 
   const noteParts = [
     `Created in the CRM (${order.orderNumber}) - ${source.label}.`,
