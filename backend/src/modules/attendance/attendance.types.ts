@@ -18,6 +18,15 @@ export interface ReportQuery {
   userId?: string;
 }
 
+export interface RecordsQuery {
+  from: string;
+  to: string;
+  userId?: string;
+  status: "ALL" | "PRESENT" | "LATE" | "ABSENT";
+  page: number;
+  pageSize: number;
+}
+
 export interface LogInterval {
   status: WorkStatus;
   startedAt: Date;

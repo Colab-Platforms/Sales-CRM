@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "sonner";
@@ -35,6 +35,7 @@ import {
   todayInReportZone,
 } from "@/lib/attendance";
 import { cn } from "@/lib/utils";
+import { AttendanceReport } from "./attendance-report";
 
 function StatusCell({ member }: { member: TeamMemberStatus }) {
   const isOffline = member.status === "OFFLINE";
@@ -65,9 +66,12 @@ function BreakLimitControl() {
   const save = useSetBreakLimitMutation();
   const [value, setValue] = useState("");
 
-  useEffect(() => {
+  // Show the saved limit whenever it loads or changes (adjusting state during render, not in an effect).
+  const [loaded, setLoaded] = useState<typeof data>(undefined);
+  if (data !== loaded) {
+    setLoaded(data);
     if (data) setValue(data.maxConcurrentBreaks === null ? "" : String(data.maxConcurrentBreaks));
-  }, [data]);
+  }
 
   const trimmed = value.trim();
   const parsed = trimmed === "" ? null : Number(trimmed);
@@ -218,7 +222,7 @@ function DailyReport() {
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3">
-        <CardTitle>Daily report</CardTitle>
+        <CardTitle>Shift breakdown</CardTitle>
         <Input
           type="date"
           value={date}
@@ -301,11 +305,12 @@ export function AttendanceBoard() {
       <div>
         <h1 className="font-heading text-2xl font-extrabold">Attendance</h1>
         <p className="text-sm text-muted-foreground">
-          Live status, shift timers and productive hours.
+          Live status, attendance reports, shift timers and productive hours.
           {role === "MANAGER" ? " Showing your direct reports." : " Showing all salespersons."}
         </p>
       </div>
       <LiveBoard />
+      <AttendanceReport />
       <DailyReport />
     </div>
   );

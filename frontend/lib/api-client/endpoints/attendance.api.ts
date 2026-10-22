@@ -1,6 +1,8 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
+  AttendanceRecords,
+  AttendanceRecordsQuery,
   AttendanceReport,
   BreakLimit,
   ManualWorkStatus,
@@ -9,6 +11,13 @@ import type {
 } from "../types/attendance.types";
 
 export const attendanceApi = {
+  async getRecords(q: AttendanceRecordsQuery): Promise<AttendanceRecords> {
+    const res = await apiClient.get<ApiEnvelope<AttendanceRecords>>("/attendance/records", {
+      params: { from: q.from, to: q.to, status: q.status, page: q.page ?? 1, pageSize: q.pageSize ?? 50, ...(q.userId ? { userId: q.userId } : {}) },
+    });
+    return res.data.data;
+  },
+
   async start(): Promise<MyShift> {
     const res = await apiClient.post<ApiEnvelope<MyShift>>("/attendance/start");
     return res.data.data;

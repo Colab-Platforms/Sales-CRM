@@ -1,0 +1,185 @@
+import { SessionEndReason } from "../../../generated/prisma/enums.js";
+import { BREAK_LIMIT_MS, LATE_AFTER_MINUTES } from "./attendance.constants.js";
+import { computeSummary, mergeSummaries } from "./attendance.calc.js";
+import type { LogInterval } from "./attendance.types.js";
+
+// ---------------------------------------------------------------------------------------------
+// Attendance records: one status per employee per calendar day (report timezone), derived only from
+// the WorkSession rows that person actually has. Nothing is written; nothing is inferred from leads/calls.
+//
+//  PRESENT     clocked in that day, first clock-in at or before LATE_AFTER_MINUTES
+//  LATE        clocked in that day, first clock-in after LATE_AFTER_MINUTES (still counts as attended)
+//  ABSENT      no clock-in on a day the employee should have worked (on/after joining, before today)
+//  PENDING     today, not clocked in yet - not counted as absent until the day is over
+//  NOT_JOINED  a day before the employee's account existed - not expected, not counted
+//  NOT_TRACKED a day before the CRM recorded any attendance at all - nobody could clock in, not counted
+//
+// A session belongs to the day it STARTED on (an overnight shift stays on its start day). Several
+// sessions in one day are merged into one record, so a re-login never creates a second attendance.
+// Policy: every day is a working day; no half-day, leave or holiday statuses exist in this CRM.
+// ---------------------------------------------------------------------------------------------
+
+export type DayStatus = "PRESENT" | "LATE" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED";
+export type StatusFilter = "ALL" | "PRESENT" | "LATE" | "ABSENT";
+
+const DAY_MS = 24 * 60 * 60_000;
+
+export interface SessionForDay {
+  startedAt: Date;
+  endedAt: Date | null;
+  endReason: SessionEndReason | null;
+  lastSeenAt: Date;
+  logs: LogInterval[];
+}
+
+export interface DayRecord {
+  date: string;
+  status: DayStatus;
+  checkIn: string | null;
+  /** Null while a session is still open, or when there is no session. */
+  checkOut: string | null;
+  stillWorking: boolean;
+  workingMs: number;
+  productiveMs: number;
+  breakMs: number;
+  /** How far past the late cut-off the first clock-in was; 0 when on time. */
+  lateByMs: number;
+  sessions: number;
+  /** Calls the employee made that day (any outcome), and the talk time of the connected ones. */
+  calls: number;
+  talkTimeSec: number;
+  remarks: string[];
+}
+
+export interface DayCalls {
+  calls: number;
+  talkTimeSec: number;
+}
+
+/** "YYYY-MM-DD" of an instant in the report zone. */
+export function zoneDay(at: Date, tzOffsetMinutes: number): string {
+  return new Date(at.getTime() + tzOffsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+/** Every calendar day from `from` to `to`, both included. */
+export function listDays(from: string, to: string): string[] {
+  const days: string[] = [];
+  for (let t = Date.parse(`${from}T00:00:00.000Z`); t <= Date.parse(`${to}T00:00:00.000Z`); t += DAY_MS) {
+    days.push(new Date(t).toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+/** Minutes after midnight (report zone) of an instant. */
+function zoneMinutes(at: Date, tzOffsetMinutes: number): number {
+  const local = new Date(at.getTime() + tzOffsetMinutes * 60_000);
+  return local.getUTCHours() * 60 + local.getUTCMinutes() + local.getUTCSeconds() / 60;
+}
+
+/** One employee's record for one day from the sessions that started that day. */
+export function dayRecord(input: {
+  date: string;
+  today: string;
+  joinedOn: string;
+  /** First day any attendance was ever recorded; earlier days cannot be absences. Null = nothing recorded yet. */
+  trackingStartedOn: string | null;
+  sessions: SessionForDay[];
+  /** That day's calls, counted the same way as the sales reports (talk time = connected calls only). */
+  callStats?: DayCalls;
+  now: Date;
+  tzOffsetMinutes: number;
+}): DayRecord {
+  const { date, today, joinedOn, trackingStartedOn, now, tzOffsetMinutes } = input;
+  const sessions = [...input.sessions].sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+  const empty: DayRecord = {
+    date,
+    status: "ABSENT",
+    checkIn: null,
+    checkOut: null,
+    stillWorking: false,
+    workingMs: 0,
+    productiveMs: 0,
+    breakMs: 0,
+    lateByMs: 0,
+    sessions: 0,
+    calls: input.callStats?.calls ?? 0,
+    talkTimeSec: input.callStats?.talkTimeSec ?? 0,
+    remarks: [],
+  };
+
+  if (sessions.length === 0) {
+    if (date < joinedOn) return { ...empty, status: "NOT_JOINED", remarks: [`Joined ${joinedOn}`] };
+    if (!trackingStartedOn || date < trackingStartedOn) return { ...empty, status: "NOT_TRACKED", remarks: ["Before attendance tracking began"] };
+    if (date >= today) return { ...empty, status: "PENDING", remarks: date === today ? ["Not clocked in yet"] : [] };
+    return { ...empty, remarks: ["No clock-in recorded"] };
+  }
+
+  const first = sessions[0]!;
+  const open = sessions.some((s) => !s.endedAt);
+  const summary = mergeSummaries(sessions.map((s) => computeSummary(s.logs, s.startedAt, s.endedAt ?? now)));
+  const lateByMs = Math.max(0, Math.round((zoneMinutes(first.startedAt, tzOffsetMinutes) - LATE_AFTER_MINUTES) * 60_000));
+  const last = sessions[sessions.length - 1]!;
+
+  const remarks: string[] = [];
+  if (open) remarks.push("Still working");
+  if (sessions.some((s) => s.endReason === SessionEndReason.STALE)) remarks.push("Auto clocked out (no activity)");
+  if (sessions.length > 1) remarks.push(`${sessions.length} sessions`);
+  if (summary.breakTotalMs > BREAK_LIMIT_MS) remarks.push("Breaks over 1h limit");
+  if (date < joinedOn) remarks.push(`Before joining date ${joinedOn}`);
+
+  return {
+    date,
+    status: lateByMs > 0 ? "LATE" : "PRESENT",
+    checkIn: first.startedAt.toISOString(),
+    checkOut: open ? null : (last.endedAt?.toISOString() ?? null),
+    stillWorking: open,
+    workingMs: summary.shiftElapsedMs,
+    productiveMs: summary.productiveMs,
+    breakMs: summary.breakTotalMs,
+    lateByMs,
+    sessions: sessions.length,
+    calls: input.callStats?.calls ?? 0,
+    talkTimeSec: input.callStats?.talkTimeSec ?? 0,
+    remarks,
+  };
+}
+
+export function matchesStatus(status: DayStatus, filter: StatusFilter): boolean {
+  return filter === "ALL" || status === filter;
+}
+
+export interface AttendanceTotals {
+  present: number;
+  late: number;
+  absent: number;
+  /** Days the employee should have attended (present + late + absent; excludes today-pending and pre-joining days). */
+  expected: number;
+  /** present + late. */
+  attended: number;
+  workingMs: number;
+  productiveMs: number;
+  calls: number;
+  talkTimeSec: number;
+  /** attended / expected, 0..100, null when nothing was expected. */
+  attendancePct: number | null;
+}
+
+export function totalsOf(records: DayRecord[]): AttendanceTotals {
+  const present = records.filter((r) => r.status === "PRESENT").length;
+  const late = records.filter((r) => r.status === "LATE").length;
+  const absent = records.filter((r) => r.status === "ABSENT").length;
+  const expected = present + late + absent;
+  return {
+    present,
+    late,
+    absent,
+    expected,
+    attended: present + late,
+    workingMs: records.reduce((a, r) => a + r.workingMs, 0),
+    productiveMs: records.reduce((a, r) => a + r.productiveMs, 0),
+    calls: records.reduce((a, r) => a + r.calls, 0),
+    talkTimeSec: records.reduce((a, r) => a + r.talkTimeSec, 0),
+    attendancePct: expected > 0 ? Math.round(((present + late) / expected) * 1000) / 10 : null,
+  };
+}
+
