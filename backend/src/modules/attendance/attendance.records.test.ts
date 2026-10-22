@@ -46,9 +46,12 @@ describe("day status", () => {
     assert.equal(r.lateByMs, 30 * 60_000);
   });
 
-  it("no clock-in on a past working day is Absent; today is Pending; before joining is Not joined", () => {
+  it("no clock-in on a past working day is Absent; today is Pending until the late cut-off, then Absent; before joining is Not joined", () => {
     assert.equal(dayRecord({ ...base, date: "2026-10-20", sessions: [] }).status, "ABSENT");
-    assert.equal(dayRecord({ ...base, date: "2026-10-22", sessions: [] }).status, "PENDING");
+    assert.equal(dayRecord({ ...base, date: "2026-10-22", sessions: [] }).status, "ABSENT");
+    assert.equal(dayRecord({ ...base, now: ist("2026-10-22", "09:45"), date: "2026-10-22", sessions: [] }).status, "PENDING");
+    assert.equal(dayRecord({ ...base, now: ist("2026-10-22", "09:46"), date: "2026-10-22", sessions: [] }).status, "ABSENT");
+    assert.equal(dayRecord({ ...base, date: "2026-10-23", sessions: [] }).status, "PENDING");
     assert.equal(dayRecord({ ...base, joinedOn: "2026-10-21", date: "2026-10-20", sessions: [] }).status, "NOT_JOINED");
     // Before the CRM recorded any attendance, nobody could clock in: not an absence.
     assert.equal(dayRecord({ ...base, date: "2026-10-05", sessions: [] }).status, "NOT_TRACKED");

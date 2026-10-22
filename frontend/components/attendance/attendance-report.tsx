@@ -309,7 +309,7 @@ function Summary({ data }: { data: AttendanceRecords }) {
         <KpiCard label="Attendance %" tone="violet" icon={Percent} value={pct(s.attendancePct)} lines={[{ text: s.expected ? `${s.attended} of ${s.expected} working ${multi ? "days" : "employees"}` : "Nothing expected yet" }]} />
       </div>
       <p className="text-xs text-muted-foreground">
-        Half-day, leave, holidays and weekly offs aren&apos;t tracked in this CRM, so every day counts as a working day. Today counts once someone clocks in;
+        Half-day, leave, holidays and weekly offs aren&apos;t tracked in this CRM, so every day counts as a working day. Today, anyone not clocked in by {data.policy.lateAfter} IST counts as absent (a later clock-in turns it into Late);
         days before an employee joined{data.policy.trackingStartedOn ? ` or before attendance tracking began (${data.policy.trackingStartedOn})` : ""} are left out.
       </p>
     </div>

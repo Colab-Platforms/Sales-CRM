@@ -9,8 +9,9 @@ import type { LogInterval } from "./attendance.types.js";
 //
 //  PRESENT     clocked in that day, first clock-in at or before LATE_AFTER_MINUTES
 //  LATE        clocked in that day, first clock-in after LATE_AFTER_MINUTES (still counts as attended)
-//  ABSENT      no clock-in on a day the employee should have worked (on/after joining, before today)
-//  PENDING     today, not clocked in yet - not counted as absent until the day is over
+//  ABSENT      no clock-in on a day the employee should have worked (on/after joining); today counts
+//              once the late cut-off has passed without a clock-in (a later clock-in turns it into LATE)
+//  PENDING     today before the late cut-off, not clocked in yet - not counted either way
 //  NOT_JOINED  a day before the employee's account existed - not expected, not counted
 //  NOT_TRACKED a day before the CRM recorded any attendance at all - nobody could clock in, not counted
 //
@@ -110,7 +111,8 @@ export function dayRecord(input: {
   if (sessions.length === 0) {
     if (date < joinedOn) return { ...empty, status: "NOT_JOINED", remarks: [`Joined ${joinedOn}`] };
     if (!trackingStartedOn || date < trackingStartedOn) return { ...empty, status: "NOT_TRACKED", remarks: ["Before attendance tracking began"] };
-    if (date >= today) return { ...empty, status: "PENDING", remarks: date === today ? ["Not clocked in yet"] : [] };
+    if (date > today) return { ...empty, status: "PENDING" };
+    if (date === today && zoneMinutes(now, tzOffsetMinutes) <= LATE_AFTER_MINUTES) return { ...empty, status: "PENDING", remarks: ["Not clocked in yet"] };
     return { ...empty, remarks: ["No clock-in recorded"] };
   }
 
@@ -152,7 +154,7 @@ export interface AttendanceTotals {
   present: number;
   late: number;
   absent: number;
-  /** Days the employee should have attended (present + late + absent; excludes today-pending and pre-joining days). */
+  /** Days the employee should have attended (present + late + absent; excludes today before the late cut-off and pre-joining days). */
   expected: number;
   /** present + late. */
   attended: number;
