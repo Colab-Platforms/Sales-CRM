@@ -10,7 +10,7 @@ import {
   ENDED_CALL_STATUSES,
   MANUAL_STATUSES,
   MAX_ON_CALL_MS,
-  LATE_AFTER_MINUTES,
+  ATTENDANCE_CUTOFF_MINUTES,
   MAX_ATTENDANCE_RANGE_DAYS,
   REPORT_TZ_OFFSET_MINUTES,
   STALE_SESSION_MS,
@@ -487,7 +487,7 @@ class AttendanceService {
 }
 
 // Attendance records over a date range (see attendance.records.ts for the status rules). Scope: a manager sees
-// their active direct reports, an admin every active salesperson. Sessions are read from the database for
+// their active direct reports, an admin every active salesperson, a salesperson only themselves. Sessions are read from the database for
 // exactly these people and days; statuses are derived, never stored or altered.
 export async function attendanceRecords(user: AuthUser, q: RecordsQuery) {
   const tz = REPORT_TZ_OFFSET_MINUTES;
@@ -500,10 +500,12 @@ export async function attendanceRecords(user: AuthUser, q: RecordsQuery) {
     throw new ApiError(`Choose a range of at most ${MAX_ATTENDANCE_RANGE_DAYS} days`, STATUS_CODES.BAD_REQUEST);
   }
 
+  // A salesperson only ever sees their own records, whatever userId they ask for.
+  if (user.role === Role.SALESPERSON && q.userId && q.userId !== user.id) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
   const people = await prisma.user.findMany({
     where: {
       role: Role.SALESPERSON,
-      status: UserStatus.ACTIVE,
+      ...(user.role === Role.SALESPERSON ? { id: user.id } : { status: UserStatus.ACTIVE }),
       ...(user.role === Role.MANAGER ? { reportingManagerId: user.id } : {}),
       ...(q.userId ? { id: q.userId } : {}),
     },
@@ -579,7 +581,7 @@ export async function attendanceRecords(user: AuthUser, q: RecordsQuery) {
   const daily = days.map((date) => {
     const onDay = employees.map((e) => e.records.find((r) => r.date === date)!).filter((r) => matchesStatus(r.status, q.status));
     const t = totalsOf(onDay);
-    return { date, present: t.present, late: t.late, absent: t.absent, expected: t.expected, attendancePct: t.attendancePct };
+    return { date, present: t.present, absent: t.absent, expected: t.expected, attendancePct: t.attendancePct };
   });
 
   const pageSize = q.pageSize;
@@ -592,7 +594,8 @@ export async function attendanceRecords(user: AuthUser, q: RecordsQuery) {
     filters: { userId: q.userId ?? null, status: q.status },
     policy: {
       trackingStartedOn,
-      lateAfter: `${String(Math.floor(LATE_AFTER_MINUTES / 60)).padStart(2, "0")}:${String(LATE_AFTER_MINUTES % 60).padStart(2, "0")}`,
+      // Before this time (IST) today has no status yet; after it, no clock-in = Absent.
+      cutoff: `${String(Math.floor(ATTENDANCE_CUTOFF_MINUTES / 60)).padStart(2, "0")}:${String(ATTENDANCE_CUTOFF_MINUTES % 60).padStart(2, "0")}`,
       weeklyOff: null,
       halfDay: false,
       leaveAndHolidays: false,

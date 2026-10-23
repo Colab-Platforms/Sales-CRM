@@ -37,16 +37,35 @@ import {
 import { cn } from "@/lib/utils";
 import { AttendanceReport } from "./attendance-report";
 
+/** Offline splits in two: worked today and has clocked out (still Present in the attendance report), or never clocked in today. */
+const offlineLabel = (member: TeamMemberStatus) => (member.summary ? "Clocked out" : "Not clocked in today");
+
 function StatusCell({ member }: { member: TeamMemberStatus }) {
   const isOffline = member.status === "OFFLINE";
   return (
-    <Badge 
-      variant={isOffline ? "secondary" : "outline"} 
+    <Badge
+      variant={isOffline ? "secondary" : "outline"}
       className={cn("gap-1.5 px-2 py-0.5", !isOffline && "border-primary/20 bg-primary/5 text-primary")}
+      title={isOffline && member.summary ? "Clocked in earlier today, so Present in the attendance report" : undefined}
     >
       <span className={cn("size-2 rounded-full", STATUS_DOT[member.status])} />
-      {STATUS_LABEL[member.status]}
+      {isOffline ? offlineLabel(member) : STATUS_LABEL[member.status]}
     </Badge>
+  );
+}
+
+/** Counts that line up with the attendance report: present today = online now + clocked out. */
+function BoardCounts({ members }: { members: TeamMemberStatus[] }) {
+  const online = members.filter((m) => m.status !== "OFFLINE").length;
+  const clockedOut = members.filter((m) => m.status === "OFFLINE" && m.summary).length;
+  const notIn = members.length - online - clockedOut;
+  return (
+    <p className="text-xs text-muted-foreground">
+      <span className="font-medium text-foreground">{online}</span> online now ·{" "}
+      <span className="font-medium text-foreground">{clockedOut}</span> clocked out ·{" "}
+      <span className="font-medium text-foreground">{notIn}</span> not clocked in today ·{" "}
+      <span className="font-medium text-foreground">{online + clockedOut}</span> present today
+    </p>
   );
 }
 
@@ -138,7 +157,10 @@ function LiveBoard() {
   return (
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
-        <CardTitle>Live team status</CardTitle>
+        <div className="space-y-1">
+          <CardTitle>Live team status</CardTitle>
+          {data ? <BoardCounts members={data.members} /> : null}
+        </div>
         {role === "MANAGER" ? <BreakLimitControl /> : null}
       </CardHeader>
       <CardContent className="px-0">

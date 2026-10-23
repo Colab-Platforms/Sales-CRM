@@ -73,7 +73,7 @@ export function TicketsView() {
                   <tr className="border-b text-left text-xs text-muted-foreground">
                     <th className="px-3 py-2 font-medium">#</th>
                     <th className="px-3 py-2 font-medium">Subject</th>
-                    {!isSalesperson ? <th className="px-3 py-2 font-medium">Raised by</th> : null}
+                    {!isSalesperson ? <th className="px-3 py-2 font-medium whitespace-nowrap">Raised by</th> : null}
                     <th className="px-3 py-2 font-medium">Category</th>
                     <th className="px-3 py-2 font-medium">Priority</th>
                     <th className="px-3 py-2 font-medium">Status</th>
@@ -83,22 +83,22 @@ export function TicketsView() {
                 <tbody>
                   {items.map((t) => (
                     <tr key={t.id} className="cursor-pointer border-b align-top hover:bg-muted/40" onClick={() => setOpenId(t.id)}>
-                      <td className="px-3 py-2 tabular-nums text-muted-foreground">{t.ticketNumber}</td>
+                      <td className="px-3 py-2 whitespace-nowrap tabular-nums text-muted-foreground">{t.ticketNumber}</td>
                       <td className="max-w-[22rem] px-3 py-2 break-words">
                         <button type="button" className="text-left font-medium text-primary hover:underline" onClick={() => setOpenId(t.id)}>
                           {t.subject}
                         </button>
                         {t.commentCount > 0 ? <span className="block text-xs text-muted-foreground">{t.commentCount} repl{t.commentCount === 1 ? "y" : "ies"}</span> : null}
                       </td>
-                      {!isSalesperson ? <td className="px-3 py-2">{t.raisedBy.name}</td> : null}
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{TICKET_CATEGORY_LABELS[t.category]}</td>
+                      {!isSalesperson ? <td className="px-3 py-2 whitespace-nowrap">{t.raisedBy.name}</td> : null}
+                      <td className="px-3 py-2 text-xs whitespace-nowrap text-muted-foreground">{TICKET_CATEGORY_LABELS[t.category]}</td>
                       <td className="px-3 py-2">
                         <TicketPriorityBadge priority={t.priority} />
                       </td>
                       <td className="px-3 py-2">
                         <TicketStatusBadge status={t.status} />
                       </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">{formatDateTime(t.createdAt)}</td>
+                      <td className="px-3 py-2 text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(t.createdAt)}</td>
                     </tr>
                   ))}
                 </tbody>

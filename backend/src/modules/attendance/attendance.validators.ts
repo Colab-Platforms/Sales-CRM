@@ -21,7 +21,7 @@ const recordsQuerySchema = z
     from: day,
     to: day,
     userId: z.string().uuid().optional(),
-    status: z.enum(["ALL", "PRESENT", "LATE", "ABSENT"]).default("ALL"),
+    status: z.enum(["ALL", "PRESENT", "ABSENT"]).default("ALL"),
     page: z.coerce.number().int().min(1).default(1),
     // Exports ask for everyone on one page; the cap keeps a single response bounded.
     pageSize: z.coerce.number().int().min(1).max(1000).default(50),

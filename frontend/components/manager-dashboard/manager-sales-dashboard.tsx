@@ -106,7 +106,7 @@ export function ManagerSalesDashboard({
       : undefined;
 
   const openSalesperson = (id: string) => router.push(`/dashboard/salespersons/${id}?${filtersToSearch(filters)}`);
-  const period = filters.preset === "custom" ? "in this period" : RANGE_LABELS[filters.preset].toLowerCase();
+  const period = filters.preset === "custom" || filters.preset === "single" ? "in this period" : RANGE_LABELS[filters.preset].toLowerCase();
 
   return (
     <div className="space-y-6">

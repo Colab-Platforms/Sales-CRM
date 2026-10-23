@@ -3,16 +3,16 @@ import { downloadXlsx, type Cell, type SheetSpec } from "@/lib/report-xlsx";
 
 export const DAY_STATUS_LABEL: Record<DayStatus, string> = {
   PRESENT: "Present",
-  LATE: "Late",
   ABSENT: "Absent",
-  PENDING: "Not in yet",
-  NOT_JOINED: "Not joined",
-  NOT_TRACKED: "Not tracked",
+  PENDING: "Not Yet Recorded",
+  // Outside the reporting period for that employee: not a status, shown as a neutral dash.
+  NOT_JOINED: "—",
+  NOT_TRACKED: "—",
 };
 /** One letter per cell in the matrix. */
-export const DAY_STATUS_CODE: Record<DayStatus, string> = { PRESENT: "P", LATE: "L", ABSENT: "A", PENDING: "-", NOT_JOINED: "", NOT_TRACKED: "" };
+export const DAY_STATUS_CODE: Record<DayStatus, string> = { PRESENT: "P", ABSENT: "A", PENDING: "-", NOT_JOINED: "", NOT_TRACKED: "" };
 
-const STATUS_FILTER_LABEL = { ALL: "All", PRESENT: "Present", LATE: "Late", ABSENT: "Absent" } as const;
+const STATUS_FILTER_LABEL = { ALL: "All", PRESENT: "Present", ABSENT: "Absent" } as const;
 
 /** "HH:MM" in India time (the report zone), or "" when there is no time. */
 export function istTime(iso: string | null): string {
@@ -27,13 +27,13 @@ function recordRow(name: string, employeeId: string, r: AttendanceDayRecord): Ce
   return [
     employeeId, name, r.date, DAY_STATUS_LABEL[r.status], istTime(r.checkIn),
     r.stillWorking ? "Still working" : istTime(r.checkOut), hours(r.workingMs), hours(r.productiveMs), hours(r.breakMs),
-    r.calls, hours(r.talkTimeSec * 1000), r.lateByMs > 0 ? Math.round(r.lateByMs / 60_000) : "", r.remarks.join("; "),
+    r.calls, hours(r.talkTimeSec * 1000), r.remarks.join("; "),
   ];
 }
 
 const RECORD_HEADER = [
   "Employee ID", "Employee Name", "Date", "Status", "Check-In (IST)", "Check-Out (IST)",
-  "Working Hours", "Productive Hours", "Break Hours", "Calls", "Talk Time (hours)", "Late By (min)", "Remarks",
+  "Working Hours", "Productive Hours", "Break Hours", "Calls", "Talk Time (hours)", "Remarks",
 ];
 
 function sheets(data: AttendanceRecords, employeeName: string): SheetSpec[] {
@@ -48,18 +48,18 @@ function sheets(data: AttendanceRecords, employeeName: string): SheetSpec[] {
   return [
     {
       name: "Attendance Matrix",
-      header: ["Employee ID", "Employee Name", ...data.range.days, "Present", "Late", "Absent", "Attendance %", "Calls", "Talk Time (hours)", "Working Hours"],
+      header: ["Employee ID", "Employee Name", ...data.range.days, "Present", "Absent", "Attendance %", "Calls", "Talk Time (hours)", "Working Hours"],
       rows: data.employees.map((e) => [
         e.employeeId, e.name, ...e.records.map((r) => DAY_STATUS_CODE[r.status]),
-        e.totals.present, e.totals.late, e.totals.absent, e.totals.attendancePct ?? "",
+        e.totals.present, e.totals.absent, e.totals.attendancePct ?? "",
         e.totals.calls, hours(e.totals.talkTimeSec * 1000), hours(e.totals.workingMs),
       ]),
     },
     { name: "Daily Records", header: RECORD_HEADER, rows: records },
     {
       name: "Daily Summary",
-      header: ["Date", "Present", "Late", "Absent", "Expected", "Attendance %"],
-      rows: data.daily.map((d) => [d.date, d.present, d.late, d.absent, d.expected, d.attendancePct ?? ""]),
+      header: ["Date", "Present", "Absent", "Working days", "Attendance %"],
+      rows: data.daily.map((d) => [d.date, d.present, d.absent, d.expected, d.attendancePct ?? ""]),
     },
     {
       name: "Report Info",
@@ -71,16 +71,15 @@ function sheets(data: AttendanceRecords, employeeName: string): SheetSpec[] {
         ["Status filter", STATUS_FILTER_LABEL[status]],
         ["Employees", s.totalEmployees],
         ["Present days", s.present],
-        ["Late days", s.late],
         ["Absent days", s.absent],
         ["Attendance %", s.attendancePct ?? ""],
         ["Calls", s.calls],
         ["Talk Time (hours)", hours(s.talkTimeSec * 1000)],
         ["Talk time", "Duration of connected calls, by the day each call started (same as the sales reports)"],
-        ["Late rule", `First clock-in after ${data.policy.lateAfter} IST`],
-        ["Codes", "P = Present, L = Late, A = Absent, - = not clocked in yet today, blank = before joining or before attendance tracking began"],
+        ["Status rule", `Present = a clock-in that day. Absent = no clock-in on a working day (today only after ${data.policy.cutoff} IST)`],
+        ["Codes", `P = Present, A = Absent, - = today, not yet recorded (before ${data.policy.cutoff} IST), blank = outside the reporting period (before joining or before attendance tracking began)`],
         ["Tracking began", data.policy.trackingStartedOn ?? "No attendance recorded yet"],
-        ["Not tracked", "Half-day, leave, holidays and weekly offs (every day is a working day)"],
+        ["Working days", "No weekly-off, holiday or leave records exist in this CRM, so every day is a working day"],
         ["Generated", new Date().toLocaleString("en-IN")],
       ],
     },

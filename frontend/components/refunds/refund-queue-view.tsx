@@ -54,8 +54,8 @@ export function RefundQueueTable({
           <tr className="border-b text-left text-xs text-muted-foreground">
             <th className="px-3 py-2 font-medium">Order</th>
             <th className="px-3 py-2 font-medium">Customer</th>
-            <th className="px-3 py-2 font-medium">Requested by</th>
-            <th className="px-3 py-2 text-right font-medium">Amount</th>
+            <th className="px-3 py-2 font-medium whitespace-nowrap">Requested by</th>
+            <th className="px-3 py-2 text-right font-medium whitespace-nowrap">Amount</th>
             <th className="px-3 py-2 font-medium">Payment</th>
             <th className="px-3 py-2 font-medium">Reason</th>
             <th className="px-3 py-2 font-medium">Requested</th>
@@ -69,24 +69,24 @@ export function RefundQueueTable({
             const own = r.requestedBy.id === userId;
             return (
               <tr key={r.id} className="border-b align-top" data-testid="refund-queue-row">
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
                   <Link href={`/dashboard/orders/${r.orderId}`} className="font-medium text-primary hover:underline">
                     {r.orderNumber}
                   </Link>
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
                   {r.customer.name}
                   {r.customer.mobile ? <span className="block text-xs text-muted-foreground">{r.customer.mobile}</span> : null}
                 </td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 whitespace-nowrap">
                   {r.requestedBy.name}
                   <span className="block text-xs text-muted-foreground">{r.requestedBy.role}</span>
                 </td>
-                <td className="px-3 py-2 text-right tabular-nums">
+                <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums">
                   <span className="font-semibold">{money(r.amount)}</span>
                   <span className="block text-xs text-muted-foreground">of {money(r.paymentAmount)} paid</span>
                 </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">
+                <td className="min-w-52 px-3 py-2 text-xs text-muted-foreground">
                   {r.paymentMethod ?? "—"}
                   <span className="block">already refunded {money(r.refundedAmount)}</span>
                   <span className="block">remaining refundable {money(r.remainingRefundableAmount)}</span>
@@ -100,8 +100,8 @@ export function RefundQueueTable({
                   {r.reason}
                   {r.decisionNote ? <span className="mt-1 block text-xs text-muted-foreground">Decision note: {r.decisionNote}</span> : null}
                 </td>
-                <td className="px-3 py-2 text-xs text-muted-foreground">{formatDateTime(r.createdAt)}</td>
-                <td className="px-3 py-2">
+                <td className="px-3 py-2 text-xs whitespace-nowrap text-muted-foreground">{formatDateTime(r.createdAt)}</td>
+                <td className="min-w-40 px-3 py-2">
                   <RefundStatusBadge status={r.status} executionStatus={r.executionStatus} />
                   <span className="mt-1 block text-xs text-muted-foreground">{refundDisplay(r).note}</span>
                   {r.cfRefundId ? <span className="mt-1 block font-mono text-[10px] text-muted-foreground">Cashfree refund {r.cfRefundId}</span> : null}

@@ -9,6 +9,7 @@ const TONES = {
   teal: { card: "bg-teal-50/70 border-teal-100 dark:bg-teal-500/10 dark:border-teal-500/20", bar: "bg-teal-500", spark: "text-teal-500", chip: "bg-teal-500/10 text-teal-700 dark:text-teal-300" },
   amber: { card: "bg-amber-50/70 border-amber-100 dark:bg-amber-500/10 dark:border-amber-500/20", bar: "bg-amber-400", spark: "text-amber-500", chip: "bg-amber-500/12 text-amber-700 dark:text-amber-300" },
   emerald: { card: "bg-emerald-50/70 border-emerald-100 dark:bg-emerald-500/10 dark:border-emerald-500/20", bar: "bg-emerald-500", spark: "text-emerald-500", chip: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" },
+  red: { card: "bg-red-50/70 border-red-100 dark:bg-red-500/10 dark:border-red-500/20", bar: "bg-red-500", spark: "text-red-500", chip: "bg-red-500/10 text-red-700 dark:text-red-300" },
   violet: { card: "bg-violet-50/70 border-violet-100 dark:bg-violet-500/10 dark:border-violet-500/20", bar: "bg-violet-500", spark: "text-violet-500", chip: "bg-violet-500/10 text-violet-700 dark:text-violet-300" },
 } as const;
 

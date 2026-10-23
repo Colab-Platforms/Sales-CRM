@@ -33,22 +33,24 @@ describe("date ranges", () => {
 });
 
 describe("day status", () => {
-  it("clock-in at or before 09:45 IST is Present", () => {
+  it("any valid clock-in is Present", () => {
     const r = dayRecord({ ...base, date: "2026-10-20", sessions: [session(ist("2026-10-20", "09:45"), ist("2026-10-20", "18:45"))] });
     assert.equal(r.status, "PRESENT");
-    assert.equal(r.lateByMs, 0);
     assert.equal(r.workingMs, 9 * 3600_000);
   });
 
-  it("clock-in after 09:45 IST is Late, by the right amount", () => {
+  it("there is no Late status: a clock-in after the 09:45 cut-off is still Present", () => {
     const r = dayRecord({ ...base, date: "2026-10-20", sessions: [session(ist("2026-10-20", "10:15"), ist("2026-10-20", "18:00"))] });
-    assert.equal(r.status, "LATE");
-    assert.equal(r.lateByMs, 30 * 60_000);
+    assert.equal(r.status, "PRESENT");
+    assert.ok(!r.remarks.some((x) => /late/i.test(x)));
   });
 
-  it("no clock-in on a past working day is Absent; today is Pending; before joining is Not joined", () => {
+  it("no clock-in on a past working day is Absent; today is Pending until the late cut-off, then Absent; before joining is Not joined", () => {
     assert.equal(dayRecord({ ...base, date: "2026-10-20", sessions: [] }).status, "ABSENT");
-    assert.equal(dayRecord({ ...base, date: "2026-10-22", sessions: [] }).status, "PENDING");
+    assert.equal(dayRecord({ ...base, date: "2026-10-22", sessions: [] }).status, "ABSENT");
+    assert.equal(dayRecord({ ...base, now: ist("2026-10-22", "09:45"), date: "2026-10-22", sessions: [] }).status, "PENDING");
+    assert.equal(dayRecord({ ...base, now: ist("2026-10-22", "09:46"), date: "2026-10-22", sessions: [] }).status, "ABSENT");
+    assert.equal(dayRecord({ ...base, date: "2026-10-23", sessions: [] }).status, "PENDING");
     assert.equal(dayRecord({ ...base, joinedOn: "2026-10-21", date: "2026-10-20", sessions: [] }).status, "NOT_JOINED");
     // Before the CRM recorded any attendance, nobody could clock in: not an absence.
     assert.equal(dayRecord({ ...base, date: "2026-10-05", sessions: [] }).status, "NOT_TRACKED");
@@ -87,16 +89,17 @@ describe("day status", () => {
 
 describe("totals", () => {
   it("count employee-days, ignore pending and pre-joining days, and never divide by zero", () => {
-    const rec = (status: "PRESENT" | "LATE" | "ABSENT" | "PENDING" | "NOT_JOINED") => ({ ...dayRecord({ ...base, date: "2026-10-20", sessions: [] }), status });
-    const t = totalsOf([rec("PRESENT"), rec("LATE"), rec("ABSENT"), rec("PENDING"), rec("NOT_JOINED")]);
-    assert.deepEqual([t.present, t.late, t.absent, t.expected, t.attended], [1, 1, 1, 3, 2]);
+    const rec = (status: "PRESENT" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED") => ({ ...dayRecord({ ...base, date: "2026-10-20", sessions: [] }), status });
+    const t = totalsOf([rec("PRESENT"), rec("PRESENT"), rec("ABSENT"), rec("PENDING"), rec("NOT_JOINED"), rec("NOT_TRACKED")]);
+    // Only Present and Absent days are eligible working days; the rest are neither counted nor shown as a status.
+    assert.deepEqual([t.present, t.absent, t.expected, t.attended], [2, 1, 3, 2]);
     assert.equal(t.attendancePct, 66.7);
     assert.equal(totalsOf([rec("PENDING")]).attendancePct, null);
   });
 
   it("the status filter keeps only that status", () => {
-    assert.equal(matchesStatus("LATE", "LATE"), true);
-    assert.equal(matchesStatus("PRESENT", "LATE"), false);
+    assert.equal(matchesStatus("ABSENT", "ABSENT"), true);
+    assert.equal(matchesStatus("PRESENT", "ABSENT"), false);
     assert.equal(matchesStatus("PENDING", "ALL"), true);
   });
 });

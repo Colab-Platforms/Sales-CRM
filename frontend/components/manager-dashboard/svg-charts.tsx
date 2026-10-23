@@ -23,6 +23,15 @@ function niceMax(max: number): number {
   return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * exp;
 }
 
+/** Axis top for whole-number counts drawn with 4 gridlines: every tick (top/4 steps) is an integer, so no label is rounded. */
+function countMax(max: number): number {
+  if (max <= 0) return 4;
+  const raw = max / 4;
+  const exp = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = ([1, 2, 2.5, 3, 4, 5, 6, 8, 10].find((c) => c * exp >= raw) ?? 10) * exp;
+  return Math.max(1, Math.ceil(step)) * 4;
+}
+
 export interface LineSeries {
   key: string;
   label: string;
@@ -266,7 +275,7 @@ export function StackedBarChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const totals = labels.map((_, i) => series.reduce((a, s) => a + (s.values[i] ?? 0), 0));
-  const top = niceMax(Math.max(0, ...totals));
+  const top = countMax(Math.max(0, ...totals));
   const labelEvery = labels.length > 21 ? 3 : labels.length > 10 ? 2 : 1;
 
   return (
@@ -289,7 +298,7 @@ export function StackedBarChart({
             {labels.map((l, i) => (
               <div key={l + i} className="relative flex min-w-0 flex-1 flex-col" onMouseEnter={() => setHover(i)} onClick={() => setHover(i)}>
                 <div className="flex flex-1 flex-col-reverse pb-6">
-                  <div className="flex flex-col-reverse overflow-hidden rounded-t-[3px]" style={{ height: `${(totals[i]! / top) * 100}%`, marginTop: "auto" }}>
+                  <div className="mx-auto flex w-full max-w-16 flex-col-reverse overflow-hidden rounded-t-[3px]" style={{ height: `${(totals[i]! / top) * 100}%`, marginTop: "auto" }}>
                     {series.map((s) => (
                       <div
                         key={s.key}
@@ -301,7 +310,7 @@ export function StackedBarChart({
                 </div>
                 <span className="absolute inset-x-0 bottom-0 h-6 truncate text-center text-[11px] leading-6 text-muted-foreground">{i % labelEvery === 0 ? l : ""}</span>
                 {hover === i ? (
-                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i > labels.length / 2 ? "right-full mr-1" : "left-full ml-1")}>
+                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i >= (labels.length - 1) / 2 ? "right-1/2 mr-10" : "left-1/2 ml-10")}>
                     <p className="mb-1.5 font-semibold">{tooltipTitles?.[i] ?? l}</p>
                     <dl className="space-y-1">
                       {series.map((s) => (
@@ -355,7 +364,7 @@ export function GroupedBarChart({
   tooltipTitles?: string[];
 }) {
   const [hover, setHover] = useState<number | null>(null);
-  const top = niceMax(Math.max(0, ...series.flatMap((s) => s.values)));
+  const top = countMax(Math.max(0, ...series.flatMap((s) => s.values)));
   const labelEvery = labels.length > 21 ? 3 : labels.length > 10 ? 2 : 1;
 
   if (labels.length === 0) return null;
@@ -395,7 +404,7 @@ export function GroupedBarChart({
                 </div>
                 <span className="absolute inset-x-0 bottom-0 h-6 truncate text-center text-[11px] leading-6 text-muted-foreground">{i % labelEvery === 0 ? l : ""}</span>
                 {hover === i ? (
-                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i > labels.length / 2 ? "right-full mr-1" : "left-full ml-1")}>
+                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i >= (labels.length - 1) / 2 ? "right-1/2 mr-10" : "left-1/2 ml-10")}>
                     <p className="mb-1.5 font-semibold">{tooltipTitles?.[i] ?? l}</p>
                     <dl className="space-y-1">
                       {series.map((s) => (

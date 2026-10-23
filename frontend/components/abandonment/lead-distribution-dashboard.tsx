@@ -65,7 +65,7 @@ export function LeadDistributionView({ data, range }: { data: AbandonmentDistrib
       <Card>
         <CardContent className="p-0">
           <div className="overflow-x-auto">
-            <table className="w-full text-sm" data-testid="telecaller-table">
+            <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap" data-testid="telecaller-table">
               <thead>
                 <tr className="border-b text-left text-xs text-muted-foreground">
                   <th className="px-4 py-3 font-medium">Telecaller</th>

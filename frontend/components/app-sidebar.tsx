@@ -30,6 +30,7 @@ import {
   ChevronRight,
   Briefcase,
   ClipboardList,
+  CalendarDays,
 } from "lucide-react";
 import {
   Sidebar,
@@ -191,6 +192,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Overview",
       items: [
         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+        { title: "My Attendance", href: "/dashboard/my-attendance", icon: CalendarDays },
       ],
     },
     {
@@ -254,7 +256,8 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/salespersons",
           icon: Contact,
         },
-        { title: "Attendance", href: "/dashboard/attendance", icon: Timer },
+        { title: "Attendance", href: "/dashboard/attendance", icon: Timer, exact: true },
+        { title: "Attendance Calendar", href: "/dashboard/attendance/calendar", icon: CalendarDays },
       ],
     },
     {
@@ -345,7 +348,8 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       items: [
         { title: "Users", href: "/dashboard/users", icon: UserCog },
         { title: "Groups", href: "/dashboard/groups", icon: Building2 },
-        { title: "Attendance", href: "/dashboard/attendance", icon: Timer },
+        { title: "Attendance", href: "/dashboard/attendance", icon: Timer, exact: true },
+        { title: "Attendance Calendar", href: "/dashboard/attendance/calendar", icon: CalendarDays },
         { title: "Sources", href: "/dashboard/sources", icon: Plug },
         {
           title: "Virtual Numbers",

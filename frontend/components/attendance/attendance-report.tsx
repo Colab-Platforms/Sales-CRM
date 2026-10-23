@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { CalendarCheck, ChevronDown, Clock, Download, Percent, UserCheck, UserX, Users } from "lucide-react";
+import { ChevronDown, Download, Percent, UserCheck, UserX, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -21,26 +21,17 @@ import type {
   AttendanceRecords,
   AttendanceRecordsQuery,
   AttendanceStatusFilter,
-  DayStatus,
 } from "@/lib/api-client/types/attendance.types";
 import { DAY_STATUS_CODE, DAY_STATUS_LABEL, exportAttendanceCsv, exportAttendanceXlsx, istTime } from "@/lib/attendance-export";
 import { formatHours, todayInReportZone } from "@/lib/attendance";
 import { cn } from "@/lib/utils";
+import { DAY_STATUS_STYLE, DayStatusBadge } from "./day-status-badge";
+import { DATE_PRESETS, DATE_PRESET_LABELS, presetError, resolvePreset, shiftDay, type DatePreset } from "@/lib/date-presets";
 
-// ---------- date presets (India business days, same as the server) ----------
+// ---------- date presets (shared with every report; India business days, same as the server) ----------
 
-type Preset = "today" | "yesterday" | "5d" | "7d" | "month" | "single" | "custom";
-const PRESETS: { value: Preset; label: string }[] = [
-  { value: "today", label: "Today" },
-  { value: "yesterday", label: "Yesterday" },
-  { value: "5d", label: "Last 5 Days" },
-  { value: "7d", label: "Last 7 Days" },
-  { value: "month", label: "This Month" },
-  { value: "single", label: "Single Date" },
-  { value: "custom", label: "Custom Range" },
-];
-
-const shift = (ymd: string, days: number) => new Date(Date.parse(`${ymd}T00:00:00.000Z`) + days * 86_400_000).toISOString().slice(0, 10);
+type Preset = DatePreset;
+const PRESETS = DATE_PRESETS.map((value) => ({ value, label: DATE_PRESET_LABELS[value] }));
 
 interface Draft {
   preset: Preset;
@@ -53,52 +44,19 @@ interface Draft {
 
 const initialDraft = (): Draft => {
   const today = todayInReportZone();
-  return { preset: "today", single: today, from: shift(today, -6), to: today, userId: "", status: "ALL" };
+  return { preset: "today", single: today, from: shiftDay(today, -6), to: today, userId: "", status: "ALL" };
 };
 
 /** The inclusive date range a draft stands for, or an error message. */
-export function rangeOf(d: Draft, today = todayInReportZone()): { from: string; to: string } | { error: string } {
-  switch (d.preset) {
-    case "today":
-      return { from: today, to: today };
-    case "yesterday":
-      return { from: shift(today, -1), to: shift(today, -1) };
-    case "5d":
-      return { from: shift(today, -4), to: today };
-    case "7d":
-      return { from: shift(today, -6), to: today };
-    case "month":
-      return { from: `${today.slice(0, 8)}01`, to: today };
-    case "single":
-      if (!d.single) return { error: "Pick a date." };
-      if (d.single > today) return { error: "The date cannot be in the future." };
-      return { from: d.single, to: d.single };
-    case "custom":
-      if (!d.from || !d.to) return { error: "Pick both From and To dates." };
-      if (d.from > d.to) return { error: "From date must not be after To date." };
-      if (d.to > today) return { error: "To date cannot be in the future." };
-      return { from: d.from, to: d.to };
-  }
+export function rangeOf(d: Draft): { from: string; to: string } | { error: string } {
+  const error = presetError(d);
+  return error ? { error } : resolvePreset(d);
 }
 
 // ---------- small pieces ----------
 
-const STATUS_BADGE: Record<DayStatus, string> = {
-  PRESENT: "bg-emerald-500/12 text-emerald-700 dark:text-emerald-300",
-  LATE: "bg-amber-500/15 text-amber-700 dark:text-amber-300",
-  ABSENT: "bg-red-500/12 text-red-700 dark:text-red-300",
-  PENDING: "bg-muted text-muted-foreground",
-  NOT_JOINED: "text-muted-foreground/60",
-  NOT_TRACKED: "text-muted-foreground/60",
-};
-
-function StatusBadge({ status }: { status: DayStatus }) {
-  return (
-    <span className={cn("inline-flex rounded-full px-2 py-0.5 text-xs font-medium whitespace-nowrap", STATUS_BADGE[status])}>
-      {DAY_STATUS_LABEL[status]}
-    </span>
-  );
-}
+const STATUS_BADGE = DAY_STATUS_STYLE;
+const StatusBadge = DayStatusBadge;
 
 const dayLabel = (ymd: string) =>
   new Date(`${ymd}T00:00:00.000Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
@@ -129,6 +87,16 @@ export function AttendanceReport() {
     setApplied(draft);
     setPage(1);
   };
+  // A quick range (Today, Yesterday, ...) loads at once - otherwise clicking "Today" kept showing the last
+  // applied range until Apply was pressed. Single Date / Custom Range still wait for Apply (dates to pick first).
+  const choosePreset = (preset: Preset) => {
+    const next = { ...draft, preset };
+    setDraft(next);
+    if (preset !== "single" && preset !== "custom") {
+      setApplied(next);
+      setPage(1);
+    }
+  };
   const reset = () => {
     const fresh = initialDraft();
     setDraft(fresh);
@@ -157,7 +125,7 @@ export function AttendanceReport() {
   const openEmployee = (id: string) => router.push(`/dashboard/salespersons/${id}`);
 
   return (
-    <Panel title="Attendance Report" description="Present, late and absent days from real clock-ins. Every day is a working day; late = first clock-in after 09:45 IST.">
+    <Panel title="Attendance Report" description="Present and absent days from real clock-ins. Present = clocked in that day; absent = no clock-in on a working day.">
       <div className="space-y-5">
         {/* ---- filters ---- */}
         <div className="space-y-3">
@@ -166,7 +134,7 @@ export function AttendanceReport() {
               <button
                 key={p.value}
                 type="button"
-                onClick={() => patch({ preset: p.value })}
+                onClick={() => choosePreset(p.value)}
                 className={cn(
                   "rounded-full border px-3 py-1 text-xs transition-colors",
                   draft.preset === p.value ? "border-foreground bg-foreground text-background" : "border-border bg-card hover:bg-muted",
@@ -211,7 +179,6 @@ export function AttendanceReport() {
               <NativeSelect value={draft.status} onChange={(e) => patch({ status: e.target.value as AttendanceStatusFilter })} wrapperClassName="w-36" aria-label="Attendance status">
                 <option value="ALL">All</option>
                 <option value="PRESENT">Present</option>
-                <option value="LATE">Late</option>
                 <option value="ABSENT">Absent</option>
               </NativeSelect>
             </label>
@@ -300,16 +267,14 @@ function Summary({ data }: { data: AttendanceRecords }) {
   const unit = multi ? "employee-days" : "employees";
   return (
     <div className="space-y-2">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard label="Total Employees" tone="blue" icon={Users} value={String(s.totalEmployees)} lines={[{ text: multi ? `${data.range.days.length} days` : data.range.from }]} />
-        <KpiCard label="Present" tone="emerald" icon={UserCheck} value={String(s.present + s.late)} lines={[{ text: `${unit} · incl. ${s.late} late` }]} />
-        <KpiCard label="On Time" tone="teal" icon={CalendarCheck} value={String(s.present)} lines={[{ text: unit }]} />
-        <KpiCard label="Late Arrivals" tone="amber" icon={Clock} value={String(s.late)} lines={[{ text: `after ${data.policy.lateAfter} IST` }]} />
-        <KpiCard label="Absent" tone="slate" icon={UserX} value={String(s.absent)} lines={[{ text: unit }]} />
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard label="Employees" tone="blue" icon={Users} value={String(s.totalEmployees)} lines={[{ text: multi ? `${data.range.days.length} days` : data.range.from }]} />
+        <KpiCard label="Present" tone="emerald" icon={UserCheck} value={String(s.present)} lines={[{ text: unit }]} />
+        <KpiCard label="Absent" tone="red" icon={UserX} value={String(s.absent)} lines={[{ text: unit }]} />
         <KpiCard label="Attendance %" tone="violet" icon={Percent} value={pct(s.attendancePct)} lines={[{ text: s.expected ? `${s.attended} of ${s.expected} working ${multi ? "days" : "employees"}` : "Nothing expected yet" }]} />
       </div>
       <p className="text-xs text-muted-foreground">
-        Half-day, leave, holidays and weekly offs aren&apos;t tracked in this CRM, so every day counts as a working day. Today counts once someone clocks in;
+        Half-day, leave, holidays and weekly offs aren&apos;t tracked in this CRM, so every day counts as a working day. Today shows &quot;Not Yet Recorded&quot; until {data.policy.cutoff} IST; after that, anyone not clocked in counts as absent (a later clock-in makes them present);
         days before an employee joined{data.policy.trackingStartedOn ? ` or before attendance tracking began (${data.policy.trackingStartedOn})` : ""} are left out.
       </p>
     </div>
@@ -325,8 +290,7 @@ function TrendChart({ data }: { data: AttendanceRecords }) {
         tooltipTitles={data.daily.map((d) => `${weekday(d.date)} ${dayLabel(d.date)} · ${pct(d.attendancePct)} attendance`)}
         height={200}
         series={[
-          { key: "present", label: "On time", values: data.daily.map((d) => d.present), colorClass: "text-emerald-500" },
-          { key: "late", label: "Late", values: data.daily.map((d) => d.late), colorClass: "text-amber-400" },
+          { key: "present", label: "Present", values: data.daily.map((d) => d.present), colorClass: "text-emerald-500" },
           { key: "absent", label: "Absent", values: data.daily.map((d) => d.absent), colorClass: "text-red-500" },
         ]}
       />
@@ -348,7 +312,7 @@ function Matrix({ data, onOpen }: { data: AttendanceRecords; onOpen: (id: string
                 <div className="text-[10px] font-normal">{weekday(d)}</div>
               </th>
             ))}
-            {["Present", "Late", "Absent", "Att. %", "Talk Time"].map((h) => (
+            {["Present", "Absent", "Att. %", "Talk Time"].map((h) => (
               <th key={h} className="px-2 py-2 text-right font-medium whitespace-nowrap">
                 {h}
               </th>
@@ -379,7 +343,6 @@ function Matrix({ data, onOpen }: { data: AttendanceRecords; onOpen: (id: string
                 </td>
               ))}
               <td className="px-2 text-right tabular-nums">{e.totals.present}</td>
-              <td className="px-2 text-right tabular-nums">{e.totals.late}</td>
               <td className="px-2 text-right tabular-nums">{e.totals.absent}</td>
               <td className="px-2 text-right font-medium tabular-nums">{pct(e.totals.attendancePct)}</td>
               <td className="px-2 pr-3 text-right tabular-nums" title={`${e.totals.calls} calls`}>{formatHours(e.totals.talkTimeSec * 1000)}</td>
@@ -388,7 +351,7 @@ function Matrix({ data, onOpen }: { data: AttendanceRecords; onOpen: (id: string
         </tbody>
       </table>
       <p className="border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
-        P = Present · L = Late · A = Absent · – = not clocked in yet today · · = before joining or before attendance tracking began. Present and Late totals are separate; both count as attended.
+        P = Present · A = Absent · – = today, not yet recorded (before {data.policy.cutoff} IST) · · = outside the reporting period (before joining or before attendance tracking began).
       </p>
     </div>
   );
@@ -401,42 +364,56 @@ function RecordsTable({ mode, data, onOpen }: { mode: "day" | "history"; data: A
       ? data.employees.map((e) => ({ id: e.id, name: e.name, employeeId: e.employeeId, r: e.records[0]! }))
       : data.employees.flatMap((e) => [...e.records].reverse().map((r) => ({ id: e.id, name: e.name, employeeId: e.employeeId, r })));
   const shown = rows.filter((x) => x.r.status !== "NOT_JOINED" && x.r.status !== "NOT_TRACKED" && (data.filters.status === "ALL" || x.r.status === data.filters.status));
-  const head = ["Employee ID", "Employee", "Date", "Check-In", "Check-Out", "Working", "Productive", "Calls", "Talk Time", "Status", "Late By", "Remarks"];
+  // Durations and counts are right-aligned so their digits line up; everything else reads left to right.
+  const head: { label: string; right?: boolean }[] = [
+    { label: "Employee ID" },
+    { label: "Employee" },
+    { label: "Date" },
+    { label: "Check-In" },
+    { label: "Check-Out" },
+    { label: "Working", right: true },
+    { label: "Productive", right: true },
+    { label: "Calls", right: true },
+    { label: "Talk Time", right: true },
+    { label: "Status" },
+    { label: "Remarks" },
+  ];
+  const cell = "px-3 py-2.5 align-middle whitespace-nowrap";
+  const num = `${cell} text-right tabular-nums`;
   return (
     <div className="overflow-x-auto rounded-md border border-border">
       <table className="w-full text-sm">
         <thead className="bg-muted/60 text-xs text-muted-foreground">
           <tr>
             {head.map((h) => (
-              <th key={h} className="px-3 py-2 text-left font-medium whitespace-nowrap">
-                {h}
+              <th key={h.label} className={cn("px-3 py-2 font-medium whitespace-nowrap", h.right ? "text-right" : "text-left")}>
+                {h.label}
               </th>
             ))}
           </tr>
         </thead>
         <tbody>
           {shown.map(({ id, name, employeeId, r }) => (
-            <tr key={`${id}-${r.date}`} className="border-t border-border/60">
-              <td className="px-3 py-2 text-muted-foreground">{employeeId}</td>
-              <td className="px-3 py-2">
-                <button type="button" onClick={() => onOpen(id)} className="font-medium hover:underline">
+            <tr key={`${id}-${r.date}`} className="border-t border-border/60 hover:bg-muted/30">
+              <td className={cn(cell, "text-muted-foreground")}>{employeeId}</td>
+              <td className={cell}>
+                <button type="button" onClick={() => onOpen(id)} className="text-left font-medium hover:underline">
                   {name}
                 </button>
               </td>
-              <td className="px-3 py-2 whitespace-nowrap">
+              <td className={cell}>
                 {weekday(r.date)} {dayLabel(r.date)}
               </td>
-              <td className="px-3 py-2 tabular-nums">{istTime(r.checkIn) || "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.stillWorking ? "Working" : istTime(r.checkOut) || "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.checkIn ? formatHours(r.workingMs) : "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.checkIn ? formatHours(r.productiveMs) : "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.calls || "—"}</td>
-              <td className="px-3 py-2 tabular-nums">{r.talkTimeSec ? formatHours(r.talkTimeSec * 1000) : "—"}</td>
-              <td className="px-3 py-2">
+              <td className={cn(cell, "tabular-nums")}>{istTime(r.checkIn) || "—"}</td>
+              <td className={cn(cell, "tabular-nums")}>{r.stillWorking ? "Working" : istTime(r.checkOut) || "—"}</td>
+              <td className={num}>{r.checkIn ? formatHours(r.workingMs) : "—"}</td>
+              <td className={num}>{r.checkIn ? formatHours(r.productiveMs) : "—"}</td>
+              <td className={num}>{r.calls || "—"}</td>
+              <td className={num}>{r.talkTimeSec ? formatHours(r.talkTimeSec * 1000) : "—"}</td>
+              <td className={cell}>
                 <StatusBadge status={r.status} />
               </td>
-              <td className="px-3 py-2 tabular-nums">{r.lateByMs > 0 ? formatHours(r.lateByMs) : "—"}</td>
-              <td className="px-3 py-2 text-xs text-muted-foreground">{r.remarks.join(" · ") || "—"}</td>
+              <td className="min-w-48 px-3 py-2.5 align-middle text-xs text-muted-foreground">{r.remarks.join(" · ") || "—"}</td>
             </tr>
           ))}
         </tbody>

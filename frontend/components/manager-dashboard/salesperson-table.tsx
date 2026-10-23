@@ -55,7 +55,7 @@ export function SalespersonPerformanceTable({
         <>
           {/* Desktop / tablet table */}
           <div className="hidden overflow-x-auto md:block">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="py-2.5 pr-3 pl-5 text-left font-medium">Salesperson</th>

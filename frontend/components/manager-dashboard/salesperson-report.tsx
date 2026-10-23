@@ -327,7 +327,7 @@ function DailyPerformanceTable({ daily }: { daily: DailyBucket[] }) {
       ) : (
         <>
           <div className="hidden max-h-[28rem] overflow-auto md:block">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
               <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
                 <tr>
                   {cols.map((c, i) => (
