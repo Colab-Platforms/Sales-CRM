@@ -275,7 +275,9 @@ class AttendanceService {
     if (!session) return;
     await prisma.workSession.update({ where: { id: session.id }, data: { lastSeenAt: new Date() } });
     if (session.currentStatus === WorkStatus.IDLE) {
-      await this.transition(session.id, userId, WorkStatus.IDLE, WorkStatus.ACTIVE);
+      // Reconnecting mid-call: the agent is still on the phone, so go back to ON_CALL, not ACTIVE.
+      const onCall = await this.hasCallInFlight(userId, new Date());
+      await this.transition(session.id, userId, WorkStatus.IDLE, onCall ? WorkStatus.ON_CALL : WorkStatus.ACTIVE);
     }
   }
 
@@ -295,6 +297,7 @@ class AttendanceService {
   // Someone on a break/huddle who closes the laptop is still on that break - only "working" statuses
   // turn into IDLE when the browser goes away.
   private async markIdleIfWorking(sessionId: string, userId: string, status: WorkStatus): Promise<void> {
+    if (status === WorkStatus.ON_CALL && (await this.hasCallInFlight(userId, new Date()))) return; // talking on the phone, browser may be backgrounded
     if (status === WorkStatus.ACTIVE || status === WorkStatus.ON_CALL) {
       await this.transition(sessionId, userId, status, WorkStatus.IDLE);
     }
