@@ -21,6 +21,10 @@ import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.sch
 import { startIdempotencyPruneJob } from "./modules/orders/orders.idempotency.prune.js";
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
 import { attendanceService } from "./modules/attendance/attendance.service.js";
+import { assertSandboxProcess } from "./modules/cashfree/cashfree.sandbox-guard.js";
+
+// A Cashfree SANDBOX test run (CRM_SANDBOX_MODE=true) refuses to start when it could reach production; any other process is unaffected.
+assertSandboxProcess();
 
 const app = express();
 

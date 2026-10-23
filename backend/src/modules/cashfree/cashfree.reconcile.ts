@@ -23,6 +23,11 @@ export interface PaymentReconcileDeps {
   getShopifyClient?: () => ShopifyClient;
   /** Test seam for the customer notification (fake senders). */
   notifyDeps?: OrderNotifyDeps;
+  /**
+   * After a payment becomes SUCCESS or FAILED: close what is still open for it at Cashfree (the UPI QR's order after the link was paid or the payment failed; the payment link after the QR was paid).
+   * Best effort: a failure here is logged and recorded, never undoes the payment - a payment that still arrives is caught as a duplicate / late payment by applyPaymentUpdate.
+   */
+  closeOpenMethods?: (paymentId: string, to: "SUCCESS" | "FAILED", via: string | null) => Promise<void>;
 }
 
 export interface PaymentReconcileContext {
@@ -39,6 +44,13 @@ export async function reconcileCashfreePayment(deps: PaymentReconcileDeps, payme
 
   // Best-effort follow-ups to a newly successful payment. Neither can undo the payment above, and a failure is recorded on the order (Shopify) or logged,
   // never turned into a retry of the payment itself; the existing "Retry Shopify payment sync" action re-runs the (idempotent) Shopify step.
+  if (applied.outcome === "updated" && deps.closeOpenMethods && (applied.to === PaymentStatus.SUCCESS || applied.to === PaymentStatus.FAILED)) {
+    try {
+      await deps.closeOpenMethods(paymentId, applied.to, typeof update.meta?.via === "string" ? update.meta.via : null);
+    } catch (error) {
+      logger.warn(`Closing the other payment method of payment ${paymentId} errored: ${safeMessage(error instanceof Error ? error.message : String(error))}`);
+    }
+  }
   if (applied.outcome === "updated" && applied.to === PaymentStatus.SUCCESS) {
     await confirmAndSyncPaidOrder(deps, applied.orderId, ctx, now);
     try {
@@ -46,7 +58,7 @@ export async function reconcileCashfreePayment(deps: PaymentReconcileDeps, payme
     } catch (error) {
       logger.warn(`Payment-success WhatsApp notification errored for order ${applied.orderId}: ${safeMessage(error instanceof Error ? error.message : String(error))}`);
     }
-  } else if (applied.outcome === "unchanged" && (await isStuckPaidPrepaidOrder(deps.runner, applied.orderId))) {
+  } else if (applied.outcome === "unchanged" && !applied.exception && (await isStuckPaidPrepaidOrder(deps.runner, applied.orderId))) {
     // RECOVERY. The payment is already SUCCESS but the prepaid order never left PENDING_PAYMENT: the confirmation step did not run or did not complete the first time (a webhook handled by an older build, a
     // crash or an error in between). Every Cashfree result passes through here - a repeated webhook, Refresh, the scheduled catch-up - so any of them finishes the job now. It is the same idempotent
     // confirmation (guarded status change, claimed Shopify create, paid only on a verified payment), so a concurrent or repeated run changes nothing the second time. No customer message is re-sent.

@@ -23,6 +23,7 @@ import {
 } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import CustomersService from "./customers.service.js";
+import { validateCustomerIdParams } from "./customers.validators.js";
 
 class Rollback extends Error {}
 
@@ -609,6 +610,144 @@ describe("Deactivating a customer profile (Part 8, WhatsApp Inbox)", () => {
       // Still fully reachable directly - deactivation never hides a record from a direct lookup, only from lists.
       const direct = await svc.getCustomer360(as(admin, Role.ADMIN), deactivated.id);
       assert.equal(direct.profile.workingStatus, "DEACTIVATED");
+    });
+  });
+});
+
+// ---- Customer 360 / Timeline / customer-name link: ONE lookup rule, the same lead the Lead page opens
+describe("Customer detail reads resolve the same lead the Lead page opens", () => {
+  const world = async (tx: Prisma.TransactionClient) => {
+    const manager = await tx.user.create({ data: { name: "Manager", username: `m-${uid()}`, role: Role.MANAGER } });
+    const otherManager = await tx.user.create({ data: { name: "Other Manager", username: `m2-${uid()}`, role: Role.MANAGER } });
+    const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+    const stranger = await tx.user.create({ data: { name: "Stranger", username: `s-${uid()}`, role: Role.SALESPERSON } });
+    const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+    const group = await tx.group.create({ data: { name: `Team-${uid()}`, managerId: manager.id } });
+    await tx.groupMember.create({ data: { groupId: group.id, userId: rep.id, joinedAt: new Date(), isActive: true } });
+    const mk = (data: Record<string, unknown>) => tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Asha", lifecycleStage: "CUSTOMER", mobile: `9${Math.floor(1e8 + Math.random() * 9e8)}`, ...data } as never });
+    // assigned to the manager only (what the Lead page / Abandoned Leads hand out): no telecaller, no group
+    const assigned = await mk({ assignedManagerId: manager.id });
+    // in the manager's team through a telecaller (the old, still-valid path)
+    const team = await mk({ ownerId: rep.id });
+    // somebody else's
+    const foreign = await mk({ assignedManagerId: otherManager.id });
+    await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: assigned.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "649.00" } });
+    return { manager, otherManager, rep, stranger, admin, assigned, team, foreign, svc: new CustomersService(tx) };
+  };
+  const q = { page: 1, pageSize: 20 };
+
+  it("a manager opens Customer 360, the Timeline and the next-best-action of a lead ASSIGNED to them - all three resolve the SAME record, with its order history", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const m = as(w.manager, Role.MANAGER);
+      const c360 = await w.svc.getCustomer360(m, w.assigned.id);
+      assert.equal(c360.profile.leadId, w.assigned.id);
+      assert.equal(c360.orders.length, 1, "order history is preserved");
+      assert.equal((await w.svc.getTimeline(m, w.assigned.id, q)).pagination.page, 1);
+      assert.ok(await w.svc.getNextBestAction(m, w.assigned.id));
+    });
+  });
+
+  it("the team path still works (a lead owned by the manager's telecaller), and admin / owner access is unchanged", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      assert.equal((await w.svc.getCustomer360(as(w.manager, Role.MANAGER), w.team.id)).profile.leadId, w.team.id);
+      assert.equal((await w.svc.getCustomer360(as(w.rep, Role.SALESPERSON), w.team.id)).profile.leadId, w.team.id);
+      assert.equal((await w.svc.getCustomer360(as(w.admin, Role.ADMIN), w.assigned.id)).profile.leadId, w.assigned.id);
+      assert.equal((await w.svc.getTimeline(as(w.admin, Role.ADMIN), w.foreign.id, q)).pagination.page, 1);
+    });
+  });
+
+  it("ISOLATION: another manager, a telecaller who does not own the lead, and a manager looking at another manager's lead all get Customer not found on every detail read", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const denied: [ReturnType<typeof as>, string][] = [
+        [as(w.otherManager, Role.MANAGER), w.assigned.id],
+        [as(w.manager, Role.MANAGER), w.foreign.id],
+        [as(w.stranger, Role.SALESPERSON), w.assigned.id],
+        [as(w.rep, Role.SALESPERSON), w.assigned.id], // the manager's own telecaller does not get a lead that is only assigned to the manager
+        [as(w.stranger, Role.SALESPERSON), w.team.id],
+      ];
+      for (const [user, id] of denied) {
+        // the timeline and the next-best-action keep the strict scope for everyone
+        await assert.rejects(() => w.svc.getTimeline(user, id, q), /Customer not found/);
+        await assert.rejects(() => w.svc.getNextBestAction(user, id), /Customer not found/);
+      }
+      // Customer 360 itself is the page the customer-NAME link opens: for a customer WITH orders it is READ-ONLY here (see the next describe); for one without orders it is still not found
+      await assert.rejects(() => w.svc.getCustomer360(as(w.stranger, Role.SALESPERSON), w.team.id), /Customer not found/, "no order, not in scope: not found");
+    });
+  });
+
+  it("the broader READ never becomes a write: deactivating / the deactivation impact keep the strict team scope, and the customer LIST is unchanged", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const m = as(w.manager, Role.MANAGER);
+      await assert.rejects(() => w.svc.getDeactivationImpact(m, w.assigned.id), /Customer not found/);
+      await assert.rejects(() => w.svc.deactivateCustomer(m, w.assigned.id), /Customer not found/);
+      await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: w.team.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "100.00" } });
+      const list = await w.svc.listCustomers(m, { page: 1, pageSize: 50 } as never);
+      const ids = list.items.map((i: { leadId: string }) => i.leadId);
+      assert.ok(ids.includes(w.team.id) && !ids.includes(w.assigned.id), "the list keeps its own scope");
+    });
+  });
+
+  it("a missing id is a proper not-found, a malformed id is a validation error (never treated as another identifier type)", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const m = as(w.manager, Role.MANAGER);
+      await assert.rejects(() => w.svc.getCustomer360(m, uid()), /Customer not found/);
+      await assert.rejects(() => w.svc.getTimeline(m, uid(), q), /Customer not found/);
+      for (const bad of ["not-a-uuid", "gid://shopify/Customer/123", "123456789", "CRM-ABC", ""]) {
+        assert.ok(validateCustomerIdParams({ leadId: bad }).error, `${bad} must be refused as an id`);
+      }
+      assert.ifError(validateCustomerIdParams({ leadId: w.assigned.id }).error);
+    });
+  });
+});
+
+// ---- the customer-NAME link on company-wide lists (Orders, Shiprocket, Inbox ...) opens a READ-ONLY Customer 360 for a customer who has an order
+describe("Customer-name link: the customer behind a visible order opens read-only", () => {
+  const world = async (tx: Prisma.TransactionClient) => {
+    const owner = await tx.user.create({ data: { name: "Owner", username: `o-${uid()}`, role: Role.SALESPERSON } });
+    const telecaller = await tx.user.create({ data: { name: "Other telecaller", username: `t-${uid()}`, role: Role.SALESPERSON } });
+    const manager = await tx.user.create({ data: { name: "Manager", username: `m-${uid()}`, role: Role.MANAGER } });
+    const hr = await tx.user.create({ data: { name: "HR", username: `h-${uid()}`, role: Role.HR } });
+    const admin = await tx.user.create({ data: { name: "Admin", username: `a-${uid()}`, role: Role.ADMIN } });
+    const mk = (data: Record<string, unknown>) => tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Meera", lifecycleStage: "CUSTOMER", mobile: `9${Math.floor(1e8 + Math.random() * 9e8)}`, ...data } as never });
+    const withOrder = await mk({ ownerId: owner.id });
+    const noOrder = await mk({ ownerId: owner.id });
+    await tx.order.create({ data: { orderNumber: `ORD-${uid()}`, leadId: withOrder.id, source: OrderSource.WEBSITE, status: OrderStatus.CONFIRMED, totalAmount: "649.00" } });
+    return { owner, telecaller, manager, hr, admin, withOrder, noOrder, svc: new CustomersService(tx) };
+  };
+
+  it("a telecaller / manager who is NOT the owner opens the customer from a visible order: the same record, READ-ONLY, with its order history", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      for (const u of [as(w.telecaller, Role.SALESPERSON), as(w.manager, Role.MANAGER)]) {
+        const c = await w.svc.getCustomer360(u, w.withOrder.id);
+        assert.equal(c.profile.leadId, w.withOrder.id);
+        assert.equal(c.readOnly, true);
+        assert.equal(c.orders.length, 1);
+      }
+      // the owner and the admin keep the full, editable view
+      assert.equal((await w.svc.getCustomer360(as(w.owner, Role.SALESPERSON), w.withOrder.id)).readOnly, undefined);
+      assert.equal((await w.svc.getCustomer360(as(w.admin, Role.ADMIN), w.withOrder.id)).readOnly, undefined);
+    });
+  });
+
+  it("nothing else opens: a customer with no order, HR, a missing id are all not found - and the timeline, next-best-action, deactivation and the list stay strict for the read-only viewer", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const t = as(w.telecaller, Role.SALESPERSON);
+      await assert.rejects(() => w.svc.getCustomer360(t, w.noOrder.id), /Customer not found/);
+      await assert.rejects(() => w.svc.getCustomer360(as(w.hr, Role.HR), w.withOrder.id), /Customer not found/);
+      await assert.rejects(() => w.svc.getCustomer360(t, uid()), /Customer not found/);
+      await assert.rejects(() => w.svc.getTimeline(t, w.withOrder.id, { page: 1, pageSize: 20 }), /Customer not found/);
+      await assert.rejects(() => w.svc.getNextBestAction(t, w.withOrder.id), /Customer not found/);
+      await assert.rejects(() => w.svc.getDeactivationImpact(t, w.withOrder.id), /Customer not found/);
+      await assert.rejects(() => w.svc.deactivateCustomer(t, w.withOrder.id), /Customer not found/);
+      const list = await w.svc.listCustomers(t, { page: 1, pageSize: 50 } as never);
+      assert.ok(!list.items.some((i: { leadId: string }) => i.leadId === w.withOrder.id), "the customer list keeps its own scope");
     });
   });
 });

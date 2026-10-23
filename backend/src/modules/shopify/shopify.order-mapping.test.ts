@@ -249,3 +249,23 @@ test("mergeShippingForRepair keeps every non-blank value Shopify already has and
   assert.deepEqual([out.address1, out.zip, out.city, out.lastName, out.address2, out.phone], ["Staff corrected", "411046", "Pune", "Rao", "CRM line 2", "+919811950001"]);
   assert.deepEqual(mergeShippingForRepair(mapped, null), mapped, "no existing address: the CRM address as is");
 });
+
+test("customer: a lead with NO e-mail and no Shopify match gets no customer upsert (Shopify identifies a new customer by e-mail); a phone match is still associated; an e-mail lead is unchanged", async () => {
+  const noEmail = { ...LEAD, email: null };
+  const none = await resolveShopifyCustomer(customersClient([]), noEmail, "Anil Kumar Verma");
+  assert.equal(none.customer, null);
+  assert.match(none.note, /^the lead has no e-mail/);
+  assert.deepEqual((await resolveShopifyCustomer(customersClient([cust("9", "+919811700001")]), noEmail, "Anil")).customer, { toAssociate: { id: "gid://shopify/Customer/9" } });
+  assert.deepEqual((await resolveShopifyCustomer(customersClient([]), LEAD, "Anil Kumar Verma")).customer, { toUpsert: { email: "anil@example.com", phone: "+919811700001", firstName: "Anil", lastName: "Kumar Verma" } });
+  assert.equal((await resolveShopifyCustomer(customersClient([]), { ...LEAD, email: "   " }, null)).customer, null, "a blank e-mail is no e-mail");
+});
+
+test("compareShopifyOrder reports the amounts when the total differs, and nothing when it matches to the cent", () => {
+  const found = (amount: string) => ({ totalPriceSet: { shopMoney: { amount } }, note: null, tags: [], shippingAddress: null, billingAddress: null, customer: null, lineItems: { nodes: [] }, metafields: { nodes: [] }, displayFinancialStatus: "Pending" }) as never;
+  const sent = { lineItems: [] } as never;
+  const off = compareShopifyOrder(sent, found("649.0"), "699.00");
+  assert.deepEqual(off.totals, { expected: "699.00", actual: "649.00", difference: "50.00" });
+  assert.ok(off.missing.includes("totals"));
+  assert.equal(compareShopifyOrder(sent, found("699.00"), "699.00").totals, undefined);
+  assert.equal(compareShopifyOrder(sent, found("649.0")).totals, undefined, "not compared when the totals were not meant to match");
+});

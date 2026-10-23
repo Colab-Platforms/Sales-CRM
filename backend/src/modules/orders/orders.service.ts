@@ -317,6 +317,21 @@ async function prepareShopifyPayload(order: PushOrder, client: ShopifyClient) {
     return { built, customerDecision, extras, crmFiguresAddUp, cents };
 }
 
+/**
+ * Which part of a refused orderCreate Shopify blames, from its STRUCTURED error: the userErrors' field paths and messages (or a GraphQL error's message). Only an error that names the shipping line(s) or the
+ * discount (shippingLines, discountCode, itemFixedDiscountCode, "discount") is a shipping / discount refusal. Words that merely contain "shipping" - shippingAddress, "shipping address" - are the ADDRESS, never
+ * the charge. Anything else (an address or product field, a variant, a note ...) is a general order refusal, so an administrator is not pointed at the wrong cause.
+ */
+function classifyCreateRejection(error: unknown): "shipping_or_discount_rejected" | "order_rejected" {
+  const raw = error instanceof ShopifyOrderCreateError ? error.raw : undefined;
+  const parts: string[] = [];
+  if (Array.isArray(raw)) for (const e of raw as { field?: unknown; message?: unknown }[]) parts.push(`${Array.isArray(e?.field) ? e.field.join(".") : ""} ${typeof e?.message === "string" ? e.message : ""}`);
+  else if (raw instanceof Error) parts.push(raw.message);
+  else if (error instanceof Error) parts.push(error.message);
+  const text = parts.join(" | ").replace(/shipping[\s_-]*address(es)?/gi, "").replace(/billing[\s_-]*address(es)?/gi, "");
+  return /shippingLines?\b|shipping[\s_-]*lines?\b|discountCode|itemFixedDiscountCode|\bdiscount/i.test(text) ? "shipping_or_discount_rejected" : "order_rejected";
+}
+
 class OrdersService {
   // getShopifyClient is injectable so tests never construct a real client (which would read real
   // env credentials) - same "factory the constructor can override" shape as WhatsAppMessagingService's
@@ -1169,7 +1184,7 @@ class OrdersService {
       const sentOmitted: string[] = Object.entries(built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
       let verifiedSync: ShopifySyncRecord | null = null;
       // A fallback that dropped information the CRM HAS (customer / discount) or a customer that could not be attached is never a complete sync.
-      let degraded: string[] = customerDecision.customer ? [] : (customerDecision.note.startsWith("the lead has no phone") ? [] : [`customer not associated: ${customerDecision.note}`]);
+      let degraded: string[] = customerDecision.customer ? [] : (/^the lead has no (phone|e-mail)/.test(customerDecision.note) ? [] : [`customer not associated: ${customerDecision.note}`]);
       const earlier = (order.metadata as Record<string, unknown> | null)?.shopifyCreateUncertain === true;
       // A previous attempt ended without an answer (timeout / dropped connection): Shopify may well have created the order. Look for it by the CRM order number FIRST; creating blindly could make a second one.
       const existing = earlier ? await findShopifyOrderBySourceIdentifier(client, order.orderNumber) : null;
@@ -1181,15 +1196,37 @@ class OrdersService {
           result = await createShopifyOrder(client, input);
         } catch (error) {
           if (!isShopifyRejection(error)) throw error;
-          // Shopify REFUSED the request (nothing was created). Retry once, dropping the optional parts that most often cause a refusal, and say so in the sync result:
-          // the customer association (a phone/e-mail that belongs to another Shopify customer) and the discount/shipping mirror.
+          // Shopify REFUSED the request (nothing was created). STAGED fallback: only the customer association is optional - a phone/e-mail that belongs to another Shopify customer, or a new customer Shopify will not
+          // take - so the retry drops THAT and nothing else: items, shipping line and discount stay exactly as the CRM has them. The CRM's charges are never removed to get an order through.
           const rejection = error instanceof Error ? error.message : "rejected";
           if (!input.customer && !extras) throw error;
-          if (input.customer) { sentOmitted.push(`customer (Shopify refused it: ${rejection.slice(0, 120)})`); degraded.push("customer: Shopify refused the association"); }
-          if (extras) { mirrored = false; sentOmitted.push("discount/shipping mirror (Shopify refused it)"); degraded.push("discount/shipping were not mirrored"); }
+          const sentMoney = { shippingLineSent: Boolean(input.shippingAmount), discountSent: Boolean(input.discount) };
+          // Shopify refused the shipping / discount data as well (or the refusal is not about the customer): NOTHING is created without the CRM's charges. The order stays unlinked, the failure is recorded for an
+          // administrator with the category and the expected-versus-actual amounts, and a later retry can create it once the cause is fixed.
+          const refuseMoney = async (second: unknown): Promise<{ status: "failed"; reason: string }> => {
+            const why = sanitizeSyncError(second instanceof Error ? second : rejection);
+            const category = classifyCreateRejection(second);
+            const expectedText = `expected total ${order.totalAmount.toString()}: items ${order.subtotal.toString()} - discount ${order.discountAmount.toString()} + shipping ${order.shippingAmount.toString()}`;
+            const reason = (category === "shipping_or_discount_rejected"
+              ? `Shopify refused the order with the CRM shipping/discount lines (${expectedText}); no Shopify order was created, so the difference is the whole total. It was NOT created without those charges. ${why}`
+              : `Shopify refused the order for a reason that does not name the shipping or discount lines (${expectedText}); no Shopify order was created, and the CRM's shipping/discount lines were NOT removed. ${why}`).slice(0, 480);
+            const record: ShopifySyncRecord = { status: "failed", missing: [category === "shipping_or_discount_rejected" ? "shipping/discount lines refused by Shopify" : "order refused by Shopify"], omitted: sentOmitted, repaired: [], customer: customerDecision.note, attemptedAt: new Date().toISOString(), verifiedAt: null, retryAdvice: "ADMIN", error: reason, totals: { category, expected: order.totalAmount.toString(), actual: null, difference: order.totalAmount.toString(), items: order.subtotal.toString(), discount: order.discountAmount.toString(), shipping: order.shippingAmount.toString(), customerSent: false, ...sentMoney } };
+            const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
+            await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifySync: record } as unknown as Prisma.InputJsonValue } });
+            logger.warn(`Shopify refused order ${order.orderNumber} (${category}); not created without its shipping/discount lines`);
+            return { status: "failed", reason };
+          };
+          if (!input.customer) return await refuseMoney(error);
+          sentOmitted.push(`customer (Shopify refused it: ${rejection.slice(0, 120)}) - the order was retried without the customer only`);
+          degraded.push("customer: Shopify refused the association");
           input.customer = undefined;
-          if (extras) { input.discount = undefined; input.shippingAmount = undefined; }
-          result = await createShopifyOrder(client, input);
+          try {
+            result = await createShopifyOrder(client, input);
+          } catch (second) {
+            if (!isShopifyRejection(second)) throw second;
+            if (!extras) throw second;
+            return await refuseMoney(second);
+          }
         }
       }
       // Read the order BACK and compare it with what was sent: a 200 with no userErrors does not prove every field was saved. A missing shipping address / metafields is re-sent once with orderUpdate (those
@@ -1207,7 +1244,7 @@ class OrdersService {
             repairErrors = fixed.errors.map(sanitizeSyncError);
             if (repairErrors.length > 0) logger.warn(`Shopify refused the repair of order ${order.orderNumber}: ${repairErrors.join(" | ")}`);
           }
-          verifiedSync = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted: sentOmitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? customerDecision.note : `no Shopify customer record: ${customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+          verifiedSync = { status: check.totals ? "failed" : check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted: sentOmitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? customerDecision.note : `no Shopify customer record: ${customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: check.totals ? "ADMIN" : syncAdvice(check.missing, degraded), error: check.totals ? sanitizeSyncError(`Shopify total ${check.totals.actual} differs from the CRM total ${check.totals.expected} (difference ${check.totals.difference}); the order was not changed`) : null, ...(check.totals ? { totals: { category: "total_mismatch" as const, ...check.totals, items: order.subtotal.toString(), discount: order.discountAmount.toString(), shipping: order.shippingAmount.toString(), shippingLineSent: Boolean(input.shippingAmount), discountSent: Boolean(input.discount), customerSent: Boolean(input.customer) } } : {}) };
         } catch (verifyError) {
           verifiedSync = { status: "partial", missing: ["(could not read the order back to verify it)", ...degraded], omitted: sentOmitted, repaired: [], customer: customerDecision.note, attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(verifyError) };
           logger.error("Shopify order read-back failed", sanitizeSyncError(verifyError));
@@ -1309,9 +1346,9 @@ class OrdersService {
           if (!check.missing.includes("tags")) repaired.push("tags");
         }
       }
-      const degraded = prepared.customerDecision.customer || check.customerAssociated ? [] : [`customer not associated: ${prepared.customerDecision.note}`];
+      const degraded = prepared.customerDecision.customer || check.customerAssociated || prepared.customerDecision.note.startsWith("the lead has no e-mail") ? [] : [`customer not associated: ${prepared.customerDecision.note}`];
       const omitted = Object.entries(prepared.built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
-      record = { status: check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? "a Shopify customer is attached" : `no Shopify customer record: ${prepared.customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: syncAdvice(check.missing, degraded), error: null };
+      record = { status: check.totals ? "failed" : check.missing.length === 0 && degraded.length === 0 ? "complete" : "partial", missing: [...check.missing, ...degraded], omitted, repaired, ...(repairErrors.length > 0 ? { repairErrors } : {}), customer: check.customerAssociated ? "a Shopify customer is attached" : `no Shopify customer record: ${prepared.customerDecision.note}`, attemptedAt: attemptAt, verifiedAt: check.missing.length === 0 ? new Date().toISOString() : null, retryAdvice: check.totals ? "ADMIN" : syncAdvice(check.missing, degraded), error: check.totals ? sanitizeSyncError(`Shopify total ${check.totals.actual} differs from the CRM total ${check.totals.expected} (difference ${check.totals.difference}); the order was not changed`) : null, ...(check.totals ? { totals: { category: "total_mismatch" as const, ...check.totals, items: order.subtotal.toString(), discount: order.discountAmount.toString(), shipping: order.shippingAmount.toString(), shippingLineSent: Boolean(input.shippingAmount), discountSent: Boolean(input.discount), customerSent: Boolean(input.customer) } } : {}) };
     } catch (error) {
       record = { status: "failed", missing: [], omitted: [], repaired: [], customer: "", attemptedAt: attemptAt, verifiedAt: null, retryAdvice: "RETRY", error: sanitizeSyncError(error) };
     }

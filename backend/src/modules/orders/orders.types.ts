@@ -116,6 +116,8 @@ export interface ShopifySyncRecord {
   error: string | null;
   /** What Shopify answered when a repair (e.g. of the shipping address) was refused - sanitized, so a failed repair is explained. */
   repairErrors?: string[];
+  /** A money problem needing attention, with non-sensitive diagnostics: what the CRM expected, what Shopify holds (null = no Shopify order was created), the difference, and what was sent. */
+  totals?: { category: "total_mismatch" | "shipping_or_discount_rejected" | "order_rejected"; expected: string; actual: string | null; difference: string; items: string; discount: string; shipping: string; shippingLineSent: boolean; discountSent: boolean; customerSent: boolean };
 }
 
 export interface ShopifyPushResult {

@@ -26,14 +26,14 @@ const uid = () => randomUUID();
 const CONFIG = loadCashfreeConfig({ CASHFREE_ENABLED: "true", CASHFREE_CLIENT_ID: "TEST_APP", CASHFREE_CLIENT_SECRET: "test-secret", PUBLIC_BACKEND_URL: "https://crm.example.com" });
 
 /** A scripted Shopify that stores what it is sent and answers the read-back like the real one - optionally dropping the address, or refusing the repair. */
-function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repairErrors?: string[] } = {}) {
-  const state = { created: [] as any[], updates: [] as any[], repaired: false };
+function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repairErrors?: string[]; rejectUpsertWithoutEmail?: boolean; rejectCustomer?: boolean; rejectShippingLines?: boolean; rejectDiscount?: boolean; rejectAll?: { field: unknown[]; message: string }; totalOffset?: number; customerNodes?: any[] } = {}) {
+  const state = { created: [] as any[], updates: [] as any[], repaired: false, attempts: [] as { customer: boolean; shippingLines: boolean; discount: boolean }[] };
   const money = (v: number) => ({ shopMoney: { amount: v.toFixed(2) } });
   const total = (o: any) => (o.lineItems ?? []).reduce((s: number, l: any) => s + Number(l.priceSet?.shopMoney?.amount ?? 0) * Number(l.quantity ?? 1), 0) - Number(o.discountCode?.itemFixedDiscountCode?.amountSet?.shopMoney?.amount ?? 0) + Number(o.shippingLines?.[0]?.priceSet?.shopMoney?.amount ?? 0);
   const address = (a: any) => (a ? { address1: a.address1 ?? null, city: a.city ?? null, zip: a.zip ?? null, provinceCode: a.provinceCode ?? null, countryCodeV2: a.countryCode ?? null, lastName: a.lastName ?? null, firstName: a.firstName ?? null } : null);
   const client = {
     query: async (doc: string, vars: any) => {
-      if (/customers\(/.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: [] } };
+      if (/customers\(/.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: opts.customerNodes ?? [] } };
       if (/crmOrderIdentity/.test(doc)) {
         const o = state.created.find((c) => c.id === vars.id);
         return { order: o ? { name: o.name, sourceIdentifier: o.sourceIdentifier ?? null, cancelledAt: o.cancelledAt ?? null } : null };
@@ -43,6 +43,14 @@ function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repa
         return { orders: { nodes: state.created.filter((o) => o.sourceIdentifier === ref).map((o) => ({ id: o.id, name: o.name })) } };
       }
       if (/orderCreate/.test(doc)) {
+        state.attempts.push({ customer: Boolean(vars.order.customer), shippingLines: Boolean(vars.order.shippingLines?.length), discount: Boolean(vars.order.discountCode) });
+        // scripted REFUSALS (a rejected orderCreate creates nothing): Shopify refuses a new customer that has no e-mail; or any customer; or the shipping / discount data
+        const refuse = (message: string, field: unknown[] = ["order"]) => ({ orderCreate: { order: null, userErrors: [{ field, message }] } });
+        if (opts.rejectAll) return refuse(opts.rejectAll.message, opts.rejectAll.field);
+        if (opts.rejectUpsertWithoutEmail && vars.order.customer?.toUpsert && !vars.order.customer.toUpsert.email) return refuse("OrderCreateUpsertCustomerAttributesInput requires at least one of id or email");
+        if (opts.rejectCustomer && vars.order.customer) return refuse("customer phone has already been taken");
+        if (opts.rejectShippingLines && vars.order.shippingLines?.length) return refuse("shippingLines are not accepted");
+        if (opts.rejectDiscount && vars.order.discountCode) return refuse("discount is not accepted");
         const n = String(Math.floor(1e8 + Math.random() * 9e8));
         // REAL Shopify behaviour (proven on production data): an address whose LAST name is blank is not an error - the order is saved with NO shipping and NO billing address.
         const blankLast = Boolean(vars.order.shippingAddress) && !String(vars.order.shippingAddress.lastName ?? "").trim();
@@ -52,7 +60,7 @@ function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repa
       if (/crmOrderVerify/.test(doc)) {
         const o = state.created.find((c) => c.id === vars.id) ?? state.created.at(-1);
         const hasShip = !opts.dropShipping || state.repaired;
-        return { order: { id: o.id, note: o.note, tags: o.tags ?? [], displayFinancialStatus: "Pending", totalPriceSet: money(total(o)), customer: o.customer ? { id: "c" } : null,
+        return { order: { id: o.id, note: o.note, tags: o.tags ?? [], displayFinancialStatus: "Pending", totalPriceSet: money(total(o) - (opts.totalOffset ?? 0)), customer: o.customer ? { id: "c" } : null,
           shippingAddress: hasShip ? address(o.shippingAddress) : null, billingAddress: opts.dropBilling ? null : address(o.billingAddress),
           lineItems: { nodes: (o.lineItems ?? []).map((l: any) => ({ requiresShipping: l.requiresShipping !== false })) }, metafields: { nodes: (o.metafields ?? []).map((m: any) => ({ key: m.key })) } } };
       }
@@ -591,6 +599,199 @@ describe("reconciliation safety: verified identity, only what is missing, nothin
       await w.orders.resyncShopifyOrder(w.as, r.order.id);
       const after = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { status: true, totalAmount: true, shippingAddress: true, externalId: true } });
       assert.deepEqual([JSON.stringify(after), await tx.payment.count({ where: { orderId: r.order.id } }), w.shop.state.created.length], [JSON.stringify(before), payments, 1]);
+    });
+  });
+});
+
+// ---- the CRM total must reach Shopify intact: customer upsert needs an e-mail, the fallback drops ONLY the customer, a refusal of the money lines is a failure, and a total that differs is never "synced"
+describe("Shopify order totals: customer fallback and the amount guard (MOCKED Shopify)", () => {
+  const syncOf = async (tx: Prisma.TransactionClient, orderId: string) => ((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true } })).metadata as any)?.shopifySync;
+  const linked = async (tx: Prisma.TransactionClient, orderId: string) => (await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { externalId: true, totalAmount: true } }));
+
+  it("an e-mail-less lead with no Shopify customer: NO customer upsert is attempted, so Shopify is asked once, keeps the 50 shipping line, and the totals match (CRM 699 = Shopify 699)", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectUpsertWithoutEmail: true });
+      const r = await w.create("COD");
+      assert.equal(r.order.totalAmount.toString(), "699");
+      assert.deepEqual(w.shop.state.attempts, [{ customer: false, shippingLines: true, discount: false }], "one request, no customer, shipping line sent");
+      assert.equal(w.shop.state.created.length, 1);
+      assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 50);
+      const sync = await syncOf(tx, r.order.id);
+      assert.equal(sync.status, "complete", JSON.stringify({ s: sync.status, m: sync.missing }));
+      assert.match(sync.customer, /no e-mail/);
+      assert.equal(sync.totals, undefined);
+    });
+  });
+
+  it("a lead WITH an e-mail still gets its customer created, exactly as before", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectUpsertWithoutEmail: true });
+      await tx.lead.update({ where: { id: w.lead.id }, data: { email: "buyer@example.com" } });
+      await w.create("COD");
+      assert.deepEqual(w.shop.state.attempts, [{ customer: true, shippingLines: true, discount: false }]);
+      assert.equal(w.shop.state.created[0].customer.toUpsert.email, "buyer@example.com");
+    });
+  });
+
+  it("an EXISTING Shopify customer (verified on the phone) is still associated, with or without an e-mail", async () => {
+    await inRollback(async (tx) => {
+      const node = { id: "gid://shopify/Customer/55", firstName: null, lastName: null, email: null, phone: "+919902575944", numberOfOrders: 1, amountSpent: null, defaultAddress: null, createdAt: "", updatedAt: "" };
+      const w = await world(tx, { rejectUpsertWithoutEmail: true, customerNodes: [node] });
+      await w.create("COD");
+      assert.deepEqual(w.shop.state.created[0].customer, { toAssociate: { id: "gid://shopify/Customer/55" } });
+      assert.equal(w.shop.state.attempts.length, 1);
+    });
+  });
+
+  it("Shopify refuses the CUSTOMER but would take the money lines: the retry drops only the customer - the 50 shipping line stays, totals match, and the sync says the customer is the open problem", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectCustomer: true });
+      await tx.lead.update({ where: { id: w.lead.id }, data: { email: "buyer@example.com" } });
+      const r = await w.create("COD");
+      assert.deepEqual(w.shop.state.attempts, [{ customer: true, shippingLines: true, discount: false }, { customer: false, shippingLines: true, discount: false }]);
+      assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 50, "shipping preserved in the retry");
+      const sync = await syncOf(tx, r.order.id);
+      assert.equal(sync.status, "partial");
+      assert.equal(sync.retryAdvice, "ADMIN");
+      assert.ok(sync.missing.includes("customer: Shopify refused the association"));
+      assert.ok(!sync.missing.includes("totals") && !sync.missing.some((m: string) => /discount\/shipping/.test(m)), "no money problem");
+      assert.equal(sync.totals, undefined);
+      assert.ok((await linked(tx, r.order.id)).externalId);
+    });
+  });
+
+  it("the same for a DISCOUNT on a prepaid order: a refused customer never removes the CRM discount", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectCustomer: true });
+      await tx.lead.update({ where: { id: w.lead.id }, data: { email: "buyer@example.com" } });
+      const r = await w.create("PAYMENT_LINK", { discount: { type: "FIXED", value: "50" } });
+      assert.equal(w.shop.state.attempts.length, 0, "a prepaid order reaches Shopify only once it is pushed / paid");
+      await w.orders.pushOrderToShopify(w.as, r.order.id);
+      assert.deepEqual(w.shop.state.attempts.map((a) => [a.customer, a.discount]), [[true, true], [false, true]]);
+      assert.equal(r.order.totalAmount.toString(), "599");
+      assert.equal((await syncOf(tx, r.order.id)).totals, undefined);
+    });
+  });
+
+  it("Shopify refuses the shipping line too: NOTHING is created without it - the order stays unlinked and the failure records the category and the expected-versus-actual amounts", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectCustomer: true, rejectShippingLines: true });
+      await tx.lead.update({ where: { id: w.lead.id }, data: { email: "buyer@example.com" } });
+      const r = await w.create("COD");
+      assert.equal(w.shop.state.created.length, 0, "no Shopify order without the shipping charge");
+      assert.equal(r.shopify.status, "failed");
+      assert.equal((await linked(tx, r.order.id)).externalId, null);
+      assert.equal((await linked(tx, r.order.id)).totalAmount.toString(), "699", "the CRM order is untouched");
+      const sync = await syncOf(tx, r.order.id);
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.difference, sync.totals.shipping, sync.totals.shippingLineSent], ["failed", "ADMIN", "shipping_or_discount_rejected", "699", null, "699", "50", true]);
+      assert.match(sync.error, /NOT created without those charges/);
+    });
+  });
+
+  it("an e-mail-less lead whose shipping line is refused fails straight away (one request) instead of dropping the charge", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectShippingLines: true });
+      const r = await w.create("COD");
+      assert.equal(w.shop.state.attempts.length, 1);
+      assert.equal(w.shop.state.created.length, 0);
+      assert.equal((await syncOf(tx, r.order.id)).totals.category, "shipping_or_discount_rejected");
+    });
+  });
+
+  it("a discount refused by Shopify on a prepaid order is a recorded failure too - never a silently cheaper or dearer order", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectDiscount: true });
+      const r = await w.create("PAYMENT_LINK", { discount: { type: "FIXED", value: "50" } });
+      await w.orders.pushOrderToShopify(w.as, r.order.id);
+      assert.equal(w.shop.state.created.length, 0);
+      const sync = await syncOf(tx, r.order.id);
+      assert.deepEqual([sync.status, sync.totals.discountSent, sync.totals.discount], ["failed", true, "50"]);
+    });
+  });
+
+  it("AMOUNT GUARD: when Shopify's total differs from the CRM total the sync is FAILED / needs attention with both amounts and the difference, and the order is not edited or recreated", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { totalOffset: 50 });
+      const r = await w.create("COD");
+      assert.equal(w.shop.state.created.length, 1, "no second order");
+      assert.equal(w.shop.state.updates.length, 0, "nothing was edited");
+      const sync = await syncOf(tx, r.order.id);
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.difference, sync.totals.shippingLineSent], ["failed", "ADMIN", "total_mismatch", "699.00", "649.00", "50.00", true]);
+      assert.match(sync.error, /649\.00 differs from the CRM total 699\.00 \(difference 50\.00\)/);
+      assert.ok(sync.missing.includes("totals"));
+      assert.ok((await linked(tx, r.order.id)).externalId, "the order stays linked; an administrator decides");
+    });
+  });
+
+  it("an exact match is complete; a mismatch is never complete (COD and prepaid)", async () => {
+    await inRollback(async (tx) => {
+      const ok = await world(tx);
+      const a = await ok.create("COD");
+      const b = await ok.create("PAYMENT_LINK");
+      await ok.orders.pushOrderToShopify(ok.as, b.order.id);
+      assert.deepEqual([(await syncOf(tx, a.order.id)).status, (await syncOf(tx, b.order.id)).status], ["complete", "complete"]);
+      const bad = await world(tx, { totalOffset: 1 });
+      const c = await bad.create("PAYMENT_LINK");
+      await bad.orders.pushOrderToShopify(bad.as, c.order.id);
+      assert.equal((await syncOf(tx, c.order.id)).status, "failed");
+    });
+  });
+});
+
+// ---- the failure category names the cause Shopify actually gave
+describe("refusal category: shipping/discount only when Shopify names them (MOCKED Shopify)", () => {
+  const syncOf = async (tx: Prisma.TransactionClient, orderId: string) => ((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true } })).metadata as any)?.shopifySync;
+  const row = (tx: Prisma.TransactionClient, orderId: string) => tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { externalId: true, totalAmount: true, shippingAmount: true } });
+
+  it("the retry is refused for an UNRELATED field (a shipping ADDRESS line): no order, failed / ADMIN, category order_rejected - and the shipping charge was still never removed", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectAll: { field: ["order", "shippingAddress", "address1"], message: "Address line 1 is too long" } });
+      await tx.lead.update({ where: { id: w.lead.id }, data: { email: "buyer@example.com" } });
+      const r = await w.create("COD");
+      assert.deepEqual(w.shop.state.attempts, [{ customer: true, shippingLines: true, discount: false }, { customer: false, shippingLines: true, discount: false }], "customer dropped first; the shipping line stays in BOTH requests");
+      assert.equal(w.shop.state.created.length, 0, "no Shopify order");
+      assert.equal(r.shopify.status, "failed");
+      const sync = await syncOf(tx, r.order.id);
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.shippingLineSent], ["failed", "ADMIN", "order_rejected", "699", null, true]);
+      assert.deepEqual(sync.missing, ["order refused by Shopify"]);
+      assert.match(sync.error, /does not name the shipping or discount lines.*NOT removed/);
+      assert.ok(!/NOT created without those charges/.test(sync.error), "it does not blame the charges");
+      const o = await row(tx, r.order.id);
+      assert.deepEqual([o.externalId, o.totalAmount.toString(), o.shippingAmount.toString()], [null, "699", "50"], "the CRM order is untouched and unlinked");
+    });
+  });
+
+  it("an e-mail-less lead refused for a PRODUCT / variant field: one request, same category, nothing created", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectAll: { field: ["order", "lineItems", "0", "variantId"], message: "Variant does not exist" } });
+      const r = await w.create("COD");
+      assert.equal(w.shop.state.attempts.length, 1);
+      assert.equal(w.shop.state.created.length, 0);
+      assert.equal((await syncOf(tx, r.order.id)).totals.category, "order_rejected");
+    });
+  });
+
+  it("a message that only CONTAINS 'shipping' as part of 'shipping address' is still the address, not the charge", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { rejectAll: { field: ["order"], message: "Shipping address is invalid and billing address too" } });
+      const r = await w.create("COD");
+      assert.equal((await syncOf(tx, r.order.id)).totals.category, "order_rejected");
+    });
+  });
+
+  it("the shipping / discount safeguard is intact: errors that DO name those fields keep their category, prepaid discount included", async () => {
+    await inRollback(async (tx) => {
+      const ship = await world(tx, { rejectAll: { field: ["order", "shippingLines", "0", "priceSet"], message: "is not valid" } });
+      const a = await ship.create("COD");
+      assert.equal((await syncOf(tx, a.order.id)).totals.category, "shipping_or_discount_rejected");
+      assert.equal(ship.shop.state.created.length, 0);
+
+      const disc = await world(tx, { rejectAll: { field: ["order", "discountCode", "itemFixedDiscountCode"], message: "invalid" } });
+      const b = await disc.create("PAYMENT_LINK", { discount: { type: "FIXED", value: "50" } });
+      await disc.orders.pushOrderToShopify(disc.as, b.order.id);
+      const syncB = await syncOf(tx, b.order.id);
+      assert.deepEqual([syncB.status, syncB.totals.category, syncB.totals.discountSent, syncB.retryAdvice], ["failed", "shipping_or_discount_rejected", true, "ADMIN"]);
+      assert.equal(disc.shop.state.created.length, 0, "never created without the discount");
     });
   });
 });

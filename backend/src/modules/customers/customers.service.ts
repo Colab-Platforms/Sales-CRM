@@ -4,7 +4,8 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, InterestedPeriodStatus, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { canViewAllWhatsAppConversations } from "../whatsapp/whatsapp.history.filters.js";
-import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
+import { getCustomerDetailScope, getLeadScope, type DbClient } from "@/lib/leadScope.js";
+import { canViewAllOrders } from "../orders/orders.filters.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
 import { ShopifyClient } from "../shopify/shopify.client.js";
@@ -252,11 +253,19 @@ class CustomersService {
    * everything else) nothing changes: out-of-scope customers look the same as missing ones.
    */
   async getCustomer360(user: AuthUser, leadId: string, opts: { inboxRead?: boolean } = {}): Promise<Customer360> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getCustomerDetailScope(user, this.db);
     let lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: PROFILE_SELECT });
     let readOnly = false;
     if (!lead && opts.inboxRead && canViewAllWhatsAppConversations(user.role)) {
       lead = await this.db.lead.findFirst({ where: { id: leadId, whatsAppMessages: { some: {} } }, select: PROFILE_SELECT });
+      readOnly = Boolean(lead);
+    }
+
+    // The customer-NAME link on the Orders list, Shiprocket, the audit views and the Inbox opens this page. Orders are company-wide for ADMIN / MANAGER / SALESPERSON (canViewAllOrders), so every
+    // customer who has an order is already visible to them; the same customer opened here is therefore READ-ONLY (profile + orders, no edit / delete / send / timeline) instead of "Customer not found".
+    // A customer with no order, any other role (HR, recruiters) and every unknown id are still not found, and the strict scope above is untouched for every action.
+    if (!lead && canViewAllOrders(user.role)) {
+      lead = await this.db.lead.findFirst({ where: { id: leadId, orders: { some: {} } }, select: PROFILE_SELECT });
       readOnly = Boolean(lead);
     }
 
@@ -306,7 +315,7 @@ class CustomersService {
   // reuses the exact same data/derivation as Customer 360's `nextBestAction` field, just without the
   // rest of the payload, for a caller that only needs the recommendation.
   async getNextBestAction(user: AuthUser, leadId: string): Promise<NextBestActionInfo> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getCustomerDetailScope(user, this.db);
     const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, leadScope), select: PROFILE_SELECT });
 
     if (!lead) {
@@ -378,7 +387,7 @@ class CustomersService {
   }
 
   async getTimeline(user: AuthUser, leadId: string, query: ListCustomerTimelineQuery): Promise<CustomerTimelineResult> {
-    const leadScope = await getLeadScope(user, this.db);
+    const leadScope = await getCustomerDetailScope(user, this.db);
     const lead = await this.db.lead.findFirst({
       where: scopedLeadWhere(leadId, leadScope),
       select: { id: true, createdAt: true },

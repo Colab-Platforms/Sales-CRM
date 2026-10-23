@@ -3,6 +3,8 @@
 // The API host is chosen from CASHFREE_ENV and never taken from a variable, so credentials can only ever be sent to
 // Cashfree's own sandbox or production host. (The older CASHFREE_API_URL / CASHFREE_BASE_URL variables are ignored.)
 
+import { sandboxProblems } from "./cashfree.sandbox-guard.js";
+
 export type CashfreeEnvironment = "sandbox" | "production";
 
 export const CASHFREE_BASE_URLS: Record<CashfreeEnvironment, string> = {
@@ -72,6 +74,9 @@ export function resolvePublicBackendUrl(env: Env = process.env): string | null {
 
 export function loadCashfreeConfig(env: Env = process.env): CashfreeConfig {
   if (!flag(env)) throw new CashfreeConfigError("Cashfree is not enabled (CASHFREE_ENABLED is not true)");
+  // a sandbox TEST run is refused outright when anything could reach production (no effect on a normal process)
+  const sandbox = sandboxProblems(env);
+  if (sandbox.length > 0) throw new CashfreeConfigError(`Sandbox run refused: ${sandbox.join("; ")}`);
   const problems: string[] = [];
 
   const environment = (env.CASHFREE_ENV ?? "sandbox").trim().toLowerCase();
@@ -105,9 +110,23 @@ export function loadCashfreeConfig(env: Env = process.env): CashfreeConfig {
   return config;
 }
 
+/**
+ * The dynamic UPI QR (Cashfree Order Pay) is off unless CASHFREE_UPI_QR_ENABLED=true, and it is SANDBOX-ONLY unless CASHFREE_UPI_QR_ALLOW_PRODUCTION=true is also set on purpose.
+ * Returns why it must not run, or null when it may. Sandbox and production credentials stay separate: the feature never picks credentials, it only runs under whichever CASHFREE_ENV
+ * the whole integration (links, webhook secret) is configured for.
+ */
+export function upiQrBlockReason(config: Pick<CashfreeConfig, "environment">, env: Env = process.env): string | null {
+  if ((env.CASHFREE_UPI_QR_ENABLED ?? "").trim().toLowerCase() !== "true") return "The UPI QR is not enabled (CASHFREE_UPI_QR_ENABLED is not true).";
+  if (config.environment !== "sandbox" && (env.CASHFREE_UPI_QR_ALLOW_PRODUCTION ?? "").trim().toLowerCase() !== "true") {
+    return "The UPI QR runs in the Cashfree sandbox only (CASHFREE_ENV=sandbox); it is refused for production until CASHFREE_UPI_QR_ALLOW_PRODUCTION=true is set deliberately.";
+  }
+  return null;
+}
+
 /** What the webhook endpoint needs to authenticate a delivery. null when Cashfree is off or has no secret, so the endpoint refuses everything. */
 export function loadCashfreeWebhookConfig(env: Env = process.env): { readonly secret: string } | null {
   if (!flag(env)) return null;
+  if (sandboxProblems(env).length > 0) return null; // a misconfigured sandbox run accepts no webhook
   const secret = (env.CASHFREE_CLIENT_SECRET ?? "").trim();
   if (!secret) return null;
   const config = {} as { secret: string };

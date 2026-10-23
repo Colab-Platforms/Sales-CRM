@@ -461,13 +461,20 @@ export interface ShopifyVerification {
   customerAssociated: boolean;
   /** The shipping address Shopify currently HAS (null when it has none). A repair keeps every non-blank value in it. */
   existingShipping?: Record<string, string | null> | null;
+  /** Set when the Shopify order total differs from the CRM total that was expected to be mirrored: both amounts and the difference (CRM minus Shopify). */
+  totals?: { expected: string; actual: string; difference: string };
 }
 
 export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNullable<VerifyResponse["order"]>, expectedTotal?: string): ShopifyVerification {
   const missing: string[] = [];
+  let totals: ShopifyVerification["totals"];
   // The CRM and Shopify totals must reconcile to the cent (checked only when the discount/shipping were mirrored, i.e. when they are supposed to be equal).
   if (expectedTotal !== undefined && found.totalPriceSet) {
-    if (Math.abs(Number(found.totalPriceSet.shopMoney.amount) - Number(expectedTotal)) >= 0.005) missing.push("totals");
+    const actual = Number(found.totalPriceSet.shopMoney.amount);
+    if (Math.abs(actual - Number(expectedTotal)) >= 0.005) {
+      missing.push("totals");
+      totals = { expected: Number(expectedTotal).toFixed(2), actual: actual.toFixed(2), difference: (Number(expectedTotal) - actual).toFixed(2) };
+    }
   }
   if (sent.shippingAddress) {
     const a = found.shippingAddress;
@@ -494,7 +501,7 @@ export function compareShopifyOrder(sent: ShopifyOrderCreateInput, found: NonNul
     if (sent.metafields.some((m) => !have.has(m.key))) missing.push("metafields");
   }
   if (sent.financialStatus === "PENDING" && found.displayFinancialStatus && /^paid$/i.test(found.displayFinancialStatus.trim())) missing.push("financialStatus(unexpectedly paid)");
-  return { missing, customerAssociated: Boolean(found.customer), existingShipping: found.shippingAddress ? { ...found.shippingAddress } : null };
+  return { missing, customerAssociated: Boolean(found.customer), existingShipping: found.shippingAddress ? { ...found.shippingAddress } : null, ...(totals ? { totals } : {}) };
 }
 
 export async function verifyShopifyOrder(client: ShopifyClient, shopifyOrderId: string, sent: ShopifyOrderCreateInput, expectedTotal?: string): Promise<ShopifyVerification> {

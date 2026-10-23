@@ -18,6 +18,7 @@ import { NextBestActionCard } from "./next-best-action-card";
 import { CustomerPaymentSummaryCard } from "./customer-payment-summary-card";
 import { CustomerOrdersList } from "./customer-orders-list";
 import { CustomerTimeline } from "./customer-timeline";
+import { customer360Sections, READ_ONLY_NOTICE } from "./customer-360-access";
 
 const ORDERS_HREF = "/dashboard/orders";
 
@@ -66,35 +67,48 @@ export function Customer360View({ leadId }: { leadId: string }) {
   }
 
   const currency = data.latestOrder?.currency ?? "INR";
+  // A customer reached from a visible order but not owned by this user comes back readOnly: profile + orders only (see customer-360-access.ts).
+  const readOnly = Boolean(data.readOnly);
+  const show = customer360Sections({ readOnly, role });
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <BackLink />
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
-            <Pencil data-icon="inline-start" />
-            Edit
-          </Button>
-          {role === "ADMIN" ? (
+          {show.edit ? (
+            <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+              <Pencil data-icon="inline-start" />
+              Edit
+            </Button>
+          ) : null}
+          {show.delete ? (
             <Button size="sm" variant="destructive" onClick={() => setDeleteOpen(true)}>
               <Trash2 data-icon="inline-start" />
               Delete
             </Button>
           ) : null}
-          <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data.profile.mobile}>
-            <MessageCircle data-icon="inline-start" />
-            Send WhatsApp
-          </Button>
+          {show.sendWhatsApp ? (
+            <Button size="sm" onClick={() => setSendOpen(true)} disabled={!data.profile.mobile}>
+              <MessageCircle data-icon="inline-start" />
+              Send WhatsApp
+            </Button>
+          ) : null}
         </div>
       </div>
+      {readOnly ? (
+        <p role="status" data-testid="customer-360-readonly" className="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+          {READ_ONLY_NOTICE}
+        </p>
+      ) : null}
       <CustomerProfileCard customer={data} />
       <CustomerSegmentCard segment={data.segment} currency={currency} />
       <NextBestActionCard nba={data.nextBestAction} />
       <CustomerPaymentSummaryCard summary={data.paymentSummary} currency={currency} />
       <CustomerOrdersList orders={data.orders} />
-      <WhatsAppConversation leadId={leadId} onStartWhatsApp={data.profile.mobile ? () => setSendOpen(true) : undefined} />
-      <CustomerTimeline leadId={leadId} />
+      {show.conversation ? <WhatsAppConversation leadId={leadId} onStartWhatsApp={data.profile.mobile ? () => setSendOpen(true) : undefined} /> : null}
+      {show.timeline ? <CustomerTimeline leadId={leadId} /> : null}
+      {show.history ? (
       <div className="flex flex-wrap gap-x-6 gap-y-1">
         <Link href={`/dashboard/leads/${leadId}`} className="text-sm text-primary hover:underline">
           View lead & assignment history
@@ -103,6 +117,7 @@ export function Customer360View({ leadId }: { leadId: string }) {
           View full audit trail for this customer
         </Link>
       </div>
+      ) : null}
       <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={data.profile.name} orders={data.orders} />
       <EditLeadDialog leadId={leadId} open={editOpen} onOpenChange={setEditOpen} onDone={() => setEditOpen(false)} />
       <DeleteLeadDialog
