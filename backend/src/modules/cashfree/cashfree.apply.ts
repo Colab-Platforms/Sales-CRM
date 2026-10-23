@@ -1,4 +1,4 @@
-import { ActivitySource, ActivityType, PaymentMethod, PaymentStatus, type Role } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, OrderStatus, PaymentMethod, PaymentStatus, type Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown } from "../orders/orders.filters.js";
 import { deriveReconciliationStatus } from "../reconciliation/reconciliation.filters.js";
@@ -109,8 +109,81 @@ export interface ApplyContext {
 
 export type ApplyResult =
   | { outcome: "not_found" }
-  | { outcome: "unchanged"; orderId: string; leadId: string }
+  | { outcome: "unchanged"; orderId: string; leadId: string; /** Set when a verified SUCCESS was NOT applied as a normal payment but recorded as an exception for refund / review. */ exception?: PaymentException }
   | { outcome: "updated"; orderId: string; leadId: string; from: PaymentStatus; to: PaymentStatus };
+
+export type PaymentException = "duplicate" | "late";
+const CLOSED_ORDER = new Set<OrderStatus>([OrderStatus.CANCELLED, OrderStatus.REFUNDED, OrderStatus.RETURNED]);
+
+interface SuccessSubject {
+  id: string;
+  orderId: string;
+  status: PaymentStatus;
+  amount: { toString(): string };
+  providerPaymentId: string | null;
+  failureReason: string | null;
+  paymentExpiresAt: Date | null;
+  metadata: unknown;
+  order: { leadId: string; orderNumber: string; status: OrderStatus };
+}
+
+/**
+ * A verified SUCCESS that must NOT be applied as the order's normal payment, but must not vanish either:
+ *  - DUPLICATE: the payment is already SUCCESS and this is a DIFFERENT Cashfree payment / order (the customer paid through the payment link AND the UPI QR). The first one stays the payment of record.
+ *  - LATE: money arrived for a payment the CRM had ALREADY CLOSED (FAILED) because its order was cancelled / refunded / returned, because the payment was cancelled, or (for the UPI QR) because it expired. A payment that is still OPEN when its order is cancelled keeps its existing handling: it is recorded as received, the order is never reactivated, and the over-collection is reported. The order is never confirmed, shipped to Shopify or marked paid by it.
+ * Either is written ONCE (keyed by the Cashfree payment / order id, so a repeated or concurrent delivery adds nothing): an audit row the admins see, and an entry in Order.metadata.paymentExceptions marked
+ * NEEDS_REFUND. No Payment row is created and no status moves; refunding stays a deliberate, manual decision.
+ * A repeat of the SAME payment (same ids, or no ids to tell it apart) is the ordinary idempotent case and returns null.
+ */
+async function recordSuccessException(tx: Db, payment: SuccessSubject, update: PaymentUpdate, ctx: ApplyContext, now: Date): Promise<PaymentException | null> {
+  const cashfree = asRecord(asRecord(payment.metadata).cashfree);
+  const incomingPayment = update.cfPaymentId ?? null;
+  const incomingOrder = typeof update.meta?.cashfreeOrderId === "string" ? update.meta.cashfreeOrderId : null;
+  const storedOrder = typeof cashfree.cashfreeOrderId === "string" ? cashfree.cashfreeOrderId : null;
+
+  let kind: PaymentException | null = null;
+  if (payment.status === PaymentStatus.SUCCESS) {
+    const differs = (incomingPayment && payment.providerPaymentId && incomingPayment !== payment.providerPaymentId) || (incomingOrder && storedOrder && incomingOrder !== storedOrder && incomingOrder.startsWith("qr_") !== storedOrder.startsWith("qr_"));
+    if (differs) kind = "duplicate";
+  } else if (payment.status === PaymentStatus.FAILED && CLOSED_ORDER.has(payment.order.status)) kind = "late";
+  else if (payment.status === PaymentStatus.FAILED && /cancel/i.test(payment.failureReason ?? "")) kind = "late";
+  else if (payment.status === PaymentStatus.FAILED && update.meta?.via === "upi_qr" && payment.paymentExpiresAt && (update.paidAt ?? now) > payment.paymentExpiresAt) kind = "late";
+  if (!kind) return null;
+
+  const key = `${kind}:${incomingPayment ?? incomingOrder ?? payment.id}`;
+  const already = await tx.activity.findFirst({
+    where: { orderId: payment.orderId, type: ActivityType.PAYMENT_MISMATCH_DETECTED, referenceType: PAYMENT_REFERENCE_TYPE, referenceId: payment.id, metadata: { path: ["exceptionKey"], equals: key } },
+    select: { id: true },
+  });
+  if (already) return kind;
+
+  const amount = fromCents(toCents(update.paidAmount ?? payment.amount.toString()));
+  const via = typeof update.meta?.via === "string" ? update.meta.via : incomingOrder && incomingOrder.startsWith("qr_") ? "upi_qr" : "payment_link";
+  await tx.activity.create({
+    data: {
+      leadId: payment.order.leadId,
+      orderId: payment.orderId,
+      actorId: ctx.actor?.id ?? null,
+      actorRole: ctx.actor?.role ?? null,
+      source: ctx.source,
+      type: ActivityType.PAYMENT_MISMATCH_DETECTED,
+      referenceType: PAYMENT_REFERENCE_TYPE,
+      referenceId: payment.id,
+      title: kind === "duplicate" ? `A second successful payment was received for order ${payment.order.orderNumber} - it needs a refund` : `A payment was received for order ${payment.order.orderNumber} after it was cancelled or its payment closed - it needs a refund`,
+      description: "Cashfree confirmed this payment, but it was NOT applied to the order. Check the Cashfree dashboard and refund or reconcile it manually.",
+      metadata: { provider: "CASHFREE", kind, exceptionKey: key, cfPaymentId: incomingPayment, cashfreeOrderId: incomingOrder, amount, via, needsRefund: true, paymentStatusAtArrival: payment.status, orderStatusAtArrival: payment.order.status } as Prisma.InputJsonValue,
+      createdAt: now,
+    },
+  });
+  const order = await tx.order.findUnique({ where: { id: payment.orderId }, select: { metadata: true } });
+  const meta = asRecord(order?.metadata);
+  const list = Array.isArray(meta.paymentExceptions) ? (meta.paymentExceptions as unknown[]) : [];
+  await tx.order.update({
+    where: { id: payment.orderId },
+    data: { metadata: { ...meta, paymentExceptions: [...list, { kind, key, paymentId: payment.id, cfPaymentId: incomingPayment, cashfreeOrderId: incomingOrder, amount, via, at: now.toISOString(), status: "NEEDS_REFUND" }] } as Prisma.InputJsonValue },
+  });
+  return kind;
+}
 
 export async function applyPaymentUpdate(tx: Db, paymentId: string, update: PaymentUpdate, ctx: ApplyContext): Promise<ApplyResult> {
   const now = ctx.now ?? new Date();
@@ -130,13 +203,21 @@ export async function applyPaymentUpdate(tx: Db, paymentId: string, update: Paym
       externalId: true,
       providerPaymentId: true,
       transactionReference: true,
+      failureReason: true,
+      paymentExpiresAt: true,
       metadata: true,
-      order: { select: { leadId: true, orderNumber: true, totalAmount: true, payments: { select: { id: true, status: true, amount: true, refundedAmount: true } } } },
+      order: { select: { leadId: true, orderNumber: true, status: true, totalAmount: true, payments: { select: { id: true, status: true, amount: true, refundedAmount: true } } } },
     },
   });
   if (!payment || payment.externalSource !== "CASHFREE") return { outcome: "not_found" };
   const { leadId, orderNumber } = payment.order;
   const unchanged: ApplyResult = { outcome: "unchanged", orderId: payment.orderId, leadId };
+
+  // A verified SUCCESS that is a second payment, or arrives for a cancelled order / cancelled payment, is recorded for refund and never applied as the order's payment.
+  if (update.status === "SUCCESS") {
+    const exception = await recordSuccessException(tx, payment, update, ctx, now);
+    if (exception) return { ...unchanged, exception };
+  }
 
   const from = payment.status;
   const to = update.status ? (PaymentStatus[update.status] as PaymentStatus) : null;

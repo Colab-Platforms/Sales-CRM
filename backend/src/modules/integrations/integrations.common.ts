@@ -50,7 +50,7 @@ export interface HttpRequest {
   provider: ProviderName;
   fetchImpl: typeof fetch;
   url: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH";
   headers: Record<string, string>;
   body?: unknown;
   timeoutMs?: number;

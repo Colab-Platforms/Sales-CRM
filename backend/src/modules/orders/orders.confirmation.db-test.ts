@@ -372,18 +372,17 @@ describe("CRM discount + shipping reach Shopify at creation, so Shopify's total 
     });
   });
 
-  it("if Shopify REFUSES the discount/shipping fields, the order is created once without them and is NOT claimed to match (the safe reconciliation then applies)", async () => {
+  it("if Shopify REFUSES the discount/shipping fields, NO Shopify order is created without them: the CRM order is kept unlinked and the failure records the category and the amounts (an administrator decides)", async () => {
     await inRollback(async (tx) => {
       const shop = shopify();
       shop.state.rejectExtras = true;
       const w = await world(tx, shop);
       const r = await w.create(w.vini, { discount: { type: "FIXED", value: "100" }, shippingAmount: "66.72" });
-      assert.equal(shop.state.calls.filter((c) => c === "create").length, 1, "exactly one Shopify order");
-      const sent = shop.state.created.at(-1);
-      assert.equal("discountCode" in sent, false);
-      assert.equal("shippingLines" in sent, false);
-      assert.equal((await w.row(r.order.id)).externalId !== null, true);
-      assert.equal((await meta(w, r.order.id)).shopifyTotals.mirrored, false);
+      assert.equal(shop.state.created.length, 0, "no Shopify order without the CRM's discount / shipping");
+      assert.equal(r.shopify.status, "failed");
+      assert.equal((await w.row(r.order.id)).externalId, null);
+      const sync = (await meta(w, r.order.id)).shopifySync;
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.actual], ["failed", "ADMIN", "shipping_or_discount_rejected", null]);
       assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1, "one CRM order");
     });
   });

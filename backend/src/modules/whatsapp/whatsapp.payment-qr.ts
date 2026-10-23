@@ -4,7 +4,10 @@ import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { resolvePublicBackendUrl } from "../cashfree/cashfree.config.js";
+import { isCashfreeEnabled, loadCashfreeConfig, resolvePublicBackendUrl, upiQrBlockReason } from "../cashfree/cashfree.config.js";
+import { CashfreeClient } from "../cashfree/cashfree.client.js";
+import { ensureUpiQr, readStoredUpiQr, type UpiQrDeps } from "../cashfree/cashfree.upi-qr.js";
+import { prisma } from "@/lib/prisma.js";
 import { asRecord, safeMessage, type Db } from "../integrations/integrations.common.js";
 import WhatsAppFreeTextService from "./whatsapp.freetext.service.js";
 import { tryRenderPaymentCardPng } from "./whatsapp.payment-qr.card.js";
@@ -29,6 +32,10 @@ export interface PaymentQrResult {
   reason?: string;
   /** The CRM WhatsApp message row of the image, when one was sent. */
   messageId?: string;
+  /** Which image was sent: UPI = the order-specific Cashfree UPI QR (the customer's UPI app shows the exact amount); LINK = the QR of the payment link (opens the Cashfree page). */
+  kind?: "UPI" | "LINK";
+  /** When a UPI QR was tried but the payment-link QR was sent instead: why (safe text, never a credential). */
+  fallbackReason?: string;
   at: string;
 }
 
@@ -37,6 +44,8 @@ export interface PaymentQrDeps {
   /** Public https base of this backend (default: PUBLIC_BACKEND_URL / RENDER_EXTERNAL_URL). null = none configured. */
   publicBaseUrl?: string | null;
   now?: () => Date;
+  /** The UPI QR dependencies. undefined = build them from the environment (null when the feature is off or not allowed in this environment); null = never use the UPI QR (tests of the link QR). */
+  upiQr?: UpiQrDeps | null;
 }
 
 const OPEN_STATUSES = new Set(["PENDING", "PROCESSING"]);
@@ -91,6 +100,36 @@ export async function buildPaymentQrImage(payment: { paymentUrl: string | null; 
   return card ?? renderPaymentQrPng(payment.paymentUrl!);
 }
 
+/** The real dependencies of the UPI QR, or null when it is off / not allowed in this environment / Cashfree is not configured - the link QR is then used, exactly as before. */
+export function defaultUpiQrDeps(env: NodeJS.ProcessEnv = process.env): UpiQrDeps | null {
+  if (!isCashfreeEnabled(env)) return null;
+  try {
+    const config = loadCashfreeConfig(env);
+    if (upiQrBlockReason(config, env)) return null;
+    return { runner: prisma, api: new CashfreeClient(config), config, env };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The image to send for a payment: the order-specific UPI QR when that is on and Cashfree produces one (an existing one is reused, never a second order), otherwise the QR of the payment link with the reason.
+ * A UPI QR failure (not enabled on the Cashfree account, an unusable answer, an amount mismatch...) never blocks the payment: the link QR of the same payment is sent and the result says so.
+ */
+export async function chooseQrImage(deps: PaymentQrDeps, payment: { id: string; paymentUrl: string | null; currency: string; amount: { toString(): string } }, orderNumber: string): Promise<{ png: Buffer; kind: "UPI" | "LINK" }> {
+  const upi = deps.upiQr === undefined ? defaultUpiQrDeps() : deps.upiQr;
+  if (upi) {
+    // The direct UPI QR is ON: it is the provider's QR (verified to be a upi://pay request for this exact amount) or NOTHING. A QR of the payment-link web page is never sent in its place.
+    try {
+      return { png: (await ensureUpiQr(upi, payment.id)).png, kind: "UPI" };
+    } catch (error) {
+      throw new Error(`The direct UPI QR could not be created: ${error instanceof Error ? error.message : String(error)} No website QR was sent in its place; the payment link message is unaffected.`);
+    }
+  }
+  // feature off (the default): the long-standing QR of the payment link, exactly as before
+  return { png: await buildPaymentQrImage(payment, orderNumber), kind: "LINK" };
+}
+
 export const QR_MEDIA_NAME = (orderNumber: string): string => `payment-qr-${orderNumber}.png`;
 export const PAYMENT_QR_ACTIVITY_KEY = "paymentQrImage";
 const QR_CAPTION_START = /^Scan to pay /;
@@ -119,9 +158,12 @@ export async function resolvePaymentQrMessages(db: Db, messageIds: string[]): Pr
 }
 
 /** The image of a payment's QR for a person to LOOK at (the CRM conversation / order page). Read-only: it never touches a payment, and works for any status (it is what was sent). Null when there is no Cashfree link. */
-export async function renderStoredPaymentQr(db: Db, paymentId: string, orderId?: string): Promise<{ png: Buffer; orderNumber: string } | null> {
-  const payment = await db.payment.findFirst({ where: { id: paymentId, ...(orderId ? { orderId } : {}) }, select: { externalSource: true, paymentUrl: true, currency: true, amount: true, order: { select: { orderNumber: true } } } });
+export async function renderStoredPaymentQr(db: Db, paymentId: string, orderId?: string, deps: PaymentQrDeps = {}): Promise<{ png: Buffer; orderNumber: string } | null> {
+  const payment = await db.payment.findFirst({ where: { id: paymentId, ...(orderId ? { orderId } : {}) }, select: { externalSource: true, paymentUrl: true, currency: true, amount: true, metadata: true, order: { select: { orderNumber: true } } } });
+  const stored = payment ? readStoredUpiQr(payment.metadata) : null;
+  if (payment && stored && payment.externalSource === "CASHFREE") return { png: stored.png, orderNumber: payment.order.orderNumber };
   if (!payment || payment.externalSource !== "CASHFREE" || !isCashfreePaymentUrl(payment.paymentUrl)) return null;
+  if ((deps.upiQr === undefined ? defaultUpiQrDeps() : deps.upiQr) !== null) return null; // direct UPI QR is on: no website QR is shown as the payment QR
   return { png: await buildPaymentQrImage({ paymentUrl: payment.paymentUrl, currency: payment.currency, amount: payment.amount }, payment.order.orderNumber), orderNumber: payment.order.orderNumber };
 }
 
@@ -143,8 +185,8 @@ export async function sendPaymentQr(db: Db, user: AuthUser, paymentId: string, d
   });
   if (!payment || (opts.orderId && payment.orderId !== opts.orderId)) throw new ApiError("Payment not found", STATUS_CODES.NOT_FOUND);
 
-  const outcome = async (status: PaymentQrStatus, reason?: string, messageId?: string): Promise<PaymentQrResult> => {
-    const result: PaymentQrResult = { status, paymentId, ...(reason ? { reason } : {}), ...(messageId ? { messageId } : {}), at: now.toISOString() };
+  const outcome = async (status: PaymentQrStatus, reason?: string, messageId?: string, extra: { kind?: "UPI" | "LINK"; fallbackReason?: string } = {}): Promise<PaymentQrResult> => {
+    const result: PaymentQrResult = { status, paymentId, ...(reason ? { reason } : {}), ...(messageId ? { messageId } : {}), ...(extra.kind ? { kind: extra.kind } : {}), ...(extra.fallbackReason ? { fallbackReason: extra.fallbackReason } : {}), at: now.toISOString() };
     await recordPaymentQr(db, payment.orderId, result);
     return result;
   };
@@ -169,11 +211,12 @@ export async function sendPaymentQr(db: Db, user: AuthUser, paymentId: string, d
     const caption = qrCaption(payment.order.orderNumber, payment.currency, payment.amount.toString());
     // PREFERRED: upload the PNG to Meta and send it by media id - Meta already holds the file, so it needs no public address of ours and cannot hit a missing / undeployed route (the 131053 "404 downloading
     // media from weblink" failure). FALLBACK (upload refused): the public image URL, when this backend has a public https address.
+    const chosen = await chooseQrImage(deps, { id: paymentId, paymentUrl: payment.paymentUrl, currency: payment.currency, amount: payment.amount }, payment.order.orderNumber);
     let mediaId: string | null = null;
     let uploadError: string | null = null;
     if (typeof provider.uploadMedia === "function") {
       try {
-        mediaId = await provider.uploadMedia(await buildPaymentQrImage({ paymentUrl: payment.paymentUrl, currency: payment.currency, amount: payment.amount }, payment.order.orderNumber), "image/png", QR_MEDIA_NAME(payment.order.orderNumber));
+        mediaId = await provider.uploadMedia(chosen.png, "image/png", QR_MEDIA_NAME(payment.order.orderNumber));
       } catch (error) {
         uploadError = redactProviderError(error instanceof Error ? error.message : String(error));
       }
@@ -186,7 +229,7 @@ export async function sendPaymentQr(db: Db, user: AuthUser, paymentId: string, d
     });
     // Remember WHICH payment this image belongs to, so the CRM conversation can show the very same QR (no new link is involved).
     await db.activity.create({ data: { leadId: payment.order.leadId, orderId: payment.orderId, actorId: user.id, actorRole: user.role, source: ActivitySource.USER, type: ActivityType.WHATSAPP_MESSAGE_SENT, referenceType: "WhatsAppMessage", referenceId: row.id, title: "Payment QR image sent", description: `QR code for ${payment.order.orderNumber}`, metadata: { [PAYMENT_QR_ACTIVITY_KEY]: { paymentId } } as unknown as Prisma.InputJsonValue, createdAt: now } });
-    return outcome("SENT", undefined, row.id);
+    return outcome("SENT", undefined, row.id, { kind: chosen.kind });
   } catch (error) {
     return outcome("FAILED", redactProviderError(error instanceof Error ? error.message : String(error)));
   }
@@ -199,7 +242,10 @@ export async function loadPaymentQrPng(db: Db, paymentId: string, token: string,
   const now = (deps.now ?? (() => new Date()))();
   if (!payment || payment.externalSource !== "CASHFREE" || !OPEN_STATUSES.has(payment.status) || !isCashfreePaymentUrl(payment.paymentUrl)) return null;
   if (payment.paymentExpiresAt && payment.paymentExpiresAt <= now) return null;
+  const upiStored = readStoredUpiQr(payment.metadata);
   const stored = asRecord(payment.metadata).qrToken;
   if (typeof stored !== "string" || stored.length !== token.length || !timingSafeEqual(Buffer.from(stored), Buffer.from(token))) return null;
+  if (upiStored) return upiStored.png;
+  if ((deps.upiQr === undefined ? defaultUpiQrDeps() : deps.upiQr) !== null) return null; // direct UPI QR is on: never serve the payment-link web QR
   return buildPaymentQrImage({ paymentUrl: payment.paymentUrl, currency: payment.currency, amount: payment.amount }, payment.order.orderNumber);
 }

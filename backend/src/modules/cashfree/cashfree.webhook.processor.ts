@@ -8,6 +8,7 @@ import { linkToUpdate, recordAmountMismatch, type PaymentUpdate } from "./cashfr
 import { parseEvent, type CashfreeEvent } from "./cashfree.events.js";
 import { reconcileCashfreePayment } from "./cashfree.reconcile.js";
 import type { CashfreeLink, CashfreeRefund } from "./cashfree.client.js";
+import type { QrOrderVerdict } from "./cashfree.upi-qr.js";
 import { applyRefundOutcome } from "../refunds/refunds.execution.js";
 import { cashfreeOrderIdOf } from "../refunds/refunds.eligibility.js";
 import type { OrderNotifyDeps } from "../whatsapp/whatsapp.order-notify.service.js";
@@ -30,6 +31,13 @@ export interface CashfreeProcessorDeps {
    * amount the CRM expects - the webhook body is never trusted on its own. Left out (tests), the signed delivery is applied as before.
    */
   verifyLink?: (linkId: string) => Promise<CashfreeLink>;
+  /**
+   * Read-only check of a UPI QR's Cashfree order (Get Order + its payments). A SUCCESS delivery for the QR's order is applied only when Cashfree itself says that order is PAID for the CRM payment's exact
+   * amount in INR; the payment LINK is not consulted for it (the link itself is unpaid).
+   */
+  verifyQrOrder?: (orderId: string, expected: { amount: string; currency: string }) => Promise<QrOrderVerdict>;
+  /** See PaymentReconcileDeps.closeOpenMethods. */
+  closeOpenMethods?: (paymentId: string, to: "SUCCESS" | "FAILED", via: string | null) => Promise<void>;
   /**
    * Read-only lookup of a refund at Cashfree (Get Refund). A refund webhook is only an announcement: with no verifier it changes nothing, and with one the refund
    * is applied from what Cashfree itself returns, never from the delivery body.
@@ -74,17 +82,20 @@ export function eventToUpdate(event: CashfreeEvent, now: Date): PaymentUpdate | 
 /** A payment link's Cashfree order is named CFPay_<link code>_<hex>_<epoch>, and the link code is the last part of the link URL the CRM stored - a second way to find the payment when no CRM id is echoed back. */
 const LINK_ORDER = /^CFPay_(.{8,}?)_[0-9a-f]{3,6}_\d{9,}$/i;
 
-async function findPayment(tx: Db, event: Exclude<CashfreeEvent, { kind: "refund" }>): Promise<{ id: string; externalId: string | null; amount: string } | null> {
+async function findPayment(tx: Db, event: Exclude<CashfreeEvent, { kind: "refund" }>): Promise<{ id: string; externalId: string | null; amount: string; currency: string; upiQrOrderId: string | null } | null> {
   const ids = event.kind === "link" ? [event.linkId, event.orderId] : [event.orderId, event.linkId];
   const keys = ids.filter((id): id is string => !!id);
   const or: Prisma.PaymentWhereInput[] = [];
   if (keys.length > 0) or.push({ externalId: { in: keys } }, { providerOrderId: { in: keys } });
+  // the Cashfree order behind a payment's UPI QR (see cashfree.upi-qr.ts) is another id the same CRM payment answers to
+  for (const key of keys) or.push({ metadata: { path: ["upiQr", "orderId"], equals: key } });
   if (event.crmPaymentId && UUID_PATTERN.test(event.crmPaymentId)) or.push({ id: event.crmPaymentId });
   const code = [event.orderId, event.kind === "payment" ? event.linkId : null].map((v) => (v ? LINK_ORDER.exec(v)?.[1] : undefined)).find(Boolean);
   if (code) or.push({ paymentUrl: { endsWith: `/links/${code}` } });
   if (or.length === 0) return null;
-  const found = await tx.payment.findFirst({ where: { externalSource: "CASHFREE", OR: or }, select: { id: true, externalId: true, amount: true } });
-  return found ? { id: found.id, externalId: found.externalId, amount: found.amount.toString() } : null;
+  const found = await tx.payment.findFirst({ where: { externalSource: "CASHFREE", OR: or }, select: { id: true, externalId: true, amount: true, currency: true, metadata: true } });
+  const qrOrderId = found ? (found.metadata as { upiQr?: { orderId?: unknown } } | null)?.upiQr?.orderId : undefined;
+  return found ? { id: found.id, externalId: found.externalId, amount: found.amount.toString(), currency: found.currency, upiQrOrderId: typeof qrOrderId === "string" ? qrOrderId : null } : null;
 }
 
 async function processRefundEvent(event: Extract<CashfreeEvent, { kind: "refund" }>, deps: CashfreeProcessorDeps, now: () => Date): Promise<"processed" | "ignored"> {
@@ -113,7 +124,7 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
       await deps.store.complete(eventId, result === "processed" ? "PROCESSED" : "IGNORED", now());
       return result;
     }
-    const update = event ? eventToUpdate(event, now()) : null;
+    let update = event ? eventToUpdate(event, now()) : null;
     if (!event || !update) {
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
@@ -130,11 +141,24 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
     // The amount the delivery itself reports must also be the amount the CRM expects.
     if (update.status === "SUCCESS" && update.paidAmount && toCents(update.paidAmount) !== toCents(payment.amount)) {
       logger.warn(`Cashfree webhook reported ${update.paidAmount} for a payment expecting ${payment.amount}; not applied`);
-      await deps.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount, reported: update.paidAmount!, via: "webhook", source: ActivitySource.CASHFREE_WEBHOOK, now: now() }));
+      await deps.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount, reported: update!.paidAmount!, via: "webhook", source: ActivitySource.CASHFREE_WEBHOOK, now: now() }));
       await deps.store.complete(eventId, "IGNORED", now());
       return "ignored";
     }
-    if (update.status === "SUCCESS" && deps.verifyLink && payment.externalId) {
+    const viaQr = Boolean(payment.upiQrOrderId) && event.orderId === payment.upiQrOrderId;
+    if (update.status === "SUCCESS" && viaQr && deps.verifyQrOrder) {
+      const verdict = await deps.verifyQrOrder(payment.upiQrOrderId!, { amount: payment.amount, currency: payment.currency });
+      if (!verdict.paid) {
+        logger.warn(`Cashfree webhook claimed a UPI QR payment for ${payment.upiQrOrderId}, but Cashfree reports ${verdict.status}; not applied`);
+        if (verdict.reportedAmount) {
+          await deps.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount, reported: verdict.reportedAmount!, via: "webhook", source: ActivitySource.CASHFREE_WEBHOOK, now: now() }));
+        }
+        await deps.store.complete(eventId, "IGNORED", now());
+        return "ignored";
+      }
+      update = { ...update!, paidAmount: verdict.amount, cfPaymentId: verdict.cfPaymentId ?? update!.cfPaymentId ?? null, bankReference: verdict.bankReference ?? update!.bankReference ?? null, meta: { ...update!.meta, via: "upi_qr", cashfreeOrderId: payment.upiQrOrderId } };
+    }
+    if (update.status === "SUCCESS" && !viaQr && deps.verifyLink && payment.externalId) {
       const link = await deps.verifyLink(payment.externalId);
       if (link.linkStatus !== "PAID" || toCents(link.linkAmountPaid) !== toCents(payment.amount)) {
         logger.warn(`Cashfree webhook claimed payment for ${payment.externalId}, but Cashfree reports ${link.linkStatus} (${link.linkAmountPaid ?? "no amount"} of ${payment.amount}); not applied`);
@@ -148,7 +172,7 @@ export async function processCashfreeEvent(eventId: string, deps: CashfreeProces
     }
 
     // The same reconciliation Refresh and the scheduled catch-up use (apply -> Shopify -> notification), so all three produce the same result.
-    const applied = await reconcileCashfreePayment({ runner: deps.runner, now, getShopifyClient: deps.getShopifyClient, notifyDeps: deps.notifyDeps }, payment.id, update, { source: ActivitySource.CASHFREE_WEBHOOK });
+    const applied = await reconcileCashfreePayment({ runner: deps.runner, now, getShopifyClient: deps.getShopifyClient, notifyDeps: deps.notifyDeps, closeOpenMethods: deps.closeOpenMethods }, payment.id, update, { source: ActivitySource.CASHFREE_WEBHOOK });
     if (applied.outcome === "not_found") {
       logger.info(`Cashfree webhook ${stored.eventType} matched no CRM payment; ignored (event ${eventId})`);
       await deps.store.complete(eventId, "IGNORED", now());

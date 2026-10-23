@@ -417,8 +417,8 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       let calls = 0;
       const svc = new OrdersService(tx, () => fakeShopifyClient(async () => {
         calls++;
-        // A COD order now always carries its flat shipping line, so Shopify's one "retry without the optional parts" fallback is attempted inside the first push: Shopify is down for BOTH of those calls.
-        if (calls <= 2) return { orderCreate: { order: null, userErrors: [{ field: null, message: "Temporary failure" }] } };
+        // A COD order carries its flat shipping line and this lead has no e-mail, so there is no optional customer to drop: the first push makes ONE request. The fallback never removes the shipping line to get an order through.
+        if (calls <= 1) return { orderCreate: { order: null, userErrors: [{ field: null, message: "Temporary failure" }] } };
         return { orderCreate: { order: { id: "gid://shopify/Order/777", name: "#TST777" }, userErrors: [] } };
       }));
 
@@ -429,7 +429,7 @@ describe("createManualOrder's Shopify push (mocked client - never a real Shopify
       assert.deepEqual({ ...retry, sync: undefined }, { sync: undefined, status: "created", shopifyOrderId: "gid://shopify/Order/777", shopifyOrderName: "#TST777" });
 
       assert.equal(await tx.order.count({ where: { leadId: lead.id } }), 1, "still exactly one CRM order - never duplicated by the retry");
-      assert.equal(calls, 3, "two failed attempts in the first push + one successful retry");
+      assert.equal(calls, 2, "one refused attempt in the first push + one successful retry");
     });
   });
 

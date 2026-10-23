@@ -76,6 +76,19 @@ export function buildOrderFlowScope(scope: Prisma.LeadWhereInput, role: Role): P
   return { OR: [scope, { whatsAppConversation: { isNot: null } }, { whatsAppMessages: { some: {} } }] };
 }
 
+// The scope for READING one customer's detail (Customer 360, its timeline and its next-best-action). The Lead page is what links to them, and a MANAGER opens a lead there when it is ASSIGNED to them
+// (lead.service.ts: assignedManagerId = the manager) - which is a different rule from the team rule above (the manager's groups / active team members). With only the team rule, a lead the manager can
+// open on the Lead page answered "Customer not found" the moment they clicked Customer 360, the Customer Timeline or the customer name. The detail READS therefore also accept a lead assigned to the
+// manager; nothing else changes: other roles keep their scope, and every WRITE (edit, deactivate, orders, refunds ...) and every list keeps the strict scope above.
+export function buildCustomerDetailScope(scope: Prisma.LeadWhereInput, role: Role, userId: string): Prisma.LeadWhereInput {
+  if (role !== Role.MANAGER || Object.keys(scope).length === 0) return scope;
+  return { OR: [scope, { assignedManagerId: userId }] };
+}
+
+export async function getCustomerDetailScope(user: AuthUser, db: DbClient = prisma): Promise<Prisma.LeadWhereInput> {
+  return buildCustomerDetailScope(await getLeadScope(user, db), user.role, user.id);
+}
+
 export async function getOrderFlowScope(user: AuthUser, db: DbClient = prisma): Promise<Prisma.LeadWhereInput> {
   return buildOrderFlowScope(await getLeadScope(user, db), user.role);
 }

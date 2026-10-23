@@ -5,3 +5,4 @@ dist/
 .claude/
 .windsurf/
 .agents/
+.env.sandbox.local

@@ -223,7 +223,7 @@ describe("custom items: duplicate protection, idempotency and failures", () => {
 
   it("a Shopify refusal is reported with its reason, the CRM order and its custom lines are kept, and the retry creates the ONE Shopify order", async () => {
     await inRollback(async (tx) => {
-      const w = await world(tx, { failCreate: 2 });
+      const w = await world(tx, { failCreate: 1 }); // a lead without an e-mail has no customer to drop, so one refusal is the whole first attempt
       const r = await w.create("COD", [w.catalog(1), custom({ customName: "Gift", unitPrice: "50.00" })]);
       assert.equal(r.shopify.status, "failed");
       assert.match(r.shopify.reason ?? "", /refused the line items/);
@@ -235,13 +235,13 @@ describe("custom items: duplicate protection, idempotency and failures", () => {
     });
   });
 
-  it("TAXABLE risk: if the shop adds tax to a taxable custom item, Shopify's total differs from the CRM total - the sync is reported PARTIAL with 'totals' missing (never silently complete), and the CRM total is not changed; a non-taxable item stays complete", async () => {
+  it("TAXABLE risk: if the shop adds tax to a taxable custom item, Shopify's total differs from the CRM total - the sync is reported FAILED / needs attention with 'totals' missing (never silently complete), and the CRM total is not changed; a non-taxable item stays complete", async () => {
     await inRollback(async (tx) => {
       const taxed = await world(tx, { taxPercent: 18 });
       const r = await taxed.create("COD", [custom({ customName: "Taxable thing", unitPrice: "1000.00", taxable: true })]);
       const sync = (r.shopify as any).sync;
       assert.equal(r.shopify.status, "created", "the order exists on Shopify");
-      assert.deepEqual([sync.status, sync.missing.includes("totals")], ["partial", true], JSON.stringify(sync));
+      assert.deepEqual([sync.status, sync.missing.includes("totals"), sync.retryAdvice, sync.totals?.category], ["failed", true, "ADMIN", "total_mismatch"], JSON.stringify(sync));
       assert.equal(String(r.order.subtotal), "1000", "the CRM adds no tax and keeps its own figures");
       const plain = await world(tx, { taxPercent: 18 });
       const ok = await plain.create("COD", [custom({ customName: "Not taxable", unitPrice: "1000.00", taxable: false })]);

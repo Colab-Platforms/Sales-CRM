@@ -5,6 +5,7 @@ import { createPrismaWebhookStore } from "../shopify/shopify.webhook.store.js";
 import { startWebhookWorker } from "../shopify/shopify.webhook.worker.js";
 import { isCashfreeEnabled, loadCashfreeConfig, loadCashfreeWebhookConfig } from "./cashfree.config.js";
 import { CashfreeClient } from "./cashfree.client.js";
+import { closeOpenMethods, verifyQrOrderPaid } from "./cashfree.upi-qr.js";
 import CashfreePaymentsService from "./cashfree.payments.service.js";
 import { createCashfreeReconciler, loadReconcileMinutes } from "./cashfree.catchup.js";
 import { handleCashfreeWebhook } from "./cashfree.webhook.handler.js";
@@ -18,7 +19,7 @@ const store = createPrismaWebhookStore(prisma, CASHFREE_PROVIDER);
 
 async function process(eventId: string) {
   try {
-    return await processCashfreeEvent(eventId, { store, runner: prisma, verifyLink: (linkId) => new CashfreeClient(loadCashfreeConfig()).getLink(linkId), verifyRefund: (orderId, refundId) => new CashfreeClient(loadCashfreeConfig()).getRefund(orderId, refundId) });
+    return await processCashfreeEvent(eventId, { store, runner: prisma, verifyLink: (linkId) => new CashfreeClient(loadCashfreeConfig()).getLink(linkId), verifyQrOrder: (orderId, expected) => verifyQrOrderPaid(new CashfreeClient(loadCashfreeConfig()), orderId, expected), closeOpenMethods: async (paymentId, to, via) => void (await closeOpenMethods({ runner: prisma, api: new CashfreeClient(loadCashfreeConfig()) }, paymentId, to, via)), verifyRefund: (orderId, refundId) => new CashfreeClient(loadCashfreeConfig()).getRefund(orderId, refundId) });
   } catch (error) {
     logger.error("Cashfree webhook processing crashed", error);
     return "failed";

@@ -19,6 +19,7 @@ import { reconcileCashfreePayment } from "./cashfree.reconcile.js";
 import { applyPaymentUpdate, linkToUpdate, orderLockKey, PAYMENT_REFERENCE_TYPE, recordAmountMismatch } from "./cashfree.apply.js";
 import { CashfreeClient, type CashfreeLink, type CashfreeLinkOrder, type CashfreeOrderPayment, type CreateLinkRequest } from "./cashfree.client.js";
 import { CashfreeConfigError, isCashfreeEnabled, loadCashfreeConfig, type CashfreeConfig } from "./cashfree.config.js";
+import { closeOpenMethods, verifyQrOrderPaid } from "./cashfree.upi-qr.js";
 
 // Creates and manages Cashfree payment links for an existing CRM order. The order is the business reference: no Shopify
 // order is ever created, and the Payment row this makes is the same row the webhook later updates, so reconciliation
@@ -31,6 +32,10 @@ export interface CashfreeApi {
   /** Read-only identifier lookups used by refresh (optional so an API without them simply skips the lookup). */
   getLinkOrders?(linkId: string): Promise<CashfreeLinkOrder[]>;
   getOrderPayments?(cashfreeOrderId: string): Promise<CashfreeOrderPayment[]>;
+  /** Read-only lookup of the Cashfree order behind a payment's UPI QR (optional like the lookups above). */
+  getOrder?(orderId: string): Promise<import("./cashfree.client.js").CashfreeOrder>;
+  /** Terminate Order for a payment's UPI QR (optional like the lookups above). */
+  terminateOrder?(orderId: string, idempotencyKey: string): Promise<import("./cashfree.client.js").CashfreeOrder>;
 }
 
 export interface ResolvedCashfreeIds {
@@ -401,6 +406,10 @@ class CashfreePaymentsService {
         { source: ActivitySource.USER, actor: user, now: this.now() },
       );
       return this.toResult(await tx.payment.findUniqueOrThrow({ where: { id: paymentId }, select: PAYMENT_SELECT }), false, config);
+    }).then(async (result) => {
+      // the link is cancelled: the payment's UPI QR (if it has one) must not stay payable either
+      await closeOpenMethods({ runner: this.runner, api: this.api(config), now: () => this.now() }, paymentId, "FAILED", null).catch(() => undefined);
+      return result;
     });
   }
 
@@ -435,7 +444,19 @@ class CashfreePaymentsService {
     }
 
     // A paid link: also record WHICH Cashfree order / payment settled it (webhooks normally do this; without a reachable webhook this is the only way).
-    const update = linkToUpdate(link);
+    let update = linkToUpdate(link);
+    // The customer may have paid through the payment's UPI QR instead of the link: ask Cashfree about that order too. Only a PAID order for the exact amount in INR counts.
+    const qrOrderId = asRecord(asRecord(payment.metadata).upiQr).orderId;
+    const qrApi = this.api(config);
+    if (link.linkStatus !== "PAID" && typeof qrOrderId === "string" && qrApi.getOrder) {
+      try {
+        const verdict = await verifyQrOrderPaid({ getOrder: (id) => qrApi.getOrder!(id), getOrderPayments: qrApi.getOrderPayments ? (id) => qrApi.getOrderPayments!(id) : undefined }, qrOrderId, { amount: payment.amount.toString(), currency: payment.currency });
+        if (verdict.paid) update = { status: "SUCCESS", paidAmount: verdict.amount, cfPaymentId: verdict.cfPaymentId, bankReference: verdict.bankReference, meta: { via: "upi_qr", cashfreeOrderId: qrOrderId, ...(verdict.cfPaymentId ? { cfPaymentId: verdict.cfPaymentId } : {}) } };
+        else if (verdict.reportedAmount) await this.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount.toString(), reported: verdict.reportedAmount!, via: "refresh", source: ctx.source, now: this.now() }));
+      } catch {
+        // the QR order could not be read right now; the link's own answer stands and the next refresh asks again
+      }
+    }
     if (link.linkStatus === "PAID") {
       const ids = await resolveCashfreeIds(this.api(config), linkId);
       if (ids.cashfreeOrderId) update.meta = { ...update.meta, cashfreeOrderId: ids.cashfreeOrderId, ...(ids.cfOrderId ? { cfOrderId: ids.cfOrderId } : {}) };
@@ -448,13 +469,13 @@ class CashfreePaymentsService {
     }
 
     // A paid link must be for the amount the CRM expects; anything else is not applied as paid.
-    if (update.status === "SUCCESS" && toCents(link.linkAmountPaid) !== toCents(payment.amount.toString())) {
+    if (update.status === "SUCCESS" && link.linkStatus === "PAID" && toCents(link.linkAmountPaid) !== toCents(payment.amount.toString())) {
       update.status = null;
       update.meta = { ...update.meta, amountMismatch: { expected: payment.amount.toString(), paid: link.linkAmountPaid } };
       // not applied as paid, but visible to admins in the order's audit trail (once per distinct reported amount)
       if (link.linkAmountPaid) await this.runner.$transaction((tx) => recordAmountMismatch(tx, payment.id, { expected: payment.amount.toString(), reported: link.linkAmountPaid!, via: "refresh", source: ctx.source, now: this.now() }));
     }
-    return reconcileCashfreePayment({ runner: this.runner, now: () => this.now(), getShopifyClient: this.deps.getShopifyClient, notifyDeps: this.deps.notifyDeps }, paymentId, update, ctx);
+    return reconcileCashfreePayment({ runner: this.runner, now: () => this.now(), getShopifyClient: this.deps.getShopifyClient, notifyDeps: this.deps.notifyDeps, closeOpenMethods: async (id, to, via) => void (await closeOpenMethods({ runner: this.runner, api: this.api(config), now: () => this.now() }, id, to, via)) }, paymentId, update, ctx);
   }
 
   // ---------------------------------------------------------------- WhatsApp

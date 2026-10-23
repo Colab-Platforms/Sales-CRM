@@ -227,7 +227,7 @@ describe("CRM -> Shopify parity (pushOrderToShopify)", () => {
       const w = await world(tx);
       const f = fakeShopify({ total: "1298.00" });
       const r = await new OrdersService(tx, () => f.client).pushOrderToShopify(w.as, w.order.id);
-      assert.deepEqual([r.sync?.status, r.sync?.missing.includes("totals")], ["partial", true]);
+      assert.deepEqual([r.sync?.status, r.sync?.missing.includes("totals"), r.sync?.totals?.difference], ["failed", true, "-50.00"]);
     });
   });
 
