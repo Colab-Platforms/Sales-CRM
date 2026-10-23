@@ -94,8 +94,10 @@ export interface BreakLimit {
 
 // ---- Attendance records (filters & reports) ----
 
-export type DayStatus = "PRESENT" | "LATE" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED";
-export type AttendanceStatusFilter = "ALL" | "PRESENT" | "LATE" | "ABSENT";
+// Only PRESENT and ABSENT are attendance statuses. PENDING = today before the cut-off ("Not Yet Recorded");
+// NOT_JOINED / NOT_TRACKED = outside the reporting period for that employee. Neither is counted.
+export type DayStatus = "PRESENT" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED";
+export type AttendanceStatusFilter = "ALL" | "PRESENT" | "ABSENT";
 
 export interface AttendanceDayRecord {
   date: string;
@@ -106,7 +108,6 @@ export interface AttendanceDayRecord {
   workingMs: number;
   productiveMs: number;
   breakMs: number;
-  lateByMs: number;
   sessions: number;
   calls: number;
   talkTimeSec: number;
@@ -115,7 +116,6 @@ export interface AttendanceDayRecord {
 
 export interface AttendanceTotals {
   present: number;
-  late: number;
   absent: number;
   expected: number;
   attended: number;
@@ -138,9 +138,9 @@ export interface AttendanceRecordsQuery {
 export interface AttendanceRecords {
   range: { from: string; to: string; days: string[]; today: string; tzOffsetMinutes: number };
   filters: { userId: string | null; status: AttendanceStatusFilter };
-  policy: { trackingStartedOn: string | null; lateAfter: string; weeklyOff: null; halfDay: boolean; leaveAndHolidays: boolean };
+  policy: { trackingStartedOn: string | null; cutoff: string; weeklyOff: null; halfDay: boolean; leaveAndHolidays: boolean };
   summary: AttendanceTotals & { totalEmployees: number };
-  daily: { date: string; present: number; late: number; absent: number; expected: number; attendancePct: number | null }[];
+  daily: { date: string; present: number; absent: number; expected: number; attendancePct: number | null }[];
   employees: { id: string; name: string; employeeId: string; joinedOn: string; totals: AttendanceTotals; records: AttendanceDayRecord[] }[];
   pagination: { page: number; pageSize: number; pages: number; total: number };
   team: { id: string; name: string; employeeId: string }[];

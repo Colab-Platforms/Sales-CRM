@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Download, SlidersHorizontal } from "lucide-react";
+import { ChevronDown, Download, RotateCcw, SlidersHorizontal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
@@ -13,10 +13,12 @@ import {
   ORDER_STATUS_LABELS,
   PAYMENT_MODE_LABELS,
   RANGE_LABELS,
+  defaultFilters,
   type DashboardFilters,
   type RangePreset,
 } from "@/lib/manager-analytics";
 import type { CallStatusFilter, LeadStatusFilter, OrderStatusFilter, PaymentModeFilter } from "@/lib/api-client/types/manager-analytics.types";
+import { istToday, presetError } from "@/lib/date-presets";
 
 type Patch = (patch: Partial<DashboardFilters>) => void;
 
@@ -35,13 +37,23 @@ export function DateRangeFilter({ filters, onChange }: { filters: DashboardFilte
           </option>
         ))}
       </NativeSelect>
+      {filters.preset === "single" ? (
+        <Input
+          type="date"
+          aria-label="Date"
+          value={filters.singleDate}
+          max={istToday()}
+          onChange={(e) => onChange({ singleDate: e.target.value })}
+          className="w-full sm:w-40"
+        />
+      ) : null}
       {filters.preset === "custom" ? (
         <div className="flex items-center gap-2">
           <Input
             type="date"
             aria-label="From date"
             value={filters.customFrom}
-            max={filters.customTo || undefined}
+            max={filters.customTo || istToday()}
             onChange={(e) => onChange({ customFrom: e.target.value })}
             className="w-full sm:w-40"
           />
@@ -51,6 +63,7 @@ export function DateRangeFilter({ filters, onChange }: { filters: DashboardFilte
             aria-label="To date"
             value={filters.customTo}
             min={filters.customFrom || undefined}
+            max={istToday()}
             onChange={(e) => onChange({ customTo: e.target.value })}
             className="w-full sm:w-40"
           />
@@ -163,27 +176,75 @@ export function FilterBar({
   exporting?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  // Edits are a draft until Apply, so every KPI, chart and table moves to the new filters together.
+  const [draft, setDraft] = useState(filters);
+  const appliedKey = JSON.stringify(filters);
+  // When the applied filters change from outside (Reset, a chart's own metric switch), the draft follows them.
+  const [syncedKey, setSyncedKey] = useState(appliedKey);
+  if (syncedKey !== appliedKey) {
+    setSyncedKey(appliedKey);
+    setDraft(filters);
+  }
+  const edit: Patch = (p) => setDraft((d) => ({ ...d, ...p }));
+  const dirty = JSON.stringify(draft) !== appliedKey;
+  const error = presetError({ preset: draft.preset, single: draft.singleDate, from: draft.customFrom, to: draft.customTo });
+  const apply = () => {
+    if (error) return;
+    onChange(draft);
+    setOpen(false);
+  };
+  const reset = () => {
+    const fresh = defaultFilters();
+    setDraft(fresh);
+    onChange(fresh);
+    setOpen(false);
+  };
 
   const controls = (
     <>
-      <DateRangeFilter filters={filters} onChange={onChange} />
+      <DateRangeFilter
+        filters={draft}
+        onChange={(p) => {
+          // Quick ranges load at once; Single Date / Custom Range (and the other filters) wait for Apply.
+          if (p.preset && p.preset !== "single" && p.preset !== "custom") {
+            const next = { ...draft, ...p };
+            setDraft(next);
+            onChange(next);
+          } else edit(p);
+        }}
+      />
       {showSalesperson ? (
-        <SalespersonFilter value={filters.salespersonId} people={people} onChange={(id) => onChange({ salespersonId: id })} />
+        <SalespersonFilter value={draft.salespersonId} people={people} onChange={(id) => edit({ salespersonId: id })} />
       ) : null}
       {variant === "report" ? (
         <>
-          <PaymentModeSelect value={filters.paymentMode} onChange={(paymentMode) => onChange({ paymentMode })} />
-          <OrderStatusSelect value={filters.orderStatus} onChange={(orderStatus) => onChange({ orderStatus })} />
-          <CallStatusSelect value={filters.callStatus} onChange={(callStatus) => onChange({ callStatus })} />
+          <PaymentModeSelect value={draft.paymentMode} onChange={(paymentMode) => edit({ paymentMode })} />
+          <OrderStatusSelect value={draft.orderStatus} onChange={(orderStatus) => edit({ orderStatus })} />
+          <CallStatusSelect value={draft.callStatus} onChange={(callStatus) => edit({ callStatus })} />
         </>
       ) : (
         <>
-          <CallStatusSelect value={filters.callStatus} onChange={(callStatus) => onChange({ callStatus })} />
-          {showLeadStatus ? <LeadStatusSelect value={filters.leadStatus} onChange={(leadStatus) => onChange({ leadStatus })} /> : null}
+          <CallStatusSelect value={draft.callStatus} onChange={(callStatus) => edit({ callStatus })} />
+          {showLeadStatus ? <LeadStatusSelect value={draft.leadStatus} onChange={(leadStatus) => edit({ leadStatus })} /> : null}
         </>
       )}
     </>
   );
+  const actions = (
+    <>
+      <Button onClick={apply} disabled={!dirty || Boolean(error)}>
+        Apply Filters
+      </Button>
+      <Button variant="outline" onClick={reset} aria-label="Reset filters">
+        <RotateCcw data-icon="inline-start" /> Reset
+      </Button>
+    </>
+  );
+  const note = error ? (
+    <p className="text-xs text-destructive">{error}</p>
+  ) : dirty ? (
+    <p className="text-xs text-muted-foreground">Filters changed - press Apply Filters to update.</p>
+  ) : null;
 
   const exportMenu = exportOptions?.length ? (
     <DropdownMenu>
@@ -204,9 +265,13 @@ export function FilterBar({
 
   return (
     <>
-      <div className="hidden flex-wrap items-center justify-end gap-2 lg:flex">
-        {controls}
-        {exportMenu}
+      <div className="hidden flex-col items-end gap-1 lg:flex">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {controls}
+          {actions}
+          {exportMenu}
+        </div>
+        {note}
       </div>
       <div className="flex gap-2 lg:hidden">
         <Button variant="outline" className="flex-1" onClick={() => setOpen(true)}>
@@ -219,11 +284,10 @@ export function FilterBar({
           <SheetHeader>
             <SheetTitle>Filters</SheetTitle>
           </SheetHeader>
-          <div className="flex flex-col gap-3 px-4 pb-6 [&_div]:w-full">{controls}</div>
-          <div className="px-4 pb-6">
-            <Button className="w-full" onClick={() => setOpen(false)}>
-              Apply
-            </Button>
+          <div className="flex flex-col gap-3 px-4 pb-4 [&_div]:w-full">{controls}</div>
+          <div className="space-y-2 px-4 pb-6">
+            {note}
+            <div className="grid grid-cols-2 gap-2">{actions}</div>
           </div>
         </SheetContent>
       </Sheet>

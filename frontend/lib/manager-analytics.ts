@@ -8,6 +8,7 @@ import type {
   PaymentModeFilter,
   SalespersonStats,
 } from "@/lib/api-client/types/manager-analytics.types";
+import { DATE_PRESET_LABELS, resolvePreset, type DatePreset } from "@/lib/date-presets";
 
 // ---------- formatting ----------
 
@@ -66,16 +67,9 @@ export function initials(name: string): string {
 
 // ---------- date range / filters ----------
 
-export type RangePreset = "today" | "yesterday" | "7d" | "30d" | "month" | "custom";
+export type RangePreset = DatePreset;
 
-export const RANGE_LABELS: Record<RangePreset, string> = {
-  today: "Today",
-  yesterday: "Yesterday",
-  "7d": "Last 7 Days",
-  "30d": "Last 30 Days",
-  month: "This Month",
-  custom: "Custom Range",
-};
+export const RANGE_LABELS: Record<RangePreset, string> = DATE_PRESET_LABELS;
 
 export const CALL_STATUS_LABELS: Record<CallStatusFilter, string> = {
   ALL: "All Calls",
@@ -96,6 +90,8 @@ export interface DashboardFilters {
   preset: RangePreset;
   customFrom: string;
   customTo: string;
+  /** The date for the "single" preset. */
+  singleDate: string;
   salespersonId: string; // "" = all
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
@@ -117,36 +113,17 @@ export const ORDER_STATUS_LABELS: Record<OrderStatusFilter, string> = {
 export const REPORT_TZ_OFFSET_MINUTES = 330;
 const toYmd = (d: Date) => new Date(d.getTime() + REPORT_TZ_OFFSET_MINUTES * 60_000).toISOString().slice(0, 10);
 
-export function presetRange(preset: RangePreset, customFrom: string, customTo: string, now = new Date()) {
-  const day = (offset: number) => toYmd(new Date(now.getTime() - offset * 24 * 60 * 60_000));
-  switch (preset) {
-    case "today":
-      return { from: day(0), to: day(0) };
-    case "yesterday":
-      return { from: day(1), to: day(1) };
-    case "7d":
-      return { from: day(6), to: day(0) };
-    case "30d":
-      return { from: day(29), to: day(0) };
-    case "month": {
-      const today = day(0);
-      return { from: `${today.slice(0, 8)}01`, to: today };
-    }
-    case "custom": {
-      const from = customFrom || day(6);
-      const to = customTo || day(0);
-      return from <= to ? { from, to } : { from: to, to: from };
-    }
-  }
+export function presetRange(preset: RangePreset, customFrom: string, customTo: string, now = new Date(), singleDate = "") {
+  return resolvePreset({ preset, from: customFrom, to: customTo, single: singleDate }, now);
 }
 
 export function defaultFilters(): DashboardFilters {
   const today = toYmd(new Date());
-  return { preset: "today", customFrom: today, customTo: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
+  return { preset: "today", customFrom: today, customTo: today, singleDate: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
 }
 
 export function toQuery(f: DashboardFilters): AnalyticsQuery {
-  const { from, to } = presetRange(f.preset, f.customFrom, f.customTo);
+  const { from, to } = presetRange(f.preset, f.customFrom, f.customTo, new Date(), f.singleDate);
   return {
     from,
     to,
@@ -339,6 +316,7 @@ export function filtersToSearch(f: DashboardFilters): string {
     p.set("from", f.customFrom);
     p.set("to", f.customTo);
   }
+  if (f.preset === "single") p.set("date", f.singleDate);
   return p.toString();
 }
 
@@ -354,6 +332,7 @@ export function filtersFromSearch(sp: { get(name: string): string | null }): Das
     preset: range && range in RANGE_LABELS ? range : base.preset,
     customFrom: sp.get("from") ?? base.customFrom,
     customTo: sp.get("to") ?? base.customTo,
+    singleDate: sp.get("date") ?? base.singleDate,
     callStatus: callStatus && callStatus in CALL_STATUS_LABELS ? callStatus : "ALL",
     leadStatus: leadStatus && leadStatus in LEAD_STATUS_LABELS ? leadStatus : "ALL",
     paymentMode: paymentMode && paymentMode in PAYMENT_MODE_LABELS ? paymentMode : "ALL",

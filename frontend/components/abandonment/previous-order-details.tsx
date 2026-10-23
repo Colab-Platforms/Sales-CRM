@@ -74,9 +74,9 @@ export function OrderDetailsBody({ view }: { view: DetailView }) {
                   {l.variant && l.variant !== "Default Title" ? <span className="block text-muted-foreground">{l.variant}</span> : null}
                   {l.sku ? <span className="block text-muted-foreground">SKU {l.sku}</span> : null}
                 </td>
-                <td className="py-1 text-right tabular-nums">{l.quantity}</td>
-                <td className="py-1 text-right tabular-nums">{l.unitPrice ? formatMoney(l.unitPrice, view.currency) : "-"}</td>
-                <td className="py-1 text-right tabular-nums">{l.total ? formatMoney(l.total, view.currency) : "-"}</td>
+                <td className="py-1 pl-2 text-right whitespace-nowrap tabular-nums">{l.quantity}</td>
+                <td className="py-1 pl-2 text-right whitespace-nowrap tabular-nums">{l.unitPrice ? formatMoney(l.unitPrice, view.currency) : "-"}</td>
+                <td className="py-1 pl-2 text-right whitespace-nowrap tabular-nums">{l.total ? formatMoney(l.total, view.currency) : "-"}</td>
               </tr>
             ))}
           </tbody>

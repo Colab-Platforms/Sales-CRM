@@ -1,5 +1,5 @@
 import { SessionEndReason } from "../../../generated/prisma/enums.js";
-import { BREAK_LIMIT_MS, LATE_AFTER_MINUTES } from "./attendance.constants.js";
+import { ATTENDANCE_CUTOFF_MINUTES, BREAK_LIMIT_MS } from "./attendance.constants.js";
 import { computeSummary, mergeSummaries } from "./attendance.calc.js";
 import type { LogInterval } from "./attendance.types.js";
 
@@ -7,21 +7,21 @@ import type { LogInterval } from "./attendance.types.js";
 // Attendance records: one status per employee per calendar day (report timezone), derived only from
 // the WorkSession rows that person actually has. Nothing is written; nothing is inferred from leads/calls.
 //
-//  PRESENT     clocked in that day, first clock-in at or before LATE_AFTER_MINUTES
-//  LATE        clocked in that day, first clock-in after LATE_AFTER_MINUTES (still counts as attended)
+//  PRESENT     clocked in that day (any time - there is no Late status)
 //  ABSENT      no clock-in on a day the employee should have worked (on/after joining); today counts
-//              once the late cut-off has passed without a clock-in (a later clock-in turns it into LATE)
-//  PENDING     today before the late cut-off, not clocked in yet - not counted either way
+//              once ATTENDANCE_CUTOFF_MINUTES has passed without a clock-in (a later clock-in turns it into PRESENT)
+//  PENDING     today before the cut-off, not clocked in yet ("Not Yet Recorded") - not counted either way
 //  NOT_JOINED  a day before the employee's account existed - not expected, not counted
 //  NOT_TRACKED a day before the CRM recorded any attendance at all - nobody could clock in, not counted
 //
 // A session belongs to the day it STARTED on (an overnight shift stays on its start day). Several
 // sessions in one day are merged into one record, so a re-login never creates a second attendance.
-// Policy: every day is a working day; no half-day, leave or holiday statuses exist in this CRM.
+// Policy: every day is a working day; the CRM holds no weekly-off, half-day, leave or holiday records. Only
+// PRESENT and ABSENT are attendance statuses; PENDING / NOT_JOINED / NOT_TRACKED are "no status" and never counted.
 // ---------------------------------------------------------------------------------------------
 
-export type DayStatus = "PRESENT" | "LATE" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED";
-export type StatusFilter = "ALL" | "PRESENT" | "LATE" | "ABSENT";
+export type DayStatus = "PRESENT" | "ABSENT" | "PENDING" | "NOT_JOINED" | "NOT_TRACKED";
+export type StatusFilter = "ALL" | "PRESENT" | "ABSENT";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -43,8 +43,6 @@ export interface DayRecord {
   workingMs: number;
   productiveMs: number;
   breakMs: number;
-  /** How far past the late cut-off the first clock-in was; 0 when on time. */
-  lateByMs: number;
   sessions: number;
   /** Calls the employee made that day (any outcome), and the talk time of the connected ones. */
   calls: number;
@@ -101,7 +99,6 @@ export function dayRecord(input: {
     workingMs: 0,
     productiveMs: 0,
     breakMs: 0,
-    lateByMs: 0,
     sessions: 0,
     calls: input.callStats?.calls ?? 0,
     talkTimeSec: input.callStats?.talkTimeSec ?? 0,
@@ -112,14 +109,13 @@ export function dayRecord(input: {
     if (date < joinedOn) return { ...empty, status: "NOT_JOINED", remarks: [`Joined ${joinedOn}`] };
     if (!trackingStartedOn || date < trackingStartedOn) return { ...empty, status: "NOT_TRACKED", remarks: ["Before attendance tracking began"] };
     if (date > today) return { ...empty, status: "PENDING" };
-    if (date === today && zoneMinutes(now, tzOffsetMinutes) <= LATE_AFTER_MINUTES) return { ...empty, status: "PENDING", remarks: ["Not clocked in yet"] };
+    if (date === today && zoneMinutes(now, tzOffsetMinutes) <= ATTENDANCE_CUTOFF_MINUTES) return { ...empty, status: "PENDING", remarks: ["Not clocked in yet"] };
     return { ...empty, remarks: ["No clock-in recorded"] };
   }
 
   const first = sessions[0]!;
   const open = sessions.some((s) => !s.endedAt);
   const summary = mergeSummaries(sessions.map((s) => computeSummary(s.logs, s.startedAt, s.endedAt ?? now)));
-  const lateByMs = Math.max(0, Math.round((zoneMinutes(first.startedAt, tzOffsetMinutes) - LATE_AFTER_MINUTES) * 60_000));
   const last = sessions[sessions.length - 1]!;
 
   const remarks: string[] = [];
@@ -131,14 +127,13 @@ export function dayRecord(input: {
 
   return {
     date,
-    status: lateByMs > 0 ? "LATE" : "PRESENT",
+    status: "PRESENT",
     checkIn: first.startedAt.toISOString(),
     checkOut: open ? null : (last.endedAt?.toISOString() ?? null),
     stillWorking: open,
     workingMs: summary.shiftElapsedMs,
     productiveMs: summary.productiveMs,
     breakMs: summary.breakTotalMs,
-    lateByMs,
     sessions: sessions.length,
     calls: input.callStats?.calls ?? 0,
     talkTimeSec: input.callStats?.talkTimeSec ?? 0,
@@ -152,11 +147,10 @@ export function matchesStatus(status: DayStatus, filter: StatusFilter): boolean 
 
 export interface AttendanceTotals {
   present: number;
-  late: number;
   absent: number;
-  /** Days the employee should have attended (present + late + absent; excludes today before the late cut-off and pre-joining days). */
+  /** Eligible working days: present + absent (excludes today before the cut-off, pre-joining and pre-tracking days). */
   expected: number;
-  /** present + late. */
+  /** Same as present (kept so totals read "attended of expected"). */
   attended: number;
   workingMs: number;
   productiveMs: number;
@@ -168,20 +162,18 @@ export interface AttendanceTotals {
 
 export function totalsOf(records: DayRecord[]): AttendanceTotals {
   const present = records.filter((r) => r.status === "PRESENT").length;
-  const late = records.filter((r) => r.status === "LATE").length;
   const absent = records.filter((r) => r.status === "ABSENT").length;
-  const expected = present + late + absent;
+  const expected = present + absent;
   return {
     present,
-    late,
     absent,
     expected,
-    attended: present + late,
+    attended: present,
     workingMs: records.reduce((a, r) => a + r.workingMs, 0),
     productiveMs: records.reduce((a, r) => a + r.productiveMs, 0),
     calls: records.reduce((a, r) => a + r.calls, 0),
     talkTimeSec: records.reduce((a, r) => a + r.talkTimeSec, 0),
-    attendancePct: expected > 0 ? Math.round(((present + late) / expected) * 1000) / 10 : null,
+    attendancePct: expected > 0 ? Math.round((present / expected) * 1000) / 10 : null,
   };
 }
 

@@ -22,7 +22,7 @@ export interface RecordsQuery {
   from: string;
   to: string;
   userId?: string;
-  status: "ALL" | "PRESENT" | "LATE" | "ABSENT";
+  status: "ALL" | "PRESENT" | "ABSENT";
   page: number;
   pageSize: number;
 }

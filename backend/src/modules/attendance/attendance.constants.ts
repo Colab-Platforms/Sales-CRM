@@ -25,9 +25,10 @@ export const MAX_ON_CALL_MS = 30 * MINUTE;
 // Reports/"today" are cut at midnight in this zone (the team works Indian hours; the server runs in UTC).
 export const REPORT_TZ_OFFSET_MINUTES = 330;
 
-// Attendance policy (company rules). A day's first clock-in after this time (report zone) is Late.
-// Every calendar day is a working day (no weekly off); there is no half-day status, leave or holiday calendar.
-export const LATE_AFTER_MINUTES = 9 * 60 + 45; // 09:45 IST
+// Attendance policy (company rules). Attendance has two statuses only: Present (any valid clock-in that day) and
+// Absent. Until this cut-off (report zone) today has no status yet ("Not Yet Recorded"); after it, no clock-in = Absent.
+// Every calendar day is a working day (no weekly off); the CRM has no half-day, leave or holiday records to exclude.
+export const ATTENDANCE_CUTOFF_MINUTES = 9 * 60 + 45; // 09:45 IST
 // Longest range one attendance report may cover.
 export const MAX_ATTENDANCE_RANGE_DAYS = 92;
 

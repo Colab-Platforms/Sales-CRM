@@ -40,7 +40,7 @@ export function CourierTable({ weightKg, dimensions, options, selectedKey, onSel
         </p>
       ) : null}
       <div className="overflow-x-auto">
-        <table className="w-full">
+        <table className="w-full [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
           <thead>
             <tr className="text-left text-xs text-muted-foreground">
               {onSelect ? <th className="w-8 px-3 py-1.5" aria-label="Selected" /> : null}

@@ -85,7 +85,7 @@ export function ProductivityVsResults({ people, onOpen }: { people: SalespersonS
           </div>
 
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
               <thead>
                 <tr className="border-b border-border text-xs text-muted-foreground">
                   <th className="py-2 pr-3 text-left font-medium">Salesperson</th>

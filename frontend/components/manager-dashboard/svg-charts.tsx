@@ -298,7 +298,7 @@ export function StackedBarChart({
             {labels.map((l, i) => (
               <div key={l + i} className="relative flex min-w-0 flex-1 flex-col" onMouseEnter={() => setHover(i)} onClick={() => setHover(i)}>
                 <div className="flex flex-1 flex-col-reverse pb-6">
-                  <div className="flex flex-col-reverse overflow-hidden rounded-t-[3px]" style={{ height: `${(totals[i]! / top) * 100}%`, marginTop: "auto" }}>
+                  <div className="mx-auto flex w-full max-w-16 flex-col-reverse overflow-hidden rounded-t-[3px]" style={{ height: `${(totals[i]! / top) * 100}%`, marginTop: "auto" }}>
                     {series.map((s) => (
                       <div
                         key={s.key}
@@ -310,7 +310,7 @@ export function StackedBarChart({
                 </div>
                 <span className="absolute inset-x-0 bottom-0 h-6 truncate text-center text-[11px] leading-6 text-muted-foreground">{i % labelEvery === 0 ? l : ""}</span>
                 {hover === i ? (
-                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i > labels.length / 2 ? "right-full mr-1" : "left-full ml-1")}>
+                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i >= (labels.length - 1) / 2 ? "right-1/2 mr-10" : "left-1/2 ml-10")}>
                     <p className="mb-1.5 font-semibold">{tooltipTitles?.[i] ?? l}</p>
                     <dl className="space-y-1">
                       {series.map((s) => (
@@ -404,7 +404,7 @@ export function GroupedBarChart({
                 </div>
                 <span className="absolute inset-x-0 bottom-0 h-6 truncate text-center text-[11px] leading-6 text-muted-foreground">{i % labelEvery === 0 ? l : ""}</span>
                 {hover === i ? (
-                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i > labels.length / 2 ? "right-full mr-1" : "left-full ml-1")}>
+                  <div className={cn("pointer-events-none absolute top-0 z-20 w-44 rounded-md border border-border bg-popover p-2.5 text-xs shadow-md", i >= (labels.length - 1) / 2 ? "right-1/2 mr-10" : "left-1/2 ml-10")}>
                     <p className="mb-1.5 font-semibold">{tooltipTitles?.[i] ?? l}</p>
                     <dl className="space-y-1">
                       {series.map((s) => (

@@ -36,8 +36,9 @@ router.get("/team/stream", requireRole(Role.ADMIN, Role.MANAGER), streamTeam);
 router.get("/break-limit", requireRole(Role.ADMIN, Role.MANAGER), getBreakLimit);
 router.put("/break-limit", requireRole(Role.ADMIN, Role.MANAGER), setBreakLimit);
 
-// Attendance records over a date range (Present / Late / Absent per employee per day), for filters and reports.
-router.get("/records", requireRole(Role.ADMIN, Role.MANAGER), getRecords);
+// Attendance records over a date range (Present / Absent per employee per day), for filters, reports and
+// the calendars. A salesperson is limited to their own records by the service.
+router.get("/records", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getRecords);
 
 // Daily report; a salesperson is limited to their own row by the service.
 router.get("/report", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getReport);

@@ -150,7 +150,7 @@ export function DailyCallPerformance({
             ))}
           </div>
           <div className="max-h-96 overflow-auto rounded-md border border-border">
-            <table className="w-full text-sm">
+            <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
               <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">Date</th>
