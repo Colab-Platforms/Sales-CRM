@@ -1,0 +1,209 @@
+// WhatsApp Report Automation: a daily telecaller-performance report sent to one WhatsApp number.
+// One automation per Admin / Manager (ownerId): an Admin's report covers every active telecaller, a Manager's covers their own team - the same scope as the Sales & Revenue analytics.
+// ownerId is a plain id (no relation): the scheduler re-reads the user at run time and skips the run if they are no longer an active Admin / Manager.
+
+enum ReportDeliveryStatus {
+  PENDING
+  SENDING
+  SENT
+  FAILED
+  // The provider gave no answer (timeout / dropped connection): it MAY have accepted the message, so it is never re-sent automatically.
+  UNCERTAIN
+
+  @@map("report_delivery_status")
+}
+
+enum ReportDeliveryKind {
+  SCHEDULED
+  TEST
+
+  @@map("report_delivery_kind")
+}
+
+model ReportAutomation {
+  id String @id @default(uuid()) @db.Uuid
+
+  ownerId String @unique @map("owner_id") @db.Uuid
+
+  enabled   Boolean @default(false)
+  // E.164 with country code, e.g. +919876543210
+  recipient String? @map("recipient") @db.VarChar(20)
+  // Local time of day, "HH:mm" (24h), in `timezone`
+  sendTime  String  @default("21:00") @map("send_time") @db.VarChar(5)
+  // IANA zone, default Asia/Kolkata (IST)
+  timezone  String  @default("Asia/Kolkata") @map("timezone") @db.VarChar(64)
+  // TODAY = the report is for the local day on which it is sent; YESTERDAY = the previous local day
+  reportFor String  @default("TODAY") @map("report_for") @db.VarChar(10)
+  // Used when reportFor = "DATE": the calendar day (YYYY-MM-DD, in `timezone`) the report covers, independent of when it is sent. Other modes: TODAY, YESTERDAY, LAST7DAYS (the 7 complete days before the send day).
+  reportDataDate String? @map("report_data_date") @db.VarChar(10)
+
+  // The APPROVED WhatsApp template a business-initiated message needs. Body: a single variable holding the report text.
+  templateName String? @map("template_name") @db.VarChar(150)
+  languageCode String  @default("en") @map("language_code") @db.VarChar(20)
+
+  // Which sections the message contains: { teamSummary, calls, leads, sales, followUps }
+  options Json @default("{}") @map("options")
+
+  // Which telecallers the report covers: a list of user ids (the roster). Empty = every active telecaller in the owner's scope (the original behaviour). Ids, not names, so a rename or a test account
+  // with a similar name can never slip in; an excluded user's data is left out of every total, never re-attributed to someone else.
+  includedUserIds Json @default("[]") @map("included_user_ids")
+
+  // What is sent to each recipient: the template text message and/or the Excel document.
+  sendText  Boolean @default(true) @map("send_text")
+  sendExcel Boolean @default(true) @map("send_excel")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  deliveries ReportDelivery[]
+  recipients ReportRecipient[]
+
+  @@map("report_automations")
+}
+
+model ReportDelivery {
+  id String @id @default(uuid()) @db.Uuid
+
+  automationId String           @map("automation_id") @db.Uuid
+  automation   ReportAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  kind       ReportDeliveryKind @map("kind")
+  // The report's local calendar day, YYYY-MM-DD in the automation's timezone
+  reportDate String             @map("report_date") @db.VarChar(10)
+
+  // `<automationId>:<reportDate>` for a SCHEDULED delivery, NULL for a TEST: the unique index is what makes "one scheduled report per automation per day"
+  // atomic (two workers / a restart can never both insert it), while any number of test sends coexist.
+  // For a multi-day report (LAST7DAYS) the first day covered; `reportDate` is then the last day. Null for a single-day report.
+  reportRangeStart String? @map("report_range_start") @db.VarChar(10)
+
+  dedupeKey String? @unique @map("dedupe_key") @db.VarChar(120)
+
+  recipient String               @map("recipient") @db.VarChar(20)
+  status    ReportDeliveryStatus @default(PENDING) @map("status")
+  attempts  Int                  @default(0) @map("attempts")
+
+  providerMessageId String? @map("provider_message_id") @db.VarChar(255)
+  error             String? @map("error") @db.VarChar(500)
+
+  scheduledFor  DateTime? @map("scheduled_for")
+  nextAttemptAt DateTime? @map("next_attempt_at")
+  sentAt        DateTime? @map("sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  recipientResults ReportDeliveryRecipient[]
+
+  @@index([automationId, createdAt])
+  @@index([status, nextAttemptAt])
+  @@map("report_deliveries")
+}
+
+// ---------------------------------------------------------------------------------------------- multiple recipients and per-recipient delivery (migration 20261024000000)
+
+enum ReportRecipientStatus {
+  PENDING
+  SENDING
+  // The provider ACCEPTED the message. Not proof of delivery.
+  SENT
+  // Only ever set from the provider's own delivery callback.
+  DELIVERED
+  READ
+  FAILED
+  // No answer from the provider: it may have been delivered; never re-sent automatically.
+  UNCERTAIN
+  // This part is switched off for the automation (e.g. Excel disabled) - nothing was or will be sent.
+  SKIPPED
+
+  @@map("report_recipient_status")
+}
+
+// A person the report is sent to. Several per automation, each with an optional display name.
+model ReportRecipient {
+  id String @id @default(uuid()) @db.Uuid
+
+  automationId String           @map("automation_id") @db.Uuid
+  automation   ReportAutomation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  name     String? @map("name") @db.VarChar(100)
+  // E.164, e.g. +919876543210
+  phone    String  @map("phone") @db.VarChar(20)
+  position Int     @default(0) @map("position")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([automationId, phone])
+  @@map("report_recipients")
+}
+
+// ONE recipient's result for ONE report run (a ReportDelivery). The recipient list is copied into this table when the run is created, so history keeps the name and number that were used even if the list
+// is edited later, and one recipient's failure never touches another's row.
+model ReportDeliveryRecipient {
+  id String @id @default(uuid()) @db.Uuid
+
+  deliveryId String         @map("delivery_id") @db.Uuid
+  delivery   ReportDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  name     String? @map("name") @db.VarChar(100)
+  phone    String  @map("phone") @db.VarChar(20)
+  provider String? @map("provider") @db.VarChar(20)
+
+  status   ReportRecipientStatus @default(PENDING) @map("status")
+  attempts Int                   @default(0) @map("attempts")
+
+  providerMessageId String? @map("provider_message_id") @db.VarChar(255)
+  error             String? @map("error") @db.VarChar(500)
+
+  lastAttemptAt DateTime? @map("last_attempt_at")
+  nextAttemptAt DateTime? @map("next_attempt_at")
+  sentAt        DateTime? @map("sent_at")
+  deliveredAt   DateTime? @map("delivered_at")
+  readAt        DateTime? @map("read_at")
+
+  // The Excel DOCUMENT is a separate WhatsApp message with its own result (status above is the TEXT template message).
+  // The DETAILED TEXT is a third message: the formatted multi-line report as a free-form WhatsApp text (allowed only inside the 24-hour customer-service window). `status` above is the short template NOTIFICATION.
+  txtStatus            ReportRecipientStatus @default(SKIPPED) @map("txt_status")
+  txtAttempts          Int                   @default(0) @map("txt_attempts")
+  txtProviderMessageId String?               @map("txt_provider_message_id") @db.VarChar(255)
+  txtError             String?               @map("txt_error") @db.VarChar(500)
+  txtLastAttemptAt     DateTime?             @map("txt_last_attempt_at")
+  txtSentAt            DateTime?             @map("txt_sent_at")
+  txtDeliveredAt       DateTime?             @map("txt_delivered_at")
+  txtReadAt            DateTime?             @map("txt_read_at")
+
+  docStatus            ReportRecipientStatus @default(SKIPPED) @map("doc_status")
+  docAttempts          Int                   @default(0) @map("doc_attempts")
+  docProviderMessageId String?               @map("doc_provider_message_id") @db.VarChar(255)
+  docMediaId           String?               @map("doc_media_id") @db.VarChar(255)
+  docError             String?               @map("doc_error") @db.VarChar(500)
+  docLastAttemptAt     DateTime?             @map("doc_last_attempt_at")
+  docSentAt            DateTime?             @map("doc_sent_at")
+  docDeliveredAt       DateTime?             @map("doc_delivered_at")
+  docReadAt            DateTime?             @map("doc_read_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([deliveryId, phone])
+  @@index([docProviderMessageId])
+  @@index([txtProviderMessageId])
+  @@index([providerMessageId])
+  @@index([status, nextAttemptAt])
+  @@map("report_delivery_recipients")
+}
+
+// One row (id = 1): the last time ANY scheduler tick ran and what it found. This is how a sleeping or crashed host shows up in the UI instead of silently never sending.
+model ReportSchedulerState {
+  id Int @id
+
+  lastTickAt  DateTime? @map("last_tick_at")
+  lastChecked Int       @default(0) @map("last_checked")
+  lastStarted Int       @default(0) @map("last_started")
+  lastError   String?   @map("last_error") @db.VarChar(300)
+  // "scheduler" (in-process timer) or "cron" (the secret-protected external trigger)
+  lastSource  String?   @map("last_source") @db.VarChar(20)
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  @@map("report_scheduler_state")
+}

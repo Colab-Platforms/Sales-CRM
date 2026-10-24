@@ -303,6 +303,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Communication",
       items: [
+        { title: "WhatsApp Report Automation", href: "/dashboard/report-automation", icon: ClipboardList },
         {
           title: "WhatsApp",
           icon: MessageCircle,
@@ -391,6 +392,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
     {
       label: "Communication",
       items: [
+        { title: "WhatsApp Report Automation", href: "/dashboard/report-automation", icon: ClipboardList },
         {
           title: "WhatsApp",
           icon: MessageCircle,

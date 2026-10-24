@@ -21,6 +21,7 @@ import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
 import recruitmentRoutes from "@modules/recruitment/recruitment.routes.js";
 import refundRoutes from "@modules/refunds/refunds.routes.js";
 import attendanceRoutes from "@modules/attendance/attendance.routes.js";
+import reportAutomationRoutes, { cronRouter as reportAutomationCronRouter } from "@modules/report-automation/report-automation.routes.js";
 import ticketsRoutes from "@modules/tickets/tickets.routes.js";
 import { prisma } from "@/lib/prisma.js";
 import { createCachedDatabaseCheck } from "@/lib/dbHealth.js";
@@ -67,6 +68,8 @@ router.use("/abandonments", abandonmentRoutes);
 router.use("/recruitment", recruitmentRoutes);
 router.use("/refund-requests", refundRoutes);
 router.use("/attendance", attendanceRoutes);
+router.use("/report-automation/cron", reportAutomationCronRouter);
+router.use("/report-automation", reportAutomationRoutes);
 router.use("/tickets", ticketsRoutes);
 
 export default router;

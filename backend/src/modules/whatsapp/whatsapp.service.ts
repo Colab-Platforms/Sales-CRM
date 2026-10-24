@@ -15,6 +15,7 @@ import { WhatsAppMediaError, type FetchedMedia } from "./whatsapp.meta.provider.
 import { getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
 import { QR_MEDIA_NAME, renderStoredPaymentQr, resolvePaymentQrMessages } from "./whatsapp.payment-qr.js";
 import { contentDisposition, describeMedia, loadMediaDescriptors, mediaActivityMetadata, recoverMediaFromWebhook, safeFilename, servedContentType, type InboundMedia } from "./whatsapp.media.js";
+import { applyReportDeliveryStatus } from "../report-automation/report-automation.status.js";
 import type { NormalizedIncomingMessage, NormalizedStatusUpdate, WhatsAppDeliveryStatus, WhatsAppProvider, WhatsAppProviderId } from "./whatsapp.provider.js";
 import { legacyMatchCandidates, matchSenderToLead, threadOf } from "./whatsapp.matching.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
@@ -569,6 +570,8 @@ class WhatsAppService {
   }
 
   async recordStatusUpdate(provider: WhatsAppProviderId, update: NormalizedStatusUpdate): Promise<void> {
+    // A daily-report message is not a customer message (no WhatsAppMessage row): its recipient's delivery status is tracked separately. No-op unless the id belongs to a report message.
+    await applyReportDeliveryStatus(this.db, provider, update).catch((error) => logger.error("Report delivery status could not be applied", error instanceof Error ? error.message : String(error)));
     const existing = await this.db.whatsAppMessage.findUnique({
       where: { provider_providerMessageId: { provider, providerMessageId: update.providerMessageId } },
       select: { id: true, status: true, leadId: true, sentAt: true, deliveredAt: true, readAt: true, failedAt: true },

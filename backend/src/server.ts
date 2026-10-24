@@ -18,6 +18,7 @@ import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/wha
 import legalRoutes from "./modules/legal/legal.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
+import { startReportAutomationScheduler } from "./modules/report-automation/report-automation.scheduler.js";
 import { startIdempotencyPruneJob } from "./modules/orders/orders.idempotency.prune.js";
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
 import { attendanceService } from "./modules/attendance/attendance.service.js";
@@ -96,5 +97,6 @@ app.listen(PORT, () => {
   startMetaWebhookWorker();
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
+  startReportAutomationScheduler(); // daily WhatsApp telecaller report (Admin / Manager automation)
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
 });

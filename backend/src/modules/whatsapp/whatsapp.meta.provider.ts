@@ -256,7 +256,7 @@ export class MetaCloudApiProvider implements WhatsAppProvider {
   }
 
   async sendDocument(input: MetaMediaMessage): Promise<SendTemplateMessageResult> {
-    const body = await this.post({ to: input.to, type: "document", document: { link: input.link, caption: input.caption, filename: input.filename } }, "document");
+    const body = await this.post({ to: input.to, type: "document", document: { ...(input.mediaId ? { id: input.mediaId } : { link: input.link }), caption: input.caption, filename: input.filename } }, "document");
     return { providerMessageId: firstMessageId(body), raw: body };
   }
 
