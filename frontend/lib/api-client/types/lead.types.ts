@@ -69,7 +69,19 @@ export interface LeadListParams {
   assignment?: AssignmentFilter;
   managerId?: string;
   salespersonId?: string;
+  bucket?: "TODAY";
   search?: string;
+}
+
+export type BucketKind = "LEAD" | "ABANDONED";
+
+export interface BucketSummaryRow {
+  salespersonId: string;
+  name: string;
+  total: number;
+  done: number;
+  remaining: number;
+  isEmpty: boolean;
 }
 
 export interface CreateLeadPayload {

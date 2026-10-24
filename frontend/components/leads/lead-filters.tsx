@@ -36,7 +36,7 @@ export function LeadFilters({
 }) {
   const [search, setSearch] = useState(value.search ?? "");
 
-  const hasFilters = Boolean(value.search || value.workingStatus || value.assignment);
+  const hasFilters = Boolean(value.search || value.workingStatus || value.assignment || value.bucket);
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -115,6 +115,16 @@ export function LeadFilters({
             ))}
           </NativeSelect>
         </div>
+      ) : null}
+
+      {role === "SALESPERSON" ? (
+        <Button
+          type="button"
+          variant={value.bucket === "TODAY" ? "default" : "outline"}
+          onClick={() => onChange({ ...value, bucket: value.bucket === "TODAY" ? undefined : "TODAY" })}
+        >
+          Today&apos;s bucket
+        </Button>
       ) : null}
 
       {hasFilters ? (

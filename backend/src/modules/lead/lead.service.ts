@@ -20,6 +20,7 @@ import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, schedu
 // (or a Shopify/Meta match) uses, with no special-casing needed on either side.
 import { normalizeMobile, normalizeEmail } from "@/lib/leadIdentity.js";
 import { isAbandonedImportBatch } from "@/lib/importBatchKind.js";
+import { bucketToday } from "@/lib/leadBucket.js";
 import {
   Role,
   UserStatus,
@@ -141,6 +142,11 @@ class LeadService {
 
     if (user.role === Role.ADMIN && query.managerId) where.assignedManagerId = query.managerId;
     if (user.role !== Role.SALESPERSON && query.salespersonId) where.ownerId = query.salespersonId;
+    // Today's daily bucket: leads put in the owner's bucket today that they have not worked yet.
+    if (query.bucket === "TODAY") {
+      where.bucketDate = bucketToday();
+      where.bucketDoneAt = null;
+    }
 
     if (query.search) {
       where.OR = [
@@ -174,6 +180,36 @@ class LeadService {
         totalPages: Math.ceil(total / query.limit),
       },
     };
+  }
+
+  /**
+   * Today's daily-bucket status for every active salesperson on a manager's team. `remaining` is leads put in their bucket today that
+   * they have not worked yet; `isEmpty` marks the reps the manager can top up with RINGING leads.
+   */
+  async getBucketSummary(managerId: string, kind: "LEAD" | "ABANDONED" = "LEAD") {
+    const today = bucketToday();
+    const team = await prisma.user.findMany({
+      where: {
+        role: Role.SALESPERSON,
+        status: UserStatus.ACTIVE,
+        OR: [{ reportingManagerId: managerId }, { groupMemberships: { some: { isActive: true, group: { managerId, status: "ACTIVE" } } } }],
+      },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    // Normal leads and abandoned-cart leads are separate queues, each with its own bucket.
+    const queue: Prisma.LeadWhereInput = kind === "ABANDONED" ? { abandonments: { some: {} } } : { abandonments: { none: {} } };
+    const [totals, done] = await Promise.all([
+      prisma.lead.groupBy({ by: ["ownerId"], where: { ...queue, ownerId: { in: team.map((t) => t.id) }, bucketDate: today }, _count: { _all: true } }),
+      prisma.lead.groupBy({ by: ["ownerId"], where: { ...queue, ownerId: { in: team.map((t) => t.id) }, bucketDate: today, bucketDoneAt: { not: null } }, _count: { _all: true } }),
+    ]);
+    const totalBy = new Map(totals.map((r) => [r.ownerId, r._count._all]));
+    const doneBy = new Map(done.map((r) => [r.ownerId, r._count._all]));
+    return team.map((member) => {
+      const total = totalBy.get(member.id) ?? 0;
+      const doneCount = doneBy.get(member.id) ?? 0;
+      return { salespersonId: member.id, name: member.name, total, done: doneCount, remaining: total - doneCount, isEmpty: total - doneCount === 0 };
+    });
   }
 
   private async getLeadOrThrow(id: string) {
@@ -536,7 +572,7 @@ class LeadService {
     }
 
     for (const [salespersonId, { ids, groupId }] of bySalesperson) {
-      await tx.lead.updateMany({ where: { id: { in: ids } }, data: { ownerId: salespersonId, groupId } });
+      await tx.lead.updateMany({ where: { id: { in: ids } }, data: { ownerId: salespersonId, groupId, bucketDate: bucketToday(now), bucketDoneAt: null } });
     }
     if (newLeadIds.length) {
       await tx.lead.updateMany({ where: { id: { in: newLeadIds } }, data: { workingStatus: "ASSIGNED" } });

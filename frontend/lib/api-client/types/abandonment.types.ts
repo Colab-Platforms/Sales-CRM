@@ -31,6 +31,7 @@ export interface ListAbandonmentsParams {
   managerId?: string;
   salespersonId?: string;
   workingStatus?: LeadWorkingStatus;
+  bucket?: "TODAY";
   /** Item keys from GET /abandonments/items; any of them (OR). */
   items?: string[];
   /** Table column filters (server-side, over the whole result set). */

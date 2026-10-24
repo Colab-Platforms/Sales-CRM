@@ -44,6 +44,10 @@ model Lead {
   lastContactedAt DateTime? @map("last_contacted_at")
   lastActivityAt  DateTime? @map("last_activity_at")
 
+  // Daily work bucket: the day (IST calendar date) the lead was put in its owner's bucket, and when it was worked.
+  bucketDate   DateTime? @map("bucket_date") @db.Date
+  bucketDoneAt DateTime? @map("bucket_done_at")
+
   // Identity in an external system (Shopify). Null for records created inside the CRM.
   externalSource    ExternalSource? @map("external_source")
   externalId        String?         @map("external_id") @db.VarChar(100)
@@ -68,6 +72,7 @@ model Lead {
   @@index([normalizedEmail])
   @@index([sourceId])
   @@index([ownerId])
+  @@index([ownerId, bucketDate])
   @@index([groupId])
   @@index([assignedManagerId])
   @@index([importBatchId])
