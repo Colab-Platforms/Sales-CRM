@@ -2,6 +2,13 @@
 // npm install --save-dev prisma dotenv
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
+import { resolveMigrationUrl } from "./src/lib/migrationUrl.js";
+
+const migration = resolveMigrationUrl(process.env);
+if (migration.pooled) {
+  // host-kind only - never the URL itself
+  console.warn("[prisma.config] The Prisma CLI is using a pooled (-pooler) connection. `migrate` takes a session advisory lock that PgBouncer can leave behind; set DIRECT_URL to the direct (non-pooled) URL of the same database.");
+}
 
 export default defineConfig({
   schema: "prisma/schema",
@@ -13,7 +20,8 @@ export default defineConfig({
     // CLI-only (migrate/studio/db push) - the app's own PrismaClient (src/lib/prisma.ts) builds its
     // adapter straight from DATABASE_URL and never reads this file. Neon's pooled DATABASE_URL
     // (PgBouncer, transaction mode) doesn't support the session-level advisory lock `migrate` takes,
-    // so the CLI needs the direct, non-pooled connection instead.
-    url: process.env["DATABASE_URL"],
+    // so the CLI uses the direct, non-pooled DIRECT_URL when it is set (same database, checked in
+    // src/lib/migrationUrl.ts) and DATABASE_URL otherwise - the app's runtime connection is unchanged.
+    url: migration.url,
   },
 });
