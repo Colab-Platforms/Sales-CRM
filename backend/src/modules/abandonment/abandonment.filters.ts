@@ -4,6 +4,7 @@ import type { DbClient } from "@/lib/leadScope.js";
 import { fullName } from "../orders/orders.filters.js";
 import { dayBounds, todayString } from "../attendance/attendance.calc.js";
 import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
+import { bucketToday } from "@/lib/leadBucket.js";
 import { abandonmentItemsWhere, readSnapshotItems } from "./abandonment.items.js";
 import type { AbandonmentCallItem, AbandonmentDateRange, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
 
@@ -109,6 +110,7 @@ export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScop
   else if (query.assignment === "UNASSIGNED_TELECALLER") and.push({ lead: { ownerId: null } });
   if (query.managerId) and.push({ lead: { assignedManagerId: query.managerId } });
   if (query.salespersonId) and.push({ lead: { ownerId: query.salespersonId } });
+  if (query.bucket === "TODAY") and.push({ lead: { bucketDate: bucketToday(now), bucketDoneAt: null } });
   if (query.items && query.items.length > 0) and.push(abandonmentItemsWhere(query.items));
   // Column filters. Each term is "contains", case-insensitive, and every filter ANDs with all the others.
   if (query.lead) and.push(abandonmentTermsWhere(query.lead, (contains) => [{ lead: { firstName: contains } }, { lead: { lastName: contains } }, { lead: { leadNumber: contains } }]));

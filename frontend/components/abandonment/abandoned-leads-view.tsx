@@ -26,6 +26,7 @@ import { parseAbandonedLeadsUrl } from "@/lib/abandoned-leads-href";
 import { assignableTelecallersQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { X } from "lucide-react";
 import { IngestionHealthPanel } from "@/components/abandonment/ingestion-health";
+import { BucketSummary } from "@/components/leads/bucket-summary";
 import { ImportAbandonedLeadsDialog } from "@/components/abandonment/import-abandoned-leads-dialog";
 
 const PAGE_SIZE = 20;
@@ -51,6 +52,10 @@ export function AbandonedLeadsView() {
   const salespersonId = isTelecaller ? undefined : urlFilters.salespersonId;
   const assignment = isTelecaller ? undefined : urlFilters.assignment;
   const [filters, setFilters] = useState<AbandonmentFilterState>({});
+  // Daily bucket / RINGING pool views are about when a lead was ASSIGNED, not when the cart was abandoned, so they ignore the Today / Yesterday tabs.
+  const [bucketOnly, setBucketOnly] = useState(false);
+  const [allDays, setAllDays] = useState(false);
+  const apiRange: AbandonmentDateRange = bucketOnly || allDays ? "all" : range;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Shown when changing a filter had to clear a selection, so a selection is never dropped silently.
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
@@ -95,8 +100,8 @@ export function AbandonedLeadsView() {
 
   // A custom Detected range from the column filter replaces the Today / Yesterday / All tabs (see toApiFilters).
   const customDates = Boolean(filters.detectedFrom || filters.detectedTo);
-  const effectiveRange: AbandonmentDateRange = customDates ? "all" : range;
-  const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize: PAGE_SIZE, ...toApiFilters(filters, range), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, filters, range, salespersonId, assignment]);
+  const effectiveRange: AbandonmentDateRange = customDates ? "all" : apiRange;
+  const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize: PAGE_SIZE, ...toApiFilters(filters, apiRange), ...(bucketOnly ? { bucket: "TODAY" as const } : {}), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, filters, apiRange, bucketOnly, salespersonId, assignment]);
   // Rows of another day are never kept on screen while a new range loads (they would be selectable under the wrong heading); page/filter changes within a day still are.
   const { data, isPending, isFetching, error } = useQuery({
     ...abandonmentListQueryOptions(params),
@@ -108,7 +113,7 @@ export function AbandonedLeadsView() {
 
   if (!user) return null;
 
-  const hasActiveFilters = Boolean(hasAnyFilter(filters) || salespersonId || assignment);
+  const hasActiveFilters = Boolean(hasAnyFilter(filters) || salespersonId || assignment || bucketOnly);
   const isAdmin = user.role === "ADMIN";
   const isManager = user.role === "MANAGER";
   const isHr = user.role === "HR";
@@ -144,7 +149,7 @@ export function AbandonedLeadsView() {
     setSelectingAll(true);
     setSelectAllError(null);
     try {
-      const result = await abandonmentApi.listMatchingIds({ ...toApiFilters(filters, range), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) });
+      const result = await abandonmentApi.listMatchingIds({ ...toApiFilters(filters, apiRange), ...(bucketOnly ? { bucket: "TODAY" as const } : {}), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) });
       setSelectedIds(new Set(result.ids));
       if (result.capped) setSelectAllError(`Only the first ${result.ids.length} of ${result.total} matches were selected. Narrow the filters to assign the rest.`);
     } catch (e) {
@@ -192,7 +197,37 @@ export function AbandonedLeadsView() {
 
       {isStaff ? <IngestionHealthPanel canReconcile={isAdmin} /> : null}
 
-      <AbandonmentDateRangeFilter value={range} onChange={selectRange} total={error ? undefined : data?.pagination.totalItems} />
+      {isManager ? (
+        <BucketSummary
+          kind="ABANDONED"
+          onShowRinging={() => {
+            clearSelectionForFilterChange();
+            setBucketOnly(false);
+            setAllDays(true);
+            setFilters({ workingStatus: "RINGING" });
+            resetPage();
+          }}
+        />
+      ) : null}
+
+      {isTelecaller ? (
+        <div>
+          <Button
+            type="button"
+            variant={bucketOnly ? "default" : "outline"}
+            onClick={() => {
+              clearSelectionForFilterChange();
+              setBucketOnly(!bucketOnly);
+              setAllDays(false);
+              resetPage();
+            }}
+          >
+            Today&apos;s bucket
+          </Button>
+        </div>
+      ) : null}
+
+      <AbandonmentDateRangeFilter value={range} onChange={(next) => { setAllDays(false); setBucketOnly(false); selectRange(next); }} total={error ? undefined : data?.pagination.totalItems} />
 
       {hasUrlFilters ? <DrillDownChips salespersonId={salespersonId} assignment={assignment} onRemove={(name) => { clearSelectionForFilterChange(); removeUrlFilter(name); }} /> : null}
 
@@ -271,7 +306,7 @@ export function AbandonedLeadsView() {
                   </div>
                 ) : null}
                 {hasActiveFilters ? (
-                  <Button type="button" size="sm" variant="outline" onClick={() => { setFilters({}); resetPage(); clearSelectionForFilterChange(); if (salespersonId) removeUrlFilter("salespersonId"); if (assignment) removeUrlFilter("assignment"); }}>
+                  <Button type="button" size="sm" variant="outline" onClick={() => { setFilters({}); setBucketOnly(false); setAllDays(false); resetPage(); clearSelectionForFilterChange(); if (salespersonId) removeUrlFilter("salespersonId"); if (assignment) removeUrlFilter("assignment"); }}>
                     Clear filters
                   </Button>
                 ) : null}

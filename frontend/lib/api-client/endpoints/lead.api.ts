@@ -1,6 +1,8 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
+  BucketKind,
+  BucketSummaryRow,
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
   BulkUpdateStatusPayload,
@@ -17,6 +19,11 @@ import type {
 export const leadApi = {
   async listLeads(params: LeadListParams): Promise<LeadListResult> {
     const res = await apiClient.get<ApiEnvelope<LeadListResult>>("/lead/leads", { params });
+    return res.data.data;
+  },
+
+  async getBucketSummary(kind: BucketKind = "LEAD"): Promise<BucketSummaryRow[]> {
+    const res = await apiClient.get<ApiEnvelope<BucketSummaryRow[]>>("/lead/leads/bucket/summary", { params: { kind } });
     return res.data.data;
   },
 

@@ -15,6 +15,7 @@ import { AssignManagerDialog } from "@/components/leads/assign-manager-dialog";
 import { AssignSalespersonDialog } from "@/components/leads/assign-salesperson-dialog";
 import { BulkUpdateStatusDialog } from "@/components/leads/bulk-update-status-dialog";
 import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
+import { BucketSummary } from "@/components/leads/bucket-summary";
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
 
 const PAGE_SIZE = 20;
@@ -82,6 +83,16 @@ export default function LeadsPage() {
           </>
         }
       />
+
+      {isManager ? (
+        <BucketSummary
+          onShowRinging={() => {
+            setFilters({ workingStatus: "RINGING" });
+            setPage(1);
+            clearSelection();
+          }}
+        />
+      ) : null}
 
       <LeadFilters
         value={filters}

@@ -30,6 +30,15 @@ export const listLeads = async (req: AuthRequest, res: Response): Promise<void> 
   }
 };
 
+export const getBucketSummary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await leadService.getBucketSummary(req.user!.id, req.query.kind === "ABANDONED" ? "ABANDONED" : "LEAD");
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 export const getLead = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await leadService.getLeadById(req.user!, req.params.id as string);

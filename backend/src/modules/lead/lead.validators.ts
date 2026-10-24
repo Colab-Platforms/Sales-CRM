@@ -59,6 +59,7 @@ const listLeadsQuerySchema = z.object({
   assignment: assignmentEnum.optional(),
   managerId: z.string().guid().optional(),
   salespersonId: z.string().guid().optional(),
+  bucket: z.enum(["TODAY"]).optional(),
   search: z.string().max(255).optional(),
 });
 
