@@ -7,6 +7,8 @@ import { prisma } from "../../lib/prisma.js";
 import { OrderStatus, ProductType, Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import OrderEditService from "./orders.edit.service.js";
+import { ShopifyApiError } from "../shopify/shopify.client.js";
+import { readEditableOrder } from "../shopify/shopify.orders.edit.js";
 import { validateUpdateShippingAddress } from "./orders.validators.js";
 
 class Rollback extends Error {}
@@ -36,13 +38,24 @@ interface FakeOpts {
   provinceDropped?: boolean;
   /** every Shopify call waits this long (lets two requests overlap) */
   delayMs?: number;
+  /** orderEditCommit answers OK but the order is not changed */
+  commitNoop?: boolean;
+  /** the first N reads after the commit still show the order as it was before it (read-after-write lag) */
+  staleReads?: number;
+  /** the first N reads after the commit fail (a dropped connection) */
+  readFailsAfterCommit?: number;
 }
 
 function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; otherProductGid?: string }, opts: FakeOpts = {}) {
   const calls: string[] = [];
   const state = {
     total: "1298.00",
-    lines: [{ id: "gid://shopify/LineItem/1", quantity: 2, variant: opts.alreadySwapped ? w.newGid : w.oldGid, price: "649.00" }],
+    lines: [{ id: "gid://shopify/LineItem/1", quantity: 2, current: undefined as number | undefined, variant: opts.alreadySwapped ? w.newGid : w.oldGid, price: "649.00" }],
+    committed: false,
+    snapshot: null as any,
+    newId: 100,
+    staleLeft: opts.staleReads ?? 0,
+    failsLeft: opts.readFailsAfterCommit ?? 0,
     shipping: { firstName: "Old", lastName: "Name", address1: "Old line", address2: null, city: "Pune", provinceCode: "MH", zip: "411001", countryCodeV2: "IN", phone: null } as Record<string, string | null>,
     updatedInput: null as any,
     stagedLines: null as any,
@@ -52,28 +65,34 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
       if (/crmOrderForEdit/.test(doc)) {
         calls.push("read_order");
+        if (state.committed && state.failsLeft > 0) { state.failsLeft -= 1; throw new ShopifyApiError("socket hang up", 502); }
+        let view = state.lines;
+        if (state.committed && state.staleLeft > 0) { state.staleLeft -= 1; view = state.snapshot; }
         return { order: { id: "gid://shopify/Order/1", cancelledAt: opts.cancelled ? "2026-10-20T00:00:00Z" : null, displayFulfillmentStatus: opts.fulfillment ?? "UNFULFILLED", currentTotalPriceSet: { shopMoney: { amount: state.total } },
-          lineItems: { nodes: state.lines.map((l) => ({ id: l.id, quantity: l.quantity, variant: { id: l.variant, product: { id: w.productGid } }, originalUnitPriceSet: { shopMoney: { amount: l.price } } })) }, shippingAddress: state.shipping } };
+          lineItems: { nodes: view.map((l: any) => ({ id: l.id, quantity: l.quantity, currentQuantity: l.current ?? l.quantity, variant: { id: l.variant, product: { id: w.productGid } }, originalUnitPriceSet: { shopMoney: { amount: l.price } } })) }, shippingAddress: state.shipping } };
       }
       if (/crmVariantForEdit/.test(doc)) { calls.push("read_variant"); return { productVariant: { id: vars.id, price: opts.newPrice ?? "649.00", product: { id: vars.id === w.newGid ? w.productGid : w.otherProductGid ?? w.productGid } } }; }
       if (/crmFlavourEditBegin/.test(doc)) {
         calls.push("edit_begin");
         state.stagedLines = state.lines.map((l) => ({ ...l }));
-        return { orderEditBegin: { calculatedOrder: { id: "gid://shopify/CalculatedOrder/9", lineItems: { nodes: state.lines.map((l, i) => ({ id: `gid://shopify/CalculatedLineItem/${i}`, quantity: l.quantity, variant: { id: l.variant } })) } }, userErrors: [] } };
+        return { orderEditBegin: { calculatedOrder: { id: "gid://shopify/CalculatedOrder/9", lineItems: { nodes: state.lines.filter((l) => (l.current ?? l.quantity) > 0).map((l, i) => ({ id: `gid://shopify/CalculatedLineItem/${i}`, quantity: l.current ?? l.quantity, variant: { id: l.variant } })) } }, userErrors: [] } };
       }
-      if (/crmFlavourEditSetQuantity/.test(doc)) { calls.push("edit_set_quantity"); state.stagedLines = []; return { orderEditSetQuantity: { calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: "0.00" } } }, userErrors: [] } }; }
+      if (/crmFlavourEditSetQuantity/.test(doc)) { calls.push("edit_set_quantity"); for (const l of state.stagedLines) if ((l.current ?? l.quantity) > 0) l.current = 0; /* Shopify keeps the removed line: quantity stays, currentQuantity becomes 0 */ return { orderEditSetQuantity: { calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: "0.00" } } }, userErrors: [] } }; }
       if (/crmFlavourEditAddVariant/.test(doc)) {
         calls.push("edit_add_variant");
         const price = opts.newPrice ?? "649.00";
-        state.stagedLines.push({ id: "gid://shopify/LineItem/2", quantity: vars.quantity, variant: vars.variantId, price });
+        state.stagedLines.push({ id: `gid://shopify/LineItem/${state.newId++}`, quantity: vars.quantity, variant: vars.variantId, price });
         const staged = (Number(price) * vars.quantity).toFixed(2);
         return { orderEditAddVariant: { calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: staged } } }, userErrors: [] } };
       }
       if (/crmFlavourEditCommit/.test(doc)) {
         calls.push("edit_commit");
         if (opts.failCommit) return { orderEditCommit: { order: null, userErrors: [{ field: null, message: "Access denied for orderEditCommit field" }] } };
+        if (opts.commitNoop) return { orderEditCommit: { order: { id: "gid://shopify/Order/1" }, userErrors: [] } };
+        state.snapshot = state.lines;
         state.lines = state.stagedLines;
-        state.total = state.lines.reduce((s: number, l: any) => s + Number(l.price) * l.quantity, 0).toFixed(2);
+        state.committed = true;
+        state.total = state.lines.reduce((s: number, l: any) => s + Number(l.price) * (l.current ?? l.quantity), 0).toFixed(2);
         return { orderEditCommit: { order: { id: "gid://shopify/Order/1" }, userErrors: [] } };
       }
       if (/crmOrderShippingAddressUpdate/.test(doc)) {
@@ -128,8 +147,9 @@ describe("change flavour", () => {
       const r = await svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id);
       assert.equal(r.shopify, "updated");
       assert.deepEqual(f.calls.filter((c) => c.startsWith("edit_")), ["edit_begin", "edit_set_quantity", "edit_add_variant", "edit_commit"]);
-      assert.equal(f.state.lines[0]!.variant, w.ids.newGid, "Shopify now holds the new variant");
-      assert.equal(f.state.lines[0]!.quantity, 2, "quantity kept");
+      const active = f.state.lines.filter((l) => (l.current ?? l.quantity) > 0);
+      assert.deepEqual(active.map((l) => [l.variant, l.quantity]), [[w.ids.newGid, 2]], "Shopify's active lines: only the new variant, quantity kept");
+      assert.equal(f.state.lines.length, 2, "Shopify kept the removed line (quantity 2, currentQuantity 0) next to the new one - this is what the old check mistook for 'still the old flavour'");
       assert.equal(f.state.total, "1298.00", "Shopify total unchanged");
       const after = await read(tx, w.order.id);
       assert.equal(after.items[0]!.variantId, w.paan.id);
@@ -170,7 +190,7 @@ describe("change flavour", () => {
       const after = await read(tx, w.order.id);
       assert.equal(after.items[0]!.variantId, w.gutka.id);
       assert.equal(await tx.activity.count({ where: { orderId: w.order.id } }), 0);
-      assert.equal(f.state.lines[0]!.variant, w.ids.oldGid, "Shopify unchanged");
+      assert.equal(f.state.lines.filter((l) => (l.current ?? l.quantity) > 0)[0]!.variant, w.ids.oldGid, "Shopify unchanged");
     });
   });
 
@@ -415,5 +435,85 @@ describe("edit claim (one edit at a time per order)", () => {
       await assert.rejects(svc(tx, f).updateAddress(w.as(w.bala, Role.SALESPERSON), w.order.id, addr), (e: any) => e.statusCode === 404);
       assert.equal(await claimKey(tx, w.order.id), undefined, "an out-of-scope request never touches the order row");
     });
+  });
+});
+
+describe("flavour change - verification against Shopify's real removed-line behaviour (regression)", () => {
+  const ids = (w: Awaited<ReturnType<typeof world>>) => w.ids;
+  const activeOf = (f: ReturnType<typeof fakeShopify>) => f.state.lines.filter((l) => (l.current ?? l.quantity) > 0);
+
+  it("success: Shopify keeps the removed old line (quantity 2, currentQuantity 0) and adds the new one under a NEW line-item id - the fresh read confirms the new flavour and only then is the CRM updated", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const f = fakeShopify(ids(w));
+      const r = await svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id);
+      assert.equal(r.shopify, "updated");
+      const lines = f.state.lines;
+      assert.deepEqual(lines.map((l) => [l.id, l.quantity, l.current ?? l.quantity]), [["gid://shopify/LineItem/1", 2, 0], ["gid://shopify/LineItem/100", 2, 2]]);
+      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.paan.id);
+    });
+  });
+
+  it("Shopify accepts the edit but a fresh read still shows the OLD flavour: reported with the counts, the CRM is NOT changed, nothing is audited, and no second edit was made", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const f = fakeShopify(ids(w), { commitNoop: true });
+      await assert.rejects(svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id), (e: any) =>
+        e.statusCode === 502 && /shows 0 of the new flavour \(expected 2\) and 2 of the old one/.test(e.message) && /CRM was NOT changed/.test(e.message) && /Retrying is safe/.test(e.message));
+      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.gutka.id);
+      assert.equal(await tx.activity.count({ where: { orderId: w.order.id } }), 0);
+      assert.equal(f.calls.filter((c) => c === "edit_commit").length, 1);
+    });
+  });
+
+  it("Shopify returns user errors on the commit: failed with the reason, Shopify and the CRM unchanged", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const f = fakeShopify(ids(w), { failCommit: true });
+      await assert.rejects(svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id), (e: any) => e.statusCode === 502 && /Access denied/.test(e.message));
+      assert.deepEqual(activeOf(f).map((l) => l.variant), [w.ids.oldGid]);
+      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.gutka.id);
+    });
+  });
+
+  it("read-after-write lag: the first re-read still shows the order as it was; the verification re-reads and succeeds - no false failure, no second edit", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const f = fakeShopify(ids(w), { staleReads: 1 });
+      const r = await svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id);
+      assert.equal(r.shopify, "updated");
+      assert.equal(f.calls.filter((c) => c === "edit_commit").length, 1);
+      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.paan.id);
+    });
+  });
+
+  it("RETRY after a committed-but-unconfirmed edit (the re-read failed): the CRM stays unchanged, then the retry sees the new flavour already on the order and only updates the CRM - exactly ONE new line, ONE commit, one audit entry", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const f = fakeShopify(ids(w), { readFailsAfterCommit: 3 });
+      const u = w.as(w.asha, Role.SALESPERSON);
+      await assert.rejects(svc(tx, f).changeFlavour(u, w.order.id, w.itemId, w.paan.id), (e: any) => e.statusCode === 502 && /could not be re-read/.test(e.message) && /CRM was NOT changed/.test(e.message));
+      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.gutka.id, "CRM unchanged while Shopify could not confirm");
+      assert.deepEqual(activeOf(f).map((l) => [l.variant, l.quantity]), [[w.ids.newGid, 2]], "Shopify did commit");
+      f.state.failsLeft = 0; // the connection is back
+      const retry = await svc(tx, f).changeFlavour(u, w.order.id, w.itemId, w.paan.id);
+      assert.equal(retry.shopify, "already_applied");
+      assert.equal(f.calls.filter((c) => c === "edit_commit").length, 1, "no second edit");
+      assert.equal(f.calls.filter((c) => c === "edit_begin").length, 1);
+      assert.equal(activeOf(f).length, 1, "no duplicate line");
+      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.paan.id);
+      assert.equal(await tx.activity.count({ where: { orderId: w.order.id } }), 1);
+      const again = await svc(tx, f).changeFlavour(u, w.order.id, w.itemId, w.paan.id);
+      assert.match(again.message, /already has that flavour/);
+      assert.equal(f.calls.filter((c) => c === "edit_commit").length, 1);
+    });
+  });
+
+  it("readEditableOrder reports only the lines that are on the order: a removed line (currentQuantity 0) is left out, a partly removed one uses its current quantity, an older response without currentQuantity falls back to quantity", async () => {
+    const node = (id: string, quantity: number, currentQuantity: number | undefined, variant: string) => ({ id, quantity, ...(currentQuantity === undefined ? {} : { currentQuantity }), variant: { id: variant, product: { id: "gid://shopify/Product/1" } }, originalUnitPriceSet: { shopMoney: { amount: "649.00" } } });
+    const client = { query: async () => ({ order: { id: "gid://shopify/Order/1", cancelledAt: null, displayFulfillmentStatus: "UNFULFILLED", currentTotalPriceSet: { shopMoney: { amount: "1947.00" } }, shippingAddress: null,
+      lineItems: { nodes: [node("a", 2, 0, "old"), node("b", 2, 2, "new"), node("c", 3, 1, "part"), node("d", 1, undefined, "legacy")] } } }) };
+    const o = await readEditableOrder(client as never, "1");
+    assert.deepEqual(o.lines.map((l) => [l.id, l.variantId, l.quantity]), [["b", "new", 2], ["c", "part", 1], ["d", "legacy", 1]]);
   });
 });
