@@ -53,7 +53,7 @@ const ORDER_QUERY = `
       cancelledAt
       displayFulfillmentStatus
       currentTotalPriceSet { shopMoney { amount } }
-      lineItems(first: 100) { nodes { id quantity variant { id product { id } } originalUnitPriceSet { shopMoney { amount } } } }
+      lineItems(first: 100) { nodes { id quantity currentQuantity variant { id product { id } } originalUnitPriceSet { shopMoney { amount } } } }
       shippingAddress { firstName lastName address1 address2 city provinceCode zip countryCodeV2 phone }
     }
   }
@@ -64,7 +64,7 @@ interface OrderQueryResponse {
     cancelledAt: string | null;
     displayFulfillmentStatus: string | null;
     currentTotalPriceSet: { shopMoney: { amount: string } };
-    lineItems: { nodes: { id: string; quantity: number; variant: { id: string; product: { id: string } | null } | null; originalUnitPriceSet: { shopMoney: { amount: string } } }[] };
+    lineItems: { nodes: { id: string; quantity: number; currentQuantity?: number | null; variant: { id: string; product: { id: string } | null } | null; originalUnitPriceSet: { shopMoney: { amount: string } } }[] };
     shippingAddress: EditableOrder["shippingAddress"];
   } | null;
 }
@@ -78,7 +78,10 @@ export async function readEditableOrder(client: Pick<ShopifyClient, "query">, sh
     cancelledAt: o.cancelledAt,
     fulfillmentStatus: o.displayFulfillmentStatus,
     totalCents: toCents(o.currentTotalPriceSet.shopMoney.amount),
-    lines: o.lineItems.nodes.map((l) => ({ id: l.id, quantity: l.quantity, variantId: l.variant?.id ?? null, productId: l.variant?.product?.id ?? null, unitPriceCents: toCents(l.originalUnitPriceSet.shopMoney.amount) })),
+    // ROOT CAUSE of "Shopify accepted the edit but the order does not show the new flavour": Shopify keeps a REMOVED line on the order with its original `quantity` ("including refunded and removed units");
+    // only `currentQuantity` is what is on the order now. A flavour swap leaves the old line (quantity 2, currentQuantity 0) next to the new one, so reading `quantity` made the removed old flavour look
+    // "still there". Only the lines that are actually on the order (currentQuantity > 0) are returned, with their current quantity.
+    lines: o.lineItems.nodes.filter((l) => (l.currentQuantity ?? l.quantity) > 0).map((l) => ({ id: l.id, quantity: l.currentQuantity ?? l.quantity, variantId: l.variant?.id ?? null, productId: l.variant?.product?.id ?? null, unitPriceCents: toCents(l.originalUnitPriceSet.shopMoney.amount) })),
     shippingAddress: o.shippingAddress,
   };
 }
@@ -137,7 +140,7 @@ export interface SwapVariantInput {
 }
 
 /** Replaces one line's variant with another, keeping its quantity, and commits only if the order total is unchanged. Re-reads the order afterwards to confirm. */
-export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">, shopifyOrderId: string, input: SwapVariantInput): Promise<EditableOrder> {
+export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">, shopifyOrderId: string, input: SwapVariantInput, opts: { verifyAttempts?: number; verifyDelayMs?: number } = {}): Promise<EditableOrder> {
   const gid = toShopifyOrderGid(shopifyOrderId);
   const begun = await run<{ orderEditBegin: { calculatedOrder: { id: string; lineItems: { nodes: { id: string; quantity: number; variant: { id: string } | null }[] } } | null; userErrors: UserErrors } }>(client, "edit_begin", EDIT_BEGIN, { id: gid });
   failIfErrors("edit_begin", begun.orderEditBegin.userErrors);
@@ -158,12 +161,34 @@ export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">,
   const committed = await run<{ orderEditCommit: { userErrors: UserErrors } }>(client, "edit_commit", EDIT_COMMIT, { id: calculated.id, staffNote: input.staffNote.slice(0, 255) });
   failIfErrors("edit_commit", committed.orderEditCommit.userErrors);
 
-  const after = await readEditableOrder(client, shopifyOrderId);
-  const stillOld = after.lines.some((l) => l.variantId === input.oldVariantId && l.quantity === input.quantity);
-  const hasNew = after.lines.some((l) => l.variantId === input.newVariantId && l.quantity === input.quantity);
-  if (!hasNew || (stillOld && input.oldVariantId !== input.newVariantId)) throw new ShopifyOrderEditError("Shopify accepted the edit but the order does not show the new flavour.", "verify");
+  // Fresh read(s) of the ACTIVE lines. A read straight after a commit can still show the previous state, so a not-yet-matching read is repeated a couple of times before it is called a failure.
+  const attempts = Math.max(1, opts.verifyAttempts ?? 3);
+  const readAfter = async () => {
+    try {
+      return await readEditableOrder(client, shopifyOrderId);
+    } catch (error) {
+      throw new ShopifyOrderEditError(`Shopify accepted the edit but the order could not be re-read to confirm it (${error instanceof Error ? error.message.split(String.fromCharCode(10))[0] : "error"}).`, "verify", error);
+    }
+  };
+  let after = await readAfter();
+  for (let i = 1; i < attempts && !flavourSwapped(after, input); i++) {
+    if ((opts.verifyDelayMs ?? 700) > 0) await new Promise((r) => setTimeout(r, opts.verifyDelayMs ?? 700));
+    after = await readAfter();
+  }
+  const newQty = after.lines.filter((l) => l.variantId === input.newVariantId).reduce((s, l) => s + l.quantity, 0);
+  const oldQty = input.oldVariantId === input.newVariantId ? 0 : after.lines.filter((l) => l.variantId === input.oldVariantId).reduce((s, l) => s + l.quantity, 0);
+  if (newQty !== input.quantity) {
+    throw new ShopifyOrderEditError(`Shopify accepted the edit but a fresh read of the order shows ${newQty} of the new flavour (expected ${input.quantity}) and ${oldQty} of the old one. Check the order in Shopify before retrying.`, "verify");
+  }
+  if (oldQty > 0) throw new ShopifyOrderEditError(`Shopify accepted the edit but the order still shows ${oldQty} of the old flavour next to the new one. Check the order in Shopify before retrying.`, "verify");
   if (after.totalCents !== input.expectedTotalCents) throw new ShopifyOrderEditError("Shopify accepted the edit but the order total changed.", "verify");
   return after;
+}
+
+/** The order now holds exactly the wanted quantity of the new variant and none of the old one (ignoring removed lines). */
+function flavourSwapped(after: EditableOrder, input: SwapVariantInput): boolean {
+  const qty = (variant: string) => after.lines.filter((l) => l.variantId === variant).reduce((s, l) => s + l.quantity, 0);
+  return qty(input.newVariantId) === input.quantity && (input.oldVariantId === input.newVariantId || qty(input.oldVariantId) === 0);
 }
 
 const ORDER_UPDATE = `

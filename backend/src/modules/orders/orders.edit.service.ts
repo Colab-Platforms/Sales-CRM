@@ -211,7 +211,12 @@ export class OrderEditService {
         try {
           await swapOrderLineVariant(client, order.externalId, { lineItemId: oldLine.id, oldVariantId: oldGid, newVariantId: newGid, quantity: item.quantity, expectedTotalCents: live.totalCents, staffNote: `Flavour changed in the CRM (${order.orderNumber}) by ${user.username}` });
         } catch (error) {
-          throw this.shopifyFailure(error instanceof ShopifyOrderEditError ? error : error, "change the flavour");
+          // The edit was committed but the fresh read could not confirm it: Shopify may already hold the new flavour. The CRM is left unchanged, and a retry is safe - it finds the new flavour already on the
+          // order and only finishes the CRM side (it never opens a second edit, so no duplicate line is created).
+          if (error instanceof ShopifyOrderEditError && error.step === "verify") {
+            throw new ApiError(`${error.message} The CRM was NOT changed. Retrying is safe: if Shopify already has the new flavour, only the CRM is updated and Shopify is not edited again.`, 502);
+          }
+          throw this.shopifyFailure(error, "change the flavour");
         }
         shopify = "updated";
       } else if (newLine) {
