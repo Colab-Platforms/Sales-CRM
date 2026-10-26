@@ -10,7 +10,6 @@ import { formatDateTime, formatMoney } from "@/lib/order-status";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { leadDetailHref, CallHistoryButton, LeadStatusSelect } from "@/components/leads/lead-table";
 import { ClickToCallButton } from "@/components/leads/calling";
-import { RECOVERY_ACTION_TYPE_LABELS } from "./abandonment-status-badge";
 import { parseAbandonmentCart } from "./abandonment-cart-utils";
 import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.types";
 import type { Role } from "@/lib/api-client/types/auth.types";
@@ -26,7 +25,7 @@ const HEADERS = [
   { label: "Value", className: "w-[120px] text-right" },
   { label: "Detected", className: "w-[110px]" },
   { label: "Lead Status", className: "w-[170px]" },
-  { label: "Last action", className: "w-[140px]" },
+  { label: "Call attempts", className: "w-[120px]" },
   { label: "Assigned to", className: "w-[160px]" },
 ];
 
@@ -222,13 +221,18 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
                 )}
               </TableCell>
 
-              <TableCell className="w-[140px] whitespace-nowrap text-sm">
-                {item.latestRecoveryAction ? (
-                  <span className="font-medium text-foreground">
-                    {RECOVERY_ACTION_TYPE_LABELS[item.latestRecoveryAction.type]}
+              <TableCell className="w-[120px] whitespace-nowrap text-sm tabular-nums" data-testid="call-attempts">
+                {item.lead.callAttempts > 0 ? (
+                  <span className="flex flex-col">
+                    <span className="font-medium text-foreground">{item.lead.callAttempts}</span>
+                    {item.lead.callBreakdown ? (
+                      <span className="text-xs text-muted-foreground" data-testid="call-breakdown" title="Successful / failed / ringing">
+                        {item.lead.callBreakdown.successful} ok · {item.lead.callBreakdown.failed} failed{item.lead.callBreakdown.ringing > 0 ? ` · ${item.lead.callBreakdown.ringing} ringing` : ""}
+                      </span>
+                    ) : null}
                   </span>
                 ) : (
-                  <span className="text-muted-foreground">No action yet</span>
+                  <span className="text-muted-foreground">0</span>
                 )}
               </TableCell>
 

@@ -250,14 +250,19 @@ test("mergeShippingForRepair keeps every non-blank value Shopify already has and
   assert.deepEqual(mergeShippingForRepair(mapped, null), mapped, "no existing address: the CRM address as is");
 });
 
-test("customer: a lead with NO e-mail and no Shopify match gets no customer upsert (Shopify identifies a new customer by e-mail); a phone match is still associated; an e-mail lead is unchanged", async () => {
+test("customer: a lead with NO e-mail and no Shopify match gets no customer UPSERT (Shopify identifies a new customer by e-mail) - the customer is created from the phone first; a phone match is still associated; an e-mail lead is unchanged", async () => {
   const noEmail = { ...LEAD, email: null };
   const none = await resolveShopifyCustomer(customersClient([]), noEmail, "Anil Kumar Verma");
-  assert.equal(none.customer, null);
-  assert.match(none.note, /^the lead has no e-mail/);
+  assert.equal(none.customer, null, "the decision itself is read-only: no association yet");
+  assert.match(none.note, /no Shopify customer matched this phone/);
+  assert.deepEqual(none.ensure, { create: { phone: "+919811700001", email: null, firstName: "Anil", lastName: "Kumar Verma" } }, "the CRM name travels with the customer that will be created");
   assert.deepEqual((await resolveShopifyCustomer(customersClient([cust("9", "+919811700001")]), noEmail, "Anil")).customer, { toAssociate: { id: "gid://shopify/Customer/9" } });
   assert.deepEqual((await resolveShopifyCustomer(customersClient([]), LEAD, "Anil Kumar Verma")).customer, { toUpsert: { email: "anil@example.com", phone: "+919811700001", firstName: "Anil", lastName: "Kumar Verma" } });
   assert.equal((await resolveShopifyCustomer(customersClient([]), { ...LEAD, email: "   " }, null)).customer, null, "a blank e-mail is no e-mail");
+  const blank = await resolveShopifyCustomer(customersClient([cust("9", "+919811700001")]), noEmail, "Anil Kumar Verma");
+  assert.deepEqual(blank.ensure, { fillName: { id: "gid://shopify/Customer/9", firstName: "Anil", lastName: "Kumar Verma" } }, "a matched customer with no name gets the CRM name");
+  const noNameLead = await resolveShopifyCustomer(customersClient([]), { ...noEmail, firstName: "", lastName: null }, "");
+  assert.equal(noNameLead.ensure, undefined, "with no name to give there is nothing to create");
 });
 
 test("compareShopifyOrder reports the amounts when the total differs, and nothing when it matches to the cent", () => {

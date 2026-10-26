@@ -170,6 +170,22 @@ describe("importing an order", () => {
     });
   });
 
+  it("createOnly (the backfill mode) leaves an order the CRM already holds exactly as it is, even when Shopify's copy is newer, and still creates a new one", async () => {
+    await inRollback(async (tx) => {
+      const { id, mapped } = make();
+      await upsertOrder(tx, mapped);
+      const before = await tx.order.findFirstOrThrow({ where: { ...ext, externalId: id } });
+      const newer = { ...mapped, status: OrderStatus.CANCELLED, externalUpdatedAt: new Date(mapped.externalUpdatedAt.getTime() + 3_600_000) };
+      const again = await upsertOrder(tx, newer, { createOnly: true });
+      assert.equal(again.action, "skipped");
+      const after = await tx.order.findFirstOrThrow({ where: { ...ext, externalId: id } });
+      assert.equal(after.status, before.status);
+      assert.equal(after.externalUpdatedAt?.toISOString(), before.externalUpdatedAt?.toISOString());
+      const fresh = make();
+      assert.equal((await upsertOrder(tx, fresh.mapped, { createOnly: true })).action, "created");
+    });
+  });
+
   it("re-applies with --force, still without duplicates or repeated timeline entries", async () => {
     await inRollback(async (tx) => {
       const { id, mapped } = make();

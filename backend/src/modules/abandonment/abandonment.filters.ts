@@ -5,7 +5,7 @@ import { fullName } from "../orders/orders.filters.js";
 import { dayBounds, todayString } from "../attendance/attendance.calc.js";
 import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
 import { abandonmentItemsWhere, readSnapshotItems } from "./abandonment.items.js";
-import type { AbandonmentCallItem, AbandonmentDateRange, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
+import type { AbandonmentCallItem, CallAttemptBreakdown, AbandonmentDateRange, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
 
 // Where-building, row-mapping and summary logic for the abandoned-leads queue. Kept separate from
 // abandonment.service.ts the same way orders.filters.ts / shiprocket.list.filters.ts are kept
@@ -164,6 +164,7 @@ export interface AbandonmentListRow {
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
     calls: AbandonmentCallItem[];
+    _count?: { calls: number };
     tasks: { id: string; type: string; scheduledAt: Date | null }[];
   };
   source: { id: string; name: string } | null;
@@ -184,6 +185,13 @@ function asCartSnapshot(value: unknown): CartSnapshot | null {
     stage: typeof v.stage === "string" ? v.stage : null,
     checkoutUrl: typeof v.checkoutUrl === "string" ? v.checkoutUrl : null,
   };
+}
+
+/** What an outbound call attempt came to: reached the customer (successful), did not connect (failed: provider failure, no answer, busy, not reachable) or has not finished yet (ringing / in progress). */
+export function classifyCallStatus(status: string): keyof CallAttemptBreakdown {
+  if (status === "COMPLETED" || status === "CONNECTED" || status === "AGENT_ANSWERED") return "successful";
+  if (status === "INITIATED" || status === "RINGING_AGENT" || status === "RINGING_CUSTOMER") return "ringing";
+  return "failed"; // FAILED, NO_ANSWER, BUSY, NOT_REACHABLE
 }
 
 export function mapAbandonmentListRow(row: AbandonmentListRow, summary: string | null): AbandonmentListItem {
@@ -210,6 +218,7 @@ export function mapAbandonmentListRow(row: AbandonmentListRow, summary: string |
       assignedManager: row.lead.assignedManager,
       owner: row.lead.owner,
       calls: row.lead.calls,
+      callAttempts: row.lead._count?.calls ?? row.lead.calls.filter((c) => c.direction === "OUTBOUND").length,
       tasks: row.lead.tasks,
     },
     source: row.source,

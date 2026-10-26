@@ -34,6 +34,9 @@ import { AccentCard, EmptyState, ItemsCard, LinkButton, MilestoneList, MonoId, N
 import { OrderStatusBadge } from "./order-status-badge";
 import { OrderStatusHistory } from "./order-status-history";
 import { CancelOrderButton, OrderPaymentSummary } from "./cancel-order-button";
+import { ChangeFlavourButton, EditAddressButton } from "./order-edit-actions";
+import { OrderSyncButton } from "./order-sync-button";
+import { ReviewAmountButton } from "./review-amount-button";
 import { MarkPaidButton } from "./mark-paid-button";
 import { customItemFlags } from "@/lib/custom-item";
 import { CreatePaymentLinkButton, PaymentLinkPanel, ShopifyPaymentSyncStatus } from "./payment-link-panel";
@@ -194,6 +197,10 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
           <div className="flex flex-wrap items-start justify-end gap-2">
             <PrepaidUpgradeAction target={{ kind: "crm", orderId: order.id }} onOpen={() => setUpgradeOpen(true)} />
             <OrderRefundAction orderId={order.id} orderNumber={order.orderNumber} customerName={order.customer.name} info={order.refunds} />
+            <OrderSyncButton order={order} />
+            <ReviewAmountButton order={order} />
+            <ChangeFlavourButton order={order} />
+            <EditAddressButton order={order} />
             <MarkPaidButton order={order} />
             <CancelOrderButton order={order} />
           </div>

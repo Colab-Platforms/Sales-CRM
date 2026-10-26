@@ -446,6 +446,58 @@ export interface ShopifySyncRecord {
   error: string | null;
 }
 
+export interface AmountRow { key: string; label: string; crm: string; shopify: string; status: "SAME" | "DIFFERENT" }
+export interface AmountGate { key: string; label: string; ok: boolean; detail: string }
+export interface AmountSnapshot { total: string; outstanding: string; shippingLines: number }
+export interface AmountProposal { kind: "ADD_SHIPPING_LINE"; title: string; amount: string; currency: string; before: AmountSnapshot; after: AmountSnapshot; reason: string; risk: string }
+export interface AmountPreview {
+  orderId: string;
+  orderNumber: string;
+  comparable: boolean;
+  note: string | null;
+  rows: AmountRow[];
+  proposal: AmountProposal | null;
+  manualReason: string | null;
+  gates: AmountGate[];
+  canApply: boolean;
+  blockedReason: string | null;
+  canExecute: boolean;
+  stateToken: string | null;
+  lastReviewedAt: string | null;
+  courier: { found: boolean; status: string | null; paymentMethod: string | null; total: string | null; hasAwb: boolean; error: string | null } | null;
+}
+export interface AmountApplyResponse { outcome: "corrected" | "failed"; message: string; before: AmountSnapshot; after: AmountSnapshot | null; preview: AmountPreview }
+
+export type SyncActionId = "customer.link" | "customer.name" | "shipping.address" | "tags.add";
+export interface SyncItem { key: string; group: "customer" | "address" | "order" | "financial" | "state"; label: string; crm: string | null; shopify: string | null; status: "SYNCED" | "DIFFERENT" | "INFO"; action: SyncActionId | null; blocked: string | null }
+export interface SyncPreview {
+  orderId: string;
+  orderNumber: string;
+  shopifyOrderId: string | null;
+  shopifyOrderName: string | null;
+  comparable: boolean;
+  note: string | null;
+  items: SyncItem[];
+  summary: { inSync: number; differences: number; syncable: number; manualReview: number };
+  stateToken: string | null;
+  lastSyncedAt: string | null;
+  orderState: { cancelled: boolean; fulfillment: string | null; financial: string | null; shipments: number; refunds: boolean } | null;
+}
+export interface SyncApplyResult { action: SyncActionId; status: "applied" | "blocked" | "failed"; message: string }
+export interface SyncApplyResponse { outcome: "synced" | "partial" | "failed" | "blocked"; message: string; results: SyncApplyResult[]; preview: SyncPreview }
+export type SyncCategory = "SYNCED" | "SAFE_CUSTOMER" | "SAFE_ADDRESS" | "FINANCIAL" | "CONFLICT" | "AMBIGUOUS_CUSTOMER";
+export interface SyncReportItem {
+  crmOrderId: string; crmOrderNumber: string; shopifyOrderId: string; orderName: string | null; customerAssociation: string; crmTotal: string; shopifyTotal: string; difference: string;
+  paymentStatus: string; fulfilment: string | null; category: SyncCategory; categoryLabel: string; reasons: string[]; proposedRepair: string;
+}
+export interface SyncReport { generatedAt: string; compared: number; counts: Record<SyncCategory, number>; items: SyncReportItem[]; notFoundInShopify: string[]; note: string }
+
+export interface FlavourOption { variantId: string; name: string; sku: string | null; priceMatches: boolean; linkedToShopify: boolean; current: boolean }
+export interface FlavourLine { itemId: string; productName: string; currentVariantId: string | null; currentVariantName: string | null; quantity: number; unitPrice: string; options: FlavourOption[] }
+export interface FlavourListing { editable: boolean; reason: string | null; lines: FlavourLine[] }
+export interface OrderEditResult { shopify: "updated" | "not_linked" | "already_applied"; message: string }
+export interface UpdateShippingAddressInput { name?: string; phone?: string; line1?: string; line2?: string; city?: string; state?: string; pincode?: string }
+
 export interface OrderDetail {
   id: string;
   orderNumber: string;

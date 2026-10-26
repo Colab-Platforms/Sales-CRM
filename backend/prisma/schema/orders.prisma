@@ -77,6 +77,8 @@ model Order {
   @@index([status])
   @@index([source])
   @@index([placedAt])
+  // The Orders Dashboard filters every request by a created_at range and sorts by it (newest first).
+  @@index([createdAt])
   @@index([shippingPincode])
   @@map("orders")
 }

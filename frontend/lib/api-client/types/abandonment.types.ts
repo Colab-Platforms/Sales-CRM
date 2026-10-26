@@ -88,6 +88,10 @@ export interface AbandonmentListItem {
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
     calls: Call[];
+    /** Outbound calls placed to this lead (server-side count; independent of the `calls` page of history). */
+    callAttempts: number;
+    /** successful (answered) / failed (no answer, busy, unreachable, provider failure) / ringing (still in progress); they add up to callAttempts. */
+    callBreakdown?: { successful: number; failed: number; ringing: number };
     tasks: LeadFollowUp[];
   };
   source: { id: string; name: string } | null;

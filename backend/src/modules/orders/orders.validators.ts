@@ -165,3 +165,26 @@ const cancelOrderSchema = z.object({
 });
 
 export const validateCancelOrder = (body: unknown) => validateSchema<CancelOrderInput>(cancelOrderSchema, body);
+
+// ---- Editing an existing order: change a line's flavour / the delivery address ----
+const itemParamsSchema = z.object({ id: z.uuid({ error: "Invalid order id" }), itemId: z.uuid({ error: "Invalid order item id" }) });
+export const validateOrderItemParams = (params: unknown) => validateSchema<{ id: string; itemId: string }>(itemParamsSchema, params);
+const changeFlavourSchema = z.object({ variantId: z.uuid({ error: "Invalid flavour (variant) id" }) });
+export const validateChangeFlavour = (body: unknown) => validateSchema<{ variantId: string }>(changeFlavourSchema, body);
+export const validateUpdateShippingAddress = (body: unknown) => validateSchema<Record<string, string | undefined>>(shippingAddressSchema, body);
+
+// ---- Sync / Update from CRM ----
+const syncApplySchema = z.object({
+  stateToken: z.string().trim().min(8, "stateToken is required").max(64),
+  actions: z.array(z.enum(["customer.link", "customer.name", "shipping.address", "tags.add"], { error: "Unknown sync action" })).min(1, "Choose at least one change to sync").max(4),
+  confirm: z.boolean({ error: "Explicit confirmation is required" }),
+});
+export const validateSyncApply = (body: unknown) => validateSchema<{ stateToken: string; actions: ("customer.link" | "customer.name" | "shipping.address" | "tags.add")[]; confirm: boolean }>(syncApplySchema, body);
+
+// ---- Review & Correct Amount ----
+const amountCorrectionSchema = z.object({
+  stateToken: z.string().trim().min(8, "stateToken is required").max(64),
+  confirmTotal: z.string().trim().regex(/^\d+(\.\d{2})?$/, "Type the corrected total exactly as shown (for example 699.00)"),
+  confirm: z.boolean({ error: "Explicit confirmation is required" }),
+});
+export const validateAmountCorrection = (body: unknown) => validateSchema<{ stateToken: string; confirmTotal: string; confirm: boolean }>(amountCorrectionSchema, body);

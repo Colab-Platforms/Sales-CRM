@@ -3,9 +3,15 @@ import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import OrdersService from "./orders.service.js";
-import { validateCancelOrder, validateCreateManualOrder, validateListOrdersQuery, validateOrderIdParams } from "./orders.validators.js";
+import { validateCancelOrder, validateChangeFlavour, validateCreateManualOrder, validateListOrdersQuery, validateOrderIdParams, validateOrderItemParams, validateUpdateShippingAddress, validateSyncApply, validateAmountCorrection } from "./orders.validators.js";
+import OrderSyncService from "./orders.sync.service.js";
+import OrderAmountService from "./orders.amount.service.js";
+import OrderEditService from "./orders.edit.service.js";
 
 const ordersService = new OrdersService();
+const orderEditService = new OrderEditService();
+const orderSyncService = new OrderSyncService();
+const orderAmountService = new OrderAmountService();
 
 export const listOrders = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -214,5 +220,98 @@ export const getOrderFilterOptions = async (req: AuthRequest, res: Response): Pr
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Edit an existing order (flavour / delivery address). Admin, Manager and Telecaller; the service enforces the scope and every business rule.
+export const getOrderFlavours = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await orderEditService.listFlavours(req.user!, params.value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const changeOrderFlavour = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderItemParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    const body = validateChangeFlavour(req.body ?? {});
+    if (body.error) return void sendResponse(res, false, null, body.error.message, STATUS_CODES.BAD_REQUEST);
+    const result = await orderEditService.changeFlavour(req.user!, params.value.id, params.value.itemId, body.value.variantId);
+    sendResponse(res, true, result, result.message, STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const updateOrderShippingAddress = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    const body = validateUpdateShippingAddress(req.body ?? {});
+    if (body.error) return void sendResponse(res, false, null, body.error.message, STATUS_CODES.BAD_REQUEST);
+    const result = await orderEditService.updateAddress(req.user!, params.value.id, body.value);
+    sendResponse(res, true, result, result.message, STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Sync / Update from CRM (order page) and the read-only out-of-sync report. The service enforces role, scope, confirmation and every safeguard.
+export const previewOrderSync = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await orderSyncService.preview(req.user!, params.value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const applyOrderSync = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    const body = validateSyncApply(req.body ?? {});
+    if (body.error) return void sendResponse(res, false, null, body.error.message, STATUS_CODES.BAD_REQUEST);
+    const result = await orderSyncService.apply(req.user!, params.value.id, body.value);
+    sendResponse(res, true, result, result.message, STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const getOrderSyncReport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await orderSyncService.report(req.user!, { fresh: req.query.fresh === "true" }), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Review & Correct Amount (order page): compare the money with Shopify and the courier, and - Admin / Manager only, after explicit confirmation - add the missing COD shipping line.
+export const previewOrderAmount = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await orderAmountService.preview(req.user!, params.value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const correctOrderAmount = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const params = validateOrderIdParams(req.params);
+    if (params.error) return void sendResponse(res, false, null, params.error.message, STATUS_CODES.BAD_REQUEST);
+    const body = validateAmountCorrection(req.body ?? {});
+    if (body.error) return void sendResponse(res, false, null, body.error.message, STATUS_CODES.BAD_REQUEST);
+    const result = await orderAmountService.apply(req.user!, params.value.id, body.value);
+    sendResponse(res, true, result, result.message, STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };

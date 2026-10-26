@@ -53,6 +53,10 @@ export interface SyncOptions {
   only: Resource[];
   force: boolean;
   dryRun: boolean;
+  /** false: no WhatsApp lifecycle message is dispatched for the orders this run brings in (a manual backfill must not send late messages). Default: dispatch, as the webhooks do. */
+  automation?: boolean;
+  /** true: only orders the CRM does not hold yet are imported; an order that already exists (any status, any owner) is left exactly as it is. */
+  createOnly?: boolean;
 }
 
 export interface Counts {
@@ -169,7 +173,7 @@ export interface OrderSyncOutcome {
 export async function syncOrderById(
   deps: SyncDeps,
   orderGid: string,
-  opts: { force?: boolean; notBefore?: Date; source?: ActivitySource; automation?: boolean } = {},
+  opts: { force?: boolean; notBefore?: Date; source?: ActivitySource; automation?: boolean; createOnly?: boolean } = {},
 ): Promise<OrderSyncOutcome> {
   const runner = requireRunner(deps);
   const raw = await fetchOrder(deps.client, toGid("Order", orderGid));
@@ -188,7 +192,7 @@ export async function syncOrderById(
   }
 
   const result = await withConflictRetry(() =>
-    runner.$transaction((tx) => upsertOrder(tx, mapped, { force: opts.force, source: opts.source }), TX_OPTIONS),
+    runner.$transaction((tx) => upsertOrder(tx, mapped, { force: opts.force, source: opts.source, createOnly: opts.createOnly }), TX_OPTIONS),
   );
   if (deps.afterCommit) {
     try {
@@ -399,7 +403,7 @@ async function syncOrders(deps: SyncDeps, options: SyncOptions, report: SyncRepo
           continue;
         }
 
-        const outcome = await syncOrderById(deps, ref.id, { force: options.force });
+        const outcome = await syncOrderById(deps, ref.id, { force: options.force, automation: options.automation, createOnly: options.createOnly });
         if (outcome.notFound || !outcome.result) {
           counts.skipped++;
           continue;

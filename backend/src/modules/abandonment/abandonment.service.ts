@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthUser } from "@/middlewares/auth.js";
-import { ActivitySource, ActivityType, AbandonmentStatus, RecoveryActionStatus, Role, TaskStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, AbandonmentStatus, CallDirection, RecoveryActionStatus, Role, TaskStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import type { DbClient } from "@/lib/leadScope.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
@@ -14,10 +14,11 @@ import { getDistribution, getTelecallerSummary, listTelecallers, type Distributi
 import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
 import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
 import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
-import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
+import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
 import { loadCustomerContext } from "./abandonment.customer-context.js";
 import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
 import type {
+  CallAttemptBreakdown,
   AbandonmentDetail,
   AbandonmentListResult,
   BulkAssignManagerBody,
@@ -51,6 +52,8 @@ const LIST_SELECT = {
       workingStatus: true,
       assignedManager: { select: { id: true, name: true } },
       owner: { select: { id: true, name: true } },
+      // Call attempts: how many outbound calls were placed to this lead (the Call table, one row per placed call). One aggregate per page of rows - never a query per lead.
+      _count: { select: { calls: { where: { direction: CallDirection.OUTBOUND } } } },
       // Same shape lead.service.ts's leadListInclude.tasks/calls use, so the abandoned-leads queue and
       // lead detail page can reuse the exact same calling/history components leads already have.
       tasks: {
@@ -164,6 +167,7 @@ class AbandonmentService {
     ]);
 
     const summaries = await this.summariesFor(rows.map((r) => r.id));
+    const breakdowns = await this.callBreakdowns(rows.map((r) => r.lead.id));
 
     return {
       items: rows.map((row) => {
@@ -172,7 +176,9 @@ class AbandonmentService {
         if (user.role === Role.SALESPERSON) {
           typed.lead.calls = typed.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
         }
-        return mapAbandonmentListRow(typed, summaries.get(row.id) ?? null);
+        const item = mapAbandonmentListRow(typed, summaries.get(row.id) ?? null);
+        item.lead.callBreakdown = breakdowns.get(row.lead.id) ?? { successful: 0, failed: 0, ringing: 0 };
+        return item;
       }),
       summary: buildAbandonmentSummary(counts),
       pagination: { page: query.page, pageSize: query.pageSize, totalItems, totalPages: Math.ceil(totalItems / query.pageSize) || 1 },
@@ -184,6 +190,20 @@ class AbandonmentService {
    * the list), so a manager only gets their own queue's products. Real cart data only - nothing hardcoded. Bounded to the most
    * recent carts so the call stays cheap on a large queue.
    */
+  /** Outbound call attempts per lead split into successful / failed / ringing: ONE grouped query for the whole page of leads (never one per lead). Inbound calls are not attempts. */
+  private async callBreakdowns(leadIds: string[]): Promise<Map<string, CallAttemptBreakdown>> {
+    const out = new Map<string, CallAttemptBreakdown>();
+    if (leadIds.length === 0) return out;
+    const groups = await this.db.call.groupBy({ by: ["leadId", "status"], where: { leadId: { in: leadIds }, direction: CallDirection.OUTBOUND }, _count: { _all: true } });
+    for (const g of groups) {
+      if (!g.leadId) continue;
+      const b = out.get(g.leadId) ?? { successful: 0, failed: 0, ringing: 0 };
+      b[classifyCallStatus(g.status)] += g._count._all;
+      out.set(g.leadId, b);
+    }
+    return out;
+  }
+
   async listItemOptions(user: AuthUser, search?: string): Promise<{ items: ItemOption[] }> {
     const leadScope = this.scopeWhere(user);
     const rows = await this.db.abandonment.findMany({

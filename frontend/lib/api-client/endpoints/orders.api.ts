@@ -25,9 +25,64 @@ import type {
   OrdersListParams,
   ShopifyPushResult,
   ShopifySyncRecord,
+  FlavourListing,
+  SyncPreview,
+  SyncApplyResponse,
+  SyncActionId,
+  SyncReport,
+  AmountPreview,
+  AmountApplyResponse,
+  OrderEditResult,
+  UpdateShippingAddressInput,
 } from "../types/orders.types";
 
 export const ordersApi = {
+  /** Review & Correct Amount: the latest CRM, Shopify and Shiprocket money compared. Read-only. */
+  async amountPreview(orderId: string): Promise<AmountPreview> {
+    const res = await apiClient.get<ApiEnvelope<AmountPreview>>(`/orders/${orderId}/amount-preview`);
+    return res.data.data;
+  },
+
+  /** Admin / Manager: adds the missing shipping line after explicit confirmation of the corrected total. */
+  async amountCorrect(orderId: string, input: { stateToken: string; confirmTotal: string; confirm: boolean }): Promise<AmountApplyResponse> {
+    const res = await apiClient.post<ApiEnvelope<AmountApplyResponse>>(`/orders/${orderId}/amount-correction`, input);
+    return res.data.data;
+  },
+
+  /** Sync / Update from CRM: the latest CRM order compared with the live Shopify order. Read-only. */
+  async syncPreview(orderId: string): Promise<SyncPreview> {
+    const res = await apiClient.get<ApiEnvelope<SyncPreview>>(`/orders/${orderId}/sync-preview`);
+    return res.data.data;
+  },
+
+  /** Writes the chosen, allowed differences to Shopify. `stateToken` is the one the comparison returned; `confirm` must be true. */
+  async syncApply(orderId: string, input: { stateToken: string; actions: SyncActionId[]; confirm: boolean }): Promise<SyncApplyResponse> {
+    const res = await apiClient.post<ApiEnvelope<SyncApplyResponse>>(`/orders/${orderId}/sync`, input);
+    return res.data.data;
+  },
+
+  /** Admin / Manager: every CRM order pushed to Shopify that is out of sync, with its category. Read-only. */
+  async syncReport(fresh = false): Promise<SyncReport> {
+    const res = await apiClient.get<ApiEnvelope<SyncReport>>("/orders/sync-report", { params: fresh ? { fresh: "true" } : undefined });
+    return res.data.data;
+  },
+
+  /** The flavours each catalogue line of the order can be switched to, and whether the order may be edited. */
+  async flavours(orderId: string): Promise<FlavourListing> {
+    const res = await apiClient.get<ApiEnvelope<FlavourListing>>(`/orders/${orderId}/flavours`);
+    return res.data.data;
+  },
+
+  async changeFlavour(orderId: string, itemId: string, variantId: string): Promise<OrderEditResult> {
+    const res = await apiClient.post<ApiEnvelope<OrderEditResult>>(`/orders/${orderId}/items/${itemId}/flavour`, { variantId });
+    return res.data.data;
+  },
+
+  async updateShippingAddress(orderId: string, input: UpdateShippingAddressInput): Promise<OrderEditResult> {
+    const res = await apiClient.patch<ApiEnvelope<OrderEditResult>>(`/orders/${orderId}/shipping-address`, input);
+    return res.data.data;
+  },
+
   async list(params: OrdersListParams): Promise<OrderListResult> {
     // axios drops undefined params, so unset filters never reach the URL.
     const res = await apiClient.get<ApiEnvelope<OrderListResult>>("/orders", { params });

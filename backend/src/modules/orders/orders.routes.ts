@@ -3,7 +3,7 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
-import { cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
+import { previewOrderAmount, correctOrderAmount, applyOrderSync, getOrderSyncReport, previewOrderSync, changeOrderFlavour, getOrderFlavours, updateOrderShippingAddress, cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
@@ -19,6 +19,8 @@ const router = Router();
 
 // Registered before "/:id" so "filter-options"/"reconciliation" are not read as an order id.
 router.get("/filter-options", requireAuth, getOrderFilterOptions);
+// Read-only out-of-sync report (Admin / Manager). Registered before "/:id" so it is not read as an order id.
+router.get("/sync-report", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), getOrderSyncReport);
 // Prefill for the Create Order form (a customer's most recent shipping address); before "/:id" like the others.
 router.get("/last-address", requireAuth, getLastShippingAddress);
 // Templates / consent for "Send payment link via WhatsApp" on Create Order (literal path, ahead of "/:id").
@@ -70,6 +72,16 @@ router.get("/:id/prepaid-upgrade", requireAuth, requireRole(Role.ADMIN, Role.MAN
 router.post("/:id/prepaid-upgrade", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createPrepaidUpgrade);
 router.post("/:id/prepaid-upgrade/:upgradeId/payment-link", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), generatePrepaidUpgradeLink);
 router.post("/:id/prepaid-upgrade/:upgradeId/decline", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), declinePrepaidUpgrade);
+// Edit an existing order: switch a line's flavour (same price only) / change the delivery address. Admin, Manager and Telecaller; the service checks scope, order state and Shopify's own restrictions.
+// Sync / Update from CRM: compare (read-only) and apply the chosen, allowed differences (explicit confirmation + a fresh comparison token). Admin, Manager and Telecaller; the service checks scope.
+// Review & Correct Amount: any of the three roles may REVIEW; only Admin / Manager may apply (the financial edit), after explicit confirmation of the new total.
+router.get("/:id/amount-preview", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), previewOrderAmount);
+router.post("/:id/amount-correction", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), correctOrderAmount);
+router.get("/:id/sync-preview", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), previewOrderSync);
+router.post("/:id/sync", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), applyOrderSync);
+router.get("/:id/flavours", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getOrderFlavours);
+router.post("/:id/items/:itemId/flavour", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), changeOrderFlavour);
+router.patch("/:id/shipping-address", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), updateOrderShippingAddress);
 router.post("/:id/cancel", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), cancelOrder);
 // Revert a cancellation - identical role gate and server-side scoping as cancel itself.
 router.post("/:id/revert-cancel", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), revertCancellation);
