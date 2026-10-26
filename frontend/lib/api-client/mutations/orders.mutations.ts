@@ -5,7 +5,7 @@ import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
 import { deliveryKeys } from "../queries/delivery.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
-import type { MarkPaidInput, MarkPaidResult, PaymentQrResult, ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
+import type { AmountApplyResponse, AmountPreview, SyncActionId, SyncApplyResponse, SyncPreview, OrderEditResult, UpdateShippingAddressInput, MarkPaidInput, MarkPaidResult, PaymentQrResult, ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
   const queryClient = useQueryClient();
@@ -22,6 +22,59 @@ export function useCreateOrderMutation() {
       queryClient.invalidateQueries({ queryKey: [...customersKeys.all, "timeline", variables.leadId] });
       queryClient.invalidateQueries({ queryKey: whatsappHistoryKeys.all });
     },
+  });
+}
+
+/** After an edit the order, its history and every list that shows it are refreshed, so the page never shows a stale flavour or address. */
+function useOrderEditInvalidation() {
+  const queryClient = useQueryClient();
+  return (orderId: string) => {
+    queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    queryClient.invalidateQueries({ queryKey: ordersKeys.lists() });
+    queryClient.invalidateQueries({ queryKey: ordersKeys.liveLists() });
+    queryClient.invalidateQueries({ queryKey: ordersKeys.statusHistory(orderId) });
+    queryClient.invalidateQueries({ queryKey: auditKeys.all });
+  };
+}
+
+/** Fetch the latest comparison (read-only). A mutation rather than a query so every click really re-reads both systems. */
+export function useAmountPreviewMutation() {
+  return useMutation<AmountPreview, unknown, { orderId: string }>({ mutationFn: ({ orderId }) => ordersApi.amountPreview(orderId) });
+}
+
+export function useAmountCorrectMutation() {
+  const refresh = useOrderEditInvalidation();
+  return useMutation<AmountApplyResponse, unknown, { orderId: string; stateToken: string; confirmTotal: string; confirm: boolean }>({
+    mutationFn: ({ orderId, ...input }) => ordersApi.amountCorrect(orderId, input),
+    onSettled: (_r, _e, { orderId }) => refresh(orderId),
+  });
+}
+
+export function useSyncPreviewMutation() {
+  return useMutation<SyncPreview, unknown, { orderId: string }>({ mutationFn: ({ orderId }) => ordersApi.syncPreview(orderId) });
+}
+
+export function useSyncApplyMutation() {
+  const refresh = useOrderEditInvalidation();
+  return useMutation<SyncApplyResponse, unknown, { orderId: string; stateToken: string; actions: SyncActionId[]; confirm: boolean }>({
+    mutationFn: ({ orderId, ...input }) => ordersApi.syncApply(orderId, input),
+    onSettled: (_r, _e, { orderId }) => refresh(orderId),
+  });
+}
+
+export function useChangeFlavourMutation() {
+  const refresh = useOrderEditInvalidation();
+  return useMutation<OrderEditResult, unknown, { orderId: string; itemId: string; variantId: string }>({
+    mutationFn: ({ orderId, itemId, variantId }) => ordersApi.changeFlavour(orderId, itemId, variantId),
+    onSuccess: (_, { orderId }) => refresh(orderId),
+  });
+}
+
+export function useUpdateShippingAddressMutation() {
+  const refresh = useOrderEditInvalidation();
+  return useMutation<OrderEditResult, unknown, { orderId: string } & UpdateShippingAddressInput>({
+    mutationFn: ({ orderId, ...input }) => ordersApi.updateShippingAddress(orderId, input),
+    onSuccess: (_, { orderId }) => refresh(orderId),
   });
 }
 

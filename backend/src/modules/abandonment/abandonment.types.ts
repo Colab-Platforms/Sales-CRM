@@ -80,6 +80,12 @@ export interface AbandonmentCallItem {
   outcome: { id: string; name: string; code: string } | null;
 }
 
+export interface CallAttemptBreakdown {
+  successful: number;
+  failed: number;
+  ringing: number;
+}
+
 export interface AbandonmentListItem {
   id: string;
   type: AbandonmentType;
@@ -105,6 +111,10 @@ export interface AbandonmentListItem {
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
     calls: AbandonmentCallItem[];
+    /** Outbound calls placed to this lead (one per Call row, whatever its outcome); inbound calls and page views are not attempts. */
+    callAttempts: number;
+    /** The outbound attempts split by what happened: answered / failed to connect / still ringing or in progress. successful + failed + ringing = callAttempts. Absent on the single-lead detail. */
+    callBreakdown?: CallAttemptBreakdown;
     /** This lead's pending call back / follow up reminder, if any - same shape leadListInclude.tasks
      *  gives the Leads page, so the call-outcome form here can pre-fill/replace it identically. */
     tasks: { id: string; type: string; scheduledAt: Date | null }[];

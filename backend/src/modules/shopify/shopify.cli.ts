@@ -14,7 +14,7 @@ const RESOURCES: Resource[] = ["orders", "products", "customers"];
 const PROGRESS_EVERY_MS = 30_000;
 
 export const USAGE = [
-  "Usage: npm run shopify:sync -- [--dry-run] [--limit N | --all] [--since D] [--until D] [--updated-since D] [--only LIST] [--force]",
+  "Usage: npm run shopify:sync -- [--dry-run] [--limit N | --all] [--since D] [--until D] [--updated-since D] [--only LIST] [--force] [--create-only]",
   "",
   "Which records (the window):",
   `  --since D          Orders created on or after D. Default: SHOPIFY_SYNC_START_DATE (${DEFAULT_START_DATE}). Older orders are`,
@@ -35,6 +35,7 @@ export const USAGE = [
   "  --only LIST  Comma-separated: orders, products, customers (default: orders). Orders pull in the products",
   "               and customers they reference. products/customers alone are filtered by their own creation date.",
   "  --force      Re-apply records even if Shopify says they have not changed.",
+  "  --create-only  Import only orders the CRM does not hold yet; orders already in the CRM are never touched (use for a historical backfill).",
   "",
   "Safe to run repeatedly and to resume: records are matched by Shopify id, so a second run updates or skips, never duplicates.",
 ];
@@ -43,7 +44,7 @@ export class CliUsageError extends Error {}
 
 export function parseCliArgs(argv: string[], now: Date = new Date()): SyncOptions {
   let values: {
-    "dry-run"?: boolean; limit?: string; all?: boolean; since?: string; until?: string; "updated-since"?: string; only?: string; force?: boolean;
+    "dry-run"?: boolean; limit?: string; all?: boolean; since?: string; until?: string; "updated-since"?: string; only?: string; force?: boolean; "create-only"?: boolean;
   };
   try {
     ({ values } = parseArgs({
@@ -57,6 +58,7 @@ export function parseCliArgs(argv: string[], now: Date = new Date()): SyncOption
         "updated-since": { type: "string" },
         only: { type: "string" },
         force: { type: "boolean" },
+        "create-only": { type: "boolean" },
       },
       strict: true,
       allowPositionals: false,
@@ -68,6 +70,7 @@ export function parseCliArgs(argv: string[], now: Date = new Date()): SyncOption
   const dryRun = values["dry-run"] === true;
   if (values.all && values.limit !== undefined) throw new CliUsageError("Use either --limit or --all, not both.");
   if (values.all && dryRun) throw new CliUsageError("--all can not be combined with --dry-run; use --limit (max 25).");
+  if (values["create-only"] && values.force) throw new CliUsageError("--create-only and --force contradict each other.");
   if (values.force && dryRun) throw new CliUsageError("--force has no meaning with --dry-run.");
 
   const maxLimit = dryRun ? MAX_DRY_RUN_LIMIT : MAX_LIMIT;
@@ -96,7 +99,7 @@ export function parseCliArgs(argv: string[], now: Date = new Date()): SyncOption
   const bad = only.filter((r) => !RESOURCES.includes(r as Resource));
   if (only.length === 0 || bad.length > 0) throw new CliUsageError(`--only must be a comma-separated list of: ${RESOURCES.join(", ")}.`);
 
-  return { limit, window, only: [...new Set(only)] as Resource[], force: values.force === true, dryRun };
+  return { limit, window, only: [...new Set(only)] as Resource[], force: values.force === true, dryRun, ...(values["create-only"] ? { createOnly: true } : {}) };
 }
 
 export interface CliDeps {
@@ -112,7 +115,8 @@ export interface CliDeps {
 export async function runCli({ argv, env, print, fetchImpl, getRunner }: CliDeps): Promise<number> {
   let options: SyncOptions;
   try {
-    options = parseCliArgs(argv);
+    // An operator run (backfill / reconcile) imports history: it must never send late WhatsApp lifecycle messages to customers.
+    options = { ...parseCliArgs(argv), automation: false };
   } catch (error) {
     print(`Error: ${(error as Error).message}`);
     USAGE.forEach((line) => print(line));

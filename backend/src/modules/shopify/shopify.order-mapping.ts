@@ -27,6 +27,9 @@ const PROVINCE_CODES: Record<string, string> = {
   uttaranchal: "UK", "west bengal": "WB",
 };
 
+/** Every province code Shopify accepts for India (the values of the map above). */
+export const INDIAN_PROVINCE_CODES: ReadonlySet<string> = new Set(Object.values(PROVINCE_CODES));
+
 export function provinceCodeFor(state: string | null | undefined): string | undefined {
   const key = (state ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   if (!key) return undefined;

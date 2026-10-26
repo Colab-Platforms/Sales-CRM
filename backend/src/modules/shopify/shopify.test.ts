@@ -410,6 +410,12 @@ describe("command line", () => {
     assert.deepEqual(parseCliArgs([]), { limit: 50, window: noWindow, only: ["orders"], force: false, dryRun: false });
   });
 
+  it("--create-only is accepted, cannot be combined with --force, and the CLI never dispatches WhatsApp lifecycle messages", () => {
+    assert.equal(parseCliArgs(["--create-only", "--all"]).createOnly, true);
+    assert.equal(parseCliArgs(["--all"]).createOnly, undefined);
+    assert.throws(() => parseCliArgs(["--create-only", "--force"]), CliUsageError);
+  });
+
   it("reads --limit, --all, --only and --force", () => {
     assert.equal(parseCliArgs(["--limit", "100"]).limit, 100);
     assert.equal(parseCliArgs(["--all"]).limit, null);

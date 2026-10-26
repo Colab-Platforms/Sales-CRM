@@ -16,7 +16,10 @@
     "db:seed:dev-orders": "tsx prisma/seed-dev-orders.ts",
     "shopify:sync": "tsx src/scripts/shopify-sync.ts",
     "shiprocket:sync": "tsx src/scripts/shiprocket-sync.ts",
-    "shopify:repair-addresses": "tsx src/scripts/repair-shopify-addresses.ts"
+    "shopify:repair-addresses": "tsx src/scripts/repair-shopify-addresses.ts",
+    "shopify:audit": "tsx src/scripts/shopify-order-audit.ts",
+    "shopify:amount-dryrun": "tsx src/scripts/shopify-amount-dryrun.ts",
+    "shopify:repair-customers": "tsx src/scripts/shopify-repair-customers.ts"
   },
   "keywords": [],
   "author": "",

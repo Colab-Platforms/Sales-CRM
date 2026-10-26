@@ -263,7 +263,7 @@ export interface OrderResult {
 
 const PAYMENT_EVENTS = new Set<PaymentStatus>([PaymentStatus.SUCCESS, PaymentStatus.FAILED, PaymentStatus.REFUNDED, PaymentStatus.PARTIALLY_REFUNDED]);
 
-export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: boolean; source?: ActivitySource } = {}): Promise<OrderResult> {
+export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: boolean; source?: ActivitySource; createOnly?: boolean } = {}): Promise<OrderResult> {
   const activitySource = opts.source ?? ActivitySource.SHOPIFY_SYNC;
   await lock(tx, `shopify:order:${mapped.externalId}`);
   const result: OrderResult = {
@@ -297,6 +297,11 @@ export async function upsertOrder(tx: Db, mapped: MappedOrder, opts: { force?: b
       },
     },
   });
+  // A backfill that must not touch what the CRM already holds: the existing order (any owner, any status) is left exactly as it is.
+  if (existing && opts.createOnly) {
+    result.orderId = existing.id;
+    return result;
+  }
   if (existing && !opts.force && existing.externalUpdatedAt && existing.externalUpdatedAt >= mapped.externalUpdatedAt) {
     result.orderId = existing.id;
     return result;

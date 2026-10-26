@@ -195,6 +195,36 @@ export interface ExistingShipment {
   createdAt: string | null;
 }
 
+/** What Shiprocket holds for one imported order, as far as the amount to collect is concerned. `totalCents` is the order total Shiprocket will ask a COD customer for. */
+export interface ShiprocketOrderLookup {
+  shiprocketOrderId: string;
+  channelOrderId: string;
+  status: string | null;
+  paymentMethod: string | null;
+  totalCents: number | null;
+  awb: string | null;
+  courier: string | null;
+}
+
+export function parseOrderLookups(json: unknown, channelOrderId: string): ShiprocketOrderLookup[] {
+  const body = asRecord(json);
+  const list = Array.isArray(body.data) ? body.data : Array.isArray(body.orders) ? body.orders : [];
+  const want = channelOrderId.replace(/^#/, "").trim().toLowerCase();
+  const cents = (v: unknown) => (typeof v === "string" || typeof v === "number") && Number.isFinite(Number(v)) && String(v).trim() !== "" ? Math.round(Number(v) * 100) : null;
+  return list.map(asRecord).filter((o) => (asString(o.channel_order_id) ?? "").trim().toLowerCase() === want).map((o) => {
+    const first = Array.isArray(o.shipments) ? asRecord(o.shipments[0]) : {};
+    return {
+      shiprocketOrderId: asString(o.id) ?? asString(o.order_id) ?? "",
+      channelOrderId: asString(o.channel_order_id) ?? "",
+      status: asString(o.status),
+      paymentMethod: asString(o.payment_method),
+      totalCents: cents(o.total),
+      awb: asString(first.awb) || asString(first.awb_code) || null,
+      courier: asString(first.courier) || asString(first.courier_name) || null,
+    };
+  });
+}
+
 export interface OrdersPage {
   shipments: ExistingShipment[];
   currentPage: number;
@@ -357,6 +387,11 @@ export class ShiprocketClient {
 
   async track(awb: string): Promise<TrackingResult | null> {
     return parseTracking(await this.call("GET", `/courier/track/awb/${encodeURIComponent(awb)}`), awb);
+  }
+
+  /** Read-only: the Shiprocket order(s) imported for this Shopify order name (e.g. "AWL105195"), matched EXACTLY on channel_order_id. Never creates, updates or cancels anything. */
+  async findOrdersByChannelId(channelOrderId: string): Promise<ShiprocketOrderLookup[]> {
+    return parseOrderLookups(await this.call("GET", `/orders?search=${encodeURIComponent(channelOrderId.replace(/^#/, ""))}&per_page=10`), channelOrderId);
   }
 
   /** Read-only: orders already in the Shiprocket account. Never creates, updates or cancels anything. */

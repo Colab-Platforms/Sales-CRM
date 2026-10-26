@@ -19,7 +19,7 @@ import { fetchOrder as fetchShopifyOrder, type NormalizedOrder } from "../shopif
 import { sanitizeSyncError, syncAdvice } from "../shopify/shopify.sync-status.js";
 import type { ShopifySyncRecord } from "./orders.types.js";
 import { buildShopifyOrderPayload, type CrmOrderForShopify } from "../shopify/shopify.order-mapping.js";
-import { resolveShopifyCustomer } from "../shopify/shopify.order-customer.js";
+import { materializeShopifyCustomer, resolveShopifyCustomer } from "../shopify/shopify.order-customer.js";
 import { addShopifyOrderTags, repairAndVerify, verifyShopifyOrder, cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
 import { ABANDONMENT_WORK_ROLES, abandonmentLeadScope } from "../abandonment/abandonment.filters.js";
@@ -1177,6 +1177,14 @@ class OrdersService {
     const prepared = await prepareShopifyPayload(order, client);
     const { built, customerDecision, extras, crmFiguresAddUp } = prepared;
     const input: ShopifyOrderCreateInput = built.input;
+    // The Shopify customer writes the decision asks for (create from phone / fill a blank name), made BEFORE the order so the order is associated with a customer that carries the CRM name.
+    // A refusal never blocks the order: it is recorded in the decision note and the order is created without the association.
+    {
+      const ensured = await materializeShopifyCustomer(client, customerDecision);
+      customerDecision.customer = ensured.customer;
+      customerDecision.note = ensured.note;
+      if (ensured.customer) input.customer = ensured.customer;
+    }
 
     try {
       let result: Awaited<ReturnType<typeof createShopifyOrder>>;

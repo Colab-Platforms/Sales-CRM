@@ -193,6 +193,36 @@ export function buildSegmentInfo(
   });
 }
 
+/** A search box made only of digits and phone punctuation ("98765 43210", "+91-98765-43210", "(987) 654") is a phone number. */
+const PHONE_LIKE = /^[\d\s+\-().]+$/;
+
+/** The digit strings a phone search can match: what was typed, and the national number without a +91 / 91 / 0 prefix. */
+export function phoneSearchVariants(search: string): string[] {
+  if (!PHONE_LIKE.test(search)) return [];
+  const digits = search.replace(/\D/g, "");
+  if (digits.length < 3) return [];
+  const variants = new Set([digits]);
+  const national = digits.length >= 12 && digits.startsWith("91") ? digits.slice(2) : digits.length === 11 && digits.startsWith("0") ? digits.slice(1) : digits;
+  variants.add(national);
+  return [...variants];
+}
+
+/**
+ * The customer search box, on the server (so it covers the whole authorised result set, not one page). Case-insensitive "contains":
+ *  - a phone number matches however it was typed (spaces, dashes, +91, 91, leading 0) against both the stored number and its canonical +<country><number> form, and a partial number matches too;
+ *  - a name is split into words and EVERY word must match the first name, last name, lead number, e-mail or number, so "Asha Kumar" finds first name Asha + last name Kumar (a single contains over one field never could).
+ * It only narrows the authorised set - the caller's lead scope is applied separately and is never widened by it.
+ */
+export function customerSearchWhere(search: string): Prisma.LeadWhereInput {
+  const text = search.trim().replace(/\s+/g, " ");
+  const contains = (value: string) => ({ contains: value, mode: "insensitive" as const });
+  const phones = phoneSearchVariants(text);
+  const phoneClauses: Prisma.LeadWhereInput[] = phones.flatMap((p) => [{ mobile: contains(p) }, { normalizedMobile: contains(p) }]);
+  const wordClauses = (word: string): Prisma.LeadWhereInput => ({ OR: [{ firstName: contains(word) }, { lastName: contains(word) }, { leadNumber: contains(word) }, { mobile: contains(word) }, { email: contains(word) }] });
+  const words = text.split(" ").filter(Boolean);
+  return { OR: [...phoneClauses, { AND: words.map(wordClauses) }] };
+}
+
 export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId" | "dateFrom" | "dateTo" | "search">, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
   const and: Prisma.LeadWhereInput[] = [];
 
@@ -210,10 +240,7 @@ export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId"
   if (Object.keys(leadScope).length > 0) and.push(leadScope);
   if (query.ownerId) and.push({ ownerId: query.ownerId });
   if (query.dateFrom || query.dateTo) and.push({ createdAt: { gte: query.dateFrom, lte: query.dateTo } });
-  if (query.search) {
-    const contains = { contains: query.search, mode: "insensitive" as const };
-    and.push({ OR: [{ firstName: contains }, { lastName: contains }, { leadNumber: contains }, { mobile: contains }, { email: contains }] });
-  }
+  if (query.search?.trim()) and.push(customerSearchWhere(query.search));
 
   return and.length > 0 ? { AND: and } : {};
 }
