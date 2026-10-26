@@ -34,6 +34,8 @@ export interface ListAbandonmentsQuery {
   assignee?: string;
   /** The type of the LATEST recovery action, or "NONE" for a lead nobody has acted on. */
   lastAction?: "CALL" | "CALLBACK" | "CONTINUE_ORDER" | "NONE";
+  /** Today's daily bucket: leads put in the telecaller's bucket today that they have not worked yet. */
+  bucket?: "TODAY";
   /** Cart value range (inclusive), in the cart's own currency. */
   valueMin?: number;
   valueMax?: number;

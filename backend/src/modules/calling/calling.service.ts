@@ -1,3 +1,4 @@
+import { bucketToday } from "@/lib/leadBucket.js";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -326,6 +327,11 @@ class CallingService {
 
       if (newStatus && newStatus !== lead.workingStatus) {
         await tx.lead.update({ where: { id: lead.id }, data: { workingStatus: newStatus } });
+      }
+
+      // Any disposition counts as working the lead: it leaves the owner's daily bucket for today.
+      if (user.role === Role.SALESPERSON) {
+        await tx.lead.updateMany({ where: { id: lead.id, bucketDate: bucketToday(), bucketDoneAt: null }, data: { bucketDoneAt: new Date() } });
       }
 
       await tx.activity.create({

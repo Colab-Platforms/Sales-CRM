@@ -38,6 +38,7 @@ export interface ListLeadsQuery {
   assignment?: AssignmentFilter;
   managerId?: string;
   salespersonId?: string;
+  bucket?: "TODAY";
   search?: string;
 }
 

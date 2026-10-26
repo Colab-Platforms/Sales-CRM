@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   listLeads,
   getLead,
+  getBucketSummary,
   createLead,
   updateLead,
   deleteLead,
@@ -22,6 +23,7 @@ const router = Router();
 router.use(requireAuth);
 
 router.get("/leads", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), listLeads);
+router.get("/leads/bucket/summary", requireRole(Role.MANAGER), getBucketSummary);
 router.get("/leads/:id", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getLead);
 router.get("/leads/:id/assignments", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), getAssignmentHistory);
 router.post("/leads", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createLead);
