@@ -8,6 +8,7 @@ import type { DbClient } from "@/lib/leadScope.js";
 export async function recomputeRunStatus(db: DbClient, runId: string): Promise<void> {
   const rows = await db.reportDeliveryRecipient.findMany({ where: { deliveryId: runId } });
   if (rows.length === 0) return;
+  if ((await db.reportDelivery.findUnique({ where: { id: runId }, select: { status: true } }))?.status === "CANCELLED") return; // a cancelled occurrence stays cancelled
   // Both parts count: the text message and the Excel document. A SKIPPED part (switched off) is ignored. The run is SENT only when every part that is on has been accepted.
   const text = rows.map((r) => r.status).filter((s) => s !== "SKIPPED");
   const docs = rows.map((r) => r.docStatus).filter((s) => s !== "SKIPPED");

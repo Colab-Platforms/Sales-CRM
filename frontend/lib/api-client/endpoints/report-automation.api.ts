@@ -1,6 +1,6 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportAutomationStatus, ReportDelivery, ReportDeliveryPage, ReportPreview, ReportRecipientResult } from "../types/report-automation.types";
+import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportAutomationStatus, ReportDelivery, ReportDeliveryPage, ReportPreview, ReportRecipientResult, ReportScheduled } from "../types/report-automation.types";
 
 /** One APPROVED template as Meta reports it, for the Add Template picker. */
 export interface ApprovedMetaTemplate {
@@ -28,6 +28,21 @@ export const reportAutomationApi = {
   },
   async testSend(recipientIds?: string[]): Promise<ReportDelivery> {
     return (await apiClient.post<ApiEnvelope<ReportDelivery>>("/report-automation/test-send", { confirm: true, ...(recipientIds ? { recipientIds } : {}) })).data.data;
+  },
+  /** Admin only: cancel one upcoming occurrence (durable; the scheduler will not send it). */
+  async cancelScheduled(occurrenceDate: string): Promise<{ runId: string }> {
+    return (await apiClient.post<ApiEnvelope<{ runId: string }>>("/report-automation/scheduled/cancel", { occurrenceDate })).data.data;
+  },
+  /** Admin only: hide a finished run from the history (soft delete; sent messages are not recalled). */
+  async deleteRun(id: string): Promise<void> {
+    await apiClient.delete(`/report-automation/deliveries/${id}`);
+  },
+  /** Pause (false) / resume (true) the recurring automation - the same `enabled` setting as the form. */
+  async setEnabled(enabled: boolean): Promise<void> {
+    await apiClient.put("/report-automation/enabled", { enabled });
+  },
+  async scheduled(): Promise<ReportScheduled> {
+    return (await apiClient.get<ApiEnvelope<ReportScheduled>>("/report-automation/scheduled")).data.data;
   },
   async status(): Promise<ReportAutomationStatus> {
     return (await apiClient.get<ApiEnvelope<ReportAutomationStatus>>("/report-automation/status")).data.data;

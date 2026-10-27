@@ -80,3 +80,6 @@ export const validateIdParam = (params: unknown) => validateSchema<{ id: string 
 
 const pageSchema = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20) });
 export const validateHistoryQuery = (query: unknown) => validateSchema<{ page: number; pageSize: number }>(pageSchema, query);
+
+export const validateCancelBody = (body: unknown) => validateSchema<{ occurrenceDate: string }>(z.object({ occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { error: "occurrenceDate must be YYYY-MM-DD" }) }), body);
+export const validateEnabledBody = (body: unknown) => validateSchema<{ enabled: boolean }>(z.object({ enabled: z.boolean({ error: "enabled must be true or false" }) }), body);

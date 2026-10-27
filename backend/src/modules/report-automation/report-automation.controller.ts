@@ -4,7 +4,7 @@ import type { AuthRequest } from "@/middlewares/auth.js";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import ReportAutomationService from "./report-automation.service.js";
-import { validateConfigInput, validateHistoryQuery, validateIdParam, validatePreviewQuery, validateRetryBody, validateTestSendBody } from "./report-automation.validators.js";
+import { validateCancelBody, validateConfigInput, validateEnabledBody, validateHistoryQuery, validateIdParam, validatePreviewQuery, validateRetryBody, validateTestSendBody } from "./report-automation.validators.js";
 
 import WhatsAppTemplateService from "../whatsapp/whatsapp.template.service.js";
 import { addPickerTemplate, listPickerTemplates } from "./report-automation.template-picker.js";
@@ -72,6 +72,14 @@ export const getStatus = async (req: AuthRequest, res: Response): Promise<void> 
   }
 };
 
+export const getScheduled = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await service.scheduled(req.user!), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
 export const listApprovedTemplates = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     sendResponse(res, true, await listPickerTemplates(req.user!, templates), "OK", STATUS_CODES.OK);
@@ -84,6 +92,36 @@ export const addApprovedTemplate = async (req: AuthRequest, res: Response): Prom
   try {
     const b = (req.body ?? {}) as Record<string, unknown>;
     sendResponse(res, true, await addPickerTemplate(req.user!, templates, String(b.name ?? ""), String(b.language ?? "")), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const cancelScheduled = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCancelBody(req.body);
+    if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await service.cancelOccurrence(req.user!, value.occurrenceDate), "Cancelled", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const deleteDelivery = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateIdParam(req.params);
+    if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await service.deleteRun(req.user!, value.id), "Removed from history", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const setAutomationEnabled = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateEnabledBody(req.body);
+    if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await service.setEnabled(req.user!, value.enabled), value.enabled ? "Automation turned on" : "Automation turned off", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

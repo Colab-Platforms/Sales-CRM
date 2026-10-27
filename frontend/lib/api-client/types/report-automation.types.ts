@@ -145,3 +145,49 @@ export interface ReportDeliveryPage {
   items: ReportDelivery[];
   pagination: { page: number; pageSize: number; totalItems: number; totalPages: number };
 }
+
+export type ScheduledPhase = "CANCELLED" | "SCHEDULED" | "PROCESSING" | "WAITING_FOR_REPLY" | "PARTIALLY_SENT" | "SENT" | "FAILED";
+export type ScheduledFormat = "NOTIFICATION" | "DETAIL" | "EXCEL";
+export interface ScheduledRow {
+  key: string;
+  /** When the report is (or was) SENT - an instant; show it in `timezone`. */
+  scheduledAt: string;
+  timezone: string;
+  /** Which days' figures it covers - a different thing from scheduledAt. */
+  dataFrom: string;
+  dataTo: string;
+  recipientName: string | null;
+  recipientPhone: string;
+  templateName: string | null;
+  languageCode: string;
+  formats: ScheduledFormat[];
+  status: ScheduledPhase;
+  statusLabel: string;
+  kind?: "SCHEDULED" | "TEST";
+  utcOffset?: string;
+  nextExecutionAt?: string;
+  lastAttemptAt?: string | null;
+  parts?: { notification: string; detail: string; excel: string };
+  /** Upcoming rows: the occurrence a Cancel acts on (the whole occurrence, all recipients). */
+  occurrenceDate?: string;
+  canCancel?: boolean;
+  /** Recent rows. */
+  runId?: string;
+  canDelete?: boolean;
+  deleteBlockedReason?: string | null;
+  sentAny?: boolean;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+}
+export interface ReportScheduled {
+  timezone: string;
+  enabled: boolean;
+  recurring: { sendTime: string; timezone: string; reportFor: string; dataDate: string | null } | null;
+  oneTimeSupported: boolean;
+  cancelSupported: boolean;
+  upcoming: ScheduledRow[];
+  /** Future occurrences already cancelled (they never appear in `upcoming`). */
+  cancelledUpcoming: { runId: string; scheduledAt: string; timezone: string; dataFrom: string; dataTo: string; cancelledAt: string | null; cancelledBy: string | null }[];
+  recent: ScheduledRow[];
+  reason: string | null;
+}
