@@ -60,6 +60,11 @@ export interface OrdersDashboardSummary {
   cancelled: number;
   cancelledValue: number;
   fulfilled: number;
+  /** Value of the non-cancelled COD / prepaid orders (same selection as the count cards). */
+  codRevenue: number;
+  prepaidRevenue: number;
+  /** Money received on the selected orders (successful payments, net of partial refunds). */
+  collected: number;
 }
 
 export interface OrdersDashboardDetails {
@@ -104,7 +109,7 @@ export interface OrdersDashboardResult {
 }
 
 // ---------------------------------------------------------------------------------------------- Abandoned Checkouts dashboard
-export type AbandonedMetric = "TOTAL" | "VALUE" | "PENDING" | "DONE" | "RECOVERED";
+export type AbandonedMetric = "TOTAL" | "VALUE" | "PENDING" | "DONE" | "RECOVERED" | "CONVERTED" | "DETECTED" | "COD" | "PREPAID";
 
 export interface AbandonedQuery {
   range: DashboardRangeKind;
@@ -132,6 +137,22 @@ export interface AbandonedRow {
   followUp: "PENDING" | "DONE" | "RECOVERED";
   lastAction: { type: string; status: string; at: string } | null;
   assignedTo: string | null;
+  /** The order this checkout became (null = not converted). */
+  order: null | { orderNumber: string; mode: "COD" | "PREPAID"; status: string; paymentStatus: string | null; amount: number; collected: number; telecaller: string | null };
+}
+
+export interface AbandonedConversion {
+  converted: number;
+  /** Percent (2 dp); null when nothing was detected - not a real 0%. */
+  conversionRate: number | null;
+  revenue: number;
+  prepaid: { count: number; revenue: number };
+  cod: { count: number; revenue: number };
+  /** Prepaid orders created but not yet verified as paid: not converted, not revenue. */
+  awaitingPayment: number;
+  /** Linked orders with no recorded payment mode: not counted. */
+  unclassified: number;
+  byTelecaller: { userId: string | null; name: string | null; converted: number; revenue: number }[];
 }
 
 export interface AbandonedSummary {
@@ -142,6 +163,10 @@ export interface AbandonedSummary {
   followUpPending: number;
   followUpCompleted: number;
   recovered: number;
+  /** Every checkout detected in the range (open, converted and recovered), once each. */
+  detected: number;
+  /** Checkouts that became a real order (COD, or prepaid with a verified payment). Revenue here is ACTUAL order value, never cart value. */
+  conversion: AbandonedConversion;
   openWithoutValue: number;
   openOtherCurrency: number;
 }

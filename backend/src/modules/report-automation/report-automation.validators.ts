@@ -12,7 +12,9 @@ const optionsSchema = z
   .refine((o) => o.calls || o.leads || o.sales || o.followUps, { error: "Choose at least one metric group" });
 
 export const MAX_RECIPIENTS = 10;
-const phoneSchema = z.string().trim().max(40).transform(normalizeRecipient).refine((v) => E164.test(v), { error: "Each recipient must be a WhatsApp number with country code, e.g. +919876543210" });
+/** E.164, and an Indian (+91) number must have exactly 10 digits after the country code, starting 6-9. A number one digit short (+91932614025) is valid E.164 but can never match the sender Meta reports (919321614025), so its reply window would stay closed forever. */
+export const isValidRecipient = (v: string): boolean => E164.test(v) && (!v.startsWith("+91") || /^\+91[6-9]\d{9}$/.test(v));
+const phoneSchema = z.string().trim().max(40).transform(normalizeRecipient).refine(isValidRecipient, { error: "Each recipient must be a WhatsApp number with country code, e.g. +919876543210 (an Indian +91 number has exactly 10 digits after +91)" });
 const recipientSchema = z.object({ name: z.string().trim().max(100, { error: "A recipient name can be at most 100 characters" }).optional(), phone: phoneSchema });
 
 // The pre-multi-recipient form sent one "recipient" string; it is still accepted and means a list of one.

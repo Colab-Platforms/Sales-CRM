@@ -41,20 +41,34 @@ export const FULFILMENT_LABEL: Record<DashboardFulfilmentFilter, string> = { UNF
 export const formatInr = (n: number): string => `₹${Math.round(n).toLocaleString("en-IN")}`;
 
 /** The eight summary cards, in display order. `key` is what the server filters by when the card is clicked. */
-export const CARDS: { key: DashboardMetric; label: string; hint?: string }[] = [
-  { key: "TOTAL", label: "Total Orders" },
-  { key: "VALUE", label: "Total Order Value", hint: "Excludes cancelled orders" },
-  { key: "COD", label: "COD" },
-  { key: "PREPAID", label: "Prepaid" },
-  { key: "PAID", label: "Paid" },
-  { key: "PENDING", label: "Pending Payment" },
-  { key: "CANCELLED", label: "Cancelled" },
-  { key: "FULFILLED", label: "Fulfilled", hint: "Shipped or delivered" },
+export type CardId = DashboardMetric | "COD_REVENUE" | "PREPAID_REVENUE" | "COLLECTED";
+/** `key` = which orders the server lists when the card is clicked; `id` = the card itself (a revenue card lists the same orders as its count card, and the table shows each order's amount). */
+export const CARDS: { key: DashboardMetric; id: CardId; label: string; hint?: string }[] = [
+  { key: "TOTAL", id: "TOTAL", label: "Total Orders" },
+  { key: "VALUE", id: "VALUE", label: "Revenue", hint: "Total order value, excluding cancelled orders" },
+  { key: "COD", id: "COD", label: "COD Orders" },
+  { key: "COD", id: "COD_REVENUE", label: "Revenue - COD", hint: "Value of the COD orders (not cancelled)" },
+  { key: "PREPAID", id: "PREPAID", label: "Prepaid Orders" },
+  { key: "PREPAID", id: "PREPAID_REVENUE", label: "Revenue - Prepaid", hint: "Value of the prepaid orders (not cancelled)" },
+  { key: "PAID", id: "PAID", label: "Paid" },
+  { key: "PAID", id: "COLLECTED", label: "Collected", hint: "Money received (successful payments, net of partial refunds)" },
+  { key: "PENDING", id: "PENDING", label: "Pending Payment" },
+  { key: "CANCELLED", id: "CANCELLED", label: "Cancelled" },
+  { key: "FULFILLED", id: "FULFILLED", label: "Fulfilled", hint: "Shipped or delivered" },
 ];
 
 export const cardLabel = (m: DashboardMetric): string => CARDS.find((c) => c.key === m)!.label;
 
 /** What a card shows. The value card is money; the others are order counts. */
+export function cardValueFor(summary: OrdersDashboardSummary, id: CardId): string {
+  switch (id) {
+    case "COD_REVENUE": return formatInr(summary.codRevenue);
+    case "PREPAID_REVENUE": return formatInr(summary.prepaidRevenue);
+    case "COLLECTED": return formatInr(summary.collected);
+    default: return cardValue(summary, id);
+  }
+}
+
 export function cardValue(summary: OrdersDashboardSummary, m: DashboardMetric): string {
   switch (m) {
     case "TOTAL": return String(summary.totalOrders);

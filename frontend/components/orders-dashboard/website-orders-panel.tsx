@@ -14,7 +14,7 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { ordersDashboardApi } from "@/lib/api-client/endpoints/orders-dashboard.api";
 import type { DashboardFulfilmentFilter, DashboardPaymentFilter, OrdersDashboardQuery } from "@/lib/api-client/types/orders-dashboard.types";
 import { MetricCard } from "./metric-card";
-import { CARDS, CARD_ICONS, compareLabel, FULFILMENT_LABEL, PAYMENT_LABEL, cardLabel, cardValue, closeDetails, describeRange, formatInr, selectCard, validateCustomRange, websiteFeedWarning, withFilters, type RangeState } from "./orders-dashboard-form";
+import { CARDS, CARD_ICONS, compareLabel, FULFILMENT_LABEL, PAYMENT_LABEL, cardLabel, cardValueFor, closeDetails, describeRange, formatInr, selectCard, validateCustomRange, websiteFeedWarning, withFilters, type RangeState } from "./orders-dashboard-form";
 
 const fmtDate = (iso: string) => new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 const titleCase = (v: string | null) => (v ? v.toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase()) : "-");
@@ -99,11 +99,11 @@ export function WebsiteOrdersPanel({ range }: { range: RangeState }) {
         {r
           ? CARDS.map((c) => (
               <MetricCard
-                key={c.key}
-                testId={c.key.toLowerCase()}
+                key={c.id}
+                testId={c.id.toLowerCase()}
                 label={c.label}
                 icon={CARD_ICONS[c.key]}
-                value={cardValue(r.summary, c.key)}
+                value={cardValueFor(r.summary, c.id)}
                 hint={c.key === "CANCELLED" && r.summary.cancelled > 0 ? `${formatInr(r.summary.cancelledValue)} value` : c.hint}
                 selected={own.metric === c.key}
                 onClick={() => setQuery(selectCard(query, c.key))}

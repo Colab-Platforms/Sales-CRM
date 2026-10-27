@@ -5,7 +5,6 @@ import { useAuthStore } from "@/stores/auth-store";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { AbandonedPanel } from "./abandoned-panel";
-import { AbandonedTrendChart, OrdersRevenueChart } from "./dashboard-charts";
 import { DateRangeBar } from "./date-range-bar";
 import { WebsiteOrdersPanel } from "./website-orders-panel";
 import { DEFAULT_RANGE, type RangeState } from "./orders-dashboard-form";
@@ -17,7 +16,7 @@ export function OrdersDashboardView() {
 
 /**
  * The page: ONE date range (Yesterday by default) drives everything, and the sections are stacked on the one page, each with its own cards and details:
- *   1. Website Orders  2. Orders & Revenue chart (website orders)  3. Abandoned Checkouts  4. Abandoned Checkouts trend.
+ *   1. Website Orders  2. Abandoned Checkouts. Data only: the trend charts were removed from this page (their components and APIs remain for other uses).
  * Website orders and abandoned checkouts are separate datasets: separate counts, values, records. `allowed` = Admin or Manager (the server enforces the same rule on every request).
  */
 export function OrdersDashboard({ allowed }: { allowed: boolean }) {
@@ -42,9 +41,7 @@ export function OrdersDashboard({ allowed }: { allowed: boolean }) {
       </Card>
 
       <WebsiteOrdersPanel range={range} />
-      <OrdersRevenueChart range={range} testId="orders-revenue-card" />
       <AbandonedPanel range={range} />
-      <AbandonedTrendChart range={range} testId="abandoned-trend-card" />
     </div>
   );
 }

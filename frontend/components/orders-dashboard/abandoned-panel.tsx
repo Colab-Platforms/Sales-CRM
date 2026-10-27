@@ -12,10 +12,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getErrorMessage } from "@/lib/api-client/client";
 import { abandonedDashboardApi } from "@/lib/api-client/endpoints/orders-dashboard.api";
 import type { AbandonedQuery } from "@/lib/api-client/types/orders-dashboard.types";
-import { ABANDONED_CARDS, ABANDONED_ICONS, FOLLOW_UP_LABEL, abandonedCardLabel, abandonedCardValue, abandonedSearch, closeAbandonedDetails, selectAbandonedCard } from "./abandoned-dashboard-form";
+import { ABANDONED_CARDS, ABANDONED_ICONS, CONVERSION_CARDS, CONVERSION_ICONS, FOLLOW_UP_LABEL, abandonedCardLabel, isOrderBreakdown, conversionCardHint, conversionCardValue, abandonedCardValue, abandonedSearch, closeAbandonedDetails, selectAbandonedCard } from "./abandoned-dashboard-form";
 import { MetricCard } from "./metric-card";
 import { compareLabel, describeRange, formatInr, validateCustomRange, type RangeState } from "./orders-dashboard-form";
 
+const titleCase = (v: string) => v.toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 const fmtDate = (iso: string) => new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 
 /** DASHBOARD 2 - Abandoned Checkouts: customers who started checkout and did not buy, from the CRM's saved abandon-cart events (Shiprocket Checkout / Fastrr). Cards only until one is clicked. */
@@ -90,6 +91,26 @@ export function AbandonedPanel({ range }: { range: RangeState }) {
         </div>
       ) : null}
 
+      <p className="text-sm font-medium" data-testid="conversion-heading">Conversion and revenue (actual orders from checkouts, not cart value)</p>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6" data-testid="conversion-cards">
+        {r
+          ? CONVERSION_CARDS.map((c) => (
+              <MetricCard
+                key={c.key}
+                testId={`conv-${c.key.toLowerCase()}`}
+                label={c.label}
+                icon={CONVERSION_ICONS[c.key]}
+                value={conversionCardValue(r.summary, c.key)}
+                hint={conversionCardHint(r.summary, c.key)}
+                selected={c.metric !== undefined && own.metric === c.metric}
+                onClick={() => (c.metric ? setQuery(selectAbandonedCard(query, c.metric)) : undefined)}
+                coverage={r.coverage}
+              />
+            ))
+          : null}
+      </div>
+
+      <p className="text-sm font-medium" data-testid="open-heading">Still-open checkouts (potential, not yet won)</p>
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="summary-cards">
         {!r && data.isLoading ? <p className="col-span-full text-sm text-muted-foreground">Loading…</p> : null}
         {r
@@ -100,7 +121,7 @@ export function AbandonedPanel({ range }: { range: RangeState }) {
                 label={c.label}
                 icon={ABANDONED_ICONS[c.key]}
                 value={abandonedCardValue(r.summary, c.key)}
-                hint={c.key === "VALUE" && (r.summary.openWithoutValue > 0 || r.summary.openOtherCurrency > 0) ? `${r.summary.openWithoutValue} without a value, ${r.summary.openOtherCurrency} non-INR not summed` : c.hint}
+                hint={c.key === "VALUE" && (r.summary.openWithoutValue > 0 || r.summary.openOtherCurrency > 0) ? `${c.hint}. ${r.summary.openWithoutValue} without a value, ${r.summary.openOtherCurrency} non-INR not summed` : c.hint}
                 selected={own.metric === c.key}
                 onClick={() => setQuery(selectAbandonedCard(query, c.key))}
                 coverage={r.coverage}
@@ -151,7 +172,7 @@ export function AbandonedPanel({ range }: { range: RangeState }) {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Checkout date</TableHead><TableHead>Customer</TableHead><TableHead>Contact</TableHead><TableHead className="text-right">Amount</TableHead><TableHead>Items</TableHead><TableHead>Checkout link</TableHead><TableHead>Follow-up</TableHead><TableHead>Assigned to</TableHead>
+                        <TableHead>Checkout date</TableHead><TableHead>Customer</TableHead><TableHead>Contact</TableHead><TableHead className="text-right">Amount</TableHead><TableHead>Items</TableHead><TableHead>Checkout link</TableHead><TableHead>Follow-up</TableHead><TableHead>Assigned to</TableHead>{own.metric && isOrderBreakdown(own.metric) ? <><TableHead>Order</TableHead><TableHead>Payment</TableHead><TableHead>Order status</TableHead><TableHead className="text-right">Order value</TableHead><TableHead>Telecaller</TableHead></> : null}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -168,6 +189,15 @@ export function AbandonedPanel({ range }: { range: RangeState }) {
                             {o.lastAction ? <><br />{o.lastAction.type.toLowerCase()} - {o.lastAction.status.toLowerCase()}</> : null}
                           </TableCell>
                           <TableCell>{o.assignedTo ?? "-"}</TableCell>
+                          {own.metric && isOrderBreakdown(own.metric) ? (
+                            <>
+                              <TableCell className="font-medium" data-testid="linked-order">{o.order?.orderNumber ?? "-"}</TableCell>
+                              <TableCell className="text-xs">{o.order ? `${o.order.mode === "COD" ? "COD" : "Prepaid"} - ${o.order.paymentStatus ? titleCase(o.order.paymentStatus) : "no payment"}` : "-"}</TableCell>
+                              <TableCell>{o.order ? titleCase(o.order.status) : "-"}</TableCell>
+                              <TableCell className="text-right">{o.order ? formatInr(o.order.amount) : "-"}</TableCell>
+                              <TableCell>{o.order?.telecaller ?? "-"}</TableCell>
+                            </>
+                          ) : null}
                         </TableRow>
                       ))}
                     </TableBody>

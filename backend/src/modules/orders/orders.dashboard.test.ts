@@ -97,10 +97,10 @@ describe("website scope and abandoned-checkout request validation", () => {
     assert.equal(validateList({}).value.scope, undefined);
     assert.ok(validateList({ scope: "TELECALLER" }).error);
   });
-  it("abandoned cards: only the five that exist (no COD / prepaid); an unknown card or page size is refused", () => {
-    assert.deepEqual([...ABANDONED_METRICS], ["TOTAL", "VALUE", "PENDING", "DONE", "RECOVERED"]);
+  it("abandoned cards: the nine breakdowns that exist; COD and prepaid list the converted checkouts and their linked order, never an unrelated card; an unknown card or page size is refused", () => {
+    assert.deepEqual([...ABANDONED_METRICS], ["TOTAL", "VALUE", "PENDING", "DONE", "RECOVERED", "CONVERTED", "DETECTED", "COD", "PREPAID"]);
     for (const m of ABANDONED_METRICS) assert.equal(validateAbandonedList({ metric: m }).value.metric, m);
-    for (const bad of [{ metric: "COD" }, { metric: "PREPAID" }, { metric: "PAID" }, { pageSize: "1000" }, { page: "0" }, { range: "week" }]) assert.ok(validateAbandonedList(bad).error, JSON.stringify(bad));
+    for (const bad of [{ metric: "PAID" }, { metric: "FULFILLED" }, { pageSize: "1000" }, { page: "0" }, { range: "week" }]) assert.ok(validateAbandonedList(bad).error, JSON.stringify(bad));
     assert.equal(validateAbandonedList({}).value.metric, undefined, "no card = cards only");
     assert.equal(validateAbandonedFilters({ search: " ab " }).value.search, "ab");
     assert.deepEqual([validateAbandonedList({}).value.page, validateAbandonedList({}).value.pageSize], [1, 25]);

@@ -50,3 +50,56 @@ describe("report automation form", () => {
     assert.deepEqual([has("ADMIN"), has("MANAGER"), has("SALESPERSON"), has("HR"), has("RECRUITER")], [true, true, false, false, false]);
   });
 });
+
+import { syncMessage } from "./report-automation-form";
+describe("syncMessage", () => {
+  const base = { supported: true, created: 1, updated: 0, unchanged: 2, disabledMissing: 0, total: 3 };
+  it("reports counts and that only APPROVED templates are selectable", () => {
+    const m = syncMessage(base);
+    assert.equal(m.ok, true);
+    assert.match(m.text, /Synced 3 templates from Meta: 1 new, 0 updated, 2 unchanged/);
+    assert.match(m.text, /Only APPROVED/);
+  });
+  it("mentions templates no longer at Meta", () => assert.match(syncMessage({ ...base, disabledMissing: 2 }).text, /2 no longer at Meta/));
+  it("explains the limitation when listing is unsupported and changes nothing", () => {
+    const m = syncMessage({ ...base, supported: false, reason: "No Meta config", created: 0, unchanged: 0, total: 0 });
+    assert.equal(m.ok, false);
+    assert.match(m.text, /not available: No Meta config/);
+    assert.match(m.text, /Nothing was changed/);
+  });
+});
+
+import { pickerErrorMessage, pickerKey, pickerRowState, syncFailureMessage } from "./report-automation-form";
+describe("Add Template picker", () => {
+  it("keys a row by name AND language", () => assert.notEqual(pickerKey({ name: "daily_team_report2", language: "en" }), pickerKey({ name: "daily_team_report2", language: "hi" })));
+  it("shows Add, Already added, or why a template cannot be added", () => {
+    assert.equal(pickerRowState({ alreadyAdded: false, compatible: true, incompatibleReason: null }).kind, "add");
+    assert.equal(pickerRowState({ alreadyAdded: true, compatible: true, incompatibleReason: null }).kind, "added");
+    const b = pickerRowState({ alreadyAdded: false, compatible: false, incompatibleReason: "It has 2 variables" });
+    assert.equal(b.kind, "blocked");
+    assert.match(b.note ?? "", /cannot use this template: It has 2 variables/);
+  });
+  it("explains a Meta timeout and a server reason, never offering manual entry", () => {
+    const t = pickerErrorMessage({ code: "ECONNABORTED" });
+    assert.match(t, /timed out/);
+    assert.doesNotMatch(t, /manual/i);
+    assert.match(pickerErrorMessage({ response: { data: { message: "Meta WhatsApp Cloud API is not configured" } } }), /not configured. Nothing was changed/);
+  });
+});
+describe("recipient number length", () => {
+  it("rejects an Indian number one digit short, accepts the full one", () => {
+    assert.match(validateRecipients([{ phone: "+91932614025" }], true)["0"] ?? "", /exactly 10 digits/);
+    assert.deepEqual(validateRecipients([{ phone: "+919321614025" }], true), {});
+    assert.deepEqual(validateRecipients([{ phone: "+14155550123" }], true), {});
+  });
+});
+describe("syncFailureMessage", () => {
+  it("explains a client timeout and points to manual registration", () => {
+    const m = syncFailureMessage({ code: "ECONNABORTED", message: "timeout of 20000ms exceeded" });
+    assert.match(m, /timed out/);
+    assert.match(m, /selection was not changed/);
+    assert.match(m, /Add Template/);
+  });
+  it("treats the server's database timeout the same way", () => assert.match(syncFailureMessage({ response: { data: { message: "Timeout exceeded when trying to connect" } } }), /timed out/));
+  it("shows other server reasons", () => assert.match(syncFailureMessage({ response: { data: { message: "Meta WhatsApp Cloud API is not configured" } } }), /not configured.*Add Template/));
+});

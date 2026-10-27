@@ -97,7 +97,7 @@ describe("access", () => {
       for (const role of [Role.ADMIN, Role.MANAGER]) {
         assert.equal((await call("/abandoned", token(role))).status, 200, role);
         assert.equal((await call("/abandoned?metric=PENDING", token(role))).status, 200);
-        assert.equal((await call("/abandoned?metric=COD", token(role))).status, 400, "COD is not an abandoned-checkout card");
+        assert.equal((await call("/abandoned?metric=PAID", token(role))).status, 400, "PAID is a website-order card, not an abandoned-checkout one");
         assert.equal((await call("/abandoned?range=custom&from=2026-10-22&to=2026-10-20", token(role))).status, 400);
         const x = await call("/abandoned/export", token(role));
         assert.equal(x.status, 200);
@@ -130,10 +130,12 @@ describe("cards", () => {
         followUpPending: 5, // A1 A4 A5 A6 A10 (A10's only action is still PENDING)
         followUpCompleted: 1, // A2
         recovered: 1, // A3
+        detected: 7, // A1 A2 A3 A4 A5 A6 A10: every checkout of the day, recovered ones included
+        conversion: { converted: 0, conversionRate: 0, revenue: 0, prepaid: { count: 0, revenue: 0 }, cod: { count: 0, revenue: 0 }, awaitingPayment: 0, unclassified: 0, byTelecaller: [] },
         openWithoutValue: 1,
         openOtherCurrency: 1,
       });
-      assert.equal(r.source.paymentModeAvailable, false, "no COD / prepaid card: the data has no payment mode");
+      assert.equal(r.source.paymentModeAvailable, false, "the abandonment event itself carries no payment mode (COD / prepaid come from the linked order)");
     });
   });
 
@@ -147,6 +149,10 @@ describe("cards", () => {
         PENDING: { ids: aid(w.A1, w.A4, w.A5, w.A6, w.A10), count: summary.followUpPending },
         DONE: { ids: aid(w.A2), count: summary.followUpCompleted },
         RECOVERED: { ids: aid(w.A3), count: summary.recovered },
+        CONVERTED: { ids: [], count: summary.conversion.converted }, // nothing converted in this fixture
+        DETECTED: { ids: aid(w.A1, w.A2, w.A3, w.A4, w.A5, w.A6, w.A10), count: summary.detected },
+        COD: { ids: [], count: summary.conversion.cod.count },
+        PREPAID: { ids: [], count: summary.conversion.prepaid.count },
       };
       for (const metric of ABANDONED_METRICS) {
         const d = await detail(w, { metric });
@@ -303,6 +309,177 @@ describe("abandoned-checkouts trend chart and coverage", () => {
       const r = await w.svc.overview(a, {}, 1, 10);
       assert.equal(r.coverage, "FULL");
       assert.deepEqual(r.comparison?.totalAbandoned, { previous: 1, changePct: 500 }, "25 Oct: 6 vs 24 Oct: 1 (A7)");
+    });
+  });
+});
+
+
+// ------------------------------------------------------------------------------------------------ conversion & revenue (orders created from a checkout by a telecaller)
+type Mode = "COD" | "PREPAID";
+async function orderFor(tx: Prisma.TransactionClient, w: World, row: { a: { id: string }; l: { id: string } }, o: { total: string; mode?: Mode | null; pay?: "SUCCESS" | "PENDING" | "REFUNDED" | "PARTIALLY_REFUNDED" | null; status?: "CONFIRMED" | "CANCELLED" | "DRAFT" | "PENDING_PAYMENT" | "DELIVERED"; refunded?: string; link?: boolean; source?: "SALESPERSON" | "SHOPIFY"; by?: string; leadId?: string }) {
+  const order = await tx.order.create({
+    data: {
+      orderNumber: `ORD-${uid()}`,
+      leadId: o.leadId ?? row.l.id,
+      createdById: o.by ?? w.caller.id,
+      source: o.source ?? "SALESPERSON",
+      status: o.status ?? "CONFIRMED",
+      subtotal: o.total,
+      totalAmount: o.total,
+      metadata: { ...(o.mode === null ? {} : { paymentMode: o.mode ?? "COD" }), ...(o.link === false ? {} : { abandonment: { id: row.a.id, referenceId: null } }) },
+    },
+  });
+  // payments are what the Reports rules read: COD = a COD payment row (pending until collected); prepaid = an online payment row in the given state; no row = no payment method yet
+  if (o.mode === "COD") await tx.payment.create({ data: { orderId: order.id, amount: o.total, method: "COD", status: o.pay ?? "PENDING" } });
+  else if (o.mode === "PREPAID" && o.pay) await tx.payment.create({ data: { orderId: order.id, amount: o.total, method: "UPI", status: o.pay, ...(o.refunded ? { refundedAmount: o.refunded } : {}) } });
+  return order;
+}
+const conv = async (w: World, role: Role = Role.ADMIN) => (await w.svc.overview(role === Role.MANAGER ? w.as(w.manager, Role.MANAGER) : w.as(w.admin, Role.ADMIN), {}, 1, 25)).summary;
+
+describe("conversion and revenue", () => {
+  it("nothing converted: zero orders, zero revenue, a 0% rate over the checkouts detected (the same day's carts), no COD / prepaid", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const s = await conv(w);
+      assert.equal(s.detected, 7); // A1 A2 A3 A4 A5 A6 A10 (A7/A8 outside the day, A9 is not a checkout)
+      assert.deepEqual([s.conversion.converted, s.conversion.conversionRate, s.conversion.revenue, s.conversion.cod.count, s.conversion.prepaid.count], [0, 0, 0, 0, 0]);
+    });
+  });
+
+  it("a COD order created from a checkout converts it: counted once, revenue = the order total, removed from the open cards and the potential value", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const before = await conv(w);
+      await orderFor(tx, w, w.A1, { total: "1200.00", mode: "COD" });
+      const s = await conv(w);
+      assert.deepEqual([s.conversion.converted, s.conversion.cod, s.conversion.prepaid, s.conversion.revenue], [1, { count: 1, revenue: 1200 }, { count: 0, revenue: 0 }, 1200]);
+      assert.equal(s.detected, before.detected, "total detected never changes");
+      assert.equal(s.totalAbandoned, before.totalAbandoned - 1, "the converted checkout is no longer open");
+      assert.equal(s.potentialValue, before.potentialValue - 1000, "its 1000 cart value leaves the potential value; the order's 1200 is revenue, not potential");
+      assert.equal(s.openCheckouts, before.openCheckouts - 1);
+      const rows = await detail(await Promise.resolve(w), { metric: "CONVERTED" });
+      assert.deepEqual(ids(rows.items), aid(w.A1), "the Orders Converted rows are exactly the converted checkouts");
+      assert.ok(!ids((await detail(w, { metric: "TOTAL" })).items).includes(w.A1.a.id), "never both open and converted");
+    });
+  });
+
+  it("a prepaid order counts only with a verified (SUCCESS) payment; created-but-unpaid, pending or refunded prepaid is NOT a conversion and NOT revenue", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await orderFor(tx, w, w.A2, { total: "800.00", mode: "PREPAID", pay: "SUCCESS" });
+      await orderFor(tx, w, w.A5, { total: "700.00", mode: "PREPAID", pay: "PENDING" });
+      await orderFor(tx, w, w.A6, { total: "600.00", mode: "PREPAID", pay: null }); // no payment recorded at all
+      await orderFor(tx, w, w.A4, { total: "500.00", mode: "PREPAID", pay: "REFUNDED", refunded: "500.00" }); // fully refunded: no longer a sale (Reports rule)
+      const c = (await conv(w)).conversion;
+      assert.deepEqual([c.converted, c.prepaid, c.revenue, c.awaitingPayment, c.unclassified], [1, { count: 1, revenue: 800 }, 800, 1, 1]);
+      assert.ok(ids((await detail(w, { metric: "TOTAL" })).items).includes(w.A5.a.id), "an unpaid prepaid checkout is still open");
+    });
+  });
+
+  it("cancelled and draft orders, orders with no recorded mode, website orders and unlinked orders are never conversions", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await orderFor(tx, w, w.A1, { total: "100.00", status: "CANCELLED" });
+      await orderFor(tx, w, w.A2, { total: "100.00", status: "DRAFT" });
+      await orderFor(tx, w, w.A5, { total: "100.00", mode: null }); // linked, but no payment mode
+      await orderFor(tx, w, w.A6, { total: "100.00", link: false }); // same customer, no link to the checkout
+      await orderFor(tx, w, w.A4, { total: "100.00", source: "SHOPIFY", link: false }); // a website order
+      await orderFor(tx, w, w.A10, { total: "100.00", leadId: w.A1.l.id }); // links to a checkout of ANOTHER customer: refused by the same-customer rule
+      const c = (await conv(w)).conversion;
+      assert.deepEqual([c.converted, c.revenue, c.unclassified], [0, 0, 1]);
+    });
+  });
+
+  it("the Reports rules decide eligibility and value: PENDING_PAYMENT is not a sale, a delivered order is, and a partial refund reduces the revenue", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await orderFor(tx, w, w.A1, { total: "900.00", mode: "COD", status: "PENDING_PAYMENT" });
+      await orderFor(tx, w, w.A2, { total: "1000.00", mode: "PREPAID", pay: "PARTIALLY_REFUNDED", refunded: "250.00", status: "DELIVERED" });
+      const c = (await conv(w)).conversion;
+      assert.deepEqual([c.converted, c.prepaid, c.cod, c.revenue], [1, { count: 1, revenue: 750 }, { count: 0, revenue: 0 }, 750]);
+    });
+  });
+
+  it("repeated follow-ups / several orders for one checkout never inflate: the checkout is counted once and only its earliest qualifying order counts", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await orderFor(tx, w, w.A1, { total: "1000.00", mode: "COD" });
+      await orderFor(tx, w, w.A1, { total: "1000.00", mode: "COD" }); // a repeated callback / duplicate order
+      await tx.recoveryAction.create({ data: { abandonmentId: w.A1.a.id, leadId: w.A1.l.id, type: "CALL", status: "SUCCESS", performedById: w.caller.id } });
+      await tx.recoveryAction.create({ data: { abandonmentId: w.A1.a.id, leadId: w.A1.l.id, type: "CALL", status: "SUCCESS", performedById: w.caller.id } });
+      const s = await conv(w);
+      assert.deepEqual([s.conversion.converted, s.conversion.revenue, s.detected], [1, 1000, 7]);
+    });
+  });
+
+  it("revenue totals and the conversion rate: converted / detected x 100 (2 dp), revenue = COD + verified prepaid order totals", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await orderFor(tx, w, w.A1, { total: "1200.50", mode: "COD" });
+      await orderFor(tx, w, w.A2, { total: "800.25", mode: "PREPAID", pay: "SUCCESS" });
+      const c = (await conv(w)).conversion;
+      assert.deepEqual([c.converted, c.conversionRate, c.revenue, c.cod.revenue, c.prepaid.revenue], [2, 28.57, 2000.75, 1200.5, 800.25]);
+    });
+  });
+
+  it("telecaller attribution is the order's creator; a Manager sees only conversions of their own assigned checkouts, an Admin sees all", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const second = await tx.user.create({ data: { name: "Ravi Caller", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      await orderFor(tx, w, w.A1, { total: "1000.00", mode: "COD", by: w.caller.id });
+      await orderFor(tx, w, w.A10, { total: "400.00", mode: "COD", by: second.id }); // another manager's customer
+      const admin = (await conv(w)).conversion;
+      assert.deepEqual([admin.converted, admin.revenue], [2, 1400]);
+      assert.deepEqual(admin.byTelecaller.map((t) => [t.name, t.converted, t.revenue]), [["Asha Caller", 1, 1000], ["Ravi Caller", 1, 400]]);
+      const mgr = await conv(w, Role.MANAGER);
+      assert.deepEqual([mgr.conversion.converted, mgr.conversion.revenue, mgr.detected, mgr.conversion.conversionRate], [1, 1000, 6, 16.67]);
+      assert.deepEqual(mgr.conversion.byTelecaller.map((t) => t.name), ["Asha Caller"]);
+    });
+  });
+});
+
+describe("conversion breakdowns (clickable cards)", () => {
+  it("each conversion card lists exactly the checkouts behind its number, each with its linked order; the rows add up to the card totals; unrelated orders never appear", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      const cod = await orderFor(tx, w, w.A1, { total: "1200.50", mode: "COD" });
+      const pre = await orderFor(tx, w, w.A2, { total: "800.25", mode: "PREPAID", pay: "SUCCESS" });
+      await orderFor(tx, w, w.A5, { total: "700.00", mode: "PREPAID", pay: "PENDING" }); // awaiting payment: not converted, not listed
+      await orderFor(tx, w, w.A6, { total: "999.00", link: false }); // same customer, no link: unrelated
+      const { summary } = await w.svc.overview(w.as(w.admin, Role.ADMIN), {}, 1, 25);
+      const by = async (metric: AbandonedMetric) => detail(w, { metric });
+      const conv = await by("CONVERTED");
+      const codRows = await by("COD");
+      const preRows = await by("PREPAID");
+      const all = await by("DETECTED");
+      assert.deepEqual(ids(conv.items), aid(w.A1, w.A2));
+      assert.deepEqual(ids(codRows.items), aid(w.A1), "COD lists only the COD conversion");
+      assert.deepEqual(ids(preRows.items), aid(w.A2), "prepaid lists only the verified prepaid conversion");
+      assert.deepEqual(ids(all.items), aid(w.A1, w.A2, w.A3, w.A4, w.A5, w.A6, w.A10), "Total Abandoned lists every checkout of the range once");
+      assert.equal(all.pagination.totalItems, summary.detected);
+      // the rows carry the order, its payment mode / verification, status, amount and the telecaller
+      const row = (rows: typeof conv.items, id: string) => rows.find((r) => r.id === id)!;
+      assert.deepEqual(row(conv.items, w.A1.a.id).order, { orderNumber: cod.orderNumber, mode: "COD", status: "CONFIRMED", paymentStatus: "PENDING", amount: 1200.5, collected: 0, telecaller: "Asha Caller" });
+      assert.deepEqual(row(conv.items, w.A2.a.id).order, { orderNumber: pre.orderNumber, mode: "PREPAID", status: "CONFIRMED", paymentStatus: "SUCCESS", amount: 800.25, collected: 800.25, telecaller: "Asha Caller" });
+      assert.equal(all.items.find((r) => r.id === w.A5.a.id)!.order, null, "an unconverted checkout has no order");
+      // breakdown totals = the card totals
+      const sum = (rows: typeof conv.items) => Math.round(rows.reduce((s, r) => s + (r.order?.amount ?? 0), 0) * 100) / 100;
+      assert.equal(sum(conv.items), summary.conversion.revenue);
+      assert.equal(sum(codRows.items), summary.conversion.cod.revenue);
+      assert.equal(sum(preRows.items), summary.conversion.prepaid.revenue);
+      assert.equal(conv.pagination.totalItems, summary.conversion.converted);
+    });
+  });
+
+  it("a Manager's breakdowns hold only their own assigned checkouts and orders", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx);
+      await orderFor(tx, w, w.A1, { total: "1000.00", mode: "COD" });
+      await orderFor(tx, w, w.A10, { total: "400.00", mode: "COD" }); // another manager's customer
+      const mine = await detail(w, { metric: "COD" }, Role.MANAGER);
+      assert.deepEqual(ids(mine.items), aid(w.A1));
+      const admin = await detail(w, { metric: "COD" });
+      assert.deepEqual(ids(admin.items), aid(w.A1, w.A10));
     });
   });
 });

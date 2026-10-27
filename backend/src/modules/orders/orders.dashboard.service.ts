@@ -212,6 +212,16 @@ export class OrdersDashboardService {
     const lastWebhook = webhooks._max.receivedAt;
     // The first/last-record check alone cannot see a hole in the middle of the history, so a website period is checked against Shopify's own count for it.
     const [shopifyTotal, crmTotal] = websiteOnly ? await Promise.all([this.shopifyCount(range.start, range.end), this.crmShopifyCount(range)]) : [null, 0];
+    // Revenue split and collected money for the SAME selection as the other cards: the value card's rule (cancelled orders excluded), split by the order's recorded payment mode; collected = money received
+    // (SUCCESS payments, and PARTIALLY_REFUNDED ones net of what was refunded - the Reports' own definition of "paid").
+    const notCancelled: Prisma.OrderWhereInput = { status: { not: OrderStatus.CANCELLED } };
+    const [codRev, prepaidRev, paidFull, paidPartial] = await Promise.all([
+      this.db.order.aggregate({ where: { AND: [of("COD"), notCancelled] }, _sum: { totalAmount: true } }),
+      this.db.order.aggregate({ where: { AND: [of("PREPAID"), notCancelled] }, _sum: { totalAmount: true } }),
+      this.db.payment.aggregate({ where: { status: PaymentStatus.SUCCESS, order: of("TOTAL") }, _sum: { amount: true } }),
+      this.db.payment.aggregate({ where: { status: PaymentStatus.PARTIALLY_REFUNDED, order: of("TOTAL") }, _sum: { amount: true, refundedAmount: true } }),
+    ]);
+    const collected = Number(paidFull._sum.amount ?? 0) + Number(paidPartial._sum.amount ?? 0) - Number(paidPartial._sum.refundedAmount ?? 0);
     const coverage: Coverage = websiteOnly ? verifiedCoverage(crmTotal, shopifyTotal, coverageOf(range, oldestWebsite!._min.createdAt, newestOrder, lastWebhook)) : "FULL";
     // card comparison text exists only when BOTH this period and the one before it are fully covered
     let comparison: null | { totalOrders: ReturnType<typeof compare>; totalValue: ReturnType<typeof compare> } = null;
@@ -269,6 +279,9 @@ export class OrdersDashboardService {
         cancelled,
         cancelledValue: Number(cancelledAgg._sum.totalAmount ?? 0),
         fulfilled,
+        codRevenue: Number(codRev._sum.totalAmount ?? 0),
+        prepaidRevenue: Number(prepaidRev._sum.totalAmount ?? 0),
+        collected,
       },
       // Website orders reach the CRM through the Shopify sync / webhooks: if the newest one is older than the selected range, later orders have not been synced yet
       freshness: {
