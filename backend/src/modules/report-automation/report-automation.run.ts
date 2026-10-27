@@ -14,7 +14,7 @@ export async function recomputeRunStatus(db: DbClient, runId: string): Promise<v
   const txts = rows.map((r) => r.txtStatus).filter((s) => s !== "SKIPPED");
   const all = [...text, ...txts, ...docs];
   const has = (s: string) => all.includes(s as never);
-  const status = has("SENDING") ? "SENDING" : text.includes("PENDING" as never) ? "PENDING" : has("FAILED") ? "FAILED" : has("UNCERTAIN") ? "UNCERTAIN" : [...txts, ...docs].includes("PENDING" as never) ? "PENDING" : "SENT";
+  const status = has("SENDING") ? "SENDING" : text.includes("PENDING" as never) ? "PENDING" : has("FAILED") ? "FAILED" : has("UNCERTAIN") ? "UNCERTAIN" : [...txts, ...docs].some((s) => s === "PENDING" || s === "WAITING_FOR_REPLY") ? "PENDING" : "SENT" // a part waiting for the recipient's reply keeps the run open (not Sent, not Failed);
   const bad = (st: string) => st === "FAILED" || st === "UNCERTAIN";
   const failing = rows.find((r) => bad(r.status) || bad(r.txtStatus) || bad(r.docStatus));
   const failingError = failing ? (bad(failing.status) ? failing.error : bad(failing.txtStatus) ? failing.txtError : failing.docError) : null;

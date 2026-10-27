@@ -44,6 +44,8 @@ export const CATCH_UP_MS = 3 * 60 * 60_000;
 export const MANUAL_RETRY_MAX_ATTEMPTS = 8;
 /** A scheduler that has not ticked for this long is reported as not running. */
 export const SCHEDULER_STALE_MS = 3 * 60_000;
+/** A reply only releases a scheduled report from the last 48 hours; an older, never-opened report stays a manual retry. */
+export const REPLY_LOOKBACK_MS = 48 * 60 * 60_000;
 
 export interface ReportServiceDeps {
   now?: () => Date;
@@ -95,7 +97,7 @@ const mapRecipient = (r: RecipientResult) => ({
     sentAt: r.txtSentAt,
     deliveredAt: r.txtDeliveredAt,
     readAt: r.txtReadAt,
-    canRetry: r.txtStatus === "FAILED",
+    canRetry: r.txtStatus === "FAILED" || r.txtStatus === "WAITING_FOR_REPLY",
   },
   document: {
     status: r.docStatus,
@@ -107,7 +109,7 @@ const mapRecipient = (r: RecipientResult) => ({
     deliveredAt: r.docDeliveredAt,
     readAt: r.docReadAt,
     // the Excel can be retried on its own once it definitely failed and the text is accepted (or off)
-    canRetry: r.docStatus === "FAILED",
+    canRetry: r.docStatus === "FAILED" || r.docStatus === "WAITING_FOR_REPLY",
   },
 });
 
@@ -144,6 +146,16 @@ const mapConfig = (a: AutomationRow | null) =>
         updatedAt: a.updatedAt,
       }
     : { id: null, ...defaultsFor(), updatedAt: null };
+
+export interface ReplyOutcome {
+  /** true when something was sent (or attempted) because of this message */
+  handled: boolean;
+  reason: string;
+  runId?: string;
+  reportDate?: string;
+  /** What this reply released, and how each part ended. */
+  parts?: { detail?: string; excel?: string };
+}
 
 class ReportAutomationService {
   constructor(
@@ -334,25 +346,123 @@ class ReportAutomationService {
       const claimed = await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id: row.id } });
       await this.deliver([claimed], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id]);
     } else if (part === "DETAIL") {
-      if (row.txtStatus !== "FAILED") throw notRetryable;
+      if (row.txtStatus !== "FAILED" && row.txtStatus !== "WAITING_FOR_REPLY") throw notRetryable;
       if (row.txtAttempts >= MANUAL_RETRY_MAX_ATTEMPTS) throw new ApiError("The detailed report has already been retried the maximum number of times.", STATUS_CODES.CONFLICT);
-      const claim = await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: "FAILED", txtAttempts: row.txtAttempts }, data: { txtStatus: "SENDING", txtAttempts: { increment: 1 }, txtError: null } });
+      const claim = await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: row.txtStatus, txtAttempts: row.txtAttempts }, data: { txtStatus: "SENDING", txtAttempts: { increment: 1 }, txtError: null } });
       if (claim.count !== 1) throw new ApiError("This delivery is already being retried.", STATUS_CODES.CONFLICT);
       await this.deliver([], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id]);
     } else {
-      if (row.docStatus !== "FAILED") throw notRetryable;
+      if (row.docStatus !== "FAILED" && row.docStatus !== "WAITING_FOR_REPLY") throw notRetryable;
       if (row.docAttempts >= MANUAL_RETRY_MAX_ATTEMPTS) throw new ApiError("The Excel file has already been retried the maximum number of times.", STATUS_CODES.CONFLICT);
-      const claim = await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: "FAILED", docAttempts: row.docAttempts }, data: { docStatus: "SENDING", docAttempts: { increment: 1 }, docError: null } });
+      const claim = await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: row.docStatus, docAttempts: row.docAttempts }, data: { docStatus: "SENDING", docAttempts: { increment: 1 }, docError: null } });
       if (claim.count !== 1) throw new ApiError("This delivery is already being retried.", STATUS_CODES.CONFLICT);
       await this.deliver([], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id]);
     }
     return mapRecipient(await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id: row.id } }));
   }
 
+  /**
+   * A recipient of the Daily Team Report wrote to the business WhatsApp number (any text message). That message opens WhatsApp's 24-hour window, which is exactly what the detailed report and the Excel file
+   * were waiting for: the scheduled run could only send the approved template (the short summary) while the window was closed, and marked the free-form parts "Failed - window closed". This sends those two parts
+   * now, from the run that was held back, for THAT run's report date and timezone (the report is rebuilt by the same generator - nothing is fabricated or abbreviated).
+   *
+   * Who may trigger it: only a number that is on the automation's CURRENT recipient list, for an ENABLED automation whose owner is still an active Admin / Manager - the same people the scheduled report goes to.
+   * Anyone else gets nothing (no reply, no hint that a report exists). Idempotent: a part is claimed with a compare-and-set (FAILED / PENDING -> SENDING), so a second message, a duplicate webhook or two parallel
+   * calls cannot send it twice; a part already SENT, SKIPPED, SENDING or UNCERTAIN is never sent again. A definite provider refusal leaves the part FAILED, so the next reply (or the page's Retry) tries again.
+   */
+  async sendPendingOnReply(phone: string): Promise<ReplyOutcome> {
+    const contact = normalizeMobile(phone);
+    if (!contact) return { handled: false, reason: "not a valid phone number" };
+    const now = this.now();
+    await this.recoverStaleParts(contact);
+    const rows = await this.db.reportDeliveryRecipient.findMany({
+      where: {
+        delivery: { kind: "SCHEDULED", createdAt: { gte: new Date(now.getTime() - REPLY_LOOKBACK_MS) } },
+        status: { notIn: ["PENDING", "SENDING"] }, // the notification step of that run is finished (the scheduled run owns it until then)
+        OR: [{ txtStatus: { in: ["WAITING_FOR_REPLY", "FAILED", "PENDING"] } }, { docStatus: { in: ["WAITING_FOR_REPLY", "FAILED", "PENDING"] } }],
+      },
+      include: { delivery: { include: { automation: { include: { recipients: true } } } } },
+    });
+    const mine = rows
+      .filter((r) => normalizeMobile(r.phone) === contact)
+      .filter((r) => r.delivery.automation.enabled && r.delivery.automation.recipients.some((x) => normalizeMobile(x.phone) === contact))
+      .sort((a, b) => b.delivery.createdAt.getTime() - a.delivery.createdAt.getTime());
+    const row = mine[0];
+    if (!row) return { handled: false, reason: "no held-back report for this number" };
+    const automation = row.delivery.automation;
+    const owner = await this.db.user.findUnique({ where: { id: automation.ownerId }, select: { id: true, role: true, status: true } });
+    if (!owner || owner.status !== UserStatus.ACTIVE || (owner.role !== Role.ADMIN && owner.role !== Role.MANAGER)) {
+      return { handled: false, reason: "the automation's owner is no longer an active Admin or Manager" };
+    }
+
+    const claimable = (status: string, attempts: number) => (status === "WAITING_FOR_REPLY" || status === "FAILED" || status === "PENDING") && attempts < MANUAL_RETRY_MAX_ATTEMPTS;
+    let detail = false;
+    let excel = false;
+    if (claimable(row.txtStatus, row.txtAttempts)) {
+      detail = (await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: row.txtStatus, txtAttempts: row.txtAttempts }, data: { txtStatus: "SENDING", txtAttempts: { increment: 1 }, txtError: null } })).count === 1;
+    }
+    if (claimable(row.docStatus, row.docAttempts)) {
+      excel = (await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: row.docStatus, docAttempts: row.docAttempts }, data: { docStatus: "SENDING", docAttempts: { increment: 1 }, docError: null } })).count === 1;
+    }
+    if (!detail && !excel) return { handled: false, reason: "nothing left to send (already sent, being sent, or retried the maximum number of times)", runId: row.deliveryId };
+
+    const period = { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate };
+    try {
+      await this.deliver([], automation, { id: owner.id, role: owner.role }, row.deliveryId, period, false, [row.id], { txt: detail, doc: excel });
+    } catch (error) {
+      // An unexpected failure after the parts were claimed: they must not stay "sending" forever. They may or may not have reached the provider, so they are UNCERTAIN (never resent automatically).
+      // Conditional on THIS claim (status SENDING and the attempt number this call set), so a part that finished, or one another worker has since claimed, is left exactly as it is.
+      const why = "The send was interrupted by an unexpected error before its outcome was recorded. It may have been delivered, so it was not sent again automatically.";
+      if (detail) await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: "SENDING", txtAttempts: row.txtAttempts + 1 }, data: { txtStatus: "UNCERTAIN", txtError: why, txtLastAttemptAt: this.now() } }).catch(() => undefined);
+      if (excel) await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: "SENDING", docAttempts: row.docAttempts + 1 }, data: { docStatus: "UNCERTAIN", docError: why, docLastAttemptAt: this.now() } }).catch(() => undefined);
+      await recomputeRunStatus(this.db, row.deliveryId).catch(() => undefined);
+      logger.error(`Report reply: delivery for run ${row.deliveryId} failed after its parts were claimed; they were marked uncertain`, error instanceof Error ? error.message.split(String.fromCharCode(10))[0] : "unknown error");
+      throw error;
+    }
+    const after = await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id: row.id } });
+    return { handled: true, reason: "sent on the recipient's reply", runId: row.deliveryId, reportDate: row.delivery.reportDate, parts: { ...(detail ? { detail: after.txtStatus } : {}), ...(excel ? { excel: after.docStatus } : {}) } };
+  }
+
+  /**
+   * Parts of THIS number's reports left "sending" for longer than STALE_SENDING_MS were interrupted (a restart, a crash): the provider may or may not have accepted them, so they become UNCERTAIN - never FAILED
+   * (which a retry would resend) and never resent automatically. Same state transition and timeout the scheduled run applies to its own occurrence; here it also covers runs the scheduler no longer revisits.
+   * Each update is conditional on the status AND attempt number read here, so a part another worker has meanwhile finished or re-claimed is not overwritten.
+   */
+  private async recoverStaleParts(contact: string): Promise<void> {
+    const stale = new Date(this.now().getTime() - STALE_SENDING_MS);
+    const rows = await this.db.reportDeliveryRecipient.findMany({
+      where: { updatedAt: { lt: stale }, OR: [{ status: "SENDING" }, { txtStatus: "SENDING" }, { docStatus: "SENDING" }] },
+      select: { id: true, phone: true, deliveryId: true, status: true, attempts: true, txtStatus: true, txtAttempts: true, docStatus: true, docAttempts: true },
+    });
+    const interrupted = "The send was interrupted (restart or crash) before the outcome was recorded. It may have been delivered, so it was not sent again automatically.";
+    const runs = new Set<string>();
+    for (const r of rows.filter((x) => normalizeMobile(x.phone) === contact)) {
+      let changed = 0;
+      if (r.status === "SENDING") changed += (await this.db.reportDeliveryRecipient.updateMany({ where: { id: r.id, status: "SENDING", attempts: r.attempts }, data: { status: "UNCERTAIN", error: interrupted } })).count;
+      if (r.txtStatus === "SENDING") changed += (await this.db.reportDeliveryRecipient.updateMany({ where: { id: r.id, txtStatus: "SENDING", txtAttempts: r.txtAttempts }, data: { txtStatus: "UNCERTAIN", txtError: interrupted } })).count;
+      if (r.docStatus === "SENDING") changed += (await this.db.reportDeliveryRecipient.updateMany({ where: { id: r.id, docStatus: "SENDING", docAttempts: r.docAttempts }, data: { docStatus: "UNCERTAIN", docError: interrupted } })).count;
+      if (changed > 0) runs.add(r.deliveryId);
+    }
+    for (const id of runs) await recomputeRunStatus(this.db, id);
+  }
+
   // ------------------------------------------------------------------------------------------ scheduling
 
   /** One scheduler tick. Safe to call from several processes at once and after any restart. Records a heartbeat so the page can show whether ticks are really happening. */
+  /** A part that has waited for a reply longer than REPLY_LOOKBACK_MS is closed as FAILED (so it gets the normal manual Retry) - conditional on still waiting, so a reply that released it meanwhile wins. */
+  private async expireWaitingParts(): Promise<void> {
+    const cutoff = new Date(this.now().getTime() - REPLY_LOOKBACK_MS);
+    const why = "No reply was received within 48 hours, so the report was not sent. Ask the recipient to message the business number, then press Retry.";
+    const old = { delivery: { kind: "SCHEDULED" as const, createdAt: { lt: cutoff } } };
+    const t = await this.db.reportDeliveryRecipient.findMany({ where: { ...old, txtStatus: "WAITING_FOR_REPLY" }, select: { deliveryId: true } });
+    const d = await this.db.reportDeliveryRecipient.findMany({ where: { ...old, docStatus: "WAITING_FOR_REPLY" }, select: { deliveryId: true } });
+    await this.db.reportDeliveryRecipient.updateMany({ where: { ...old, txtStatus: "WAITING_FOR_REPLY" }, data: { txtStatus: "FAILED", txtError: why } });
+    await this.db.reportDeliveryRecipient.updateMany({ where: { ...old, docStatus: "WAITING_FOR_REPLY" }, data: { docStatus: "FAILED", docError: why } });
+    for (const id of new Set([...t, ...d].map((x) => x.deliveryId))) await recomputeRunStatus(this.db, id);
+  }
+
   async runDue(source: "scheduler" | "cron" = "scheduler"): Promise<{ checked: number; started: number }> {
+    await this.expireWaitingParts().catch((error) => logger.error("Expiring report parts that waited for a reply failed", error instanceof Error ? error.message : String(error)));
     const automations = await this.db.reportAutomation.findMany({ where: { enabled: true }, include: { recipients: true } });
     let started = 0;
     let lastError: string | null = null;
@@ -461,13 +571,13 @@ class ReportAutomationService {
    *  2 and 3 are free-form messages, which WhatsApp allows only inside the recipient's 24-hour window: when it is closed they are NOT attempted and are marked Failed with the exact restriction (retry after
    *  the recipient writes to the business number). `claimed` = recipients whose notification is already claimed (SENDING); `partIds` limits steps 2-3 to those recipients (null = whole run).
    *  `retryable` = a scheduled run (automatic retries of the notification only). A part that succeeded, or whose outcome is unknown, is never sent again. */
-  private async deliver(claimed: RecipientResult[], automation: DeliverAutomation, viewer: { id: string; role: Role }, runId: string, period: ReportPeriod, retryable: boolean, partIds: string[] | null): Promise<boolean> {
+  private async deliver(claimed: RecipientResult[], automation: DeliverAutomation, viewer: { id: string; role: Role }, runId: string, period: ReportPeriod, retryable: boolean, partIds: string[] | null, only?: { txt: boolean; doc: boolean }): Promise<boolean> {
     const at = () => this.now();
     const failNote = async (r: RecipientResult, message: string, status: "FAILED" | "UNCERTAIN") => {
       const retryAt = status === "FAILED" && retryable && r.attempts < MAX_ATTEMPTS ? new Date(at().getTime() + (RETRY_DELAYS_MIN[r.attempts - 1] ?? 15) * 60_000) : null;
       await this.db.reportDeliveryRecipient.update({ where: { id: r.id }, data: { status, error: message.slice(0, 500), lastAttemptAt: at(), nextAttemptAt: retryAt } });
     };
-    const failPart = (kind: "txt" | "doc", id: string, message: string, status: "FAILED" | "UNCERTAIN") =>
+    const failPart = (kind: "txt" | "doc", id: string, message: string, status: "FAILED" | "UNCERTAIN" | "WAITING_FOR_REPLY") =>
       this.db.reportDeliveryRecipient.update({ where: { id }, data: kind === "txt" ? { txtStatus: status, txtError: message.slice(0, 500), txtLastAttemptAt: at() } : { docStatus: status, docError: message.slice(0, 500), docLastAttemptAt: at() } });
 
     const windows = new Map<string, boolean>();
@@ -482,6 +592,7 @@ class ReportAutomationService {
 
     // Parts of this run that are due: already claimed (a manual retry), or PENDING once the notification has been tried (a free-form message does not depend on the template message succeeding).
     const duePart = async (kind: "txt" | "doc"): Promise<RecipientResult[]> => {
+      if (only && !only[kind]) return []; // a reply sends exactly the parts IT claimed - a part another worker is sending is theirs
       const rows = await this.db.reportDeliveryRecipient.findMany({ where: { deliveryId: runId, ...(partIds ? { id: { in: partIds } } : {}) } });
       const out: RecipientResult[] = [];
       for (const r of rows) {
@@ -555,7 +666,7 @@ class ReportAutomationService {
       for (const r of rows) {
         try {
           if (!(await windowOpen(r.phone))) {
-            await failPart(kind, r.id, WINDOW_CLOSED_REASON, "FAILED");
+            await failPart(kind, r.id, WINDOW_CLOSED_REASON, "WAITING_FOR_REPLY"); // not a failure: kept until the recipient replies (sendPendingOnReply)
             continue;
           }
           if (kind === "txt") {
@@ -579,7 +690,7 @@ class ReportAutomationService {
     // ---- fallback: a free-form message was refused for the 24-hour window although we believed it open -> the template is the only way left to reach them
     for (const id of skippedAsRedundant) {
       const row = await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id } });
-      const windowRefused = (row.txtStatus === "FAILED" && /24 hours/.test(row.txtError ?? "")) || (row.docStatus === "FAILED" && /24 hours/.test(row.docError ?? ""));
+      const windowRefused = (["FAILED", "WAITING_FOR_REPLY"].includes(row.txtStatus) && /24 hours/.test(row.txtError ?? "")) || (["FAILED", "WAITING_FOR_REPLY"].includes(row.docStatus) && /24 hours/.test(row.docError ?? ""));
       if (!windowRefused || !automation.templateName) continue;
       try {
         const send = this.deps.send ?? createWhatsAppReportSender(this.db);

@@ -23,6 +23,8 @@ import { startIdempotencyPruneJob } from "./modules/orders/orders.idempotency.pr
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
 import { attendanceService } from "./modules/attendance/attendance.service.js";
 import { assertSandboxProcess } from "./modules/cashfree/cashfree.sandbox-guard.js";
+import { installGracefulShutdown } from "./lib/gracefulShutdown.js";
+import { drainWhatsAppBackgroundWork } from "./modules/whatsapp/whatsapp.service.js";
 
 // A Cashfree SANDBOX test run (CRM_SANDBOX_MODE=true) refuses to start when it could reach production; any other process is unaffected.
 assertSandboxProcess();
@@ -74,7 +76,7 @@ app.use(notFoundHandler);
 app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
   attendanceService.start();
   // Local development against a copy of live data: set DISABLE_BACKGROUND_JOBS=true so this machine never messages
@@ -100,3 +102,6 @@ app.listen(PORT, () => {
   startReportAutomationScheduler(); // daily WhatsApp telecaller report (Admin / Manager automation)
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
 });
+
+// Redeploys send SIGTERM: stop taking connections and give in-flight WhatsApp work (e.g. a report released by a reply) up to 10 s to finish, then exit.
+installGracefulShutdown({ server, drain: drainWhatsAppBackgroundWork, timeoutMs: 10_000 });

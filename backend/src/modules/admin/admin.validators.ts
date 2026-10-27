@@ -32,6 +32,7 @@ const createHrSchema = z.object({
 
 const updateRecruiterSchema = z
   .object({
+    username: usernameSchema.optional(),
     name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long").optional(),
     phone: z.string().max(20, "Phone number is too long").optional(),
     status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
@@ -76,6 +77,7 @@ const createSalespersonSchema = z.object({
 
 const updateManagerSchema = z
   .object({
+    username: usernameSchema.optional(),
     name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long").optional(),
     phone: z.string().max(20, "Phone number is too long").optional(),
     status: z.enum(["ACTIVE", "INACTIVE"]).optional(),
@@ -84,6 +86,7 @@ const updateManagerSchema = z
 
 const updateSalespersonSchema = z
   .object({
+    username: usernameSchema.optional(),
     name: z.string().min(2, "Name must be at least 2 characters").max(150, "Name is too long").optional(),
     phone: z.string().max(20, "Phone number is too long").optional(),
     status: z.enum(["ACTIVE", "INACTIVE"]).optional(),

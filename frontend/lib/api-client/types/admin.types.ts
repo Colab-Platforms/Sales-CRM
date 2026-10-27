@@ -15,6 +15,7 @@ export interface CreateManagerPayload {
 }
 
 export interface UpdateManagerPayload {
+  username?: string;
   name?: string;
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";
@@ -39,6 +40,7 @@ export interface CreateSalespersonPayload {
 }
 
 export interface UpdateSalespersonPayload {
+  username?: string;
   name?: string;
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";

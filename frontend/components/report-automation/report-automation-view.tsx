@@ -36,12 +36,12 @@ export const templateLabel = (t: { name: string; provider: string; language: str
 /** One message of a recipient (the text or the Excel file): its own status, attempts, last attempt, reason, provider id and Retry. */
 function PartCell({ part, testId, onRetry, busy }: { part: ReportMessagePart & { nextAttemptAt?: string | null }; testId: string; onRetry: () => void; busy: boolean }) {
   if (part.status === "SKIPPED" && !part.error) return <span className="text-xs text-muted-foreground">{STATUS_LABEL.SKIPPED}</span>;
-  const tone = part.status === "FAILED" ? "text-destructive" : part.status === "UNCERTAIN" ? "text-amber-600" : part.status === "DELIVERED" || part.status === "READ" ? "text-emerald-600" : "";
+  const tone = part.status === "FAILED" ? "text-destructive" : part.status === "UNCERTAIN" || part.status === "WAITING_FOR_REPLY" ? "text-amber-600" : part.status === "DELIVERED" || part.status === "READ" ? "text-emerald-600" : "";
   return (
     <div className="max-w-xs space-y-0.5 whitespace-normal text-xs" data-testid={`part-${testId}`}>
       <p className={`text-sm font-medium ${tone}`}>{STATUS_LABEL[part.status] ?? part.status}</p>
       <p className="text-muted-foreground">Attempts: {part.attempts}{part.lastAttemptAt ? ` | last ${fmt(part.lastAttemptAt)}` : ""}</p>
-      {part.error ? <p className={part.status === "SKIPPED" ? "text-muted-foreground" : "text-destructive"}>{part.error}</p> : null}
+      {part.error ? <p className={part.status === "SKIPPED" || part.status === "WAITING_FOR_REPLY" ? "text-muted-foreground" : "text-destructive"}>{part.error}</p> : null}
       {part.status === "FAILED" && part.nextAttemptAt ? <p>Next automatic attempt {fmt(part.nextAttemptAt)}.</p> : null}
       {part.status === "UNCERTAIN" ? <p>Not re-sent automatically; check the phone before sending again.</p> : null}
       {part.status === "PENDING" ? <p className="text-muted-foreground">Waiting for the notification to be tried.</p> : null}

@@ -103,6 +103,11 @@ class WhatsAppService {
     private readonly getProvider: () => WhatsAppProvider | null = getWhatsAppProvider,
     // Injectable so tests download media from a fake - never the real Graph API.
     private readonly getMediaSource: (db: DbClient) => Promise<{ fetchMedia(mediaId: string): Promise<FetchedMedia> } | null> = getMetaWhatsAppProvider,
+    // A recipient of the Daily Team Report writing in releases the report that was held back for the closed 24-hour window. Injectable so tests never send anything.
+    private readonly reportReply: (phone: string) => Promise<{ handled: boolean; reason: string; runId?: string; reportDate?: string }> = async (phone) => {
+      const { default: ReportAutomationService } = await import("../report-automation/report-automation.service.js");
+      return new ReportAutomationService(this.db).sendPendingOnReply(phone);
+    },
   ) {
     this.leadService = new LeadService();
     this.conversationService = new WhatsAppConversationService(this.db);
@@ -556,6 +561,10 @@ class WhatsAppService {
       return { leadId, conversation };
     });
 
+    // A normal text message from the Meta number: if the sender is a Daily Team Report recipient with a held-back report, send it now (see ReportAutomationService.sendPendingOnReply).
+    // Runs after the message is committed (so the 24-hour window is open), AFTER the duplicate check above (a repeated webhook delivery never reaches this line), and never blocks or fails the webhook.
+    if (provider === "META" && message.messageType === "TEXT") this.releaseHeldReport(message.from);
+
     if (!result.leadId || !result.conversation) return;
     if (result.conversation.mode === "AI") {
       // Fire-and-forget, same setImmediate pattern whatsapp.webhook.routes.ts already uses for
@@ -567,6 +576,23 @@ class WhatsAppService {
           .catch((error) => logger.error("WhatsApp AI order-taking processing failed", error instanceof Error ? error.message : error));
       });
     }
+  }
+
+  private releaseHeldReport(from: string): void {
+    const masked = from.length > 4 ? `${"*".repeat(from.length - 4)}${from.slice(-4)}` : "****";
+    const work: Promise<void> = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => this.reportReply(from))
+      .then((o) => {
+        if (o.handled) logger.info(`Daily Team Report released on reply: run ${o.runId} for ${o.reportDate} to ${masked}`);
+      })
+      .catch((error) => logger.error(`Daily Team Report reply handling failed for ${masked}`, error instanceof Error ? error.message : String(error)))
+      .finally(() => void pendingBackgroundWork.delete(work));
+    pendingBackgroundWork.add(work);
+  }
+
+  /** Resolves when every report-on-reply started so far has finished (for tests and graceful shutdown). */
+  async idle(): Promise<void> {
+    await drainWhatsAppBackgroundWork();
   }
 
   async recordStatusUpdate(provider: WhatsAppProviderId, update: NormalizedStatusUpdate): Promise<void> {
@@ -614,6 +640,14 @@ class WhatsAppService {
       },
     });
   }
+}
+
+/** Background work started by an inbound message (the report released by a recipient's reply). Shared by every WhatsAppService instance so shutdown can wait for all of it. */
+const pendingBackgroundWork = new Set<Promise<void>>();
+
+/** Resolves when all background WhatsApp work started so far has finished, including work started while waiting. Never rejects. */
+export async function drainWhatsAppBackgroundWork(): Promise<void> {
+  while (pendingBackgroundWork.size > 0) await Promise.allSettled([...pendingBackgroundWork]);
 }
 
 export default WhatsAppService;

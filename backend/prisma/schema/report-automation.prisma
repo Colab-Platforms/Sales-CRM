@@ -112,6 +112,8 @@ enum ReportRecipientStatus {
   FAILED
   // No answer from the provider: it may have been delivered; never re-sent automatically.
   UNCERTAIN
+  // The detailed text / Excel is held back until the recipient writes to the business number (WhatsApp's 24-hour window is closed). Released by that reply; expires after REPLY_LOOKBACK_MS. (migration 20261030000000)
+  WAITING_FOR_REPLY
   // This part is switched off for the automation (e.g. Excel disabled) - nothing was or will be sent.
   SKIPPED
 

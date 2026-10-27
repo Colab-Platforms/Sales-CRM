@@ -147,7 +147,7 @@ describe("end to end: the running scheduler sends the due report at the saved ti
     }
     const run = await until("the scheduled run to be created and finish", async () => {
       const r = await prisma.reportDelivery.findFirst({ where: { kind: "SCHEDULED" }, include: { recipientResults: true } });
-      return r && r.status !== "PENDING" && r.status !== "SENDING" ? r : null;
+      return r && r.status !== "SENDING" && r.recipientResults.every((x) => ![x.status, x.txtStatus, x.docStatus].some((st) => st === "PENDING" || st === "SENDING")) ? r : null;
     }, 150_000);
     assert.ok((run.scheduledFor?.getTime() ?? 0) >= first.target.getTime(), "created only once the saved time had passed");
     assert.equal(run.dedupeKey?.endsWith(`:${first.localDate}:${first.sendTime}:${first.localDate}`), true);
@@ -178,9 +178,9 @@ describe("end to end: the running scheduler sends the due report at the saved ti
     const by = Object.fromEntries(run.recipientResults.map((r) => [r.phone, r]));
     assert.deepEqual([by[R1]!.status, by[R1]!.txtStatus, by[R1]!.docStatus], ["SKIPPED", "SENT", "SENT"]);
     assert.ok(by[R1]!.txtProviderMessageId && by[R1]!.docProviderMessageId && !by[R1]!.providerMessageId, "no template was sent to the open-window recipient");
-    assert.deepEqual([by[R2]!.status, by[R2]!.txtStatus, by[R2]!.docStatus], ["SENT", "FAILED", "FAILED"]);
+    assert.deepEqual([by[R2]!.status, by[R2]!.txtStatus, by[R2]!.docStatus], ["SENT", "WAITING_FOR_REPLY", "WAITING_FOR_REPLY"]);
     assert.match(by[R2]!.txtError ?? "", /24 hours of the recipient's last message.*Nothing was sent/);
-    assert.equal(run.status, "FAILED", "not reported as fully successful");
+    assert.equal(run.status, "PENDING", "not reported as fully successful, nor failed: waiting for the reply");
     const hb = (await prisma.reportSchedulerState.findUnique({ where: { id: 1 } }))!;
     assert.ok(hb.lastTickAt!.getTime() >= first.target.getTime());
     assert.equal(hb.lastSource, "scheduler");
@@ -225,7 +225,7 @@ describe("end to end: the running scheduler sends the due report at the saved ti
     }
     const run2 = await until("the second scheduled run", async () => {
       const r = await prisma.reportDelivery.findFirst({ where: { kind: "SCHEDULED", dedupeKey: { endsWith: `:${second.sendTime}:${first.localDate}` } }, include: { recipientResults: true } });
-      return r && r.status !== "PENDING" && r.status !== "SENDING" ? r : null;
+      return r && r.status !== "SENDING" && r.recipientResults.every((x) => ![x.status, x.txtStatus, x.docStatus].some((st) => st === "PENDING" || st === "SENDING")) ? r : null;
     }, 150_000);
     assert.ok((run2.scheduledFor?.getTime() ?? 0) >= second.target.getTime());
     assert.equal(await prisma.reportDelivery.count({ where: { kind: "SCHEDULED" } }), 2);

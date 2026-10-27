@@ -582,6 +582,7 @@ function EditSalespersonModalContent({
 }) {
   const updateSalesperson = useUpdateSalespersonMutation();
   const [name, setName] = useState(salesperson.name);
+  const [username, setUsername] = useState(salesperson.username);
   const [phone, setPhone] = useState(salesperson.phone ?? "");
   const [reportingManagerId, setReportingManagerId] = useState(salesperson.reportingManager?.id ?? "");
   const [nameError, setNameError] = useState<string | undefined>();
@@ -599,7 +600,7 @@ function EditSalespersonModalContent({
     if (!reportingManagerId) return;
 
     updateSalesperson.mutate(
-      { id: salesperson.id, payload: { name, phone: phone || undefined, reportingManagerId } },
+      { id: salesperson.id, payload: { name, phone: phone || undefined, reportingManagerId, ...(username.trim().toLowerCase() !== salesperson.username ? { username: username.trim() } : {}) } },
       {
         onSuccess: () => {
           toast.success("Salesperson updated successfully.");
@@ -634,11 +635,15 @@ function EditSalespersonModalContent({
           <Label htmlFor={`edit-sp-username-${salesperson.id}`}>Username</Label>
           <Input
             id={`edit-sp-username-${salesperson.id}`}
-            value={salesperson.username}
-            disabled
-            className="bg-muted/50 text-muted-foreground cursor-not-allowed"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+            required
+            minLength={3}
+            maxLength={50}
+            pattern="[A-Za-z0-9._\-]+"
           />
-          <p className="text-xs text-muted-foreground">Username cannot be changed.</p>
+          <p className="text-xs text-muted-foreground">Letters, numbers, dots, underscores and hyphens. This is what the user signs in with; their password is not changed.</p>
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">
@@ -797,12 +802,13 @@ function EditManagerModalContent({
 }) {
   const updateManager = useUpdateManagerMutation();
   const [name, setName] = useState(manager.name);
+  const [username, setUsername] = useState(manager.username);
   const [phone, setPhone] = useState(manager.phone ?? "");
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     updateManager.mutate(
-      { id: manager.id, payload: { name, phone: phone || undefined } },
+      { id: manager.id, payload: { name, phone: phone || undefined, ...(username.trim().toLowerCase() !== manager.username ? { username: username.trim() } : {}) } },
       {
         onSuccess: () => {
           toast.success("Manager updated successfully");
@@ -835,11 +841,15 @@ function EditManagerModalContent({
           <Label htmlFor={`edit-username-${manager.id}`}>Username</Label>
           <Input
             id={`edit-username-${manager.id}`}
-            value={manager.username}
-            disabled
-            className="bg-muted/50 text-muted-foreground cursor-not-allowed"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="off"
+            required
+            minLength={3}
+            maxLength={50}
+            pattern="[A-Za-z0-9._\-]+"
           />
-          <p className="text-xs text-muted-foreground">Username cannot be changed.</p>
+          <p className="text-xs text-muted-foreground">Letters, numbers, dots, underscores and hyphens. This is what the user signs in with; their password is not changed.</p>
         </div>
         <div className="space-y-1.5">
           <div className="flex items-center justify-between">

@@ -82,7 +82,7 @@ export interface ReportPreview {
   data: { scope: { id: string; name: string }[]; people: ReportPersonRow[]; team: Omit<ReportPersonRow, "id" | "name"> & { telecallers: number } };
 }
 
-export type ReportRecipientStatus = "PENDING" | "SENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" | "UNCERTAIN" | "SKIPPED";
+export type ReportRecipientStatus = "PENDING" | "SENDING" | "SENT" | "DELIVERED" | "READ" | "FAILED" | "UNCERTAIN" | "WAITING_FOR_REPLY" | "SKIPPED";
 
 /** One WhatsApp message of a recipient: the text template message, or the Excel document. */
 export interface ReportMessagePart {

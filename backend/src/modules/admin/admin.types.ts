@@ -6,6 +6,7 @@ export interface CreateManagerBody {
 }
 
 export interface UpdateManagerBody {
+  username?: string;
   name?: string;
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";
@@ -20,6 +21,7 @@ export interface CreateSalespersonBody {
 }
 
 export interface UpdateSalespersonBody {
+  username?: string;
   name?: string;
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";
@@ -45,6 +47,7 @@ export interface CreateRecruiterBody {
 }
 
 export interface UpdateRecruiterBody {
+  username?: string;
   name?: string;
   phone?: string;
   status?: "ACTIVE" | "INACTIVE";
