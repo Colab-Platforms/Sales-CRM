@@ -4,13 +4,13 @@ import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AbandonedChartResult, AbandonedResult, Coverage, OrdersChartResult, OrdersDashboardResult } from "@/lib/api-client/types/orders-dashboard.types";
-import { CARDS, DEFAULT_QUERY, DEFAULT_RANGE, RANGE_LABEL, RANGE_OPTIONS, cardLabel, cardValue, changeRange, closeDetails, compareLabel, describeRange, formatInr, selectCard, switchTab, todayIn, validateCustomRange, websiteFeedWarning, withFilters } from "./orders-dashboard-form";
-import { ABANDONED_CARDS, abandonedCardValue, closeAbandonedDetails, selectAbandonedCard } from "./abandoned-dashboard-form";
+import { CARDS, DEFAULT_QUERY, DEFAULT_RANGE, RANGE_LABEL, RANGE_OPTIONS, cardLabel, cardValue, cardValueFor, changeRange, closeDetails, compareLabel, describeRange, formatInr, selectCard, switchTab, todayIn, validateCustomRange, websiteFeedWarning, withFilters } from "./orders-dashboard-form";
+import { ABANDONED_CARDS, CONVERSION_CARDS, isOrderBreakdown, abandonedCardValue, conversionCardHint, conversionCardValue, closeAbandonedDetails, selectAbandonedCard } from "./abandoned-dashboard-form";
 import { bucketLabel, chartGeometry, niceAxis, type ChartPoint } from "./chart-geometry";
 import { OrdersDashboard } from "./orders-dashboard-view";
 import { NAV_BY_ROLE } from "../app-sidebar";
 
-const summary = { totalOrders: 2, totalValue: 1500, cod: 1, prepaid: 1, paid: 1, pendingPayment: 1, cancelled: 0, cancelledValue: 0, fulfilled: 1 };
+const summary = { totalOrders: 2, totalValue: 1500, cod: 1, prepaid: 1, paid: 1, pendingPayment: 1, cancelled: 0, cancelledValue: 0, fulfilled: 1, codRevenue: 800, prepaidRevenue: 700, collected: 700 };
 const RANGE = { kind: "yesterday" as const, from: "2026-10-25", to: "2026-10-25", timezone: "Asia/Kolkata", days: 1 };
 const websiteResult = (over: Partial<OrdersDashboardResult> = {}, fresh: Partial<OrdersDashboardResult["freshness"]> = {}): OrdersDashboardResult => ({
   range: RANGE,
@@ -26,7 +26,7 @@ const abandonedResult = (over: Partial<AbandonedResult> = {}): AbandonedResult =
   range: RANGE,
   coverage: "FULL",
   comparison: { totalAbandoned: { previous: 3, changePct: 100 } },
-  summary: { totalAbandoned: 6, potentialValue: 1550, openCheckouts: 5, followUpPending: 5, followUpCompleted: 1, recovered: 1, openWithoutValue: 1, openOtherCurrency: 1 },
+  summary: { totalAbandoned: 6, potentialValue: 1550, openCheckouts: 5, followUpPending: 5, followUpCompleted: 1, recovered: 1, detected: 10, conversion: { converted: 3, conversionRate: 30, revenue: 4500, prepaid: { count: 1, revenue: 2000 }, cod: { count: 2, revenue: 2500 }, awaitingPayment: 1, unclassified: 0, byTelecaller: [{ userId: "u1", name: "Asha", converted: 3, revenue: 4500 }] }, openWithoutValue: 1, openOtherCurrency: 1 },
   source: { name: "Shiprocket Checkout (Fastrr) abandon-cart events", paymentModeAvailable: false, latestCheckoutAt: "2026-10-26T07:23:00Z" },
   details: null,
   ...over,
@@ -77,10 +77,11 @@ const section = (html: string, id: "website-panel" | "abandoned-panel") => {
 };
 
 describe("page structure: both dashboards stacked on ONE page", () => {
-  it("shows Website Orders, the Orders & Revenue chart, Abandoned Checkouts and its trend in that order - with no top-level tabs", () => {
+  it("shows Website Orders then Abandoned Checkouts - data only: NO charts or trends - with no top-level tabs", () => {
     const html = render(true);
+    assert.ok(!html.includes("orders-revenue-card") && !html.includes("abandoned-trend-card") && !/<svg[^>]*chart/i.test(html) && !/Daily|Weekly|Monthly/.test(html), "the trend charts and their day / week / month switches are gone");
     const at = (id: string) => html.indexOf(`data-testid="${id}"`);
-    const order = ["website-panel", "orders-revenue-card", "abandoned-panel", "abandoned-trend-card"].map(at);
+    const order = ["website-panel", "abandoned-panel"].map(at);
     assert.ok(order.every((i) => i >= 0), JSON.stringify(order));
     assert.deepEqual([...order].sort((a, b) => a - b), order, "stacked in that order");
     assert.ok(!html.includes('role="tablist"') && !html.includes("dashboard-website") && !html.includes("dashboard-abandoned"), "no tabs between the dashboards");
@@ -105,21 +106,21 @@ describe("page structure: both dashboards stacked on ONE page", () => {
 });
 
 describe("cards", () => {
-  it("Website Orders: eight clickable cards, values from the data, no table / details / selected card by default", () => {
+  it("Website Orders: eleven clickable cards, values from the data, no table / details / selected card by default", () => {
     const site = section(render(true), "website-panel");
-    assert.deepEqual(CARDS.map((c) => c.label), ["Total Orders", "Total Order Value", "COD", "Prepaid", "Paid", "Pending Payment", "Cancelled", "Fulfilled"]);
-    for (const [key, shown] of [["total", "2"], ["value", "₹1,500"], ["cod", "1"], ["prepaid", "1"], ["paid", "1"], ["pending", "1"], ["cancelled", "0"], ["fulfilled", "1"]]) {
+    assert.deepEqual(CARDS.map((c) => c.label), ["Total Orders", "Revenue", "COD Orders", "Revenue - COD", "Prepaid Orders", "Revenue - Prepaid", "Paid", "Collected", "Pending Payment", "Cancelled", "Fulfilled"]);
+    for (const [key, shown] of [["total", "2"], ["value", "₹1,500"], ["cod", "1"], ["cod_revenue", "₹800"], ["prepaid", "1"], ["prepaid_revenue", "₹700"], ["paid", "1"], ["collected", "₹700"], ["pending", "1"], ["cancelled", "0"], ["fulfilled", "1"]]) {
       assert.match(site, new RegExp(`data-testid="card-value-${key}"[^>]*>${shown}<`), key);
     }
-    const buttons = site.match(/<button[^>]*data-testid="card-[a-z]+"[^>]*>/g) ?? [];
-    assert.equal(buttons.length, 8);
+    const buttons = site.match(/<button[^>]*data-testid="card-[a-z_]+"[^>]*>/g) ?? [];
+    assert.equal(buttons.length, 11);
     assert.ok(buttons.every((b) => /type="button"/.test(b) && /aria-pressed="false"/.test(b)), "real buttons, none selected");
     for (const hidden of ["order-details", "order-row", "export-orders", "close-details", "<table"]) assert.ok(!site.includes(hidden), `${hidden} hidden by default`);
   });
 
   it("Abandoned Checkouts: its own five cards, separate numbers, no COD / prepaid, source stated", () => {
     const ab = section(render(true), "abandoned-panel");
-    assert.deepEqual(ABANDONED_CARDS.map((c) => c.label), ["Total Abandoned Checkouts", "Potential Abandoned Value", "Follow-up Pending", "Follow-up Completed", "Recovered"]);
+    assert.deepEqual(ABANDONED_CARDS.map((c) => c.label), ["Open Abandoned Checkouts", "Potential Abandoned Value", "Follow-up Pending", "Follow-up Completed", "Recovered"]);
     for (const [key, shown] of [["total", "6"], ["value", "₹1,550"], ["pending", "5"], ["done", "1"], ["recovered", "1"]]) assert.match(ab, new RegExp(`data-testid="card-value-${key}"[^>]*>${shown}<`), key);
     assert.ok(!/>COD<|>Prepaid<|card-cod|card-prepaid/.test(ab));
     assert.match(ab, /do not say whether the customer chose COD or prepaid/);
@@ -147,15 +148,30 @@ describe("cards", () => {
 
   it("UNAVAILABLE data is never shown as a zero: coverage NONE shows 'No data', PARTIAL says the number is incomplete", () => {
     const none = section(render(true, { site: websiteResult({ coverage: "NONE", summary: { ...summary, totalOrders: 0, totalValue: 0 } }, {}) }), "website-panel");
-    assert.equal((none.match(/>No data</g) ?? []).length, 8, "all eight cards say no data");
+    assert.equal((none.match(/>No data</g) ?? []).length, 11, "all eleven cards say no data");
     assert.ok(!/card-value-total"[^>]*>0</.test(none), "not a zero");
     assert.match(none, /Not received for this period/);
     const partial = section(render(true, { site: websiteResult({ coverage: "PARTIAL", comparison: null }) }), "website-panel");
     assert.match(partial, /Partial - data incomplete/);
     assert.match(partial, /card-value-total"[^>]*>2</);
     const abNone = section(render(true, { ab: abandonedResult({ coverage: "NONE", comparison: null }) }), "abandoned-panel");
-    assert.equal((abNone.match(/>No data</g) ?? []).length, 5);
+    assert.equal((abNone.match(/>No data</g) ?? []).length, 11, "all eleven cards (six conversion + five open) say no data");
     assert.match(abNone, /coverage-warning/);
+  });
+
+  it("RENDERED PAGE: the Abandoned Checkouts section of the real Orders Dashboard shows the six conversion cards (with COD / prepaid count | revenue) above the open-checkout cards", () => {
+    const ab = section(render(true), "abandoned-panel");
+    const labels = ["Total Abandoned Checkouts", "Orders Converted", "Conversion Rate", "Revenue Generated", "Prepaid Orders", "COD Orders"];
+    for (const l of labels) assert.ok(ab.includes(l), l);
+    assert.match(ab, /data-testid="conversion-cards"/);
+    assert.match(ab, /card-value-conv-detected"[^>]*>10</);
+    assert.match(ab, /card-value-conv-converted"[^>]*>3</);
+    assert.match(ab, /card-value-conv-rate"[^>]*>30%</);
+    assert.match(ab, /card-value-conv-revenue"[^>]*>₹4,500</);
+    assert.match(ab, /card-value-conv-prepaid"[^>]*>1 \| ₹2,000</);
+    assert.match(ab, /card-value-conv-cod"[^>]*>2 \| ₹2,500</);
+    assert.ok(ab.indexOf("conversion-cards") < ab.indexOf("summary-cards"), "conversion row first, open-checkout row after");
+    assert.ok(ab.includes("Open Abandoned Checkouts") && ab.includes("Potential Abandoned Value") && ab.includes("NOT revenue"), "potential value is labelled as not revenue");
   });
 
   it("the stale-data warning stays while the Shopify feed is behind, with the real reason; it disappears when the feed is current", () => {
@@ -174,37 +190,7 @@ describe("cards", () => {
   });
 });
 
-describe("Orders & Revenue chart", () => {
-  it("renders green bars for the days with data, the dark line for revenue, a Daily / Weekly / Monthly selector, and the totals", () => {
-    const html = render(true);
-    const c = html.slice(html.indexOf('data-testid="orders-revenue-card"'), html.indexOf('data-testid="abandoned-panel"'));
-    assert.match(c, /Orders &amp; Revenue/);
-    for (const i of ["daily", "weekly", "monthly"]) assert.ok(c.includes(`data-testid="interval-${i}"`), i);
-    assert.match(c, /data-testid="interval-daily"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-testid="interval-daily"/, "daily by default");
-    assert.equal((c.match(/data-testid="chart-bar"/g) ?? []).length, 3, "bars for the 3 days with data (a day with 0 orders is a real zero-height bar)");
-    assert.ok(c.includes("fill-emerald-500") && c.includes("stroke-slate-800"), "green bars, dark line");
-    assert.match(c, /data-testid="chart-totals"[^>]*><strong>5<\/strong> orders, <strong>₹1,400<\/strong>/);
-    assert.match(c, /role="img"/);
-  });
-
-  it("a day the CRM has no data for is a hatched gap, not a zero bar, and the line breaks there", () => {
-    const html = render(true);
-    const c = html.slice(html.indexOf('data-testid="orders-revenue-card"'), html.indexOf('data-testid="abandoned-panel"'));
-    assert.equal((c.match(/data-testid="chart-gap"/g) ?? []).length, 1);
-    assert.match(c, /no data in the CRM for this period/);
-    assert.match(c, /data-testid="chart-coverage-note"/);
-    assert.match(c, /No data for this period/);
-  });
-
-  it("the abandoned trend is its own chart with its own totals", () => {
-    const html = render(true);
-    const c = html.slice(html.indexOf('data-testid="abandoned-trend-card"'));
-    assert.match(c, /Abandoned Checkouts trend/);
-    assert.match(c, /<strong>6<\/strong> abandoned checkouts, <strong>₹1,550<\/strong> still open/);
-    assert.ok(!/orders-chart/.test(c));
-  });
-});
-
+// The Orders & Revenue / abandoned trend charts were removed from the Orders Dashboard page (data-only view); the chart components and their geometry tests below remain for other uses.
 describe("chart geometry", () => {
   const pts = (rows: [number | null, number | null][]): ChartPoint[] => rows.map(([bar, line], i) => ({ key: `2026-10-${String(20 + i).padStart(2, "0")}`, bar, line, available: bar !== null, partial: false }));
 
@@ -270,6 +256,33 @@ describe("helpers", () => {
     assert.equal(cardValue(summary, "VALUE"), "₹1,500");
     assert.equal(cardLabel("FULFILLED"), "Fulfilled");
     assert.deepEqual(ABANDONED_CARDS.map((c) => abandonedCardValue(abandonedResult().summary, c.key)), ["6", "₹1,550", "5", "1", "1"]);
+  });
+  it("website cards: Total Orders, Revenue, COD / Prepaid orders and revenue, Paid and Collected - each clickable and listing the orders behind it", () => {
+    const sm = summary;
+    assert.deepEqual(CARDS.slice(0, 8).map((c) => c.label), ["Total Orders", "Revenue", "COD Orders", "Revenue - COD", "Prepaid Orders", "Revenue - Prepaid", "Paid", "Collected"]);
+    assert.deepEqual(CARDS.slice(0, 8).map((c) => cardValueFor(sm, c.id)), ["2", "₹1,500", "1", "₹800", "1", "₹700", "1", "₹700"]);
+    // a revenue card lists the same orders as its count card (same filter, range and role scope on the server)
+    assert.deepEqual(CARDS.filter((c) => c.id === "COD_REVENUE" || c.id === "PREPAID_REVENUE" || c.id === "COLLECTED").map((c) => c.key), ["COD", "PREPAID", "PAID"]);
+    const html = section(render(true), "website-panel");
+    for (const id of ["total", "value", "cod", "cod_revenue", "prepaid", "prepaid_revenue", "paid", "collected"]) assert.match(html, new RegExp(`data-testid="card-${id}"`), id);
+    assert.match(html, /card-value-cod_revenue"[^>]*>₹800</);
+  });
+
+  it("abandoned cards: eleven cards in two clear groups (converted vs still open); the conversion cards that list rows are clickable", () => {
+    const html = section(render(true), "abandoned-panel");
+    for (const id of ["conv-detected", "conv-converted", "conv-rate", "conv-revenue", "conv-prepaid", "conv-cod", "total", "value", "pending", "done", "recovered"]) assert.match(html, new RegExp(`data-testid="card-${id}"`), id);
+    assert.deepEqual(CONVERSION_CARDS.map((c) => c.metric ?? null), ["DETECTED", "CONVERTED", null, "CONVERTED", "PREPAID", "COD"]);
+    assert.equal(isOrderBreakdown("COD") && isOrderBreakdown("PREPAID") && isOrderBreakdown("CONVERTED"), true);
+    assert.equal(isOrderBreakdown("DETECTED") || isOrderBreakdown("TOTAL"), false, "plain checkout lists have no order columns");
+  });
+
+  it("conversion cards: actual orders and revenue are separate from the potential cart value; an empty period is 'Not available', not 0%", () => {
+    const sm = abandonedResult().summary;
+    assert.deepEqual(CONVERSION_CARDS.map((c) => c.label), ["Total Abandoned Checkouts", "Orders Converted", "Conversion Rate", "Revenue Generated", "Prepaid Orders", "COD Orders"]);
+    assert.deepEqual(CONVERSION_CARDS.map((c) => conversionCardValue(sm, c.key)), ["10", "3", "30%", "₹4,500", "1 | ₹2,000", "2 | ₹2,500"]);
+    assert.match(conversionCardHint(sm, "PREPAID") ?? "", /1 prepaid order\(s\) awaiting payment are not counted/);
+    assert.equal(conversionCardValue({ ...sm, detected: 0, conversion: { ...sm.conversion, converted: 0, conversionRate: null } }, "RATE"), "Not available");
+    assert.equal(ABANDONED_CARDS.find((c) => c.key === "VALUE")!.hint?.includes("NOT revenue"), true);
   });
   it("the feed warning explains the problem from what the database knows", () => {
     const fmt = (iso: string) => iso.slice(0, 10);

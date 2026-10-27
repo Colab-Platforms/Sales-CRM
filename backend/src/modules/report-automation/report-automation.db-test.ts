@@ -554,7 +554,7 @@ describe("the real WhatsApp sender (no provider is configured in the test enviro
       await assert.rejects(() => send(input), /No APPROVED WhatsApp template/);
       await tx.whatsAppTemplate.deleteMany({ where: { name: "daily_team_report" } });
       await tpl("APPROVED", ["a", "b"]);
-      await assert.rejects(() => send(input), /exactly ONE variable.*has 2/);
+      await assert.rejects(() => send(input), /has 2 variables; the report needs either exactly one/);
       await tx.whatsAppTemplate.deleteMany({ where: { name: "daily_team_report" } });
       await tpl("APPROVED", ["report_text"]);
       await assert.rejects(() => send(input), (e: unknown) => e instanceof ReportSendRejected && /not configured/.test((e as Error).message));

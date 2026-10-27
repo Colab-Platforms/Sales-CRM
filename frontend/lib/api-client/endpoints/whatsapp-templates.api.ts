@@ -28,8 +28,9 @@ export const whatsappTemplatesApi = {
     const res = await apiClient.patch<ApiEnvelope<WhatsAppTemplate>>(`/whatsapp/templates/${id}`, input);
     return res.data.data;
   },
-  async sync(provider?: "META"): Promise<TemplateSyncSummary> {
-    const res = await apiClient.post<ApiEnvelope<TemplateSyncSummary>>("/whatsapp/templates/sync", provider ? { provider } : undefined);
+  /** `timeoutMs`: give up waiting after this long (the server keeps working on its own; nothing is retried). */
+  async sync(provider?: "META", timeoutMs?: number): Promise<TemplateSyncSummary> {
+    const res = await apiClient.post<ApiEnvelope<TemplateSyncSummary>>("/whatsapp/templates/sync", provider ? { provider } : undefined, timeoutMs ? { timeout: timeoutMs } : undefined);
     return res.data.data;
   },
   async remove(id: string): Promise<DeleteTemplateResult> {

@@ -15,7 +15,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { getErrorMessage } from "@/lib/api-client/client";
 import { reportAutomationApi } from "@/lib/api-client/endpoints/report-automation.api";
 import type { ReportAutomationConfigInput, ReportMessagePart, ReportMode, ReportOptions } from "@/lib/api-client/types/report-automation.types";
-import { MAX_RECIPIENTS, REPORT_MODE_LABEL, REPORT_TEMPLATE_NAME, STATUS_LABEL, TIMEZONES, normalizeRecipient, validateForm, validateRecipients } from "./report-automation-form";
+import { whatsappTemplatesApi } from "@/lib/api-client/endpoints/whatsapp-templates.api";
+import { MAX_RECIPIENTS, REPORT_MODE_LABEL, REPORT_TEMPLATE_NAME, STATUS_LABEL, SYNC_TIMEOUT_MS, TIMEZONES, normalizeRecipient, pickerErrorMessage, pickerKey, pickerRowState, syncFailureMessage, syncMessage, validateForm, validateRecipients } from "./report-automation-form";
 
 const keys = { config: ["report-automation", "config"] as const, history: ["report-automation", "deliveries"] as const, status: ["report-automation", "status"] as const };
 
@@ -80,6 +81,33 @@ export function ReportAutomationView() {
       setDraft(null); // show the saved (normalised) values
     },
     onError: (e) => toast.error(getErrorMessage(e, "Could not save the settings.")),
+  });
+
+  // Pull the template list from Meta into the CRM (the existing admin sync), then refresh the dropdown. Managers can't sync (admin-only on the server) and are told so.
+  const [syncResult, setSyncResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const sync = useMutation({
+    mutationFn: () => whatsappTemplatesApi.sync("META", SYNC_TIMEOUT_MS), // one attempt, gives up after 20s; never retried automatically
+    retry: false,
+    onMutate: () => setSyncResult(null),
+    onSuccess: (s) => setSyncResult(syncMessage(s)),
+    onError: (e) => setSyncResult({ ok: false, text: syncFailureMessage(e) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: keys.status }),
+  });
+
+  // Add Template (Admin): a picker of the templates Meta reports as APPROVED. Opening it loads Meta's list (one attempt; Retry on failure); Add registers that template; selecting it stays a separate step.
+  const [picking, setPicking] = useState(false);
+  const [pickMsg, setPickMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const approved = useQuery({ queryKey: ["report-automation", "approved-templates"], queryFn: reportAutomationApi.approvedTemplates, enabled: picking && role === "ADMIN", retry: false, gcTime: 0, refetchOnWindowFocus: false });
+  const addTemplate = useMutation({
+    mutationFn: (t: { name: string; language: string }) => reportAutomationApi.addTemplate(t.name, t.language),
+    retry: false,
+    onMutate: () => setPickMsg(null),
+    onSuccess: (r) => {
+      setPickMsg({ ok: true, text: r.alreadyAdded ? `${r.name} (${r.language}) was already added.` : `${r.name} (${r.language}) added. Select it in the template dropdown and press Save.` });
+      queryClient.invalidateQueries({ queryKey: keys.status });
+      void approved.refetch();
+    },
+    onError: (e) => setPickMsg({ ok: false, text: pickerErrorMessage(e, "Could not add the template.") }),
   });
 
   const [confirming, setConfirming] = useState(false);
@@ -226,6 +254,56 @@ export function ReportAutomationView() {
               {form.templateName && !templates.some((t) => t.name === form.templateName && t.language === form.languageCode) ? <option value={`${form.templateName}|${form.languageCode}`}>{form.templateName} ({form.languageCode}) - not found as approved, re-select</option> : null}
               {templates.map((t) => <option key={`${t.provider}:${t.name}:${t.language}`} value={`${t.name}|${t.language}`}>{templateLabel(t)}</option>)}
             </NativeSelect>
+            <div className="flex flex-wrap items-center gap-2">
+              {role === "ADMIN" ? (
+                <Button type="button" size="sm" variant="outline" onClick={() => sync.mutate()} disabled={sync.isPending} data-testid="sync-templates">
+                  {sync.isPending ? "Syncing templates from Meta…" : "Sync templates"}
+                </Button>
+              ) : <p className="text-xs text-muted-foreground">Only an Admin can sync or add templates.</p>}
+              {role === "ADMIN" ? <Button type="button" size="sm" variant="outline" onClick={() => { setPickMsg(null); setPicking(true); }} data-testid="add-template">Add Template</Button> : null}
+              {syncResult ? <p role={syncResult.ok ? "status" : "alert"} className={`text-xs ${syncResult.ok ? "text-emerald-600" : "text-destructive"}`} data-testid="sync-result">{syncResult.text}</p> : null}
+            </div>
+            {picking && role === "ADMIN" ? (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" role="dialog" aria-modal="true" aria-label="Add Template" data-testid="template-picker">
+                <div className="flex max-h-[85vh] w-full max-w-2xl flex-col gap-3 rounded-lg border bg-background p-4 shadow-lg">
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-base font-semibold">Add Template - approved in Meta</h2>
+                    <Button type="button" size="sm" variant="outline" onClick={() => setPicking(false)} data-testid="picker-close">Close</Button>
+                  </div>
+                  {pickMsg ? <p role={pickMsg.ok ? "status" : "alert"} className={`text-sm ${pickMsg.ok ? "text-emerald-600" : "text-destructive"}`} data-testid="picker-message">{pickMsg.text}</p> : null}
+                  {approved.isFetching && !approved.data ? <p className="text-sm text-muted-foreground" data-testid="picker-loading">Loading approved templates from Meta…</p> : null}
+                  {approved.error ? (
+                    <div className="space-y-2" data-testid="picker-error">
+                      <p role="alert" className="text-sm text-destructive">{pickerErrorMessage(approved.error)}</p>
+                      <Button type="button" size="sm" onClick={() => void approved.refetch()} disabled={approved.isFetching} data-testid="picker-retry">{approved.isFetching ? "Retrying…" : "Retry"}</Button>
+                    </div>
+                  ) : null}
+                  {approved.data && approved.data.length === 0 ? <p className="text-sm text-muted-foreground">Meta reports no approved templates.</p> : null}
+                  {approved.data && approved.data.length > 0 ? (
+                    <div className="overflow-auto">
+                      <Table>
+                        <TableHeader><TableRow><TableHead>Template</TableHead><TableHead>Language</TableHead><TableHead>Category</TableHead><TableHead className="text-right"> </TableHead></TableRow></TableHeader>
+                        <TableBody>
+                          {approved.data.map((t) => {
+                            const s = pickerRowState(t);
+                            return (
+                              <TableRow key={pickerKey(t)} data-testid={`picker-row-${t.name}-${t.language}`}>
+                                <TableCell className="font-medium">{t.name}{s.note ? <p className="text-xs font-normal text-amber-600">{s.note}</p> : null}</TableCell>
+                                <TableCell>{t.language}</TableCell>
+                                <TableCell>{t.category ?? "-"}</TableCell>
+                                <TableCell className="text-right">
+                                  {s.kind === "added" ? <span className="text-sm text-emerald-600" data-testid="already-added">Already added</span> : <Button type="button" size="sm" disabled={s.kind === "blocked" || addTemplate.isPending} onClick={() => addTemplate.mutate({ name: t.name, language: t.language })} data-testid={`add-${t.name}-${t.language}`}>{addTemplate.isPending && addTemplate.variables?.name === t.name && addTemplate.variables.language === t.language ? "Adding…" : "Add"}</Button>}
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
             {errors.templateName ? <p role="alert" className="text-xs text-destructive">{errors.templateName}</p> : null}
             {(status.data?.whatsapp.unusableTemplates ?? []).length > 0 ? (
               <ul className="space-y-0.5 text-xs text-amber-600" data-testid="unusable-templates">

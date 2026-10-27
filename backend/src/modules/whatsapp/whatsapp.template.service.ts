@@ -53,6 +53,8 @@ function visibleStatusesFor(role: Role): WhatsAppTemplateStatus[] | null {
   return role === Role.SALESPERSON ? [WhatsAppTemplateStatus.APPROVED] : null; // null = no restriction
 }
 
+export interface ApprovedMetaTemplate { name: string; language: string; category: string | null; variables: string[]; alreadyAdded: boolean }
+
 class WhatsAppTemplateService {
   constructor(
     private readonly db: DbClient = prisma,
@@ -361,6 +363,44 @@ class WhatsAppTemplateService {
       `${provider.id}: ${created} created, ${updated} updated, ${unchanged} unchanged, ${disabledMissing} disabled (no longer at provider)`,
     );
     return summary;
+  }
+
+  /** Meta's own APPROVED templates, read live (nothing is saved), each flagged if the CRM already has that provider+name+language. */
+  async listApprovedMeta(): Promise<ApprovedMetaTemplate[]> {
+    const templates = await this.fetchMetaTemplates();
+    const approved = templates.filter((t) => t.status === "APPROVED");
+    const rows = await this.db.whatsAppTemplate.findMany({ where: { provider: "META" }, select: { name: true, language: true } });
+    const have = new Set(rows.map((r) => `${r.name}|${r.language}`));
+    return approved.map((t) => ({ name: t.name, language: t.language, category: t.category, variables: extractTemplateVariables(t.body).variables, alreadyAdded: have.has(`${t.name}|${t.language}`) }));
+  }
+
+  /** Registers ONE approved Meta template (found again in Meta's live list, never taken from the caller) with Meta's own name, language, category, body and status - exactly what a sync would store. */
+  async addApprovedMeta(user: AuthUser, name: string, language: string): Promise<{ alreadyAdded: boolean; name: string; language: string }> {
+    const existing = await this.db.whatsAppTemplate.findUnique({ where: { provider_name_language: { provider: "META", name, language } }, select: { id: true } });
+    if (existing) return { alreadyAdded: true, name, language };
+    const found = (await this.fetchMetaTemplates()).find((t) => t.name === name && t.language === language && t.status === "APPROVED");
+    if (!found) throw new ApiError("That template is not APPROVED in Meta (or no longer exists). Refresh the list.", STATUS_CODES.NOT_FOUND);
+    try {
+      await this.upsertSyncedTemplate("META", found, new Date());
+    } catch (error) {
+      if (error instanceof Object && "code" in error && error.code === "P2002") return { alreadyAdded: true, name, language };
+      throw error;
+    }
+    await this.recordActivity(user, ActivityType.WHATSAPP_TEMPLATE_CREATED, null, "WhatsApp template added from Meta", `${name} (${language})`);
+    return { alreadyAdded: false, name, language };
+  }
+
+  private async fetchMetaTemplates(): Promise<NormalizedTemplate[]> {
+    const provider = this.getMeta ? await this.getMeta() : await getMetaWhatsAppProvider(this.db);
+    if (!provider) throw new ApiError("Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
+    let result;
+    try {
+      result = await provider.listTemplates();
+    } catch (error) {
+      throw error instanceof WhatsAppSendError ? new ApiError(error.message, STATUS_CODES.BAD_REQUEST) : error;
+    }
+    if (!result.supported) throw new ApiError(result.reason, STATUS_CODES.SERVICE_UNAVAILABLE);
+    return result.templates;
   }
 
   private async upsertSyncedTemplate(provider: WhatsAppProvider["id"], t: NormalizedTemplate, syncedAt: Date): Promise<"created" | "updated" | "unchanged"> {

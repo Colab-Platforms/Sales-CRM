@@ -140,7 +140,7 @@ describe("cards-only by default", () => {
       const r = await cardsOf(w);
       assert.equal(r.details, null);
       assert.deepEqual([r.range.kind, r.range.from], ["yesterday", "2026-10-25"]);
-      assert.deepEqual(r.summary, { totalOrders: 6, totalValue: 2550, cod: 2, prepaid: 3, paid: 2, pendingPayment: 1, cancelled: 1, cancelledValue: 200, fulfilled: 2 });
+      assert.deepEqual(r.summary, { totalOrders: 6, totalValue: 2550, cod: 2, prepaid: 3, paid: 2, pendingPayment: 1, cancelled: 1, cancelledValue: 200, fulfilled: 2, codRevenue: 1700, prepaidRevenue: 800, collected: 800 });
     });
   });
 
@@ -328,7 +328,7 @@ describe("Website Orders dashboard (scope = WEBSITE): storefront orders only", (
       const w = await world(tx);
       const r = await site(w);
       // yesterday's website orders: W1 (COD, payment pending, 1000) and W3 (prepaid, paid, delivered, 500)
-      assert.deepEqual(r.summary, { totalOrders: 2, totalValue: 1500, cod: 1, prepaid: 1, paid: 1, pendingPayment: 1, cancelled: 0, cancelledValue: 0, fulfilled: 1 });
+      assert.deepEqual(r.summary, { totalOrders: 2, totalValue: 1500, cod: 1, prepaid: 1, paid: 1, pendingPayment: 1, cancelled: 0, cancelledValue: 0, fulfilled: 1, codRevenue: 1000, prepaidRevenue: 500, collected: 500 });
       assert.equal(r.details, null);
       const combined = await cardsOf(w); // the older combined view still counts everyone
       assert.equal(combined.summary.totalOrders, 6);

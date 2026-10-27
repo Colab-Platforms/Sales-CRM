@@ -11,6 +11,10 @@ import { previousRange, resolveDashboardRange, type DashboardRange, type Dashboa
 import { bucketsFor, compare, coverageOf, INTERVALS, TRUNC_UNIT, type Coverage, type Interval } from "./orders.dashboard.insights.js";
 import { dayBounds } from "../report-automation/report-automation.report.js";
 import { safeCell } from "../report-automation/report-automation.xlsx.js";
+import { addSale, emptySales, salesOut, SOLD_STATUSES } from "../manager/manager.sales.js";
+import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus } from "./orders.filters.js";
+import { toCents } from "../shopify/shopify.money.js";
+import { PaymentStatus } from "../../../generated/prisma/enums.js";
 
 // ABANDONED CHECKOUTS DASHBOARD. Read-only over the CRM's existing `abandonments` table - nothing is written and no external call is made.
 //
@@ -24,17 +28,39 @@ import { safeCell } from "../report-automation/report-automation.xlsx.js";
 //   Follow-up completed        = not recovered, and at least one recovery action (call / callback / continue-order) has finished (SUCCESS or FAILED).
 //   Follow-up pending          = not recovered, and no recovery action has finished yet (none started, or still PENDING / IN_PROGRESS).
 //   Recovered                  = purchase completed after the checkout was abandoned (shown for transparency; not part of the totals above).
-//   COD / prepaid is NOT shown: an abandoned-checkout event carries no payment mode, so there is nothing true to report.
+//   COD / prepaid is NOT read from the abandoned-checkout event (it carries no payment mode). It comes from the ORDER a telecaller created from the checkout - see CONVERSION below.
+//
+// CONVERSION (the cohort is the checkouts DETECTED in the selected range, so converted <= detected and the rate never exceeds 100%; the order itself may be placed later):
+//   Link        = Order.metadata.abandonment.id (written only when a telecaller creates an order from that checkout, and only for the checkout's own customer) on a SALESPERSON order. Nothing is matched by
+//                 phone, amount or timing; a website order, or any order without that link, is never a conversion. This is the ONLY thing this file decides itself.
+//   Everything else is the REPORTS section's own rules, imported from it (manager.sales.ts / orders.filters.ts), not re-implemented:
+//     eligible order   SOLD_STATUSES (confirmed / processing / shipped / out for delivery / delivered - never draft, pending payment, cancelled, returned or refunded)
+//     revenue          Order.totalAmount minus refunds recorded on its payments (an order refunded in full drops out); nothing else is added, so tax / shipping / discount are not counted twice
+//     COD / prepaid    derivePaymentMode(payments); an order with no payment method yet is in neither and is not counted
+//     tallies          emptySales / addSale / salesOut - the same integer-paise tallies as the Reports cards
+//   One extra guard (kept from the brief): a PREPAID order counts only when derivePaymentStatus is SUCCESS or PARTIALLY_REFUNDED (a verified payment, net of the refund); otherwise it is shown as "awaiting payment", not converted, not revenue.
+//   Several qualifying orders for one checkout: the checkout is counted ONCE, with its earliest sale (confirmedAt ?? placedAt ?? createdAt), so repeats cannot inflate counts or revenue.
+//   Telecaller      = who confirmed the order in the CRM (the Reports credit), else who created it.
+//   Open vs converted: a converted checkout is removed from the open cards (total / value / pending / completed) so it is never both. RECOVERED (a logged recovery) stays its own card.
 // WHO SEES WHAT: the existing abandoned-lead visibility - an Admin sees every checkout, a Manager the ones assigned to them (abandonmentLeadScope).
 
-export type AbandonedMetric = "TOTAL" | "VALUE" | "PENDING" | "DONE" | "RECOVERED";
-export const ABANDONED_METRICS: readonly AbandonedMetric[] = ["TOTAL", "VALUE", "PENDING", "DONE", "RECOVERED"];
+export type AbandonedMetric = "TOTAL" | "VALUE" | "PENDING" | "DONE" | "RECOVERED" | "CONVERTED" | "DETECTED" | "COD" | "PREPAID";
+export const ABANDONED_METRICS: readonly AbandonedMetric[] = ["TOTAL", "VALUE", "PENDING", "DONE", "RECOVERED", "CONVERTED", "DETECTED", "COD", "PREPAID"];
+
+/** The converted checkouts of a range, split by the linked order's payment mode (see CONVERSION): what the open cards exclude and what the conversion cards list. */
+export interface ConvertedIds {
+  converted: readonly string[];
+  cod: readonly string[];
+  prepaid: readonly string[];
+}
+const NO_CONVERTED: ConvertedIds = { converted: [], cod: [], prepaid: [] };
 
 export interface AbandonedFilters extends DashboardRangeInput {
   metric?: AbandonedMetric;
   search?: string;
 }
 
+const VERIFIED_PAYMENT: PaymentStatus[] = [PaymentStatus.SUCCESS, PaymentStatus.PARTIALLY_REFUNDED];
 export const MAX_ABANDONED_PAGE_SIZE = 100;
 export const MAX_ABANDONED_EXPORT_ROWS = 20_000;
 
@@ -44,18 +70,28 @@ const notRecovered: Prisma.AbandonmentWhereInput = { status: { not: AbandonmentS
 const finishedAction: Prisma.AbandonmentWhereInput = { recoveryActions: { some: { status: { in: FINISHED } } } };
 
 /** The definition of each card: its number and the rows behind it come from this one clause. */
-export function abandonedMetricWhere(metric: AbandonedMetric): Prisma.AbandonmentWhereInput {
+export function abandonedMetricWhere(metric: AbandonedMetric, ids: ConvertedIds = NO_CONVERTED): Prisma.AbandonmentWhereInput {
+  const convertedIds = ids.converted;
+  const notConverted: Prisma.AbandonmentWhereInput = convertedIds.length > 0 ? { id: { notIn: [...convertedIds] } } : {}; // a converted checkout is not an open one
   switch (metric) {
     case "TOTAL":
-      return notRecovered;
+      return { AND: [notRecovered, notConverted] };
     case "VALUE":
-      return { status: { in: OPEN } };
+      return { AND: [{ status: { in: OPEN } }, notConverted] };
     case "PENDING":
-      return { AND: [notRecovered, { NOT: finishedAction }] };
+      return { AND: [notRecovered, notConverted, { NOT: finishedAction }] };
     case "DONE":
-      return { AND: [notRecovered, finishedAction] };
+      return { AND: [notRecovered, notConverted, finishedAction] };
     case "RECOVERED":
       return { status: AbandonmentStatus.RECOVERED };
+    case "CONVERTED":
+      return { id: { in: [...convertedIds] } };
+    case "COD":
+      return { id: { in: [...ids.cod] } };
+    case "PREPAID":
+      return { id: { in: [...ids.prepaid] } };
+    case "DETECTED": // every checkout of the range once, whatever became of it
+      return {};
   }
 }
 
@@ -83,7 +119,17 @@ export function followUpOf(status: AbandonmentStatus, finished: boolean): "RECOV
   return status === AbandonmentStatus.RECOVERED ? "RECOVERED" : finished ? "DONE" : "PENDING";
 }
 
-export const mapAbandonedRow = (o: Row, finished: boolean) => {
+export interface ConvertedOrder {
+  orderNumber: string;
+  mode: "COD" | "PREPAID";
+  status: string;
+  paymentStatus: string | null;
+  amount: number;
+  collected: number;
+  telecaller: string | null;
+}
+
+export const mapAbandonedRow = (o: Row, finished: boolean, order: ConvertedOrder | null = null) => {
   const snap = (o.cartSnapshot && typeof o.cartSnapshot === "object" ? o.cartSnapshot : {}) as Record<string, unknown>;
   const last = o.recoveryActions[0] ?? null;
   return {
@@ -102,6 +148,8 @@ export const mapAbandonedRow = (o: Row, finished: boolean) => {
     followUp: followUpOf(o.status, finished),
     lastAction: last ? { type: last.type, status: last.status, at: last.createdAt } : null,
     assignedTo: o.lead.owner?.name ?? null,
+    /** The order this checkout became (null = not converted): the same order the conversion cards count. */
+    order,
   };
 };
 
@@ -115,19 +163,20 @@ export class AbandonedDashboardService {
     if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
   }
 
-  private async openValue(user: AuthUser, range: DashboardRange): Promise<{ value: number; withoutValue: number; otherCurrency: number }> {
+  private async openValue(user: AuthUser, range: DashboardRange, ids: ConvertedIds): Promise<{ value: number; withoutValue: number; otherCurrency: number }> {
     // The cart value is a decimal string inside the saved cart (see abandonmentDerivedWhere): summed in the database, never cast unless it is a plain number.
     const num_ = Prisma.sql`(CASE WHEN a.cart_snapshot->>'cartValue' ~ '^[0-9]+([.][0-9]+)?$' THEN (a.cart_snapshot->>'cartValue')::numeric END)`;
     const inr = Prisma.sql`(a.cart_snapshot->>'currency' IS NULL OR a.cart_snapshot->>'currency' = '' OR upper(a.cart_snapshot->>'currency') = 'INR')`;
     const scope = abandonmentLeadScope(user);
     const manager = Object.keys(scope).length > 0 ? Prisma.sql`AND l.assigned_manager_id = ${user.id}::uuid` : Prisma.empty;
+    const notConverted = ids.converted.length > 0 ? Prisma.sql`AND a.id::text <> ALL(${[...ids.converted]}::text[])` : Prisma.empty;
     const rows = await this.db.$queryRaw<{ value: Prisma.Decimal | null; without_value: bigint; other_currency: bigint }[]>(Prisma.sql`
       SELECT COALESCE(SUM(CASE WHEN ${inr} THEN ${num_} END), 0) AS value,
              COUNT(*) FILTER (WHERE ${num_} IS NULL) AS without_value,
              COUNT(*) FILTER (WHERE NOT ${inr}) AS other_currency
       FROM abandonments a JOIN leads l ON l.id = a.lead_id
       WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${range.start} AND a.detected_at < ${range.end}
-        AND a.status IN ('ACTIVE'::abandonment_status, 'IN_PROGRESS'::abandonment_status) ${manager}`);
+        AND a.status IN ('ACTIVE'::abandonment_status, 'IN_PROGRESS'::abandonment_status) ${manager} ${notConverted}`);
     const r = rows[0];
     return { value: r?.value ? Number(r.value.toString()) : 0, withoutValue: Number(r?.without_value ?? 0), otherCurrency: Number(r?.other_currency ?? 0) };
   }
@@ -137,14 +186,16 @@ export class AbandonedDashboardService {
     this.assertAllowed(user);
     const range = resolveDashboardRange(f, this.now());
     const base = abandonedBaseWhere(user, range);
-    const of = (m: AbandonedMetric): Prisma.AbandonmentWhereInput => ({ AND: [base, abandonedMetricWhere(m)] });
-    const [total, pending, done, recovered, open, latest] = await Promise.all([
+    const conv = await this.conversions(user, range);
+    const of = (m: AbandonedMetric): Prisma.AbandonmentWhereInput => ({ AND: [base, abandonedMetricWhere(m, conv.ids)] });
+    const [total, pending, done, recovered, open, latest, detected] = await Promise.all([
       this.db.abandonment.count({ where: of("TOTAL") }),
       this.db.abandonment.count({ where: of("PENDING") }),
       this.db.abandonment.count({ where: of("DONE") }),
       this.db.abandonment.count({ where: of("RECOVERED") }),
-      this.openValue(user, range),
+      this.openValue(user, range, conv.ids),
       this.db.abandonment.aggregate({ where: { type: AbandonmentType.CHECKOUT }, _max: { detectedAt: true }, _min: { detectedAt: true } }),
+      this.db.abandonment.count({ where: base }),
     ]);
     const openCount = await this.db.abandonment.count({ where: of("VALUE") });
     // the checkouts the CRM holds start on `oldest`: a period before that is not a real zero
@@ -154,34 +205,112 @@ export class AbandonedDashboardService {
     if (coverage === "FULL") {
       const prev = previousRange(range);
       const prevCoverage = coverageOf(prev, oldest, latest._max.detectedAt);
-      if (prevCoverage === "FULL") comparison = { totalAbandoned: compare(total, await this.db.abandonment.count({ where: { AND: [abandonedBaseWhere(user, prev), abandonedMetricWhere("TOTAL")] } }), coverage, prevCoverage) };
+      if (prevCoverage === "FULL") comparison = { totalAbandoned: compare(total, await this.db.abandonment.count({ where: { AND: [abandonedBaseWhere(user, prev), abandonedMetricWhere("TOTAL", (await this.conversions(user, prev)).ids)] } }), coverage, prevCoverage) };
     }
     let details: null | { metric: AbandonedMetric; items: ReturnType<typeof mapAbandonedRow>[]; pagination: { page: number; pageSize: number; totalItems: number; totalPages: number } } = null;
     if (f.metric) {
-      const where = this.detailsWhere(user, range, f);
+      const where = this.detailsWhere(user, range, f, conv.ids);
       const [rows, totalItems] = await Promise.all([
         this.db.abandonment.findMany({ where, select: ROW_SELECT, orderBy: [{ detectedAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize }),
         this.db.abandonment.count({ where }),
       ]);
       const finishedIds = await this.finishedSet(rows.map((r) => r.id));
-      details = { metric: f.metric, items: rows.map((r) => mapAbandonedRow(r, finishedIds.has(r.id))), pagination: { page, pageSize, totalItems, totalPages: Math.max(1, Math.ceil(totalItems / pageSize)) } };
+      details = { metric: f.metric, items: rows.map((r) => mapAbandonedRow(r, finishedIds.has(r.id), conv.orders.get(r.id) ?? null)), pagination: { page, pageSize, totalItems, totalPages: Math.max(1, Math.ceil(totalItems / pageSize)) } };
     }
     return {
       range: { kind: range.range, from: range.from, to: range.to, timezone: range.timezone, days: range.days },
       coverage,
       comparison,
-      summary: { totalAbandoned: total, potentialValue: open.value, openCheckouts: openCount, followUpPending: pending, followUpCompleted: done, recovered, openWithoutValue: open.withoutValue, openOtherCurrency: open.otherCurrency },
+      summary: { totalAbandoned: total, potentialValue: open.value, openCheckouts: openCount, followUpPending: pending, followUpCompleted: done, recovered, detected, conversion: this.conversionSummary(conv, detected), openWithoutValue: open.withoutValue, openOtherCurrency: open.otherCurrency },
       // what the data does and does not contain, so the page never implies more than it knows
       source: { name: "Shiprocket Checkout (Fastrr) abandon-cart events", paymentModeAvailable: false, latestCheckoutAt: latest._max.detectedAt },
       details,
     };
   }
 
-  private detailsWhere(user: AuthUser, range: DashboardRange, f: AbandonedFilters): Prisma.AbandonmentWhereInput {
+  private detailsWhere(user: AuthUser, range: DashboardRange, f: AbandonedFilters, ids: ConvertedIds): Prisma.AbandonmentWhereInput {
     const and: Prisma.AbandonmentWhereInput[] = [abandonedBaseWhere(user, range)];
-    if (f.metric) and.push(abandonedMetricWhere(f.metric));
+    if (f.metric) and.push(abandonedMetricWhere(f.metric, ids));
     if (f.search?.trim()) and.push(abandonmentSearchWhere(f.search.trim()));
     return { AND: and };
+  }
+
+  /** The checkouts of the range (in the viewer's visibility) that became a real order. Only the LINK is found here; eligibility, revenue and COD / prepaid use the Reports rules (see CONVERSION above). Read-only. */
+  private async conversions(user: AuthUser, range: DashboardRange) {
+    const scope = abandonmentLeadScope(user);
+    const manager = Object.keys(scope).length > 0 ? Prisma.sql`AND l.assigned_manager_id = ${user.id}::uuid` : Prisma.empty;
+    const links = await this.db.$queryRaw<{ abandonment_id: string; order_id: string }[]>(Prisma.sql`
+      SELECT a.id::text AS abandonment_id, o.id::text AS order_id
+      FROM abandonments a
+      JOIN leads l ON l.id = a.lead_id
+      JOIN orders o ON o.lead_id = a.lead_id AND o.metadata->'abandonment'->>'id' = a.id::text
+      WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${range.start} AND a.detected_at < ${range.end} ${manager}
+        AND o.source = 'SALESPERSON'::order_source`);
+    const tally = emptySales();
+    const out = { tally, awaitingPayment: 0, unclassified: 0, telecallers: [] as { id: string | null; name: string | null; cents: number }[], ids: { converted: [] as string[], cod: [] as string[], prepaid: [] as string[] }, orders: new Map<string, ConvertedOrder>() };
+    if (links.length === 0) return out;
+    const orders = await this.db.order.findMany({
+      where: { id: { in: [...new Set(links.map((x) => x.order_id))] }, status: { in: SOLD_STATUSES } },
+      select: {
+        id: true, orderNumber: true, status: true, totalAmount: true, confirmedAt: true, placedAt: true, createdAt: true, createdById: true, confirmedByUserId: true,
+        createdBy: { select: { name: true } }, confirmedBy: { select: { name: true } },
+        payments: { select: { method: true, status: true, amount: true, refundedAmount: true } },
+      },
+    });
+    const byId = new Map(orders.map((o) => [o.id, o]));
+    const perCheckout = new Map<string, typeof orders>();
+    for (const l of links) {
+      const o = byId.get(l.order_id);
+      if (o) perCheckout.set(l.abandonment_id, [...(perCheckout.get(l.abandonment_id) ?? []), o]);
+    }
+    const saleAt = (o: (typeof orders)[number]) => (o.confirmedAt ?? o.placedAt ?? o.createdAt).getTime();
+    for (const [abandonmentId, list] of perCheckout) {
+      let sale: { cents: number; collectedCents: number; mode: "COD" | "PREPAID"; o: (typeof orders)[number] } | null = null;
+      let awaiting = false;
+      let unclassified = false;
+      for (const o of [...list].sort((x, y) => saleAt(x) - saleAt(y) || x.id.localeCompare(y.id))) {
+        const breakdown = computePaymentBreakdown(o.payments);
+        const cents = toCents(o.totalAmount.toString()) - breakdown.refundedCents;
+        if (cents <= 0) continue;
+        const mode = derivePaymentMode(o.payments);
+        if (mode === null) unclassified = true;
+        else if (mode === "PREPAID" && !VERIFIED_PAYMENT.includes(derivePaymentStatus(o.payments) as PaymentStatus)) awaiting = true; // verified = a SUCCESS payment (a partial refund keeps it a sale, net of the refund)
+        else { sale = { cents, collectedCents: breakdown.paidCents, mode, o }; break; }
+      }
+      if (sale) {
+        addSale(tally, sale);
+        out.ids.converted.push(abandonmentId);
+        (sale.mode === "COD" ? out.ids.cod : out.ids.prepaid).push(abandonmentId);
+        const who = sale.o.confirmedByUserId ?? sale.o.createdById;
+        const telecaller = sale.o.confirmedByUserId ? (sale.o.confirmedBy?.name ?? null) : (sale.o.createdBy?.name ?? null);
+        out.telecallers.push({ id: who, name: telecaller, cents: sale.cents });
+        out.orders.set(abandonmentId, { orderNumber: sale.o.orderNumber, mode: sale.mode, status: sale.o.status, paymentStatus: derivePaymentStatus(sale.o.payments), amount: sale.cents / 100, collected: sale.collectedCents / 100, telecaller });
+      } else if (awaiting) out.awaitingPayment += 1;
+      else if (unclassified) out.unclassified += 1;
+    }
+    return out;
+  }
+
+  private conversionSummary(c: Awaited<ReturnType<AbandonedDashboardService["conversions"]>>, detected: number) {
+    const t = salesOut(c.tally);
+    const byUser = new Map<string, { userId: string | null; name: string | null; converted: number; revenue: number }>();
+    for (const x of c.telecallers) {
+      const k = x.id ?? "none";
+      const e = byUser.get(k) ?? { userId: x.id, name: x.name, converted: 0, revenue: 0 };
+      e.converted += 1;
+      e.revenue = Math.round(e.revenue * 100 + x.cents) / 100;
+      byUser.set(k, e);
+    }
+    return {
+      converted: t.orders,
+      conversionRate: detected > 0 ? Math.round((t.orders / detected) * 10000) / 100 : null, // percent, 2 dp; null = nothing detected (not a real 0%)
+      revenue: t.revenue,
+      prepaid: { count: t.prepaidOrders, revenue: t.prepaidRevenue },
+      cod: { count: t.codOrders, revenue: t.codRevenue },
+      awaitingPayment: c.awaitingPayment,
+      unclassified: c.unclassified,
+      byTelecaller: [...byUser.values()].sort((a, b) => b.revenue - a.revenue),
+    };
   }
 
   private async finishedSet(ids: string[]): Promise<Set<string>> {
@@ -230,7 +359,7 @@ export class AbandonedDashboardService {
     this.assertAllowed(user);
     const range = resolveDashboardRange(f, this.now());
     f = { ...f, metric: f.metric ?? "TOTAL" }; // an export with no card chosen is the abandoned checkouts (recovered carts are a purchase, so they are only exported from the Recovered card)
-    const where = this.detailsWhere(user, range, f);
+    const where = this.detailsWhere(user, range, f, (await this.conversions(user, range)).ids);
     const total = await this.db.abandonment.count({ where });
     const wb = new ExcelJS.Workbook();
     wb.creator = "AyushWellness CRM";

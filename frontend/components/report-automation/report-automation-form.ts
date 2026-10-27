@@ -24,6 +24,8 @@ export function validateRecipients(rows: { name?: string; phone: string }[], ena
     const phone = normalizeRecipient(row.phone);
     if (!phone) { errors[String(i)] = "Enter a WhatsApp number"; return; }
     if (!E164.test(phone)) { errors[String(i)] = "Use a WhatsApp number with country code, e.g. +919876543210"; return; }
+    // An Indian number has exactly 10 digits after +91: a number one digit short is valid E.164 but never matches the sender WhatsApp reports, so the reply window would never open.
+    if (phone.startsWith("+91") && !/^\+91[6-9]\d{9}$/.test(phone)) { errors[String(i)] = "An Indian (+91) number needs exactly 10 digits after +91, e.g. +919876543210"; return; }
     if (seen.has(phone)) errors[String(i)] = "This number is already in the list";
     seen.add(phone);
     if ((row.name ?? "").trim().length > 100) errors[String(i)] = "The name can be at most 100 characters";
@@ -61,3 +63,38 @@ export const STATUS_LABEL: Record<ReportRecipientStatus, string> = {
   WAITING_FOR_REPLY: "Waiting for reply",
   SKIPPED: "Not sent (not needed / turned off)",
 };
+
+/** What the Sync templates button reports. Never claims a template is approved: only the dropdown (APPROVED, synced, correctly shaped templates) decides that. */
+export function syncMessage(s: { supported: boolean; reason?: string; created: number; updated: number; unchanged: number; disabledMissing: number; total: number }): { ok: boolean; text: string } {
+  if (!s.supported) {
+    return { ok: false, text: `Meta template listing is not available${s.reason ? `: ${s.reason}` : ""}. Nothing was changed. Create or approve the template in the Meta console, then add it under WhatsApp > Templates and sync again.` };
+  }
+  return { ok: true, text: `Synced ${s.total} template${s.total === 1 ? "" : "s"} from Meta: ${s.created} new, ${s.updated} updated, ${s.unchanged} unchanged${s.disabledMissing > 0 ? `, ${s.disabledMissing} no longer at Meta` : ""}. Only APPROVED ones appear in the dropdown.` };
+}
+
+export const SYNC_TIMEOUT_MS = 20_000;
+
+/** Label of one row of the Add Template picker; the key identifies it (the same name can exist in several languages). */
+export const pickerKey = (t: { name: string; language: string }): string => `${t.name}|${t.language}`;
+/** What a row's action shows: Already added (no button), Add, or why it cannot be added. */
+export function pickerRowState(t: { alreadyAdded: boolean; compatible: boolean; incompatibleReason: string | null }): { kind: "added" | "add" | "blocked"; note: string | null } {
+  if (t.alreadyAdded) return { kind: "added", note: null };
+  if (!t.compatible) return { kind: "blocked", note: `The report cannot use this template: ${t.incompatibleReason ?? "unsupported variables"}.` };
+  return { kind: "add", note: null };
+}
+/** The picker's load/add failure text; always followed by a Retry button in the modal. */
+export function pickerErrorMessage(error: unknown, fallback = "Could not load the approved templates from Meta."): string {
+  const err = error as { code?: string; message?: string; response?: { data?: { message?: string } } } | null;
+  const server = err?.response?.data?.message;
+  const timedOut = err?.code === "ECONNABORTED" || err?.code === "ETIMEDOUT" || /timeout|timed out/i.test(`${server ?? ""} ${err?.message ?? ""}`);
+  return timedOut ? "The connection to Meta timed out, so the approved templates could not be loaded. Nothing was changed." : `${(server ?? fallback).replace(/\.?$/, ".")} Nothing was changed.`;
+}
+
+/** A readable reason for a failed/slow sync; the Admin is always pointed at manual registration. Never claims anything was synced. */
+export function syncFailureMessage(error: unknown, fallback = "Could not sync templates from Meta."): string {
+  const err = error as { code?: string; message?: string; response?: { data?: { message?: string } } } | null;
+  const server = err?.response?.data?.message;
+  const timedOut = err?.code === "ECONNABORTED" || err?.code === "ETIMEDOUT" || /timeout|timed out/i.test(`${server ?? ""} ${err?.message ?? ""}`);
+  const base = timedOut ? "Syncing from Meta timed out. Your current template selection was not changed." : `${server ?? fallback} Your current template selection was not changed.`;
+  return `${base} You can press Sync templates again later, or use Add Template to pick an approved template from Meta.`;
+}

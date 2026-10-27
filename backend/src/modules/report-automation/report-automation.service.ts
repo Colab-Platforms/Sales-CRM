@@ -8,7 +8,9 @@ import { Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { buildReportData, fitDetailText, localInstant, periodLabel, resolvePeriod, shiftDate, type ReportPeriod, liveSources, localParts, normalizeOptions, parseSendTime, toTemplateParam, type ReportSources } from "./report-automation.report.js";
 import { buildReportXlsx, reportFilename } from "./report-automation.xlsx.js";
-import { createWhatsAppReportDetailSender, createWhatsAppReportDocumentSender, createWhatsAppReportSender, evaluateReportTemplate, isReportTemplateName, REPORT_TEMPLATE_NAME, ReportSendRejected, WINDOW_CLOSED_REASON, type ReportDetailSender, type ReportDocumentSender, type ReportSender } from "./report-automation.sender.js";
+import { classifyReportTemplates, createWhatsAppReportDetailSender, createWhatsAppReportDocumentSender, createWhatsAppReportSender, REPORT_TEMPLATE_NAME, ReportSendRejected, WINDOW_CLOSED_REASON, type ReportDetailSender, type ReportDocumentSender, type ReportSender } from "./report-automation.sender.js";
+import { buildStructuredValues, type StructuredValues, type TemplateMetricsLoader } from "./report-automation.template-metrics.js";
+import { loadTemplateMetrics } from "./report-automation.template-metrics.load.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { computeServiceWindow } from "../whatsapp/whatsapp.freetext.service.js";
 import { recomputeRunStatus } from "./report-automation.run.js";
@@ -55,6 +57,8 @@ export interface ReportServiceDeps {
   sendDetail?: ReportDetailSender;
   /** Is the recipient inside WhatsApp's 24-hour customer-service window? Default: look for an inbound Meta message from that number. */
   windowOpen?: (phone: string, now: Date) => Promise<boolean>;
+  /** The website-order and abandoned-checkout figures for the structured template. Default: the Orders Dashboard services (read-only). Only called if the approved template declares those variables. */
+  templateMetrics?: TemplateMetricsLoader;
 }
 
 type DeliverAutomation = { id: string; templateName: string | null; languageCode: string; timezone: string; options: unknown; includedUserIds?: unknown };
@@ -253,12 +257,7 @@ class ReportAutomationService {
       this.db.whatsAppConfig.count({ where: { isActive: true } }),
     ]);
     // Report-template candidates: the daily_team_report family, or any template carrying {{report_text}}. Usable ones go in the dropdown; the others are listed WITH the exact reason, never hidden.
-    const carriesReportText = (v: unknown) => Array.isArray(v) && v.some((x) => x === "report_text" || (x && typeof x === "object" && (x as { name?: unknown }).name === "report_text"));
-    const candidates = templates.filter((t) => isReportTemplateName(t.name) || carriesReportText(t.variables));
-    const usable = candidates.filter((t) => isReportTemplateName(t.name) && evaluateReportTemplate(t).ok).map((t) => ({ name: t.name, provider: t.provider, language: t.language, status: t.status }));
-    const unusable = candidates
-      .filter((t) => !usable.some((u) => u.name === t.name && u.language === t.language && u.provider === t.provider))
-      .map((t) => ({ name: t.name, provider: t.provider, language: t.language, status: t.status, reason: !isReportTemplateName(t.name) ? `The name must start with "${REPORT_TEMPLATE_NAME}"` : (evaluateReportTemplate(t) as { reason: string }).reason }));
+    const { usable, unusable } = classifyReportTemplates(templates);
     const ageMs = state?.lastTickAt ? now.getTime() - state.lastTickAt.getTime() : null;
     return {
       scheduler: {
@@ -580,6 +579,12 @@ class ReportAutomationService {
     const failPart = (kind: "txt" | "doc", id: string, message: string, status: "FAILED" | "UNCERTAIN" | "WAITING_FOR_REPLY") =>
       this.db.reportDeliveryRecipient.update({ where: { id }, data: kind === "txt" ? { txtStatus: status, txtError: message.slice(0, 500), txtLastAttemptAt: at() } : { docStatus: status, docError: message.slice(0, 500), docLastAttemptAt: at() } });
 
+    // The structured template's figures (read once per delivery, and only if a send actually needs them): the dashboards' own numbers for this report's dates, labelled with the report date in its timezone.
+    let structuredCache: Promise<StructuredValues> | null = null;
+    const structuredFor = (who: { id: string; role: Role }, p: ReportPeriod) => (): Promise<StructuredValues> => {
+      structuredCache ??= (this.deps.templateMetrics ?? loadTemplateMetrics)(who, { from: p.from, to: p.to }).then((m) => buildStructuredValues(periodLabel({ from: p.from, to: p.to }), m));
+      return structuredCache;
+    };
     const windows = new Map<string, boolean>();
     const windowOpen = async (phone: string): Promise<boolean> => {
       if (!windows.has(phone)) windows.set(phone, await (this.deps.windowOpen ?? ((p: string, n: Date) => customerWindowOpen(this.db, p, n)))(phone, at()));
@@ -636,7 +641,7 @@ class ReportAutomationService {
         }
         const text = toTemplateParam(await report(), options, await windowOpen(r.phone)).text;
         const send = this.deps.send ?? createWhatsAppReportSender(this.db);
-        const result = await send({ recipient: r.phone, templateName: automation.templateName, languageCode: automation.languageCode, text });
+        const result = await send({ recipient: r.phone, templateName: automation.templateName, languageCode: automation.languageCode, text, structured: structuredFor(viewer, period) });
         await this.db.reportDeliveryRecipient.update({ where: { id: r.id }, data: { status: "SENT", provider: result.provider ?? null, providerMessageId: result.providerMessageId, sentAt: at(), lastAttemptAt: at(), error: null, nextAttemptAt: null } });
       } catch (error) {
         if (error instanceof ReportSendRejected) await failNote(r, error.message, "FAILED");
@@ -694,7 +699,7 @@ class ReportAutomationService {
       if (!windowRefused || !automation.templateName) continue;
       try {
         const send = this.deps.send ?? createWhatsAppReportSender(this.db);
-        const result = await send({ recipient: row.phone, templateName: automation.templateName, languageCode: automation.languageCode, text: toTemplateParam(await report(), options, false).text });
+        const result = await send({ recipient: row.phone, templateName: automation.templateName, languageCode: automation.languageCode, text: toTemplateParam(await report(), options, false).text, structured: structuredFor(viewer, period) });
         await this.db.reportDeliveryRecipient.update({ where: { id }, data: { status: "SENT", provider: result.provider ?? null, providerMessageId: result.providerMessageId, sentAt: at(), lastAttemptAt: at(), error: null } });
       } catch (error) {
         await this.db.reportDeliveryRecipient.update({ where: { id }, data: error instanceof ReportSendRejected ? { status: "FAILED", error: error.message.slice(0, 500), lastAttemptAt: at() } : { status: "UNCERTAIN", error: "No answer from the WhatsApp provider. The message may have been delivered, so it was not retried automatically.", lastAttemptAt: at() } });
