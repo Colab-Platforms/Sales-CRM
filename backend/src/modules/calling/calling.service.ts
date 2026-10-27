@@ -479,6 +479,11 @@ class CallingService {
     return provided === expected;
   }
 
+  /** Takes the lead out of its owner's daily bucket for today. Only the owner's own call counts, and only once. */
+  private async markBucketWorked(leadId: string, agentId: string): Promise<void> {
+    await prisma.lead.updateMany({ where: { id: leadId, ownerId: agentId, bucketDate: bucketToday(), bucketDoneAt: null }, data: { bucketDoneAt: new Date() } });
+  }
+
   private async autoLogNoAnswer(callId: string, leadId: string | null, applicationId: string | null, agentId: string): Promise<void> {
     const outcome = await prisma.callOutcome.findFirst({ where: { code: "RINGING_NO_ANSWER", isActive: true } });
     if (!outcome) return;
@@ -573,6 +578,11 @@ class CallingService {
       attendanceService
         .restoreFromCall(call.agentId)
         .catch((e) => logger.error("[attendance] could not restore status after call", e));
+    }
+
+    // Any finished call attempt - answered or not, with or without a saved disposition - means the owner worked the lead today.
+    if (isFinalReport && call.leadId) {
+      await this.markBucketWorked(call.leadId, call.agentId).catch((e) => logger.error("[bucket] could not mark lead as worked", e));
     }
 
     // Nobody spoke, so there's nothing for the salesperson to log: record "Ringing / no answer" for them.
