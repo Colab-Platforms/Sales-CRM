@@ -31,6 +31,7 @@ import {
   Briefcase,
   ClipboardList,
   CalendarDays,
+  Grid3x3,
 } from "lucide-react";
 import {
   Sidebar,
@@ -299,6 +300,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
+        { title: "Performance Matrix", href: "/dashboard/performance-matrix", icon: Grid3x3 },
       ],
     },
     {
@@ -389,6 +391,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           icon: AlertTriangle,
         },
         { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
+        { title: "Performance Matrix", href: "/dashboard/performance-matrix", icon: Grid3x3 },
       ],
     },
     {
