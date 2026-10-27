@@ -169,7 +169,7 @@ export interface ReportDetailInput {
 export type ReportDetailSender = (input: ReportDetailInput) => Promise<{ providerMessageId: string | null; provider: string }>;
 
 export const WINDOW_CLOSED_REASON =
-  "WhatsApp only allows a free-form message (the detailed report and the Excel file) within 24 hours of the recipient's last message to your business number, and that window is closed for this number. Nothing was sent. Ask the recipient to send any message (e.g. \"Hi\") to the business number, then press Retry.";
+  "WhatsApp only allows a free-form message (the detailed report and the Excel file) within 24 hours of the recipient's last message to your business number, and that window is closed for this number. Nothing was sent yet: it is sent automatically as soon as the recipient sends any message (e.g. \"Hi\") to the business number, and kept for 48 hours.";
 
 /** Sends the formatted multi-line report as an ordinary WhatsApp text message (Meta Cloud API). Newlines and *bold* are fine in a normal text body. */
 export function createWhatsAppReportDetailSender(db: DbClient = prisma): ReportDetailSender {

@@ -58,5 +58,6 @@ export const STATUS_LABEL: Record<ReportRecipientStatus, string> = {
   READ: "Read",
   FAILED: "Failed",
   UNCERTAIN: "Outcome unknown",
+  WAITING_FOR_REPLY: "Waiting for reply",
   SKIPPED: "Not sent (not needed / turned off)",
 };

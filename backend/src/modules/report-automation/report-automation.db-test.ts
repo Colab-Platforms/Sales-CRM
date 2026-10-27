@@ -273,13 +273,13 @@ describe("scheduled delivery (18:15 Asia/Kolkata)", () => {
       w.clock.now = at(T_1815);
       assert.equal((await w.svc.runDue()).started, 1);
       const run = await runOf(tx);
-      assert.deepEqual([run.kind, run.reportDate, run.status, run.dedupeKey?.endsWith(":2026-10-23:18:15:2026-10-23")], ["SCHEDULED", "2026-10-23", "FAILED", true]);
+      assert.deepEqual([run.kind, run.reportDate, run.status, run.dedupeKey?.endsWith(":2026-10-23:18:15:2026-10-23")], ["SCHEDULED", "2026-10-23", "PENDING", true]);
       const r = byPhone(run);
       assert.deepEqual([r[A]!.status, r[A]!.attempts, r[B]!.status, r[B]!.attempts], ["SENT", 1, "SENT", 1]);
       assert.match(r[A]!.providerMessageId!, /^wamid\./);
       assert.match(w.wa.state.sent[0]!.text, /^Team report for 23 Oct 2026 \(Asia\/Kolkata\): Orders 2, /);
       assert.match(w.wa.state.sent[0]!.text, /24-hour window for this number is closed/, "the template is how a closed-window recipient is reached, and it says so");
-      assert.deepEqual(run.recipientResults.map((x) => [x.txtStatus, x.docStatus]), [["FAILED", "SKIPPED"], ["FAILED", "SKIPPED"]], "the free-form parts were not attempted (window closed) and are shown as failed, not as success");
+      assert.deepEqual(run.recipientResults.map((x) => [x.txtStatus, x.docStatus]), [["WAITING_FOR_REPLY", "SKIPPED"], ["WAITING_FOR_REPLY", "SKIPPED"]], "the free-form parts were not attempted (window closed) and WAIT for the reply - neither failed nor successful");
       assert.equal(w.wa.details.calls.length, 0);
       assert.deepEqual(w.wa.state.sent.map((s) => s.recipient).sort(), [B, A].sort());
       assert.ok(r[A]!.deliveredAt === null && r[A]!.readAt === null, "acceptance is NOT delivery");
@@ -325,7 +325,7 @@ describe("scheduled delivery (18:15 Asia/Kolkata)", () => {
       await w.svc.runDue(); // attempt 3 succeeds
       run = await runOf(tx);
       r = byPhone(run);
-      assert.deepEqual([r[B]!.status, r[B]!.attempts, r[A]!.attempts, r[C]!.attempts, run.status], ["SENT", 3, 1, 1, "FAILED"], "the run stays FAILED: the free-form parts could not go (window closed)");
+      assert.deepEqual([r[B]!.status, r[B]!.attempts, r[A]!.attempts, r[C]!.attempts, run.status], ["SENT", 3, 1, 1, "PENDING"], "the run stays open: the free-form parts of the other recipients wait for their replies");
       assert.equal(w.wa.state.calls.length, 5, "3 first sends + 2 retries of the one failed recipient");
     });
     await inRollback(async (tx) => {
@@ -349,7 +349,7 @@ describe("scheduled delivery (18:15 Asia/Kolkata)", () => {
       await w.svc.runDue();
       const run = await runOf(tx);
       const r = byPhone(run);
-      assert.deepEqual([r[A]!.status, r[A]!.attempts, r[A]!.nextAttemptAt, r[B]!.status, run.status], ["UNCERTAIN", 1, null, "SENT", "FAILED"]);
+      assert.deepEqual([r[A]!.status, r[A]!.attempts, r[A]!.nextAttemptAt, r[B]!.status, run.status], ["UNCERTAIN", 1, null, "SENT", "UNCERTAIN"]);
       assert.match(r[A]!.error ?? "", /may have been delivered/);
       assert.equal(w.wa.state.calls.filter((p) => p === A).length, 1);
     });
@@ -627,7 +627,7 @@ describe("Excel attachment (the second message)", () => {
       await w.svc.runDue();
       let ra = (await runOf(tx)).recipientResults.find((x) => x.phone === A)!;
       const rb = (await runOf(tx)).recipientResults.find((x) => x.phone === B)!;
-      assert.deepEqual([ra.status, ra.txtStatus, ra.docStatus], ["FAILED", "FAILED", "FAILED"]);
+      assert.deepEqual([ra.status, ra.txtStatus, ra.docStatus], ["FAILED", "WAITING_FOR_REPLY", "WAITING_FOR_REPLY"]);
       assert.deepEqual([rb.status, rb.txtStatus, rb.docStatus], ["SKIPPED", "SENT", "SENT"]);
       w.wa.state.modes = {};
       w.clock.now = at("2026-10-23T12:50:00Z");
@@ -950,14 +950,14 @@ describe("notification + detailed text + Excel: three separate parts", () => {
       const run = await runOf(tx);
       const ra = run.recipientResults.find((r) => r.phone === A)!;
       const rb = run.recipientResults.find((r) => r.phone === B)!;
-      assert.deepEqual([parts(ra), parts(rb)], [["SENT", "FAILED", "FAILED"], ["SKIPPED", "SENT", "SENT"]]);
-      assert.match(ra.txtError ?? "", /24 hours of the recipient's last message.*Nothing was sent.*Retry/);
+      assert.deepEqual([parts(ra), parts(rb)], [["SENT", "WAITING_FOR_REPLY", "WAITING_FOR_REPLY"], ["SKIPPED", "SENT", "SENT"]]);
+      assert.match(ra.txtError ?? "", /24 hours of the recipient's last message.*Nothing was sent yet.*automatically/);
       assert.equal(ra.docError, ra.txtError);
       assert.equal(w.wa.details.calls.includes(A), false, "no unsupported free-form attempt");
       assert.equal(w.wa.docs.calls.includes(A), false);
       assert.match(w.wa.state.sent.find((s) => s.recipient === A)!.text, /24-hour window for this number is closed: reply to this number/);
       assert.equal(w.wa.state.sent.some((s) => s.recipient === B), false, "the open-window recipient gets no template message");
-      assert.equal(run.status, "FAILED", "the run is not shown as fully successful");
+      assert.equal(run.status, "PENDING", "the run is not shown as fully successful, nor failed: it waits for the reply");
       await w.svc.runDue(); // not auto-retried
       assert.equal(w.wa.details.calls.filter((p) => p === A).length, 0);
       // once the recipient has written to the business number, each failed part is retried on its own and the notification is never repeated
@@ -967,7 +967,7 @@ describe("notification + detailed text + Excel: three separate parts", () => {
       const notes = w.wa.state.calls.length;
       await w.svc.retryRecipient(a, row.id, "DETAIL");
       let after = (await w.svc.history(a, 1, 10)).items[0]!.recipients.find((r) => r.name === "Owner")!;
-      assert.deepEqual([after.detail.status, after.document.status], ["SENT", "FAILED"]);
+      assert.deepEqual([after.detail.status, after.document.status], ["SENT", "WAITING_FOR_REPLY"]);
       await w.svc.retryRecipient(a, row.id, "DOCUMENT");
       after = (await w.svc.history(a, 1, 10)).items[0]!.recipients.find((r) => r.name === "Owner")!;
       assert.deepEqual([after.status, after.detail.status, after.document.status], ["SENT", "SENT", "SENT"]);

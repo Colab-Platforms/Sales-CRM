@@ -21,6 +21,19 @@ function toPublicUser(user: { id: string; name: string; username: string; phone:
   return { id: user.id, name: user.name, username: user.username, phone: user.phone, role: user.role, status: user.status };
 }
 
+/**
+ * A changed username must be free. An unchanged one is a no-op (never a conflict with itself). The id, role, password and sessions are untouched: the user row is updated in place, and sessions
+ * identify the user by id. The unique index is the final guard against a race, so a clash caught there is reported the same way.
+ */
+async function usernameChange(id: string, requested: string | undefined, current: string): Promise<string | undefined> {
+  if (requested === undefined || requested === current) return undefined;
+  const taken = await prisma.user.findFirst({ where: { username: requested, id: { not: id } }, select: { id: true } });
+  if (taken) throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+  return requested;
+}
+
+const uniqueViolation = (error: unknown) => typeof error === "object" && error !== null && (error as { code?: string }).code === "P2002";
+
 class AdminService {
   async createManager(data: CreateManagerBody) {
     const existing = await prisma.user.findUnique({ where: { username: data.username } });
@@ -66,18 +79,24 @@ class AdminService {
   }
 
   async updateManager(id: string, data: UpdateManagerBody) {
-    await this.getManagerOrThrow(id);
+    const existing = await this.getManagerOrThrow(id);
+    const username = await usernameChange(id, data.username, existing.username);
 
-    const manager = await prisma.user.update({
-      where: { id },
-      data: {
-        name: data.name,
-        phone: data.phone,
-        status: data.status,
-      },
-    });
-
-    return toPublicUser(manager);
+    try {
+      const manager = await prisma.user.update({
+        where: { id },
+        data: {
+          name: data.name,
+          phone: data.phone,
+          status: data.status,
+          ...(username !== undefined ? { username } : {}),
+        },
+      });
+      return toPublicUser(manager);
+    } catch (error) {
+      if (uniqueViolation(error)) throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+      throw error;
+    }
   }
 
   async deactivateManager(id: string) {
@@ -154,6 +173,7 @@ class AdminService {
 
   async updateSalesperson(id: string, data: UpdateSalespersonBody) {
     const existing = await this.getSalespersonOrThrow(id);
+    const username = await usernameChange(id, data.username, existing.username);
     const isReassignment =
       data.reportingManagerId !== undefined && data.reportingManagerId !== existing.reportingManagerId;
 
@@ -172,6 +192,7 @@ class AdminService {
           phone: data.phone,
           status: data.status,
           reportingManagerId: data.reportingManagerId,
+          ...(username !== undefined ? { username } : {}),
         },
         include: { reportingManager: { select: { id: true, name: true, username: true } } },
       });
@@ -264,12 +285,18 @@ class AdminService {
   }
 
   async updateRecruiter(id: string, data: UpdateRecruiterBody) {
-    await this.getRecruiterOrThrow(id);
-    const recruiter = await prisma.user.update({
-      where: { id },
-      data: { name: data.name, phone: data.phone, status: data.status },
-    });
-    return toPublicUser(recruiter);
+    const existing = await this.getRecruiterOrThrow(id);
+    const username = await usernameChange(id, data.username, existing.username);
+    try {
+      const recruiter = await prisma.user.update({
+        where: { id },
+        data: { name: data.name, phone: data.phone, status: data.status, ...(username !== undefined ? { username } : {}) },
+      });
+      return toPublicUser(recruiter);
+    } catch (error) {
+      if (uniqueViolation(error)) throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+      throw error;
+    }
   }
 
   async resetRecruiterPassword(id: string, password: string) {
