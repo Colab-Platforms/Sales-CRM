@@ -14,9 +14,9 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { reportAutomationApi } from "@/lib/api-client/endpoints/report-automation.api";
-import type { ReportAutomationConfigInput, ReportMessagePart, ReportMode, ReportOptions } from "@/lib/api-client/types/report-automation.types";
+import type { ReportAutomationConfigInput, ReportMessagePart, ReportMode, ReportOptions, ScheduledRow } from "@/lib/api-client/types/report-automation.types";
 import { whatsappTemplatesApi } from "@/lib/api-client/endpoints/whatsapp-templates.api";
-import { MAX_RECIPIENTS, REPORT_MODE_LABEL, REPORT_TEMPLATE_NAME, STATUS_LABEL, SYNC_TIMEOUT_MS, TIMEZONES, normalizeRecipient, pickerErrorMessage, pickerKey, pickerRowState, syncFailureMessage, syncMessage, validateForm, validateRecipients } from "./report-automation-form";
+import { cancelConfirmText, cancelFailureText, cancelSuccessText, formatInZone as fmtZone, deleteConfirmText, PAUSE_CONFIRM, FORMAT_LABEL, dataRangeLabel, formatInZone, MAX_RECIPIENTS, REPORT_MODE_LABEL, REPORT_TEMPLATE_NAME, STATUS_LABEL, SYNC_TIMEOUT_MS, TIMEZONES, normalizeRecipient, pickerErrorMessage, pickerKey, pickerRowState, syncFailureMessage, syncMessage, validateForm, validateRecipients } from "./report-automation-form";
 
 const keys = { config: ["report-automation", "config"] as const, history: ["report-automation", "deliveries"] as const, status: ["report-automation", "status"] as const };
 
@@ -35,6 +35,51 @@ const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-IN",
 export const templateLabel = (t: { name: string; provider: string; language: string; status: string }): string => `${t.name} - ${t.provider} - ${t.language} - ${t.status}`;
 
 /** One message of a recipient (the text or the Excel file): its own status, attempts, last attempt, reason, provider id and Retry. */
+const PHASE_TONE: Record<string, string> = { CANCELLED: "bg-gray-200 text-gray-700",  SCHEDULED: "bg-blue-100 text-blue-800", PROCESSING: "bg-amber-100 text-amber-800", WAITING_FOR_REPLY: "bg-amber-100 text-amber-800", PARTIALLY_SENT: "bg-orange-100 text-orange-800", SENT: "bg-green-100 text-green-800", FAILED: "bg-red-100 text-red-800" };
+
+/** One table of scheduled-report rows. The send time and the data date are always separate columns. */
+function ScheduleTable({ rows, upcoming, testId, onCancel, onDelete, busy }: { rows: ScheduledRow[]; upcoming: boolean; testId: string; onCancel?: (r: ScheduledRow) => void; onDelete?: (r: ScheduledRow) => void; busy?: boolean }) {
+  return (
+    <Table data-testid={testId}>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Scheduled for</TableHead>
+          <TableHead>Report data date</TableHead>
+          <TableHead>Recipient</TableHead>
+          <TableHead>Template</TableHead>
+          <TableHead>Delivery format</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>{upcoming ? "Next execution" : "Last attempt"}</TableHead>
+          <TableHead>Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {rows.map((r) => (
+          <TableRow key={r.key}>
+            <TableCell className="whitespace-nowrap">{formatInZone(r.scheduledAt, r.timezone)}{r.kind === "TEST" ? <span className="ml-1 text-xs text-muted-foreground">(test)</span> : null}</TableCell>
+            <TableCell className="whitespace-nowrap">{dataRangeLabel(r.dataFrom, r.dataTo)}</TableCell>
+            <TableCell>{r.recipientName ? `${r.recipientName} ` : ""}<span className="text-muted-foreground">{r.recipientPhone}</span></TableCell>
+            <TableCell>{r.templateName ?? "-"} <span className="text-muted-foreground">({r.languageCode})</span></TableCell>
+            <TableCell className="text-xs">{r.formats.map((f) => FORMAT_LABEL[f]).join(", ") || "-"}</TableCell>
+            <TableCell><span className={`rounded px-2 py-0.5 text-xs font-medium ${PHASE_TONE[r.status] ?? ""}`}>{r.statusLabel}</span></TableCell>
+            <TableCell className="whitespace-nowrap">{upcoming ? formatInZone(r.nextExecutionAt ?? r.scheduledAt, r.timezone) : r.lastAttemptAt ? formatInZone(r.lastAttemptAt, r.timezone) : "-"}</TableCell>
+            <TableCell className="text-xs">
+              {upcoming ? (
+                r.canCancel ? <Button size="sm" variant="outline" disabled={busy} onClick={() => onCancel?.(r)} data-testid="cancel-occurrence" title="Cancel this scheduled report (all recipients of this day)">Cancel</Button> : <span className="text-muted-foreground">Admin only</span>
+              ) : r.canDelete ? (
+                <Button size="sm" variant="outline" disabled={busy} onClick={() => onDelete?.(r)} data-testid="delete-run" title="Delete from history (hides the entry; sent messages are not recalled)">Delete from history</Button>
+              ) : (
+                <span className="text-muted-foreground" title={r.deleteBlockedReason ?? undefined}>{r.deleteBlockedReason ? "Active - can't delete" : "-"}</span>
+              )}
+              {!upcoming && r.status === "CANCELLED" && r.cancelledBy ? <div className="text-muted-foreground">Cancelled by {r.cancelledBy}{r.cancelledAt ? ` on ${formatInZone(r.cancelledAt, r.timezone)}` : ""}</div> : null}
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+}
+
 function PartCell({ part, testId, onRetry, busy }: { part: ReportMessagePart & { nextAttemptAt?: string | null }; testId: string; onRetry: () => void; busy: boolean }) {
   if (part.status === "SKIPPED" && !part.error) return <span className="text-xs text-muted-foreground">{STATUS_LABEL.SKIPPED}</span>;
   const tone = part.status === "FAILED" ? "text-destructive" : part.status === "UNCERTAIN" || part.status === "WAITING_FOR_REPLY" ? "text-amber-600" : part.status === "DELIVERED" || part.status === "READ" ? "text-emerald-600" : "";
@@ -61,6 +106,7 @@ export function ReportAutomationView() {
 
   const config = useQuery({ queryKey: keys.config, queryFn: reportAutomationApi.getConfig, enabled: allowed });
   const history = useQuery({ queryKey: keys.history, queryFn: () => reportAutomationApi.deliveries(1, 20), enabled: allowed, refetchInterval: 30_000 });
+  const scheduled = useQuery({ queryKey: ["report-automation", "scheduled", config.data?.updatedAt], queryFn: reportAutomationApi.scheduled, enabled: allowed, refetchInterval: 30_000 });
   const status = useQuery({ queryKey: keys.status, queryFn: reportAutomationApi.status, enabled: allowed, refetchInterval: 60_000 });
 
   // The form is the saved settings until the user edits something (a draft); saving clears the draft so the form shows what the server stored.
@@ -85,6 +131,23 @@ export function ReportAutomationView() {
 
   // Pull the template list from Meta into the CRM (the existing admin sync), then refresh the dropdown. Managers can't sync (admin-only on the server) and are told so.
   const [syncResult, setSyncResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const refreshAll = () => void queryClient.invalidateQueries({ queryKey: ["report-automation"] });
+  const cancelRun = useMutation({
+    mutationFn: (r: ScheduledRow) => reportAutomationApi.cancelScheduled(r.occurrenceDate ?? ""),
+    // The mutation stays pending until the refreshed list has arrived, so the buttons cannot be clicked on a stale row (which would cancel a different day).
+    onSuccess: async (_d, r) => { await queryClient.invalidateQueries({ queryKey: ["report-automation"] }); toast.success(cancelSuccessText(r)); },
+    onError: async (e) => { toast.error(cancelFailureText(e)); await queryClient.invalidateQueries({ queryKey: ["report-automation"] }); },
+  });
+  const removeRun = useMutation({
+    mutationFn: (r: ScheduledRow) => reportAutomationApi.deleteRun(r.runId ?? ""),
+    onSuccess: () => { toast.success("Removed from history. Messages already sent are not recalled."); refreshAll(); },
+    onError: (e) => { toast.error(getErrorMessage(e)); refreshAll(); },
+  });
+  const toggleEnabled = useMutation({
+    mutationFn: (enabled: boolean) => reportAutomationApi.setEnabled(enabled),
+    onSuccess: (_d, enabled) => { toast.success(enabled ? "Automation turned on." : "Automation turned off. Nothing further will be sent on a schedule."); setDraft(null); refreshAll(); },
+    onError: (e) => toast.error(getErrorMessage(e)),
+  });
   const sync = useMutation({
     mutationFn: () => whatsappTemplatesApi.sync("META", SYNC_TIMEOUT_MS), // one attempt, gives up after 20s; never retried automatically
     retry: false,
@@ -162,7 +225,42 @@ export function ReportAutomationView() {
       <PageHeader title="WhatsApp Report Automation" description="Send a daily telecaller performance report to one or more WhatsApp numbers. Admin: all telecallers. Manager: your team." />
 
       <Card>
-        <CardHeader><CardTitle>Saved schedule</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Scheduled Reports</CardTitle></CardHeader>
+        <CardContent className="space-y-4 text-sm" data-testid="scheduled-reports">
+          <p className="text-muted-foreground">
+            <b>Scheduled for</b> is when the report is sent{scheduled.data ? ` (${scheduled.data.timezone})` : ""}. <b>Report data date</b> is which day&apos;s figures it covers - they are different. Reports repeat daily at the saved time; one-off future runs are not supported. <b>Cancel</b> stops one upcoming day (Admin); <b>Pause automation</b> (below) stops all future days; <b>Delete from history</b> only hides a finished entry - it never recalls a sent message.
+          </p>
+          {scheduled.isLoading ? <p>Loading scheduled reports...</p> : scheduled.isError ? <p className="text-red-700">Could not load scheduled reports.</p> : (
+            <>
+              <div>
+                <h3 className="mb-1 font-medium">Upcoming</h3>
+                {scheduled.data && scheduled.data.upcoming.length > 0 ? <ScheduleTable rows={scheduled.data.upcoming} upcoming testId="scheduled-upcoming" busy={cancelRun.isPending || scheduled.isFetching} onCancel={(r) => { if (window.confirm(cancelConfirmText(r))) cancelRun.mutate(r); }} /> : <p className="text-muted-foreground" data-testid="scheduled-none">{scheduled.data?.reason ?? "Nothing is scheduled."}</p>}
+                {scheduled.data && scheduled.data.cancelledUpcoming.length > 0 ? (
+                  <p className="mt-2 text-xs text-muted-foreground" data-testid="cancelled-upcoming">
+                    Cancelled - will not be sent: {scheduled.data.cancelledUpcoming.map((c) => `${fmtZone(c.scheduledAt, c.timezone)}${c.cancelledBy ? ` (by ${c.cancelledBy})` : ""}`).join("; ")}. The list above shows the next three days that are still scheduled; use Pause automation to stop all of them.
+                  </p>
+                ) : null}
+              </div>
+              <div>
+                <h3 className="mb-1 font-medium">Recent runs</h3>
+                {scheduled.data && scheduled.data.recent.length > 0 ? <ScheduleTable rows={scheduled.data.recent} upcoming={false} testId="scheduled-recent" busy={removeRun.isPending} onDelete={(r) => { if (window.confirm(deleteConfirmText(r))) removeRun.mutate(r); }} /> : <p className="text-muted-foreground">No runs yet.</p>}
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-2">
+          <CardTitle>Saved schedule</CardTitle>
+          {c && c.id ? (
+            c.enabled ? (
+              <Button variant="outline" disabled={toggleEnabled.isPending} onClick={() => { if (window.confirm(PAUSE_CONFIRM)) toggleEnabled.mutate(false); }} data-testid="pause-automation">Pause automation</Button>
+            ) : (
+              <Button disabled={toggleEnabled.isPending} onClick={() => toggleEnabled.mutate(true)} data-testid="resume-automation">Turn automation on</Button>
+            )
+          ) : null}
+        </CardHeader>
         <CardContent className="space-y-1 text-sm" data-testid="saved-schedule">
           <p className={config.data!.enabled ? "font-medium text-emerald-600" : "font-medium text-amber-600"} data-testid="saved-state">
             Saved: automatic sending is {config.data!.enabled ? "ON" : "OFF"} - {config.data!.sendTime} {config.data!.timezone}, {config.data!.reportFor === "DATE" ? `report data for ${config.data!.dataDate}` : REPORT_MODE_LABEL[config.data!.reportFor]?.toLowerCase()}, {config.data!.recipients.length} recipient{config.data!.recipients.length === 1 ? "" : "s"}

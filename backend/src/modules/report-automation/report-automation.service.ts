@@ -14,6 +14,7 @@ import { loadTemplateMetrics } from "./report-automation.template-metrics.load.j
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { computeServiceWindow } from "../whatsapp/whatsapp.freetext.service.js";
 import { recomputeRunStatus } from "./report-automation.run.js";
+import { derivePhase, formatsOf, PHASE_LABEL, upcomingOccurrences, type RunPhase } from "./report-automation.schedule.js";
 import type { ConfigInput } from "./report-automation.validators.js";
 
 // WHATSAPP REPORT AUTOMATION. Admin and Manager only (checked here as well as on the routes). One automation per user: its owner's scope decides whose numbers are in the report; it can have several
@@ -74,6 +75,15 @@ const initialParts = (a: { sendText: boolean; sendExcel: boolean }, textStart: "
 type AutomationRow = Prisma.ReportAutomationGetPayload<{ include: { recipients: true } }>;
 type RunRow = Prisma.ReportDeliveryGetPayload<{ include: { recipientResults: true } }>;
 type RecipientResult = Prisma.ReportDeliveryRecipientGetPayload<object>;
+
+/** Why a run cannot be removed from the history right now (null = it can): anything in flight, still to be tried, held for a reply, or awaiting an automatic retry. */
+export function deleteBlock(run: { status: string; nextAttemptAt: Date | null; recipientResults: { status: string; txtStatus: string; docStatus: string }[] }): string | null {
+  const live = (st: string) => st === "SENDING" || st === "PENDING";
+  if (run.status === "SENDING" || run.status === "PENDING" || run.recipientResults.some((r) => live(r.status) || live(r.txtStatus) || live(r.docStatus))) return "This run is still being sent or is waiting to be sent, so it cannot be removed from the history.";
+  if (run.recipientResults.some((r) => r.txtStatus === "WAITING_FOR_REPLY" || r.docStatus === "WAITING_FOR_REPLY")) return "This run is waiting for the recipient's reply to send the detailed report / Excel, so it cannot be removed yet.";
+  if (run.nextAttemptAt) return "This run has an automatic retry pending, so it cannot be removed yet.";
+  return null;
+}
 
 export const maskPhone = (phone: string): string => (phone.length <= 6 ? phone : `${phone.slice(0, 3)}${"•".repeat(phone.length - 5)}${phone.slice(-2)}`);
 
@@ -239,7 +249,7 @@ class ReportAutomationService {
     this.assertAllowed(user);
     const automation = await this.db.reportAutomation.findUnique({ where: { ownerId: user.id }, select: { id: true } });
     if (!automation) return { items: [], pagination: { page, pageSize, totalItems: 0, totalPages: 1 } };
-    const where = { automationId: automation.id };
+    const where = { automationId: automation.id, deletedAt: null };
     const [rows, total] = await Promise.all([
       this.db.reportDelivery.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize, include: { recipientResults: true } }),
       this.db.reportDelivery.count({ where }),
@@ -275,11 +285,110 @@ class ReportAutomationService {
     };
   }
 
+  /**
+   * The "Scheduled Reports" section: UPCOMING occurrences of the saved recurring send (one row per recipient, computed from the saved time / timezone / report mode, minus any occurrence that already has a run) and
+   * RECENT runs (scheduled and test, kept apart by `kind`). The send instant and the report data dates are separate fields. Read-only; nothing is created. One-off future runs and cancelling a future run are
+   * not supported by the data model (no table holds them), so `oneTimeSupported` / `cancelSupported` say so instead of the page pretending.
+   */
+  async scheduled(user: AuthUser) {
+    this.assertAllowed(user);
+    const now = this.now();
+    const a = await this.loadAutomation(user.id);
+    if (!a) return { timezone: "Asia/Kolkata", enabled: false, recurring: null, oneTimeSupported: false, cancelSupported: true, upcoming: [], cancelledUpcoming: [], recent: [], reason: "Automatic sending has not been set up yet." };
+    const keys = new Set((await this.db.reportDelivery.findMany({ where: { automationId: a.id, kind: "SCHEDULED", dedupeKey: { not: null } }, select: { dedupeKey: true }, orderBy: { createdAt: "desc" }, take: 200 })).map((d) => d.dedupeKey));
+    const list = [...a.recipients].sort((x, y) => x.position - y.position);
+    const complete = list.length > 0 && !(a.sendText && !a.templateName);
+    const occurrences = complete ? upcomingOccurrences(a, now, (date) => keys.has(occurrenceKey(a, date)), 3) : [];
+    const upcoming = occurrences.flatMap((o) =>
+      list.map((r) => ({ key: `${o.scheduledDate}:${r.id}`, occurrenceDate: o.scheduledDate, canCancel: user.role === Role.ADMIN, scheduledAt: o.scheduledAt, timezone: o.timezone, utcOffset: o.utcOffset, dataFrom: o.dataFrom, dataTo: o.dataTo, dataLabel: o.dataLabel, recipientName: r.name, recipientPhone: maskPhone(r.phone), templateName: a.templateName, languageCode: a.languageCode, formats: o.formats, status: "SCHEDULED" as const, statusLabel: PHASE_LABEL.SCHEDULED, nextExecutionAt: o.scheduledAt })),
+    );
+    const runs = await this.db.reportDelivery.findMany({ where: { automationId: a.id, deletedAt: null }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 20, include: { recipientResults: true } });
+    const cancellers = new Map((await this.db.user.findMany({ where: { id: { in: runs.map((r) => r.cancelledById).filter((x): x is string => Boolean(x)) } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]));
+    const recent = runs.flatMap((run) =>
+      [...run.recipientResults].sort((x, y) => x.phone.localeCompare(y.phone)).map((r) => {
+        const cancelled = run.status === "CANCELLED";
+        const phase: RunPhase = cancelled ? "CANCELLED" : derivePhase([r.status, r.txtStatus, r.docStatus]);
+        const block = deleteBlock(run);
+        const sentAny = run.recipientResults.some((x) => [x.status, x.txtStatus, x.docStatus].some((st) => ["SENT", "DELIVERED", "READ"].includes(st)));
+        const attempts = [r.lastAttemptAt, r.txtLastAttemptAt, r.docLastAttemptAt].filter((d): d is Date => d instanceof Date);
+        return {
+          key: r.id, runId: run.id, kind: run.kind, scheduledAt: run.scheduledFor ?? run.createdAt, timezone: a.timezone, dataFrom: run.reportRangeStart ?? run.reportDate, dataTo: run.reportDate,
+          recipientName: r.name, recipientPhone: maskPhone(r.phone), templateName: a.templateName, languageCode: a.languageCode,
+          formats: formatsOf({ sendText: r.status !== "SKIPPED" || r.txtStatus !== "SKIPPED", sendExcel: r.docStatus !== "SKIPPED" }),
+          parts: { notification: r.status, detail: r.txtStatus, excel: r.docStatus },
+          status: phase, statusLabel: PHASE_LABEL[phase], lastAttemptAt: cancelled ? run.cancelledAt : attempts.length > 0 ? new Date(Math.max(...attempts.map((d) => d.getTime()))) : null,
+          canDelete: user.role === Role.ADMIN && block === null, deleteBlockedReason: block, sentAny, cancelledAt: run.cancelledAt, cancelledBy: run.cancelledById ? (cancellers.get(run.cancelledById) ?? null) : null,
+        };
+      }),
+    );
+    // Future occurrences an Admin cancelled: kept visible (who/when) so a date that is missing from Upcoming is explained, never silently lost.
+    const cancelledRuns = await this.db.reportDelivery.findMany({ where: { automationId: a.id, kind: "SCHEDULED", status: "CANCELLED", scheduledFor: { gt: now } }, orderBy: { scheduledFor: "asc" }, take: 30 });
+    const who = new Map((await this.db.user.findMany({ where: { id: { in: cancelledRuns.map((r) => r.cancelledById).filter((x): x is string => Boolean(x)) } }, select: { id: true, name: true } })).map((u) => [u.id, u.name]));
+    const cancelledUpcoming = cancelledRuns.map((r) => ({ runId: r.id, scheduledAt: r.scheduledFor!, timezone: a.timezone, dataFrom: r.reportRangeStart ?? r.reportDate, dataTo: r.reportDate, cancelledAt: r.cancelledAt, cancelledBy: r.cancelledById ? (who.get(r.cancelledById) ?? null) : null }));
+    const reason = !a.enabled ? "Automatic sending is turned OFF - nothing is scheduled." : list.length === 0 ? "No recipients are saved." : !complete ? `No template is saved: select "${REPORT_TEMPLATE_NAME}".` : upcoming.length === 0 ? "No upcoming occurrence." : null;
+    return { timezone: a.timezone, enabled: a.enabled, recurring: { sendTime: a.sendTime, timezone: a.timezone, reportFor: a.reportFor, dataDate: a.reportDataDate }, oneTimeSupported: false, cancelSupported: true, upcoming, cancelledUpcoming, recent, reason };
+  }
+
+  /**
+   * Cancel ONE upcoming occurrence (Admin only). The occurrence is persisted as a CANCELLED run that owns the occurrence's unique dedupeKey - the same key the scheduler uses to claim the day - so exactly one of
+   * "the scheduler starts it" and "the Admin cancels it" can win, even when both run at the same instant (createMany ... skipDuplicates, decided by the unique index). A cancelled occurrence is therefore never
+   * claimed, sent or regenerated as upcoming. If the run already exists (started, sent, or already cancelled) nothing is changed and the Admin is told why.
+   */
+  async cancelOccurrence(user: AuthUser, occurrenceDate: string) {
+    if (user.role !== Role.ADMIN) throw new ApiError("Only an Admin can cancel a scheduled report.", STATUS_CODES.FORBIDDEN);
+    const now = this.now();
+    const a = await this.loadAutomation(user.id);
+    if (!a) throw new ApiError("Scheduled report not found", STATUS_CODES.NOT_FOUND);
+    const dedupeKey = occurrenceKey(a, occurrenceDate);
+    const existing = await this.db.reportDelivery.findUnique({ where: { dedupeKey }, select: { id: true, status: true } });
+    if (existing) throw new ApiError(existing.status === "CANCELLED" ? "This scheduled report is already cancelled." : "This report has already started (or finished), so it cannot be cancelled safely.", STATUS_CODES.CONFLICT);
+    const o = upcomingOccurrences(a, now, () => false, 14).find((x) => x.scheduledDate === occurrenceDate);
+    if (!o) throw new ApiError("That is not an upcoming scheduled report (it may have passed, or the automation is off).", STATUS_CODES.BAD_REQUEST);
+    const list = [...a.recipients].sort((x, y) => x.position - y.position);
+    const created = await this.db.reportDelivery.createMany({ data: [{ automationId: a.id, kind: "SCHEDULED", reportDate: o.dataTo, reportRangeStart: o.dataFrom === o.dataTo ? null : o.dataFrom, dedupeKey, recipient: list[0]?.phone ?? "", status: "CANCELLED", scheduledFor: o.scheduledAt, cancelledAt: now, cancelledById: user.id }], skipDuplicates: true });
+    if (created.count !== 1) throw new ApiError("This report has already started (or was just cancelled), so it was not changed.", STATUS_CODES.CONFLICT);
+    const run = await this.db.reportDelivery.findUniqueOrThrow({ where: { dedupeKey } });
+    const why = "Cancelled before it was sent.";
+    await this.db.reportDeliveryRecipient.createMany({ data: list.map((r) => ({ deliveryId: run.id, name: r.name, phone: r.phone, status: "SKIPPED" as const, txtStatus: "SKIPPED" as const, docStatus: "SKIPPED" as const, error: why })), skipDuplicates: true });
+    return { runId: run.id, occurrenceDate, status: "CANCELLED" as const, cancelledAt: now, cancelledById: user.id };
+  }
+
+  /** Remove a FINISHED run from the history (Admin only): a soft delete that hides the run and records who/when. Nothing else changes - the run, its recipients and its dedupeKey stay, so it is never recreated or
+   *  resent, and messages already sent stay in WhatsApp. Refused while anything is in flight, waiting, or due an automatic retry. */
+  async deleteRun(user: AuthUser, runId: string) {
+    if (user.role !== Role.ADMIN) throw new ApiError("Only an Admin can remove a run from the history.", STATUS_CODES.FORBIDDEN);
+    const run = await this.db.reportDelivery.findUnique({ where: { id: runId }, include: { automation: { select: { ownerId: true } }, recipientResults: true } });
+    if (!run || run.automation.ownerId !== user.id || run.deletedAt) throw new ApiError("Run not found", STATUS_CODES.NOT_FOUND);
+    const block = deleteBlock(run);
+    if (block) throw new ApiError(block, STATUS_CODES.CONFLICT);
+    const live = ["PENDING", "SENDING"] as const;
+    const done = await this.db.reportDelivery.updateMany({
+      where: { id: runId, deletedAt: null, status: { notIn: [...live] }, nextAttemptAt: null, recipientResults: { none: { OR: [{ status: { in: [...live] } }, { txtStatus: { in: [...live, "WAITING_FOR_REPLY"] } }, { docStatus: { in: [...live, "WAITING_FOR_REPLY"] } }] } } },
+      data: { deletedAt: this.now(), deletedById: user.id },
+    });
+    if (done.count !== 1) throw new ApiError("This run started changing while you were deleting it, so it was not removed. Try again.", STATUS_CODES.CONFLICT);
+    return { id: runId, deleted: true as const };
+  }
+
+  /** Pause / resume the recurring automation using the existing `enabled` setting (Admin or Manager, the same people who can save the settings). Nothing in the history changes and nothing already sent is recalled.
+   *  Resuming stamps the settings time like a save, so an occurrence that passed while it was off is not sent late. */
+  async setEnabled(user: AuthUser, enabled: boolean) {
+    this.assertAllowed(user);
+    const a = await this.loadAutomation(user.id);
+    if (!a) throw new ApiError("Save the automation settings first.", STATUS_CODES.BAD_REQUEST);
+    if (enabled) {
+      if (a.recipients.length === 0) throw new ApiError("Add at least one recipient before turning the automation on.", STATUS_CODES.BAD_REQUEST);
+      if (a.sendText && !a.templateName) throw new ApiError(`Select the "${REPORT_TEMPLATE_NAME}" template before turning the automation on.`, STATUS_CODES.BAD_REQUEST);
+    }
+    await this.db.reportAutomation.update({ where: { id: a.id }, data: { enabled, updatedAt: this.now() } });
+    return mapConfig(await this.loadAutomation(user.id));
+  }
+
   /** The most recent SCHEDULED run (test sends are never shown here) and what happened to each of its three messages. */
   private async lastScheduled(ownerId: string) {
     const a = await this.db.reportAutomation.findUnique({ where: { ownerId }, select: { id: true } });
     if (!a) return null;
-    const run = await this.db.reportDelivery.findFirst({ where: { automationId: a.id, kind: "SCHEDULED" }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], include: { recipientResults: true } });
+    const run = await this.db.reportDelivery.findFirst({ where: { automationId: a.id, kind: "SCHEDULED", deletedAt: null, status: { not: "CANCELLED" } }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], include: { recipientResults: true } });
     return run ? mapRun(run) : null;
   }
 
@@ -333,6 +442,7 @@ class ReportAutomationService {
     const row = await this.db.reportDeliveryRecipient.findUnique({ where: { id: recipientResultId }, include: { delivery: { include: { automation: { include: { recipients: true } } } } } });
     // another user's delivery looks the same as a missing one
     if (!row || row.delivery.automation.ownerId !== user.id) throw new ApiError("Delivery not found", STATUS_CODES.NOT_FOUND);
+    if (row.delivery.status === "CANCELLED" || row.delivery.deletedAt) throw new ApiError("This run was cancelled or removed from the history, so it cannot be retried.", STATUS_CODES.CONFLICT);
     const automation = row.delivery.automation;
     const viewer = { id: user.id, role: user.role };
     const notRetryable = new ApiError("Only a delivery that definitely failed can be retried. A message that was accepted, or whose outcome is unknown, is never sent again automatically.", STATUS_CODES.CONFLICT);
@@ -349,13 +459,13 @@ class ReportAutomationService {
       if (row.txtAttempts >= MANUAL_RETRY_MAX_ATTEMPTS) throw new ApiError("The detailed report has already been retried the maximum number of times.", STATUS_CODES.CONFLICT);
       const claim = await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: row.txtStatus, txtAttempts: row.txtAttempts }, data: { txtStatus: "SENDING", txtAttempts: { increment: 1 }, txtError: null } });
       if (claim.count !== 1) throw new ApiError("This delivery is already being retried.", STATUS_CODES.CONFLICT);
-      await this.deliver([], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id]);
+      await this.deliver([], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id], { txt: true, doc: false });
     } else {
       if (row.docStatus !== "FAILED" && row.docStatus !== "WAITING_FOR_REPLY") throw notRetryable;
       if (row.docAttempts >= MANUAL_RETRY_MAX_ATTEMPTS) throw new ApiError("The Excel file has already been retried the maximum number of times.", STATUS_CODES.CONFLICT);
       const claim = await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: row.docStatus, docAttempts: row.docAttempts }, data: { docStatus: "SENDING", docAttempts: { increment: 1 }, docError: null } });
       if (claim.count !== 1) throw new ApiError("This delivery is already being retried.", STATUS_CODES.CONFLICT);
-      await this.deliver([], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id]);
+      await this.deliver([], automation, viewer, row.deliveryId, { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate }, false, [row.id], { txt: false, doc: true });
     }
     return mapRecipient(await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id: row.id } }));
   }
@@ -376,7 +486,7 @@ class ReportAutomationService {
     await this.recoverStaleParts(contact);
     const rows = await this.db.reportDeliveryRecipient.findMany({
       where: {
-        delivery: { kind: "SCHEDULED", createdAt: { gte: new Date(now.getTime() - REPLY_LOOKBACK_MS) } },
+        delivery: { kind: "SCHEDULED", status: { not: "CANCELLED" }, deletedAt: null, createdAt: { gte: new Date(now.getTime() - REPLY_LOOKBACK_MS) } },
         status: { notIn: ["PENDING", "SENDING"] }, // the notification step of that run is finished (the scheduled run owns it until then)
         OR: [{ txtStatus: { in: ["WAITING_FOR_REPLY", "FAILED", "PENDING"] } }, { docStatus: { in: ["WAITING_FOR_REPLY", "FAILED", "PENDING"] } }],
       },
@@ -528,7 +638,7 @@ class ReportAutomationService {
     // The unique dedupeKey decides, atomically, who owns this day's run. DO NOTHING on a repeat - no error, no second row.
     await this.db.reportDelivery.createMany({ data: [{ automationId: automation.id, kind: "SCHEDULED", reportDate: period.to, reportRangeStart: period.from === period.to ? null : period.from, dedupeKey, recipient: list[0]!.phone, status: "PENDING", scheduledFor: now }], skipDuplicates: true });
     const run = await this.db.reportDelivery.findUnique({ where: { dedupeKey } });
-    if (!run) return false;
+    if (!run || run.status === "CANCELLED" || run.deletedAt) return false; // a cancelled / hidden occurrence is never claimed or sent
     // The recipient list (and which parts are on) is copied once, when the run is first seen (a recipient added later joins tomorrow's run); a repeat or a crash in between adds nothing twice.
     if ((await this.db.reportDeliveryRecipient.count({ where: { deliveryId: run.id } })) === 0) {
       await this.db.reportDeliveryRecipient.createMany({ data: list.map((r) => ({ deliveryId: run.id, name: r.name, phone: r.phone, ...initialParts(automation, "PENDING") })), skipDuplicates: true });
@@ -603,7 +713,9 @@ class ReportAutomationService {
       for (const r of rows) {
         const st = kind === "txt" ? r.txtStatus : r.docStatus;
         const attempts = kind === "txt" ? r.txtAttempts : r.docAttempts;
-        if (st === "SENDING") out.push(r);
+        // A part already SENDING belongs to whoever claimed it. Only the caller that claimed it adopts it: a test send (it created the run in that state), or a retry / a reply that names the part in `only`.
+        // An automatic scheduler tick (retryable) and a retry of a different part never adopt one - it may be another worker's in-flight send, and adopting it would send the same file twice.
+        if (st === "SENDING") { if (!retryable && (only ? only[kind] : partIds === null)) out.push(r); }
         else if (st === "PENDING" && r.status !== "PENDING" && r.status !== "SENDING") {
           const where = kind === "txt" ? { id: r.id, txtStatus: "PENDING" as const, txtAttempts: attempts } : { id: r.id, docStatus: "PENDING" as const, docAttempts: attempts };
           const data2 = kind === "txt" ? { txtStatus: "SENDING" as const, txtAttempts: { increment: 1 }, txtError: null } : { docStatus: "SENDING" as const, docAttempts: { increment: 1 }, docError: null };

@@ -98,3 +98,34 @@ export function syncFailureMessage(error: unknown, fallback = "Could not sync te
   const base = timedOut ? "Syncing from Meta timed out. Your current template selection was not changed." : `${server ?? fallback} Your current template selection was not changed.`;
   return `${base} You can press Sync templates again later, or use Add Template to pick an approved template from Meta.`;
 }
+
+// ------------------------------------------------------------------------------------------------ Scheduled Reports section
+
+export const FORMAT_LABEL: Record<string, string> = { NOTIFICATION: "Template notification", DETAIL: "Detailed report", EXCEL: "Excel" };
+const SHORT_TZ: Record<string, string> = { "Asia/Kolkata": "IST", UTC: "UTC", "Asia/Dubai": "GST", "Asia/Singapore": "SGT", "Europe/London": "UK", "America/New_York": "ET" };
+/** "28 Oct 2026, 6:00 PM IST" - an instant shown in the configured timezone (never the browser's). */
+export function formatInZone(iso: string, timezone: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  const date = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, day: "numeric", month: "short", year: "numeric" }).format(d);
+  const time = new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", minute: "2-digit", hour12: true }).format(d);
+  return `${date}, ${time} ${SHORT_TZ[timezone] ?? timezone}`;
+}
+const dayLabel = (ymd: string) => new Intl.DateTimeFormat("en-GB", { timeZone: "UTC", day: "numeric", month: "short", year: "numeric" }).format(new Date(`${ymd}T00:00:00Z`));
+/** The data dates a report covers: one day, or a range - always a calendar date, never a time. */
+export const dataRangeLabel = (from: string, to: string): string => (from === to ? dayLabel(to) : `${dayLabel(from)} - ${dayLabel(to)}`);
+
+export const cancelConfirmText = (r: { scheduledAt: string; timezone: string; dataFrom: string; dataTo: string }): string =>
+  `Cancel the scheduled report for ${formatInZone(r.scheduledAt, r.timezone)} (data date ${dataRangeLabel(r.dataFrom, r.dataTo)})? It will not be sent to any recipient. Other days are not affected.`;
+/** What the Delete-from-history confirmation says; a run with sent messages is warned that WhatsApp messages cannot be recalled. */
+export const deleteConfirmText = (r: { recipientName: string | null; recipientPhone: string; dataFrom: string; dataTo: string; kind?: string; sentAny?: boolean }): string =>
+  `Delete from history: ${r.kind === "TEST" ? "test run" : "scheduled run"} for ${r.recipientName ? `${r.recipientName} ` : ""}${r.recipientPhone}, report date ${dataRangeLabel(r.dataFrom, r.dataTo)}? This only hides the entry from this list (it is kept for audit).${r.sentAny ? " Messages already sent stay in WhatsApp - deleting the history cannot recall them." : ""}`;
+export const PAUSE_CONFIRM = "Turn off the automation? No further scheduled reports will be sent until an Admin turns it on again. Completed runs and the history are kept, and messages already sent are not recalled.";
+
+/** The success message after the backend confirmed a cancellation - names the exact date cancelled. */
+export const cancelSuccessText = (r: { scheduledAt: string; timezone: string }): string => `Cancelled the report scheduled for ${formatInZone(r.scheduledAt, r.timezone)}. It will not be sent; the other days are unchanged.`;
+/** A failure is shown as the backend's own reason and never claims success. */
+export const cancelFailureText = (error: unknown): string => {
+  const err = error as { response?: { data?: { message?: string } }; message?: string } | null;
+  return `Not cancelled: ${err?.response?.data?.message ?? err?.message ?? "the request failed"}`;
+};

@@ -103,3 +103,41 @@ describe("syncFailureMessage", () => {
   it("treats the server's database timeout the same way", () => assert.match(syncFailureMessage({ response: { data: { message: "Timeout exceeded when trying to connect" } } }), /timed out/));
   it("shows other server reasons", () => assert.match(syncFailureMessage({ response: { data: { message: "Meta WhatsApp Cloud API is not configured" } } }), /not configured.*Add Template/));
 });
+
+import { dataRangeLabel, formatInZone } from "./report-automation-form";
+describe("Scheduled Reports formatting", () => {
+  it("shows the send instant in the configured timezone, not the browser's", () => {
+    assert.equal(formatInZone("2026-10-28T12:30:00.000Z", "Asia/Kolkata"), "28 Oct 2026, 6:00 PM IST");
+    assert.equal(formatInZone("2026-10-28T12:30:00.000Z", "UTC"), "28 Oct 2026, 12:30 PM UTC");
+    assert.match(formatInZone("2026-10-28T22:00:00.000Z", "America/New_York"), /28 Oct 2026, 6:00 PM ET/);
+    assert.equal(formatInZone("not a date", "UTC"), "-");
+  });
+  it("keeps the report data date separate from the execution time", () => {
+    assert.equal(dataRangeLabel("2026-10-27", "2026-10-27"), "27 Oct 2026");
+    assert.equal(dataRangeLabel("2026-10-20", "2026-10-26"), "20 Oct 2026 - 26 Oct 2026");
+    assert.notEqual(formatInZone("2026-10-28T12:30:00.000Z", "Asia/Kolkata").slice(0, 11), dataRangeLabel("2026-10-27", "2026-10-27").slice(0, 11));
+  });
+});
+
+import { cancelConfirmText, deleteConfirmText, PAUSE_CONFIRM } from "./report-automation-form";
+describe("confirmation texts", () => {
+  it("cancel names the time and the data date; delete names recipient, date and run type and warns about sent messages", () => {
+    assert.match(cancelConfirmText({ scheduledAt: "2026-10-28T12:30:00.000Z", timezone: "Asia/Kolkata", dataFrom: "2026-10-27", dataTo: "2026-10-27" }), /28 Oct 2026, 6:00 PM IST.*data date 27 Oct 2026/);
+    const t = deleteConfirmText({ recipientName: "Muzammil", recipientPhone: "+91•••••••25", dataFrom: "2026-10-26", dataTo: "2026-10-26", kind: "TEST", sentAny: true });
+    assert.match(t, /test run for Muzammil.*26 Oct 2026/);
+    assert.match(t, /cannot recall/);
+    assert.doesNotMatch(deleteConfirmText({ recipientName: null, recipientPhone: "x", dataFrom: "2026-10-26", dataTo: "2026-10-26", sentAny: false }), /cannot recall/);
+    assert.match(PAUSE_CONFIRM, /not recalled/);
+  });
+});
+
+import { cancelFailureText, cancelSuccessText } from "./report-automation-form";
+describe("cancel messages", () => {
+  it("success names the exact date; failure shows the backend reason and does not claim success", () => {
+    assert.match(cancelSuccessText({ scheduledAt: "2026-10-29T11:33:00.000Z", timezone: "Asia/Kolkata" }), /Cancelled the report scheduled for 29 Oct 2026, 5:03 PM IST/);
+    const f = cancelFailureText({ response: { data: { message: "This report has already started (or finished), so it cannot be cancelled safely." } } });
+    assert.match(f, /^Not cancelled: This report has already started/);
+    assert.doesNotMatch(f, /^Cancelled/);
+    assert.match(cancelFailureText(new Error("Network Error")), /Network Error/);
+  });
+});

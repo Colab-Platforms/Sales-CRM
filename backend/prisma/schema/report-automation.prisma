@@ -9,6 +9,8 @@ enum ReportDeliveryStatus {
   FAILED
   // The provider gave no answer (timeout / dropped connection): it MAY have accepted the message, so it is never re-sent automatically.
   UNCERTAIN
+  // An upcoming occurrence an Admin cancelled before it started (migration 20261101000000). The row owns the occurrence's unique dedupeKey, so the scheduler can neither claim nor recreate it.
+  CANCELLED
 
   @@map("report_delivery_status")
 }
@@ -88,6 +90,13 @@ model ReportDelivery {
   scheduledFor  DateTime? @map("scheduled_for")
   nextAttemptAt DateTime? @map("next_attempt_at")
   sentAt        DateTime? @map("sent_at")
+
+  // Audit: who cancelled this occurrence / removed this run from the history, and when. Plain user ids (no relation), like ownerId. A deleted run is only hidden (soft delete): the row, its recipients and
+  // its dedupeKey stay, so the scheduler can never recreate it and nothing is resent.
+  cancelledAt   DateTime? @map("cancelled_at")
+  cancelledById String?   @map("cancelled_by_id") @db.Uuid
+  deletedAt     DateTime? @map("deleted_at")
+  deletedById   String?   @map("deleted_by_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
