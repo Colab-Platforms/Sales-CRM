@@ -12,8 +12,6 @@ import { cartItemsKey } from "@/lib/checkoutCartKey.js";
 
 export const CANONICAL_WINDOW_MINUTES = 60;
 const WINDOW_MS = CANONICAL_WINDOW_MINUTES * 60_000;
-// Rows are classified from a look-back before the range start so a re-entry just after the range start is judged against the right canonical row.
-const LOOKBACK_MS = 24 * 3_600_000;
 
 const value = Prisma.sql`(CASE WHEN a.cart_snapshot->>'cartValue' ~ '^[0-9]+([.][0-9]+)?$' THEN (a.cart_snapshot->>'cartValue')::numeric END)`;
 
@@ -47,14 +45,15 @@ export function classifyCheckouts(rows: readonly CheckoutRow[]): Classified[] {
   return out;
 }
 
-const rowsFor = async (db: Pick<DbClient, "$queryRaw">, from: Date, to: Date): Promise<CheckoutRow[]> => {
+const rowsFor = async (db: Pick<DbClient, "$queryRaw">, from: Date, to: Date, leadIds?: readonly string[]): Promise<CheckoutRow[]> => {
+  const onlyLeads = leadIds ? Prisma.sql`AND a.lead_id::text = ANY(${[...leadIds]}::text[])` : Prisma.empty;
   // The contents key comes from the FULL saved item list (see checkoutCartKey.ts), computed here; a cart whose contents cannot be compared safely gets no key and is left out (never merged).
   const rows = await db.$queryRaw<{ id: string; lead_id: string; at: Date; status: string; val: string; ref: string | null; day: string; items: unknown; names: unknown; item_count: string | null }[]>(Prisma.sql`
     SELECT a.id::text AS id, a.lead_id::text AS lead_id, a.detected_at AS at, a.status::text AS status, a.reference_id AS ref, ${value}::text AS val,
            a.cart_snapshot->'items' AS items, a.cart_snapshot->'itemNames' AS names, a.cart_snapshot->>'itemCount' AS item_count,
            to_char((a.detected_at AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS day
     FROM abandonments a
-    WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${from} AND a.detected_at < ${to} AND ${value} IS NOT NULL
+    WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${from} AND a.detected_at < ${to} AND ${value} IS NOT NULL ${onlyLeads}
     ORDER BY a.lead_id, a.detected_at, a.id`);
   return rows.flatMap((r) => {
     const contents = cartItemsKey({ items: r.items, itemNames: r.names, itemCount: r.item_count });
@@ -62,11 +61,17 @@ const rowsFor = async (db: Pick<DbClient, "$queryRaw">, from: Date, to: Date): P
   });
 };
 
-/** The rows of [start, end) that are duplicates of an earlier canonical checkout. Read-only. */
+/**
+ * The rows of [start, end) that are duplicates of an earlier canonical checkout. Read-only.
+ * EXACT at the range edge: the anchored window makes a row's status depend on the canonical rows before it (a dense chain alternates canonical / duplicate), so cutting the history at an arbitrary point can flip rows near the cut.
+ * Therefore, for every lead that has a row in the range, that lead's WHOLE earlier history is loaded and classified together with the range, and only the range's rows are returned. Leads with nothing in the range cost nothing.
+ */
 export async function duplicateCheckoutIds(db: Pick<DbClient, "$queryRaw">, range: { start: Date; end: Date }): Promise<string[]> {
-  const rows = await rowsFor(db, new Date(range.start.getTime() - LOOKBACK_MS), range.end);
+  const inRange = await rowsFor(db, range.start, range.end);
+  const leads = [...new Set(inRange.map((r) => r.leadId))];
+  const history = leads.length > 0 ? await rowsFor(db, new Date(0), range.start, leads) : [];
   const startMs = range.start.getTime();
-  return classifyCheckouts(rows).flatMap((c) => c.duplicates.filter((d) => d.at.getTime() >= startMs).map((d) => d.id));
+  return classifyCheckouts([...history, ...inRange]).flatMap((c) => c.duplicates.filter((d) => d.at.getTime() >= startMs).map((d) => d.id));
 }
 
 export interface DuplicateGroup {
@@ -98,4 +103,21 @@ export async function duplicateReport(db: Pick<DbClient, "$queryRaw">, range: { 
     });
   }
   return out.sort((a, b) => a.day.localeCompare(b.day) || a.canonicalId.localeCompare(b.canonicalId));
+}
+
+// The Abandoned Leads list reloads often and classifies from its first day, which costs ~0.5-0.9 s on 12.5k rows and grows with the table. Duplicates change slowly (a new re-entry), so the list may use a result up to
+// CACHE_TTL_MS old. The window is ALWAYS open-ended (from `start` to tomorrow), so the key is the exact start only: a different start is a different entry and a result never covers less than was asked for.
+// Keyed per database client (the app's shared client in production; every test transaction is its own client, so tests never see another test's result).
+const CACHE_TTL_MS = 60_000;
+const cache = new WeakMap<object, Map<number, { at: number; ids: string[] }>>();
+export async function cachedDuplicateCheckoutIds(db: Pick<DbClient, "$queryRaw">, from: { start: Date }, now: () => number = Date.now): Promise<string[]> {
+  const perDb = cache.get(db) ?? new Map<number, { at: number; ids: string[] }>();
+  cache.set(db, perDb);
+  const key = from.start.getTime();
+  const hit = perDb.get(key);
+  if (hit && now() - hit.at < CACHE_TTL_MS) return hit.ids;
+  const ids = await duplicateCheckoutIds(db, { start: from.start, end: new Date(now() + 86_400_000) });
+  perDb.set(key, { at: now(), ids });
+  if (perDb.size > 50) for (const k of [...perDb.keys()].slice(0, perDb.size - 50)) perDb.delete(k); // bounded
+  return ids;
 }
