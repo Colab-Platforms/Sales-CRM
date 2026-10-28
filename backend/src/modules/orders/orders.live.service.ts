@@ -25,7 +25,7 @@ import { DEFAULT_START_DATE, resolveWindow, windowSearch, type WindowSpec } from
 import { cancelShopifyOrder, ShopifyOrderCancelError } from "../shopify/shopify.orders.write.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import { mapListOrderStatusAndPayments } from "../shopify/shopify.mapper.js";
-import { canViewAllOrders, derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
+import { LIVE_ORDER_SYNC_ROLES, canViewAllOrders, derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
 import { matchesAnyTag, mergeOrderTags, tagSearchClause } from "./orders.tags.js";
 import { confirmationTagFor } from "./orders.confirmation.js";
 import { creatorOf } from "./orders.creator-tag.js";
@@ -597,9 +597,9 @@ class OrdersLiveService {
   // Brings a Shopify order that has no CRM Order row into the CRM, through the SAME sync every webhook and `shopify:sync` run uses (upsertOrder:
   // idempotent on the Shopify order id under an advisory lock + unique key, so repeating it - or racing a webhook - never creates a duplicate). Reads the
   // order from Shopify (read-only) and writes the Order, items, lead link and payments; it never creates a refund and never contacts Cashfree. The
-  // lifecycle WhatsApp automation is skipped: catching an order up must not message the customer late. ADMIN only, like the live page it is offered on.
+  // lifecycle WhatsApp automation is skipped: catching an order up must not message the customer late. Roles: LIVE_ORDER_SYNC_ROLES (the same list the route uses).
   async syncLiveOrderToCrm(user: AuthUser, externalId: string): Promise<LiveOrderSyncResult> {
-    if (user.role !== Role.ADMIN) return { synced: false, reason: "Not found" };
+    if (!LIVE_ORDER_SYNC_ROLES.includes(user.role)) return { synced: false, reason: "Not found" };
 
     let client: ShopifyClient;
     try {

@@ -186,7 +186,7 @@ export function ClickToCallButton({ lead }: { lead: CallableLead }) {
       </Button>
       {activeCallId ? (
         <ActiveCallDialog
-          lead={{ id: lead.id, firstName: lead.firstName, lastName: lead.lastName ?? null }}
+          lead={{ id: lead.id, firstName: lead.firstName, lastName: lead.lastName ?? null, mobile: lead.mobile }}
           callId={activeCallId}
           currentFollowUp={lead.tasks?.[0]}
           onClose={() => setActiveCallId(null)}

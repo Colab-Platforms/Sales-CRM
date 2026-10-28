@@ -38,7 +38,8 @@ export const PAYMENT_LABEL: Record<DashboardPaymentFilter, string> = {
 };
 export const FULFILMENT_LABEL: Record<DashboardFulfilmentFilter, string> = { UNFULFILLED: "Unfulfilled", FULFILLED: "Fulfilled (shipped / delivered)", CANCELLED: "Cancelled", RETURNED: "Returned / refunded" };
 
-export const formatInr = (n: number): string => `₹${Math.round(n).toLocaleString("en-IN")}`;
+/** Rupees for a card. A value the server did not send (undefined / null / not a finite number) is shown as "N/A" - never "₹NaN", and never as a made-up zero. */
+export const formatInr = (n: number | null | undefined): string => (typeof n === "number" && Number.isFinite(n) ? `₹${Math.round(n).toLocaleString("en-IN")}` : "N/A");
 
 /** The eight summary cards, in display order. `key` is what the server filters by when the card is clicked. */
 export type CardId = DashboardMetric | "COD_REVENUE" | "PREPAID_REVENUE" | "COLLECTED";
@@ -139,3 +140,25 @@ export const CARD_ICONS: Record<DashboardMetric, ComponentType<{ className?: str
 
 /** "vs previous day" / "vs previous 7 days" - the period a comparison is measured against. */
 export const compareLabel = (days: number): string => (days === 1 ? "vs previous day" : `vs previous ${days} days`);
+
+// ---------------------------------------------------------------------------------------------- Telecaller Performance cards
+import type { TelecallerSummary } from "@/lib/api-client/types/orders-dashboard.types";
+export type TelecallerCardId = "totalOrders" | "cod" | "prepaid" | "codRevenue" | "prepaidRevenue" | "totalRevenue" | "paid" | "pendingPayment" | "collected" | "fulfilled";
+export const TELECALLER_CARDS: { id: TelecallerCardId; label: string; money: boolean; hint?: string }[] = [
+  { id: "totalOrders", label: "Total Orders", money: false, hint: "Credited to a telecaller (confirmed by them, or bought within 7 days after their call)" },
+  { id: "cod", label: "COD Orders", money: false },
+  { id: "prepaid", label: "Prepaid Orders", money: false },
+  { id: "codRevenue", label: "Revenue - COD", money: true, hint: "Order value net of refunds" },
+  { id: "prepaidRevenue", label: "Revenue - Prepaid", money: true, hint: "Order value net of refunds" },
+  { id: "totalRevenue", label: "Total Revenue", money: true, hint: "Order value net of refunds (booked, not cash)" },
+  { id: "paid", label: "Paid", money: false, hint: "Payment received (net of partial refunds)" },
+  { id: "pendingPayment", label: "Pending Payment", money: false, hint: "Not yet paid, incl. COD not yet collected" },
+  { id: "collected", label: "Collected", money: true, hint: "Money actually received; COD counts once marked paid" },
+  { id: "fulfilled", label: "Fulfilled", money: false, hint: "Shipped, out for delivery or delivered" },
+];
+/** A card's text. A missing / non-finite number is "N/A" - never "NaN" and never a made-up 0. */
+export function telecallerCardValue(summary: TelecallerSummary | null | undefined, c: { id: TelecallerCardId; money: boolean }): string {
+  const v = summary ? summary[c.id] : undefined;
+  if (typeof v !== "number" || !Number.isFinite(v)) return "N/A";
+  return c.money ? formatInr(v) : v.toLocaleString("en-IN");
+}

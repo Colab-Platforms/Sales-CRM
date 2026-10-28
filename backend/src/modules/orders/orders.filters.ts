@@ -113,6 +113,13 @@ export function canViewAllOrders(role: string): boolean {
   return role === Role.ADMIN || role === Role.MANAGER || role === Role.SALESPERSON;
 }
 
+/**
+ * Who may press "Sync order to CRM" (POST /orders/live/:externalId/sync). One list for the route AND the service, so they cannot drift. The action imports exactly ONE Shopify order, by its id, through the normal
+ * idempotent Shopify sync and returns only {orderId, action}: it reads nothing out of the CRM and writes nothing a webhook would not. It grants NO read or edit access - HR in particular still cannot read orders,
+ * payments or customers (canViewAllOrders), and cancel / refund / edit keep their own checks.
+ */
+export const LIVE_ORDER_SYNC_ROLES: Role[] = [Role.ADMIN, Role.MANAGER, Role.SALESPERSON, Role.HR];
+
 /** The lead scope that applies to READING orders: none for the roles above, the normal lead scope otherwise (HR: matches nothing). */
 export function orderVisibilityScope(role: string, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
   return canViewAllOrders(role) ? {} : leadScope;

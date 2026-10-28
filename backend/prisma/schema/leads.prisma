@@ -269,3 +269,32 @@ model CommunicationPreference {
   @@index([status])
   @@map("communication_preferences")
 }
+
+// 24/7 ABANDONED-LEAD POOL (migration 20261102000000). A fixed list of telecallers who each receive new abandoned leads in round-robin order, whether or not they are present, on shift or online.
+// `AbandonedPoolState` is the single switch + persisted cursor (one row; missing or disabled = the pool does nothing and the existing manager / salesperson auto-assign stays as it was); the row is locked
+// (SELECT ... FOR UPDATE) while a lead is assigned so concurrent assignments are serialised and the sequence survives restarts. User ids are plain ids (no relation), like ownerId elsewhere: the service re-reads each
+// user at assignment time and skips one that is disabled or gone.
+model AbandonedPoolMember {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId   String @unique @map("user_id") @db.Uuid
+  // Round-robin order (ascending).
+  position Int    @map("position")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("abandoned_pool_member")
+}
+
+model AbandonedPoolState {
+  id String @id @default(uuid()) @db.Uuid
+
+  enabled Boolean @default(false) @map("enabled")
+  // When the pool was switched on: only abandoned leads created at or after this are picked up by the automatic retry sweep. Older unassigned leads need the explicit, approved backfill.
+  enabledAt DateTime? @map("enabled_at")
+  lastAssignedUserId String? @map("last_assigned_user_id") @db.Uuid
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("abandoned_pool_state")
+}
