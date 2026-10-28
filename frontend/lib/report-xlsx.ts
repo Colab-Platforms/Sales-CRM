@@ -18,10 +18,33 @@ export interface SheetSpec {
   rows: Cell[][];
   /** Column indexes holding rupee amounts, shown with thousands separators and 2 decimals. */
   money?: number[];
+  /** Optional bold "Total" row written after the data rows. */
+  totals?: Cell[];
 }
 
 const round = (n: number, digits: number) => Number(n.toFixed(digits));
 const aov = (revenue: number, orders: number) => (orders > 0 ? round(revenue / orders, 2) : 0);
+
+/**
+ * Bottom "Total" row of the Salesperson Performance sheet. Counts, durations and money are added up;
+ * rates are worked out from those totals (adding up each person's % or average would give a meaningless number).
+ */
+function performanceTotals(data: ManagerAnalytics): Cell[] {
+  const ps = data.salespeople;
+  const sum = (pick: (p: (typeof ps)[number]) => number) => ps.reduce((a, p) => a + pick(p), 0);
+  const leads = sum((p) => p.leads);
+  const converted = sum((p) => p.converted);
+  const calls = sum((p) => p.calls);
+  const productiveMs = sum((p) => p.productiveMs);
+  const orders = sum((p) => p.orders);
+  const revenue = round(sum((p) => p.revenue), 2);
+  return [
+    "Total", leads, sum((p) => p.contacted), sum((p) => p.interested), converted, round(conversionRate({ leads, converted }), 2),
+    calls, sum((p) => p.connected), sum((p) => p.notConnected), sum((p) => p.failed),
+    sum((p) => p.uniqueLeads), formatDuration(sum((p) => p.talkTimeSec)), formatMs(productiveMs), round(callsPerProductiveHour(calls, productiveMs), 1),
+    orders, sum((p) => p.codOrders), sum((p) => p.prepaidOrders), revenue, round(sum((p) => p.codRevenue), 2), round(sum((p) => p.prepaidRevenue), 2), aov(revenue, orders),
+  ];
+}
 
 function sheets(data: ManagerAnalytics, filters?: DashboardFilters): SheetSpec[] {
   const k = data.kpis;
@@ -42,6 +65,7 @@ function sheets(data: ManagerAnalytics, filters?: DashboardFilters): SheetSpec[]
         p.orders, p.codOrders, p.prepaidOrders, p.revenue, p.codRevenue, p.prepaidRevenue, aov(p.revenue, p.orders),
       ]),
       money: [17, 18, 19, 20],
+      totals: performanceTotals(data),
     },
     {
       name: "Sales Summary",
@@ -107,6 +131,13 @@ export async function downloadXlsx(filename: string, specs: SheetSpec[]) {
     const ws = wb.addWorksheet(spec.name, { views: [{ state: "frozen", ySplit: 1 }] });
     ws.addRow(spec.header);
     spec.rows.forEach((r) => ws.addRow(r));
+    if (spec.totals && spec.rows.length > 0) {
+      const total = ws.addRow(spec.totals);
+      total.font = { bold: true };
+      total.eachCell((c) => {
+        c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF2F2F2" } };
+      });
+    }
 
     const header = ws.getRow(1);
     header.font = { bold: true };
@@ -120,7 +151,7 @@ export async function downloadXlsx(filename: string, specs: SheetSpec[]) {
     header.eachCell((c) => (c.numFmt = "@"));
 
     ws.columns.forEach((col, i) => {
-      const longest = Math.max(spec.header[i]?.length ?? 0, ...spec.rows.map((r) => String(r[i] ?? "").length));
+      const longest = Math.max(spec.header[i]?.length ?? 0, ...[...spec.rows, spec.totals ?? []].map((r) => String(r[i] ?? "").length));
       col.width = Math.min(Math.max(longest + 2, 6), 60);
     });
   }
