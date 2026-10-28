@@ -5,7 +5,12 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import OrdersDashboardService from "./orders.dashboard.service.js";
 import LiveWebsiteDashboardService from "./orders.dashboard.live.service.js";
 import AbandonedDashboardService from "./abandoned.dashboard.service.js";
-import { validateAbandonedFilters, validateAbandonedList, validateChart, validateFilters, validateList } from "./orders.dashboard.validators.js";
+import { managerAnalyticsService as reports } from "../manager/manager.analytics.js";
+import { Role } from "../../../generated/prisma/enums.js";
+import { ApiError } from "@/utils/apiError.js";
+import { summarizeTelecaller } from "./orders.dashboard.telecaller.js";
+import { resolveDashboardRange, tzOffsetOf } from "./orders.dashboard.range.js";
+import { validateTelecaller, validateAbandonedFilters, validateAbandonedList, validateChart, validateFilters, validateList } from "./orders.dashboard.validators.js";
 
 // Website Orders: read live from Shopify (nothing imported or stored). The database-backed service remains for the other sections.
 const service = new OrdersDashboardService();
@@ -85,6 +90,25 @@ export const getAbandonedChart = async (req: AuthRequest, res: Response): Promis
     if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
     const { interval, ...range } = value;
     sendResponse(res, true, await abandoned.chart(req.user!, range, interval), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+/** Telecaller Performance: the Reports' attribution and money rules (manager.sales.ts), for the dashboard's date range and the same salesperson / payment / order-status filters. Read-only. */
+export const getTelecaller = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateTelecaller(req.query);
+    if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    const user = req.user!;
+    if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
+    const range = resolveDashboardRange({ range: value.range, from: value.from, to: value.to }, new Date());
+    const { team, orders } = await reports.creditedOrders({ id: user.id, role: user.role }, {
+      from: range.from, to: range.to, tzOffsetMinutes: tzOffsetOf(range), salespersonId: value.salespersonId,
+      paymentMode: (value.paymentMode ?? "ALL") as never, orderStatus: (value.orderStatus ?? "ALL") as never, callStatus: "ALL", leadStatus: "ALL",
+    });
+    const { summary, invalidAmounts } = summarizeTelecaller(orders);
+    sendResponse(res, true, { range: { kind: range.range, from: range.from, to: range.to, timezone: range.timezone, days: range.days }, summary, invalidAmounts, salespeople: team }, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

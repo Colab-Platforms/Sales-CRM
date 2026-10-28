@@ -4,6 +4,7 @@ import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { previewOrderAmount, correctOrderAmount, applyOrderSync, getOrderSyncReport, previewOrderSync, changeOrderFlavour, getOrderFlavours, updateOrderShippingAddress, cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
+import { LIVE_ORDER_SYNC_ROLES } from "./orders.filters.js";
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
@@ -46,8 +47,8 @@ router.get("/live/customer/:customerId/history", requireAuth, getLiveOrderHistor
 // Cancel a Shopify order the CRM has not synced yet - ADMIN-only, same gate as the detail page (see
 // orders.live.controller.ts). Shopify has no "delete order" operation, only cancellation.
 router.post("/live/:externalId/cancel", requireAuth, requireRole(Role.ADMIN), cancelLiveOrder);
-// Brings a live-only Shopify order into the CRM through the normal Shopify sync (idempotent). Same ADMIN-only gate as the live page.
-router.post("/live/:externalId/sync", requireAuth, requireRole(Role.ADMIN), syncLiveOrder);
+// Brings a live-only Shopify order into the CRM through the normal Shopify sync (idempotent). Admin, Manager, Telecaller (SALESPERSON) and HR - see LIVE_ORDER_SYNC_ROLES.
+router.post("/live/:externalId/sync", requireAuth, requireRole(...LIVE_ORDER_SYNC_ROLES), syncLiveOrder);
 // Orders created by the signed-in SALESPERSON only. Registered before "/:id" so "mine" is never read as an order id.
 router.get("/mine", requireAuth, requireRole(...MY_ORDERS_ROLES), listMyOrders);
 router.get("/", requireAuth, listOrders);

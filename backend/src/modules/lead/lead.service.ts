@@ -5,6 +5,7 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { generateLeadNumber } from "@/utils/leadNumber.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
+import { logger } from "@/utils/logger.js";
 import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, scheduleFollowUp } from "../tasks/tasks.followup.js";
 // Root-cause fix: this used to import from @/utils/normalize.js, a second, DIFFERENT normalizeMobile
 // that just strips non-digit characters - no "+" prefix, no default-country-code inference for a bare
@@ -21,6 +22,7 @@ import { FOLLOW_UP_TASK_TYPES, completePendingFollowUps, parseFollowUpAt, schedu
 import { normalizeMobile, normalizeEmail } from "@/lib/leadIdentity.js";
 import { isAbandonedImportBatch } from "@/lib/importBatchKind.js";
 import { bucketToday } from "@/lib/leadBucket.js";
+import { nextPoolMember } from "../abandonment/abandonment.pool.js";
 import {
   Role,
   UserStatus,
@@ -970,10 +972,67 @@ class LeadService {
     return { ...lead, assignedManagerId: manager.id };
   }
 
+  /**
+   * 24/7 round-robin over the configured abandoned-lead pool. Safe to call any number of times for the same lead (webhook retries, polling, the sweep): the pool-state row is locked FIRST, then the lead is
+   * re-read, so two concurrent calls are serialised and the second sees the owner the first set and does nothing. A lead that already has an owner is never touched. Pool members who are disabled or missing
+   * are logged and skipped (never created, never assigned to). The cursor is stored in the same transaction as the assignment, so it survives restarts and never advances without an assignment.
+   */
+  async autoAssignAbandonedFromPool(tx: TxClient, lead: Lead): Promise<{ assigned: boolean; reason: string; userId?: string }> {
+    // 1. Deploy-order safety: if the table does not exist yet (code deployed before the migration) this is a clean "pool disabled" - a failing statement here would abort the whole transaction and take the
+    //    existing manager / salesperson auto-assign down with it. to_regclass never raises.
+    const exists = await tx.$queryRaw<{ t: string | null }[]>`SELECT to_regclass('abandoned_pool_state')::text AS t`;
+    if (!exists[0]?.t) return { assigned: false, reason: "pool disabled" };
+    // 2. Plain read first: while the pool is off (or never configured) NO row lock is taken, so the existing flow is not serialised behind it.
+    const peek = await tx.$queryRaw<{ enabled: boolean }[]>`SELECT enabled FROM abandoned_pool_state ORDER BY id LIMIT 1`;
+    if (!peek[0]?.enabled) return { assigned: false, reason: "pool disabled" };
+    // 3. Only now lock the state row (serialises every instance, webhook, import and sweep), and re-check under the lock.
+    const rows = await tx.$queryRaw<{ id: string; enabled: boolean; lastAssignedUserId: string | null }[]>`
+      SELECT id, enabled, last_assigned_user_id AS "lastAssignedUserId" FROM abandoned_pool_state ORDER BY id LIMIT 1 FOR UPDATE
+    `;
+    const state = rows[0];
+    if (!state || !state.enabled) return { assigned: false, reason: "pool disabled" };
+
+    const fresh = await tx.lead.findUnique({ where: { id: lead.id } });
+    if (!fresh) return { assigned: false, reason: "lead not found" };
+    if (fresh.ownerId) return { assigned: false, reason: "already owned" };
+    if (fresh.workingStatus === "DEACTIVATED") return { assigned: false, reason: "lead deactivated" };
+
+    const members = await tx.abandonedPoolMember.findMany({ orderBy: [{ position: "asc" }, { id: "asc" }] });
+    const users = await tx.user.findMany({ where: { id: { in: members.map((m) => m.userId) } } });
+    const byId = new Map(users.map((u) => [u.id, u]));
+    const eligible = members.flatMap((m) => {
+      const u = byId.get(m.userId);
+      return u && u.role === Role.SALESPERSON && u.status === UserStatus.ACTIVE ? [u] : [];
+    });
+    if (eligible.length < members.length) {
+      logger.warn(`abandoned_pool skipped_members=${members.filter((m) => !eligible.some((u) => u.id === m.userId)).map((m) => m.userId).join(",")} reason=disabled_or_missing`);
+    }
+    const salesperson = nextPoolMember(eligible, state.lastAssignedUserId);
+    if (!salesperson) return { assigned: false, reason: "no eligible pool member" };
+
+    let current = fresh;
+    const managerId = salesperson.reportingManagerId;
+    if (!current.assignedManagerId && managerId) {
+      const manager = await tx.user.findUnique({ where: { id: managerId } });
+      if (manager && manager.role === Role.MANAGER && manager.status === UserStatus.ACTIVE) {
+        await this.bulkAssignLeadsToManager(tx, [{ lead: current, manager }], null, AssignmentType.ROUND_ROBIN);
+        current = { ...current, assignedManagerId: manager.id };
+      }
+    }
+    const membership = current.assignedManagerId
+      ? await tx.groupMember.findFirst({ where: { userId: salesperson.id, isActive: true, group: { managerId: current.assignedManagerId, status: "ACTIVE" } }, select: { groupId: true } })
+      : null;
+    await this.bulkAssignLeadsToSalesperson(tx, [{ lead: current, salesperson, groupId: membership?.groupId ?? null }], null, AssignmentType.ROUND_ROBIN);
+    await tx.abandonedPoolState.update({ where: { id: state.id }, data: { lastAssignedUserId: salesperson.id } });
+    return { assigned: true, reason: "assigned", userId: salesperson.id };
+  }
+
   /** Entry point for a newly-created abandoned lead: tries the manager stage, then (whether a
    *  manager was just assigned or already present) the salesperson stage. Each stage's own toggle
    *  decides whether anything actually happens - safe to call unconditionally. */
   async autoAssignAbandonedLead(tx: TxClient, lead: Lead): Promise<void> {
+    // The 24/7 pool goes first: when it is on it owns abandoned-lead assignment (attendance / shift / online status are not consulted). Off, missing or empty -> the existing two stages below, unchanged.
+    if ((await this.autoAssignAbandonedFromPool(tx, lead)).assigned) return;
     const withManager = await this.autoAssignManagerForLead(tx, lead);
     await this.autoAssignSalespersonForLead(tx, withManager);
   }

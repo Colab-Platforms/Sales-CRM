@@ -200,6 +200,20 @@ class ManagerAnalyticsService {
     return { ...data, salesperson: person, recentActivity };
   }
 
+  /**
+   * The orders credited to the viewer's telecallers in [from, to] with the Reports' own rules (soldOrders: CRM-confirmed, or assisted within ASSIST_WINDOW_DAYS), narrowed by the same
+   * salesperson / payment-mode / order-status filters. Used by the Orders Dashboard's Telecaller Performance section so it cannot drift from Reports. Read-only.
+   */
+  async creditedOrders(viewer: AnalyticsViewer, f: AnalyticsFilters) {
+    const allTeam = await this.getTeam(viewer);
+    if (f.salespersonId && !allTeam.some((p) => p.id === f.salespersonId)) throw new ApiError("Salesperson not found", STATUS_CODES.NOT_FOUND);
+    const team = f.salespersonId ? allTeam.filter((p) => p.id === f.salespersonId) : allTeam;
+    const days = listDays(f);
+    if (days.length === 0 || days.length > MAX_RANGE_DAYS) throw new ApiError(`Date range must be between 1 and ${MAX_RANGE_DAYS} days`, STATUS_CODES.BAD_REQUEST);
+    const { start, end } = rangeBounds(f);
+    return { team: allTeam.map((p) => ({ id: p.id, name: p.name })), orders: await soldOrders(team.map((p) => p.id), start, end, f) };
+  }
+
   /** Every eligible order behind the Sales & Revenue figures for this viewer and these filters, as CSV. */
   async ordersExport(viewer: AnalyticsViewer, f: AnalyticsFilters) {
     const allTeam = await this.getTeam(viewer);

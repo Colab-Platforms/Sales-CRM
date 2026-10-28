@@ -100,3 +100,6 @@ export function previousRange(range: DashboardRange, timezone: string = BUSINESS
   const from = shiftDate(to, -(range.days - 1));
   return { range: "custom", from, to, start: dayBounds(from, timezone).start, end: dayBounds(to, timezone).end, timezone, days: range.days };
 }
+
+/** The business timezone's UTC offset in minutes for this range (the Reports take their date window as "local midnight minus offset"). */
+export const tzOffsetOf = (r: Pick<DashboardRange, "from" | "start">): number => Math.round((Date.parse(`${r.from}T00:00:00.000Z`) - r.start.getTime()) / 60_000);

@@ -48,6 +48,24 @@ export function summarize(orders: LiveOrder[]) {
     cancelled: count("CANCELLED"),
     cancelledValue: rupees(cents("CANCELLED")),
     fulfilled: count("FULFILLED"),
+    ...revenueSplit(orders),
+  };
+}
+
+/**
+ * The three money cards the Website dashboard also shows - the SAME rules as the database-backed dashboard (orders.dashboard.service.ts):
+ *   codRevenue / prepaidRevenue = value of the COD / prepaid orders that are not cancelled;
+ *   collected = money received on the selected orders: a paid order counts in full, a partially refunded one net of what was refunded (the Reports' own definition of "paid").
+ * They were missing from this summary, so the cards read `undefined` and rendered "NaN". The figures that already existed above are untouched.
+ */
+export function revenueSplit(orders: LiveOrder[]): { codRevenue: number; prepaidRevenue: number; collected: number } {
+  const live = orders.filter(inInr);
+  const sum = (pick: (o: LiveOrder) => number) => live.reduce((s, o) => s + pick(o), 0);
+  const notCancelled = (o: LiveOrder) => o.status !== OrderStatus.CANCELLED;
+  return {
+    codRevenue: rupees(sum((o) => (o.paymentMode === "COD" && notCancelled(o) ? o.totalCents : 0))),
+    prepaidRevenue: rupees(sum((o) => (o.paymentMode === "PREPAID" && notCancelled(o) ? o.totalCents : 0))),
+    collected: rupees(sum((o) => (o.paymentStatus === PaymentStatus.SUCCESS ? o.totalCents : o.paymentStatus === PaymentStatus.PARTIALLY_REFUNDED ? Math.max(0, o.totalCents - o.refundedCents) : 0))),
   };
 }
 

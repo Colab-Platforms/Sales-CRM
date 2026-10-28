@@ -2,7 +2,8 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Loader2, Phone, PhoneCall, PhoneMissed, PhoneOff } from "lucide-react";
+import Link from "next/link";
+import { ExternalLink, Loader2, ShoppingCart, Phone, PhoneCall, PhoneMissed, PhoneOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,8 @@ import { useFollowUpConflict } from "@/components/follow-ups/use-follow-up-confl
 import { useSubmitCallOutcomeMutation } from "@/lib/api-client/mutations/calling.mutations";
 import { callOutcomesQueryOptions, leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
+import { CreateOrderDialog } from "@/components/whatsapp/inbox/create-order-dialog";
+import { callStateLabel, customerLine, fullLeadHref, hasUnsavedOutcome, savedSummary } from "./call-quick-actions";
 import type { Call, CallStatus } from "@/lib/api-client/types/calling.types";
 import type { LeadFollowUp } from "@/lib/api-client/types/tasks.types";
 
@@ -56,7 +59,8 @@ export const CallOutcomeForm = forwardRef<CallOutcomeFormHandle, {
   call: Call;
   /** The reminder already on this lead - shown in the time picker, and replaced if a new time is saved. */
   currentFollowUp?: LeadFollowUp | null;
-  onSaved?: () => void;
+  /** Called after the outcome is saved. The popup does NOT close itself: Create Order / notes / a different disposition stay available. */
+  onSaved?: (saved: { outcomeName: string | null; followUpAt: string | null }) => void;
   /** Live active-call dialog only: if the salesperson already picked a (valid) outcome while the
    *  call was still connected, save it the instant the call ends instead of making them click Save
    *  again. Left off for the call-history form, where `call` is already terminal on mount and
@@ -74,6 +78,8 @@ export const CallOutcomeForm = forwardRef<CallOutcomeFormHandle, {
   const [outcomeId, setOutcomeId] = useState(call.outcome?.id ?? "");
   const [notes, setNotes] = useState(call.notes ?? "");
   const [followUpAt, setFollowUpAt] = useState("");
+  // What this form itself last saved (the call query may not have refetched yet) - so a saved disposition is never treated as unsaved, and can be changed again later.
+  const [justSaved, setJustSaved] = useState<{ outcomeId: string; notes: string } | null>(null);
 
   const selectedOutcome = outcomes.find((o) => o.id === outcomeId);
   const noteMissing = Boolean(selectedOutcome?.requiresNote) && !notes.trim();
@@ -84,7 +90,7 @@ export const CallOutcomeForm = forwardRef<CallOutcomeFormHandle, {
   // True once the salesperson has picked something that hasn't made it to the server yet (a fresh
   // pick while live, or an edit to an already-saved outcome) - the case the Close button must not
   // silently throw away.
-  const hasUnsavedSelection = Boolean(outcomeId) && !(call.outcome?.id === outcomeId && notes === (call.notes ?? ""));
+  const hasUnsavedSelection = hasUnsavedOutcome({ outcomeId, notes }, { outcomeId: call.outcome?.id ?? null, notes: call.notes ?? null }, justSaved);
 
   useImperativeHandle(ref, () => ({
     requestClose: () => {
@@ -132,7 +138,8 @@ export const CallOutcomeForm = forwardRef<CallOutcomeFormHandle, {
       {
         onSuccess: () => {
           toast.success(selectedOutcome?.requiresFollowup ? "Saved — reminder set." : "Call outcome saved.");
-          onSaved?.();
+          setJustSaved({ outcomeId, notes });
+          onSaved?.({ outcomeName: selectedOutcome?.name ?? null, followUpAt: selectedOutcome?.requiresFollowup ? (followUpIso ?? null) : null });
         },
         onError: (error) => toast.error(getErrorMessage(error, "Failed to save call outcome.")),
       },
@@ -183,7 +190,7 @@ export const CallOutcomeForm = forwardRef<CallOutcomeFormHandle, {
         disabled={!canSave}
         onClick={handleSave}
       >
-        Save outcome
+        {justSaved || call.outcome ? "Update outcome" : "Save outcome"}
       </Button>
     </div>
   );
@@ -334,6 +341,9 @@ export interface ActiveCallLead {
   id: string;
   firstName: string;
   lastName: string | null;
+  /** Shown and used to prefill the order form when the caller knows it. */
+  mobile?: string | null;
+  status?: string | null;
 }
 
 // Live view of one just-started call: polls this lead's calls every 3s (webhook-driven status, no
@@ -362,8 +372,12 @@ export function ActiveCallDialog({
   const ended = Boolean(call && TERMINAL_CALL_STATUSES.has(call.status));
   // Nobody spoke: the backend already logged "Ringing / no answer", so there's no form to fill in.
   const noAnswer = call?.status === "NO_ANSWER";
-  const showOutcome = Boolean(call && !noAnswer && CONNECTED_OR_LATER.has(call.status));
+  const showOutcome = Boolean(call && CONNECTED_OR_LATER.has(call.status)); // also after "no answer": the outcome can still be changed
   const outcomeFormRef = useRef<CallOutcomeFormHandle>(null);
+  // The order form opens ON TOP of this popup. While it is open the popup cannot be dismissed (an outside press or Escape would otherwise unmount it together with an unsaved order); it stays mounted underneath, so the call keeps updating.
+  const [orderOpen, setOrderOpen] = useState(false);
+  const [saved, setSaved] = useState<{ outcomeName: string | null; followUpAt: string | null } | null>(null);
+  const summary = savedSummary(saved?.outcomeName ?? call?.outcome?.name, saved ? saved.followUpAt : (currentFollowUp?.scheduledAt ?? null));
 
   // Closing (the footer button, the built-in "X", Escape, or a click outside) must never silently
   // drop a selected-but-unsaved outcome. Asks the form: it returns true when there's nothing unsaved
@@ -381,6 +395,10 @@ export function ActiveCallDialog({
       // does NOT hold it open, so when we want to keep it open we must call eventDetails.cancel().
       onOpenChange={(open, eventDetails) => {
         if (open) return;
+        if (orderOpen) {
+          eventDetails.cancel();
+          return;
+        }
         if (mayCloseNow()) {
           onClose();
         } else {
@@ -397,13 +415,23 @@ export function ActiveCallDialog({
         </DialogHeader>
 
         <CallHero lead={lead} call={call} />
+        <div className="flex flex-wrap items-center justify-center gap-2 text-xs" data-testid="call-customer-info">
+          <Badge variant={callStateLabel(call?.status) === "Connected" ? "default" : "outline"} data-testid="call-state">{callStateLabel(call?.status)}</Badge>
+          {customerLine(lead) ? <span className="text-muted-foreground">{customerLine(lead)}</span> : null}
+        </div>
+        <div className="flex flex-wrap justify-center gap-2" data-testid="call-quick-actions">
+          <Button size="sm" variant="outline" onClick={() => setOrderOpen(true)} data-testid="call-create-order"><ShoppingCart data-icon="inline-start" />Create Order</Button>
+          <Link href={fullLeadHref(lead.id)} target="_blank" rel="noopener" className="inline-flex h-7 items-center gap-1 rounded-md border border-border px-2.5 text-xs hover:bg-muted" data-testid="call-view-lead"><ExternalLink className="size-3.5" />View Full Lead</Link>
+        </div>
+        {summary ? <p className="text-center text-xs font-medium text-emerald-700 dark:text-emerald-400" data-testid="call-saved-summary">{summary}</p> : null}
         <CallStepper status={call?.status} />
 
         {noAnswer ? (
           <p className="rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2.5 text-center text-sm text-muted-foreground">
-            Marked as <span className="font-medium text-foreground">Ringing / no answer</span> automatically.
+            Marked as <span className="font-medium text-foreground">Ringing / no answer</span> automatically. You can still change the outcome, add a note or create an order below.
           </p>
-        ) : showOutcome && call ? (
+        ) : null}
+        {showOutcome && call ? (
           <div className="space-y-2 rounded-lg border border-border/70 bg-muted/30 p-3">
             <div className="flex items-center justify-between">
               <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -416,7 +444,7 @@ export function ActiveCallDialog({
               leadId={lead.id}
               call={call}
               currentFollowUp={currentFollowUp}
-              onSaved={onClose}
+              onSaved={setSaved}
               autoSaveOnEnd
             />
           </div>
@@ -435,10 +463,11 @@ export function ActiveCallDialog({
               if (mayCloseNow()) onClose();
             }}
           >
-            {ended && !noAnswer ? "Log later" : "Close"}
+            {ended && !noAnswer && !summary ? "Log later" : "Close"}
           </Button>
         </div>
       </DialogContent>
+      {orderOpen ? <CreateOrderDialog open onOpenChange={setOrderOpen} leadId={lead.id} customerName={`${lead.firstName} ${lead.lastName ?? ""}`.trim()} customerMobile={lead.mobile ?? null} /> : null}
     </Dialog>
   );
 }

@@ -1,6 +1,7 @@
 import { ActivitySource, ActivityType, AbandonmentStatus, AbandonmentType } from "../../../generated/prisma/enums.js";
 import LeadService from "../lead/lead.service.js";
 import { normalizeEmail, normalizeMobile } from "../../lib/leadIdentity.js";
+import { cartItemsKey } from "../../lib/checkoutCartKey.js";
 import { safeMessage, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import type { WebhookStore } from "../shopify/shopify.webhook.store.js";
 import { logger } from "@/utils/logger.js";
@@ -142,6 +143,18 @@ export interface SaveAbandonmentOptions {
 }
 
 /** The SAVE step: resolves (or creates) the lead, then creates or refreshes the one open CHECKOUT abandonment for the cart. Shared by the webhook processor and the CSV import. */
+/** How close two entries of the same cart must be to count as one checkout re-entered. */
+export const REENTRY_WINDOW_MINUTES = 60;
+/** The same checkout entered again: the same FULL item list (see checkoutCartKey.ts - never the 3-name display field) and the same cart value, both present. */
+export function isSameCheckoutReentry(previous: unknown, next: Record<string, unknown>): boolean {
+  const prev = (previous && typeof previous === "object" ? previous : {}) as Record<string, unknown>;
+  const value = (o: Record<string, unknown>) => (o.cartValue === null || o.cartValue === undefined || o.cartValue === "" ? null : String(Number(o.cartValue)));
+  const a = cartItemsKey(prev);
+  const b = cartItemsKey(next);
+  if (a === null || b === null || value(prev) === null || value(next) === null) return false;
+  return a === b && value(prev) === value(next);
+}
+
 export async function saveAbandonment(tx: Db, event: ParsedAbandonment, now: Date, options: SaveAbandonmentOptions = {}): Promise<{ leadId: string; created: boolean }> {
   const lead = await resolveLead(tx, event);
   const { score, reason } = priorityFromCartValue(event.cartValue);
@@ -157,15 +170,31 @@ export async function saveAbandonment(tx: Db, event: ParsedAbandonment, now: Dat
       })
     : null;
 
-  const previousSnapshot = existing
-    ? (await tx.abandonment.findUnique({ where: { id: existing.id }, select: { cartSnapshot: true } }))?.cartSnapshot
+  // Shiprocket issues a NEW cart id every time the same customer re-enters checkout, so the id alone cannot tell "the same checkout again" from "a different one". Fallback key, used only when no row carries this
+  // cart id: the same lead (same phone / e-mail), the same items, the same cart value, and an earlier open checkout within REENTRY_WINDOW_MINUTES. Anything else stays a separate checkout.
+  const earlyCart = buildCartSnapshot(event, undefined) as Record<string, unknown>;
+  const reentry = existing
+    ? null
+    : (
+        await tx.abandonment.findMany({
+          where: { leadId: lead.id, type: AbandonmentType.CHECKOUT, status: { in: [AbandonmentStatus.ACTIVE, AbandonmentStatus.IN_PROGRESS] }, detectedAt: { gte: new Date(detectedAt.getTime() - REENTRY_WINDOW_MINUTES * 60_000), lte: detectedAt } },
+          select: { id: true, detectedAt: true, cartSnapshot: true },
+          orderBy: { detectedAt: "desc" },
+        })
+      ).find((row) => isSameCheckoutReentry(row.cartSnapshot, earlyCart)) ?? null;
+  const canonical = existing ?? (reentry ? { id: reentry.id, detectedAt: reentry.detectedAt } : null);
+
+  const previousSnapshot = canonical
+    ? (await tx.abandonment.findUnique({ where: { id: canonical.id }, select: { cartSnapshot: true } }))?.cartSnapshot
     : undefined;
   const cartSnapshot = buildCartSnapshot(event, previousSnapshot) as Prisma.InputJsonObject;
 
-  const abandonment = existing
+  const abandonment = canonical
     ? await tx.abandonment.update({
-        where: { id: existing.id },
-        data: { detectedAt: detectedAt.getTime() >= existing.detectedAt.getTime() ? detectedAt : existing.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
+        where: { id: canonical.id },
+        // a re-entry under a NEW cart id keeps the canonical row's own detection time (the 60-minute window is anchored on it and never slides, so chained re-entries cannot absorb hours of separate checkouts);
+        // a repeat delivery of the SAME cart id still moves it forward as before
+        data: { detectedAt: !reentry && detectedAt.getTime() >= canonical.detectedAt.getTime() ? detectedAt : canonical.detectedAt, priorityScore: score, priorityReason: reason, cartSnapshot },
       })
     : await tx.abandonment.create({
         data: {
@@ -189,13 +218,13 @@ export async function saveAbandonment(tx: Db, event: ParsedAbandonment, now: Dat
       referenceType: "Abandonment",
       referenceId: abandonment.id,
       source: options.activitySource ?? ActivitySource.SHIPROCKET_WEBHOOK,
-      title: existing ? (options.updatedTitle ?? "Checkout abandonment updated") : (options.createdTitle ?? "Checkout abandoned"),
+      title: canonical ? (options.updatedTitle ?? "Checkout abandonment updated") : (options.createdTitle ?? "Checkout abandoned"),
       description: summarize(event),
     },
   });
 
   await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
-  return { leadId: lead.id, created: !existing };
+  return { leadId: lead.id, created: !canonical };
 }
 
 export async function processAbandonmentEvent(eventId: string, deps: AbandonmentProcessorDeps): Promise<AbandonmentProcessOutcome> {
