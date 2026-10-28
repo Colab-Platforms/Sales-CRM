@@ -92,7 +92,14 @@ export async function assignUnassigned(opts: { createdFrom?: Date; createdTo?: D
 }
 
 /** The automatic retry: leads that arrived after the pool was switched on and are still unowned (an assignment that failed, or a lead created while the database was busy). Older backlog is NOT touched here. */
+/** True when the pool tables exist (the migration has been applied). Never raises: code deployed before the migration must be a quiet no-op, not a warning every tick. */
+export async function poolTablesExist(db: Pick<typeof prisma, "$queryRaw">): Promise<boolean> {
+  const r = await db.$queryRaw<{ s: string | null; m: string | null }[]>`SELECT to_regclass('abandoned_pool_state')::text AS s, to_regclass('abandoned_pool_member')::text AS m`;
+  return Boolean(r[0]?.s && r[0]?.m);
+}
+
 export async function sweepNewUnassigned(db: typeof prisma = prisma): Promise<AssignRun | null> {
+  if (!(await poolTablesExist(db))) return null; // migration not applied yet: nothing to sweep, nothing to log
   const state = await db.abandonedPoolState.findFirst({ orderBy: { id: "asc" } });
   if (!state?.enabled || !state.enabledAt) return null;
   // a short grace so the sweep never races the webhook's own assignment of a lead that was only just saved
