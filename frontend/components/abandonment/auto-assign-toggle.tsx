@@ -12,7 +12,7 @@ import { CheckList } from "@/components/orders/column-filter";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { managerAutoAssignConfigQueryOptions, salespersonAutoAssignConfigQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
-import { useSetManagerAutoAssignMutation, useSetSalespersonAutoAssignMutation } from "@/lib/api-client/mutations/abandonment.mutations";
+import { useRedistributeAbsentMutation, useSetManagerAutoAssignMutation, useSetSalespersonAutoAssignMutation } from "@/lib/api-client/mutations/abandonment.mutations";
 
 // Sits above the manual assign-manager/assign-salesperson flow on the Abandoned Leads page - manual
 // assignment stays available either way, this only decides whether a new abandoned lead also gets
@@ -163,5 +163,72 @@ export function SalespersonAutoAssignToggle() {
         })
       }
     />
+  );
+}
+
+// Morning step after the overnight round-robin (which hands leads to every salesperson, present or not): previews, then moves the
+// absent salespeople's untouched leads to the ones clocked in now. Worked leads never move. See backend's redistributeAbsent.
+export function RedistributeAbsentCard() {
+  const mutation = useRedistributeAbsentMutation();
+  const [open, setOpen] = useState(false);
+  const preview = mutation.data && !mutation.data.confirmed ? mutation.data : null;
+
+  const openPreview = () => {
+    setOpen(true);
+    mutation.mutate(false, { onError: (err) => { setOpen(false); toast.error(getErrorMessage(err, "Failed to load the redistribution preview.")); } });
+  };
+  const confirm = () =>
+    mutation.mutate(true, {
+      onSuccess: (result) => {
+        setOpen(false);
+        toast.success(`${result.movable} lead${result.movable === 1 ? "" : "s"} moved to present salespeople.`);
+      },
+      onError: (err) => toast.error(getErrorMessage(err, "Failed to redistribute leads.")),
+    });
+
+  return (
+    <>
+      <Card>
+        <CardContent className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-col gap-1">
+            <p className="text-sm font-medium">Redistribute absent salespeople&apos;s leads</p>
+            <p className="text-sm text-muted-foreground">Leads that arrived while nobody was clocked in are shared among all your salespeople. In the morning, move the untouched leads of anyone who is absent to the people who are present.</p>
+          </div>
+          <Button variant="outline" size="sm" onClick={openPreview} disabled={mutation.isPending}>
+            Review &amp; redistribute
+          </Button>
+        </CardContent>
+      </Card>
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Redistribute to present salespeople</DialogTitle>
+            <DialogDescription>Only leads that an absent salesperson has not worked yet are moved. Leads already worked stay where they are.</DialogDescription>
+          </DialogHeader>
+          {mutation.isPending && !preview ? <Skeleton className="h-24 w-full" /> : null}
+          {preview ? (
+            <div className="flex flex-col gap-3 text-sm">
+              <div>
+                <p className="font-medium">Absent ({preview.absent.length})</p>
+                {preview.absent.length === 0 ? <p className="text-muted-foreground">Everyone on your team is present.</p> : (
+                  <ul className="text-muted-foreground">{preview.absent.map((u) => <li key={u.userId}>{u.name}: {u.leads} untouched lead{u.leads === 1 ? "" : "s"}</li>)}</ul>
+                )}
+              </div>
+              <div>
+                <p className="font-medium">Present ({preview.present.length})</p>
+                {preview.present.length === 0 ? <p className="text-muted-foreground">Nobody is clocked in yet, so nothing can be moved.</p> : (
+                  <ul className="text-muted-foreground">{preview.plan.map((u) => <li key={u.userId}>{u.name}: +{u.leads}</li>)}</ul>
+                )}
+              </div>
+              <p>{preview.movable} lead{preview.movable === 1 ? "" : "s"} will be moved.</p>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setOpen(false)} disabled={mutation.isPending}>Cancel</Button>
+            <Button size="sm" onClick={confirm} disabled={mutation.isPending || !preview || preview.movable === 0}>Move leads</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

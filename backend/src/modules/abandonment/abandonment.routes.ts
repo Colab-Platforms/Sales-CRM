@@ -25,6 +25,7 @@ import {
 import {
   getManagerAutoAssignConfig,
   getSalespersonAutoAssignConfig,
+  redistributeAbsentLeads,
   updateManagerAutoAssignConfig,
   updateSalespersonAutoAssignConfig,
 } from "./abandonment.auto-assign.controller.js";
@@ -59,6 +60,8 @@ router.get("/auto-assign/manager-config", requireAuth, requireRole(Role.ADMIN), 
 router.patch("/auto-assign/manager-config", requireAuth, requireRole(Role.ADMIN), updateManagerAutoAssignConfig);
 router.get("/auto-assign/salesperson-config", requireAuth, requireRole(Role.MANAGER), getSalespersonAutoAssignConfig);
 router.patch("/auto-assign/salesperson-config", requireAuth, requireRole(Role.MANAGER), updateSalespersonAutoAssignConfig);
+// Morning: manager previews / confirms moving absent salespeople's untouched overnight leads to present ones.
+router.post("/auto-assign/redistribute-absent", requireAuth, requireRole(Role.MANAGER), redistributeAbsentLeads);
 
 // CSV upload (admin / manager), same preview-then-confirm shape as the normal lead import. Registered ahead of "/:id".
 router.post("/import/preview", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), csvUpload.single("file"), previewAbandonmentImport);

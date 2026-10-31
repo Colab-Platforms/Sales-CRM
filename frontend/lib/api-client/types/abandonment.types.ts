@@ -211,6 +211,15 @@ export interface ManagerAutoAssignConfig extends AutoAssignConfig {
   managerIds: string[];
 }
 
+/** POST /abandonments/auto-assign/redistribute-absent: preview (confirmed=false) or result of moving absent salespeople's untouched leads to present ones. */
+export interface RedistributeAbsentResult {
+  confirmed: boolean;
+  present: { userId: string; name: string }[];
+  absent: { userId: string; name: string; leads: number }[];
+  movable: number;
+  plan: { userId: string; name: string; leads: number }[];
+}
+
 /** The saved cart + address of ONE abandoned checkout, shaped for the Create Order form (GET /abandonments/:id/order-prefill). */
 export interface OrderPrefillLine {
   key: string;

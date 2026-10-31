@@ -19,7 +19,7 @@ import { LeadSelectionToolbar } from "@/components/leads/lead-selection-toolbar"
 import { AssignAbandonmentManagerDialog } from "@/components/abandonment/assign-manager-dialog";
 import { AssignAbandonmentSalespersonDialog } from "@/components/abandonment/assign-salesperson-dialog";
 import { AbandonmentBulkUpdateStatusDialog } from "@/components/abandonment/bulk-update-status-dialog";
-import { ManagerAutoAssignToggle, SalespersonAutoAssignToggle } from "@/components/abandonment/auto-assign-toggle";
+import { ManagerAutoAssignToggle, RedistributeAbsentCard, SalespersonAutoAssignToggle } from "@/components/abandonment/auto-assign-toggle";
 import { AbandonmentDateRangeFilter, DATE_RANGE_LABEL, DEFAULT_DATE_RANGE, parseDateRange } from "@/components/abandonment/abandonment-date-range";
 import type { AbandonmentDateRange, ListAbandonmentsParams } from "@/lib/api-client/types/abandonment.types";
 import { parseAbandonedLeadsUrl } from "@/lib/abandoned-leads-href";
@@ -194,6 +194,7 @@ export function AbandonedLeadsView() {
 
       {isAdmin ? <ManagerAutoAssignToggle /> : null}
       {isManager ? <SalespersonAutoAssignToggle /> : null}
+      {isManager ? <RedistributeAbsentCard /> : null}
 
       {isStaff ? <IngestionHealthPanel canReconcile={isAdmin} /> : null}
 
