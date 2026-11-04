@@ -50,7 +50,7 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
   const calls: string[] = [];
   const state = {
     total: "1298.00",
-    lines: [{ id: "gid://shopify/LineItem/1", quantity: 2, current: undefined as number | undefined, variant: opts.alreadySwapped ? w.newGid : w.oldGid, price: "649.00" }],
+    lines: [{ id: "gid://shopify/LineItem/1", quantity: 2, current: undefined as number | undefined, variant: (opts.alreadySwapped ? w.newGid : w.oldGid) as string | null, price: "649.00", off: 0 }],
     committed: false,
     snapshot: null as any,
     newId: 100,
@@ -60,6 +60,9 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
     updatedInput: null as any,
     stagedLines: null as any,
   };
+  const discountInputs: any[] = [];
+  const customItems: any[] = [];
+  const stagedTotal = () => state.stagedLines.reduce((s: number, l: any) => s + Number(l.price) * (l.current ?? l.quantity) - l.off / 100, 0).toFixed(2);
   const client = {
     query: async (doc: string, vars: any) => {
       if (opts.delayMs) await new Promise((r) => setTimeout(r, opts.delayMs));
@@ -69,7 +72,7 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
         let view = state.lines;
         if (state.committed && state.staleLeft > 0) { state.staleLeft -= 1; view = state.snapshot; }
         return { order: { id: "gid://shopify/Order/1", cancelledAt: opts.cancelled ? "2026-10-20T00:00:00Z" : null, displayFulfillmentStatus: opts.fulfillment ?? "UNFULFILLED", currentTotalPriceSet: { shopMoney: { amount: state.total } },
-          lineItems: { nodes: view.map((l: any) => ({ id: l.id, quantity: l.quantity, currentQuantity: l.current ?? l.quantity, variant: { id: l.variant, product: { id: w.productGid } }, originalUnitPriceSet: { shopMoney: { amount: l.price } } })) }, shippingAddress: state.shipping } };
+          lineItems: { nodes: view.map((l: any) => ({ id: l.id, quantity: l.quantity, currentQuantity: l.current ?? l.quantity, variant: l.variant ? { id: l.variant, product: { id: w.productGid } } : null, originalUnitPriceSet: { shopMoney: { amount: l.price } } })) }, shippingAddress: state.shipping } };
       }
       if (/crmVariantForEdit/.test(doc)) { calls.push("read_variant"); return { productVariant: { id: vars.id, price: opts.newPrice ?? "649.00", product: { id: vars.id === w.newGid ? w.productGid : w.otherProductGid ?? w.productGid } } }; }
       if (/crmFlavourEditBegin/.test(doc)) {
@@ -81,9 +84,22 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
       if (/crmFlavourEditAddVariant/.test(doc)) {
         calls.push("edit_add_variant");
         const price = opts.newPrice ?? "649.00";
-        state.stagedLines.push({ id: `gid://shopify/LineItem/${state.newId++}`, quantity: vars.quantity, variant: vars.variantId, price });
-        const staged = (Number(price) * vars.quantity).toFixed(2);
-        return { orderEditAddVariant: { calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: staged } } }, userErrors: [] } };
+        state.stagedLines.push({ id: `gid://shopify/LineItem/${state.newId++}`, quantity: vars.quantity, variant: vars.variantId, price, off: 0 });
+        return { orderEditAddVariant: { calculatedLineItem: { id: state.stagedLines[state.stagedLines.length - 1].id }, calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: stagedTotal() } } }, userErrors: [] } };
+      }
+      if (/crmFlavourEditAddDiscount/.test(doc)) {
+        calls.push("edit_add_discount");
+        discountInputs.push(vars.discount);
+        const l = state.stagedLines.find((x: any) => x.id === vars.lineItemId);
+        if (!l) return { orderEditAddLineItemDiscount: { calculatedOrder: null, userErrors: [{ field: null, message: "line not found" }] } };
+        l.off = Math.round(Number(vars.discount.fixedValue.amount) * 100);
+        return { orderEditAddLineItemDiscount: { calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: stagedTotal() } } }, userErrors: [] } };
+      }
+      if (/crmFlavourEditAddCustomItem/.test(doc)) {
+        calls.push("edit_add_custom_item");
+        customItems.push(vars);
+        state.stagedLines.push({ id: `gid://shopify/LineItem/${state.newId++}`, quantity: vars.quantity, variant: null, price: Number(vars.price.amount).toFixed(2), off: 0 });
+        return { orderEditAddCustomItem: { calculatedOrder: { id: "x", totalPriceSet: { shopMoney: { amount: stagedTotal() } } }, userErrors: [] } };
       }
       if (/crmFlavourEditCommit/.test(doc)) {
         calls.push("edit_commit");
@@ -92,7 +108,7 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
         state.snapshot = state.lines;
         state.lines = state.stagedLines;
         state.committed = true;
-        state.total = state.lines.reduce((s: number, l: any) => s + Number(l.price) * (l.current ?? l.quantity), 0).toFixed(2);
+        state.total = state.lines.reduce((s: number, l: any) => s + Number(l.price) * (l.current ?? l.quantity) - l.off / 100, 0).toFixed(2);
         return { orderEditCommit: { order: { id: "gid://shopify/Order/1" }, userErrors: [] } };
       }
       if (/crmOrderShippingAddressUpdate/.test(doc)) {
@@ -105,7 +121,7 @@ function fakeShopify(w: { oldGid: string; newGid: string; productGid: string; ot
       throw new Error(`unexpected Shopify call: ${doc.slice(0, 60)}`);
     },
   };
-  return { client, calls, state };
+  return { client, calls, state, discountInputs, customItems };
 }
 
 async function world(tx: Prisma.TransactionClient, over: { linked?: boolean; status?: OrderStatus; shipment?: boolean; newVariantPrice?: string } = {}) {
@@ -162,22 +178,77 @@ describe("change flavour", () => {
     });
   });
 
-  it("a flavour with a different price is refused with an explanation: nothing is edited in Shopify or the CRM, and no payment is touched", async () => {
+  for (const [label, price, kind] of [["HIGHER", "799.00", "discount"]] as const) {
+    it(`new flavour with a ${label} catalogue price (${price}): the agreed 649.00 line price, quantity and total stay; the variant/SKU change; Shopify keeps the total via a ${kind} on the line`, async () => {
+      await inRollback(async (tx) => {
+        const w = await world(tx, { newVariantPrice: price });
+        const f = fakeShopify(w.ids, { newPrice: price });
+        const r = await svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id);
+        assert.equal(r.shopify, "updated");
+        assert.equal(r.priceKept?.shopifyAdjustment, kind);
+        assert.equal(r.priceKept?.agreedUnitPrice, "649.00");
+        assert.equal(r.priceKept?.catalogueUnitPrice, price);
+        assert.match(r.message, /stays at .*649/);
+        assert.equal(f.state.total, "1298.00", "Shopify total equals the CRM total");
+        const diff = Math.abs(Number(price) - 649) * 2;
+        assert.deepEqual(f.discountInputs.map((d) => d.fixedValue.amount), [diff.toFixed(2)]);
+        assert.equal(f.customItems.length, 0, "no extra line is ever added to the Shopify order");
+        assert.deepEqual(f.calls.filter((c) => c.startsWith("edit_")).slice(-1), ["edit_commit"]);
+        const after = await read(tx, w.order.id);
+        const line = after.items[0]!;
+        assert.equal(line.variantId, w.paan.id);
+        assert.equal(line.variantNameSnapshot, "Paan Masala Flavour");
+        assert.equal(line.skuSnapshot, w.paan.sku);
+        assert.deepEqual([line.unitPrice.toString(), line.quantity, line.totalPrice.toString()], ["649", 2, "1298"]);
+        assert.deepEqual([after.subtotal.toString(), after.discountAmount.toString(), after.shippingAmount.toString(), after.taxAmount.toString(), after.totalAmount.toString()], ["1298", "0", "0", "0", "1298"], "order amounts untouched");
+        const audit = await tx.activity.findMany({ where: { orderId: w.order.id } });
+        assert.equal(audit.length, 1);
+        assert.equal((audit[0]!.newValue as any).unitPrice, "649.00");
+      });
+    });
+  }
+
+  it("new flavour with a LOWER catalogue price (499 vs the agreed 649) on a Shopify-linked order is refused BEFORE anything is edited: no extra line, no commit, CRM unchanged, and the message says what to do", async () => {
     await inRollback(async (tx) => {
-      const w = await world(tx, { newVariantPrice: "699.00" });
-      const f = fakeShopify(w.ids);
-      await assert.rejects(svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id), (e: any) => e.statusCode === 409 && /priced differently/.test(e.message) && /extra payment or a refund/.test(e.message));
-      assert.deepEqual(f.calls, []);
-      assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.gutka.id);
+      const w = await world(tx, { newVariantPrice: "499.00" });
+      const f = fakeShopify(w.ids, { newPrice: "499.00" });
+      await assert.rejects(svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id), (e: any) => e.statusCode === 409 && /lower than this order's agreed price/.test(e.message) && /Nothing was changed/.test(e.message) && /fake item on the shipment/.test(e.message));
+      assert.ok(!f.calls.includes("edit_begin") && !f.calls.includes("edit_commit") && f.customItems.length === 0);
+      const after = await read(tx, w.order.id);
+      assert.deepEqual([after.items[0]!.variantId, after.items[0]!.unitPrice.toString(), after.totalAmount.toString()], [w.gutka.id, "649", "1298"]);
     });
   });
 
-  it("if Shopify's own price for the new flavour differs from the line, the swap is refused before anything is edited", async () => {
+  it("an order not linked to Shopify with a different catalogue price: variant/SKU change, price kept, no Shopify call", async () => {
     await inRollback(async (tx) => {
-      const w = await world(tx);
-      const f = fakeShopify(w.ids, { newPrice: "700.00" });
-      await assert.rejects(svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id), (e: any) => e.statusCode === 409 && /Shopify prices the new flavour/.test(e.message));
-      assert.ok(!f.calls.includes("edit_begin"));
+      const w = await world(tx, { linked: false, newVariantPrice: "499.00" });
+      const f = fakeShopify(w.ids);
+      const r = await svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id);
+      assert.equal(r.shopify, "not_linked");
+      assert.deepEqual(f.calls, []);
+      const line = (await read(tx, w.order.id)).items[0]!;
+      assert.deepEqual([line.variantId, line.unitPrice.toString(), line.totalPrice.toString()], [w.paan.id, "649", "1298"]);
+    });
+  });
+
+  it("the CRM discount / coupon, shipping and total are untouched by a flavour change", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { linked: false, newVariantPrice: "499.00" });
+      await tx.order.update({ where: { id: w.order.id }, data: { discountAmount: "100.00", discountReason: "Coupon DISTRIBUTOR500", couponCode: "DISTRIBUTOR500", shippingAmount: "50.00", totalAmount: "1248.00" } });
+      await svc(tx, fakeShopify(w.ids)).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id);
+      const after = await read(tx, w.order.id);
+      assert.deepEqual([after.discountAmount.toString(), after.shippingAmount.toString(), after.totalAmount.toString(), after.couponCode], ["100", "50", "1248", "DISTRIBUTOR500"]);
+    });
+  });
+
+  it("if Shopify cannot apply the price-keeping discount, nothing is committed, the CRM is unchanged and the error says so", async () => {
+    await inRollback(async (tx) => {
+      const w = await world(tx, { newVariantPrice: "799.00" });
+      const f = fakeShopify(w.ids, { newPrice: "799.00" });
+      const orig = f.client.query;
+      (f.client as any).query = async (doc: string, vars: any) => /crmFlavourEditAddDiscount/.test(doc) ? { orderEditAddLineItemDiscount: { calculatedOrder: null, userErrors: [{ field: null, message: "Discounts are not allowed" }] } } : orig(doc, vars);
+      await assert.rejects(svc(tx, f).changeFlavour(w.as(w.asha, Role.SALESPERSON), w.order.id, w.itemId, w.paan.id), (e: any) => e.statusCode === 502 && /Discounts are not allowed/.test(e.message) && /Nothing was changed in the CRM/.test(e.message));
+      assert.ok(!f.calls.includes("edit_commit"));
       assert.equal((await read(tx, w.order.id)).items[0]!.variantId, w.gutka.id);
     });
   });

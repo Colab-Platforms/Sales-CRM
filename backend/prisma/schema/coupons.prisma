@@ -1,0 +1,30 @@
+// CRM-managed coupons (Admin > Coupons), applied from the Create Order discount editor. One coupon per order, never stacked.
+// A coupon that has been used by an order is only ever soft-deleted (deletedAt), so the order keeps pointing at what it used.
+model Coupon {
+  id String @id @default(uuid()) @db.Uuid
+
+  /** Stored upper-case. Unique among coupons that are not deleted (partial unique index in the migration). */
+  code String @map("code") @db.VarChar(50)
+
+  discountType  CouponDiscountType @map("discount_type")
+  discountValue Decimal            @map("discount_value") @db.Decimal(12, 2)
+
+  /** null = every customer; otherwise only customers of this type. */
+  eligibleCustomerType CustomerType? @map("eligible_customer_type")
+
+  minOrderValue Decimal? @map("min_order_value") @db.Decimal(12, 2)
+  /** Percentage coupons only: the most a single order can get. */
+  maxDiscount   Decimal? @map("max_discount") @db.Decimal(12, 2)
+
+  isActive  Boolean   @default(true) @map("is_active")
+  deletedAt DateTime? @map("deleted_at")
+
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  orders Order[]
+
+  @@index([isActive, deletedAt])
+  @@map("coupons")
+}

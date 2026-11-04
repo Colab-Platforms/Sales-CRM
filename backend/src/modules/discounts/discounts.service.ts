@@ -6,6 +6,8 @@ import { computePercentDiscount } from "../orders/orders.discount.js";
 import { offersService } from "../offers/offers.controller.js";
 import type { ActiveOffer, ActiveOffersResult } from "../offers/offers.types.js";
 import { loadDefaultDiscount } from "./discounts.config.js";
+import CouponsService, { evaluateCoupon } from "../coupons/coupons.service.js";
+import type { CustomerType } from "../../../generated/prisma/enums.js";
 
 // Discounts for Create Order and Prepaid Upgrade. ONE place decides what discount an operation gets: the browser sends only a
 // custom type + value, or a Fastrr coupon CODE; this resolves it against the real base amount and (for a coupon) the live, active
@@ -23,7 +25,7 @@ export interface DiscountSelection {
 }
 
 export interface ResolvedDiscount {
-  source: "NONE" | "FASTRR" | "CUSTOM";
+  source: "NONE" | "FASTRR" | "CRM" | "CUSTOM";
   type: DiscountType | null;
   /** The coupon's / typed value, normalised (e.g. "100.00" or "10.00"). */
   value: string | null;
@@ -31,7 +33,7 @@ export interface ResolvedDiscount {
   /** Fastrr's reference for the offer (its id). */
   couponId: string | null;
   couponCode: string | null;
-  couponSource: "FASTRR" | null;
+  couponSource: "FASTRR" | "CRM" | null;
   /** A custom discount that is exactly the configured default. */
   wasDefault: boolean;
 }
@@ -87,30 +89,35 @@ export function setDefaultOffersSource(source: OffersSource | null): void {
 }
 
 class DiscountsService {
+  private readonly coupons: CouponsService;
   constructor(
-    _db: DbClient = prisma, // accepted so callers can pass their transaction; Fastrr is the only source now
+    db: DbClient = prisma, // callers pass their transaction; CRM coupons are read through it
     private readonly offers: OffersSource | undefined = undefined,
-  ) {}
+  ) {
+    this.coupons = new CouponsService(db);
+  }
 
   private get source(): OffersSource {
     return this.offers ?? defaultSource;
   }
 
   /** What the UI offers: the configured default (custom) discount and the live Fastrr coupons. Never a CRM-defined coupon list. */
-  async options(_flow: DiscountFlow) {
+  async options(_flow: DiscountFlow, customerType: CustomerType = "REGULAR") {
     const defaultDiscount = loadDefaultDiscount();
+    // ORDER: the CRM coupons (Admin > Coupons) are what the screen offers, read from the CRM database. The live Fastrr list below is still returned for older callers; a Fastrr problem only empties that part.
+    const coupons = _flow === "ORDER" ? await this.coupons.availableFor(customerType) : undefined;
     try {
       const { offers } = await this.source.getActiveOffers();
-      const coupons = offers.map(toCouponOption).filter((c): c is FastrrCouponOption => c !== null);
-      return { defaultDiscount, fastrr: { available: true as boolean, coupons, reason: null as string | null } };
+      const fastrrCoupons = offers.map(toCouponOption).filter((c): c is FastrrCouponOption => c !== null);
+      return { defaultDiscount, customerType, coupons, fastrr: { available: true as boolean, coupons: fastrrCoupons, reason: null as string | null } };
     } catch (error: any) {
       // Not configured or unreachable: say so. Never substitute made-up coupons.
-      return { defaultDiscount, fastrr: { available: false as boolean, coupons: [] as FastrrCouponOption[], reason: (error?.message as string) ?? "Fastrr coupons are unavailable" } };
+      return { defaultDiscount, fastrr: { available: false as boolean, coupons: [] as FastrrCouponOption[], reason: (error?.message as string) ?? "Fastrr coupons are unavailable" } , customerType, coupons };
     }
   }
 
   /** Resolves a selection against the real base (and, for a coupon, the live Fastrr offer). `baseCents` is what the discount may apply to. */
-  async resolve(_flow: DiscountFlow, selection: DiscountSelection | undefined | null, baseCents: number): Promise<ResolvedDiscount> {
+  async resolve(_flow: DiscountFlow, selection: DiscountSelection | undefined | null, baseCents: number, ctx?: { customerType: CustomerType }): Promise<ResolvedDiscount> {
     if (!selection || selection.none) return NO_DISCOUNT;
 
     if (selection.couponCode !== undefined) {
@@ -118,10 +125,20 @@ class DiscountsService {
       if (selection.type !== undefined || selection.value !== undefined) throw bad("Send either a Fastrr coupon or a custom discount, not both");
       const code = selection.couponCode.trim();
       if (!code) throw bad("Choose a Fastrr coupon");
+      // A CRM coupon (Admin > Coupons) is checked here against the customer and the real amount - whatever the screen showed. Only order creation passes `ctx`.
+      if (ctx) {
+        const crm = await this.coupons.findByCode(code);
+        if (crm) {
+          const e = evaluateCoupon(crm, ctx.customerType, baseCents);
+          if (!e.ok) throw bad(`Coupon ${crm.code}: ${e.reason}`);
+          return { source: "CRM", type: crm.discountType, value: crm.discountValue.toString(), amountCents: e.amountCents, couponId: crm.id, couponCode: crm.code, couponSource: "CRM", wasDefault: false };
+        }
+      }
       let active: ActiveOffer[];
       try {
         active = (await this.source.getActiveOffers()).offers;
       } catch {
+        if (ctx) throw bad("This coupon is not valid");
         throw new ApiError("Fastrr coupons are unavailable right now, so this coupon cannot be validated.", STATUS_CODES.SERVICE_UNAVAILABLE);
       }
       const offer = active.find((o) => o.couponCode === code);

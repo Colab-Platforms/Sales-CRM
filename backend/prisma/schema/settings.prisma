@@ -1,0 +1,9 @@
+// Admin-controlled settings, one row per key (value is JSON). A missing row means "never configured": the code decides the default.
+model AppSetting {
+  key         String   @id @map("key")
+  value       Json     @map("value")
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("app_setting")
+}

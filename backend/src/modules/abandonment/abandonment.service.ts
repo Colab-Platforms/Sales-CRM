@@ -14,6 +14,7 @@ import { getDistribution, getTelecallerSummary, listTelecallers, type Distributi
 import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
 import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
 import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
+import { cachedDuplicateCheckoutIds } from "../orders/abandoned.dashboard.canonical.js";
 import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
 import { loadCustomerContext } from "./abandonment.customer-context.js";
 import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
@@ -145,7 +146,12 @@ class AbandonmentService {
   private async listWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role): Promise<Prisma.AbandonmentWhereInput> {
     const where = buildAbandonmentListWhere(query, leadScope, role);
     const derived = await abandonmentDerivedWhere(this.db, query);
-    return derived ? { AND: [where, derived] } : where;
+    // One checkout re-entered under a new cart id is ONE row: the same canonical rule as the Orders Dashboard (abandoned.dashboard.canonical.ts), so the list, its total, the status counts and "select all" agree.
+    // Classified from the user's own "from" date when there is one (a smaller read), otherwise from the beginning; the result may be up to a minute old (cachedDuplicateCheckoutIds). Nothing is deleted - the duplicate rows are only left out.
+    const dups = await cachedDuplicateCheckoutIds(this.db, { start: query.dateFrom ?? new Date(0) });
+    const notDuplicate: Prisma.AbandonmentWhereInput | null = dups.length > 0 ? { id: { notIn: dups } } : null;
+    const all = [where, ...(derived ? [derived] : []), ...(notDuplicate ? [notDuplicate] : [])];
+    return all.length === 1 ? where : { AND: all };
   }
 
   async listAbandonments(user: AuthUser, query: ListAbandonmentsQuery): Promise<AbandonmentListResult> {

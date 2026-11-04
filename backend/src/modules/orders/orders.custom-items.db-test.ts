@@ -37,6 +37,8 @@ function fakeShopify(opts: { failCreate?: number; taxPercent?: number } = {}) {
   const client = {
     query: async (doc: string, vars: any) => {
       if (/customers\(/.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: [] } };
+      // Since 2026-10-26 a missing Shopify customer is created from the CRM name + phone before the order (shopify.order-customer.ts); this fake answers that call like Shopify does.
+      if (/customerCreate/.test(doc)) return { customerCreate: { customer: { id: "gid://shopify/Customer/777", firstName: vars.input?.firstName ?? null, lastName: vars.input?.lastName ?? null }, userErrors: [] } };
       if (/crmOrderBySource/.test(doc)) {
         const ref = /source_identifier:"(.*)"/.exec(String(vars.query))?.[1];
         return { orders: { nodes: state.created.filter((o) => o.sourceIdentifier === ref).map((o) => ({ id: o.id, name: o.name })) } };
@@ -223,7 +225,7 @@ describe("custom items: duplicate protection, idempotency and failures", () => {
 
   it("a Shopify refusal is reported with its reason, the CRM order and its custom lines are kept, and the retry creates the ONE Shopify order", async () => {
     await inRollback(async (tx) => {
-      const w = await world(tx, { failCreate: 1 }); // a lead without an e-mail has no customer to drop, so one refusal is the whole first attempt
+      const w = await world(tx, { failCreate: 2 }); // since 2026-10-26 the order is first sent WITH the created Shopify customer and, if refused, once more without it - two refusals are the whole first push
       const r = await w.create("COD", [w.catalog(1), custom({ customName: "Gift", unitPrice: "50.00" })]);
       assert.equal(r.shopify.status, "failed");
       assert.match(r.shopify.reason ?? "", /refused the line items/);

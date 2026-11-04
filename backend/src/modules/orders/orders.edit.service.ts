@@ -57,7 +57,7 @@ type EditOrder = Prisma.OrderGetPayload<{ select: typeof EDIT_SELECT }>;
 export interface FlavourOption { variantId: string; name: string; sku: string | null; priceMatches: boolean; linkedToShopify: boolean; current: boolean }
 export interface FlavourLine { itemId: string; productName: string; currentVariantId: string | null; currentVariantName: string | null; quantity: number; unitPrice: string; options: FlavourOption[] }
 export interface FlavourListing { editable: boolean; reason: string | null; lines: FlavourLine[] }
-export interface EditResult { shopify: "updated" | "not_linked" | "already_applied"; message: string }
+export interface EditResult { shopify: "updated" | "not_linked" | "already_applied"; message: string; /** set when the new flavour's catalogue price differs and the agreed price was kept by an adjustment in Shopify */ priceKept?: { catalogueUnitPrice: string; agreedUnitPrice: string; shopifyAdjustment: "discount" | "none" } }
 
 export class OrderEditService {
   constructor(
@@ -173,17 +173,10 @@ export class OrderEditService {
     const variant = await this.db.productVariant.findFirst({ where: { id: variantId, productId: item.productId, status: ProductStatus.ACTIVE }, select: { id: true, name: true, sku: true, price: true, externalId: true, externalSource: true } });
     if (!variant) throw new ApiError("That flavour is not an available variant of this product.", STATUS_CODES.BAD_REQUEST);
 
-    const oldUnit = toCents(item.unitPrice.toString());
+    // The flavour (variant / SKU) and the price are separate: the line keeps the unit price the customer agreed, whatever the new flavour costs in the catalogue today. Only variant, name and SKU are written below.
     const alreadyCrm = item.variantId === variant.id;
-    if (variant.price === null) throw new ApiError("The new flavour has no price in the catalogue, so the order total cannot be checked. Nothing was changed.", STATUS_CODES.CONFLICT);
-    const newUnit = toCents(variant.price.toString());
-    if (newUnit !== oldUnit) {
-      const delta = (newUnit - oldUnit) * item.quantity;
-      throw new ApiError(
-        `That flavour is priced differently (${money(newUnit)} per unit instead of ${money(oldUnit)}), which would ${delta > 0 ? `add ${money(delta)} to` : `take ${money(-delta)} off`} the order. Changing the price needs an extra payment or a refund, which this action does not do. Nothing was changed.`,
-        STATUS_CODES.CONFLICT,
-      );
-    }
+    const agreedUnit = toCents(item.unitPrice.toString());
+    let priceKept: EditResult["priceKept"];
 
     let shopify: EditResult["shopify"] = "not_linked";
     if (order.externalId) {
@@ -205,11 +198,14 @@ export class OrderEditService {
         }
         if (!info) throw new ApiError("Shopify does not have the new flavour. Nothing was changed.", STATUS_CODES.CONFLICT);
         if (oldLine.productId && info.productId !== oldLine.productId) throw new ApiError("The new flavour belongs to a different Shopify product. Nothing was changed.", STATUS_CODES.CONFLICT);
-        if (info.priceCents !== oldLine.unitPriceCents) {
-          throw new ApiError(`Shopify prices the new flavour at ${money(info.priceCents)} per unit but this order line is ${money(oldLine.unitPriceCents)}; changing it would change the total, so it was not applied. Nothing was changed.`, STATUS_CODES.CONFLICT);
+        // A LOWER catalogue price cannot be kept on the Shopify line (Shopify cannot raise a variant line's price). Keeping it with an extra "Price adjustment" line would reach Shiprocket as a parcel item with no SKU or weight on the next
+        // sync, so it is refused here, before anything is edited. A higher catalogue price is kept with a line discount.
+        if (info.priceCents < oldLine.unitPriceCents) {
+          throw new ApiError(`Shopify's catalogue price for the new flavour (${money(info.priceCents)} per unit) is lower than this order's agreed price (${money(oldLine.unitPriceCents)}). Shopify cannot keep the higher agreed price on a variant line, and adding a separate adjustment line would put a fake item on the shipment. Nothing was changed. Either raise the new flavour's catalogue price to ${money(oldLine.unitPriceCents)} in Shopify temporarily, or change the flavour in Shopify and use "Sync order" in the CRM.`, STATUS_CODES.CONFLICT);
         }
         try {
-          await swapOrderLineVariant(client, order.externalId, { lineItemId: oldLine.id, oldVariantId: oldGid, newVariantId: newGid, quantity: item.quantity, expectedTotalCents: live.totalCents, staffNote: `Flavour changed in the CRM (${order.orderNumber}) by ${user.username}` });
+          const done = await swapOrderLineVariant(client, order.externalId, { lineItemId: oldLine.id, oldVariantId: oldGid, newVariantId: newGid, quantity: item.quantity, expectedTotalCents: live.totalCents, agreedUnitPriceCents: oldLine.unitPriceCents, catalogueUnitCents: info.priceCents, currency: order.currency, staffNote: `Flavour changed in the CRM (${order.orderNumber}) by ${user.username}` });
+          priceKept = { catalogueUnitPrice: (info.priceCents / 100).toFixed(2), agreedUnitPrice: (oldLine.unitPriceCents / 100).toFixed(2), shopifyAdjustment: done.adjustment.kind };
         } catch (error) {
           // The edit was committed but the fresh read could not confirm it: Shopify may already hold the new flavour. The CRM is left unchanged, and a retry is safe - it finds the new flavour already on the
           // order and only finishes the CRM side (it never opens a second edit, so no duplicate line is created).
@@ -229,14 +225,16 @@ export class OrderEditService {
     if (!alreadyCrm) {
       try {
         await this.db.orderItem.update({ where: { id: item.id }, data: { variantId: variant.id, variantNameSnapshot: variant.name, skuSnapshot: variant.sku } });
-        await this.audit(order.id, order.leadId, user, `Flavour changed on ${order.externalNumber ?? order.orderNumber}`, { itemId: item.id, variant: item.variantNameSnapshot, sku: item.skuSnapshot }, { itemId: item.id, variant: variant.name, sku: variant.sku, shopify });
+        await this.audit(order.id, order.leadId, user, `Flavour changed on ${order.externalNumber ?? order.orderNumber}`, { itemId: item.id, variant: item.variantNameSnapshot, sku: item.skuSnapshot }, { itemId: item.id, variant: variant.name, sku: variant.sku, shopify, unitPrice: (agreedUnit / 100).toFixed(2), ...(priceKept ? { cataloguePrice: priceKept.catalogueUnitPrice, shopifyPriceAdjustment: priceKept.shopifyAdjustment } : {}) });
       } catch (error) {
         logger.error(`Flavour change: Shopify ${shopify} but the CRM write failed for order ${order.orderNumber}`, error instanceof Error ? error.message : String(error));
         throw new ApiError("The flavour was changed in Shopify but saving it in the CRM failed. Repeat the change - it will finish the CRM side without editing Shopify again.", 500);
       }
     }
+    if (!priceKept && variant.price !== null && toCents(variant.price.toString()) !== agreedUnit) priceKept = { catalogueUnitPrice: (toCents(variant.price.toString()) / 100).toFixed(2), agreedUnitPrice: (agreedUnit / 100).toFixed(2), shopifyAdjustment: "none" };
     const where = shopify === "not_linked" ? "in the CRM (the order is not linked to Shopify)" : "in the CRM and in Shopify";
-    return { shopify, message: alreadyCrm ? "The order already has that flavour." : `Flavour changed to ${variant.name} ${where}. The order total is unchanged at ${money(toCents(order.totalAmount.toString()))}.` };
+    const kept = priceKept && priceKept.catalogueUnitPrice !== priceKept.agreedUnitPrice ? ` The line price stays at ${money(agreedUnit)} per unit (the catalogue now shows ${money(toCents(priceKept.catalogueUnitPrice))}).${priceKept.shopifyAdjustment === "discount" ? " Shopify shows the difference as a line discount." : ""}` : "";
+    return { shopify, priceKept, message: alreadyCrm ? "The order already has that flavour." : `Flavour changed to ${variant.name} ${where}. The order total is unchanged at ${money(toCents(order.totalAmount.toString()))}.${kept}` };
   }
 
   // ------------------------------------------------------------------------------------------------ address

@@ -1,4 +1,4 @@
-import { asRecord, asString, ProviderHttpError, requestJson } from "../integrations/integrations.common.js";
+import { asRecord, asString, ProviderHttpError, requestJson, safeMessage } from "../integrations/integrations.common.js";
 import type { ShiprocketConfig } from "./shiprocket.config.js";
 import { ShiprocketTokenProvider, sharedTokenProvider } from "./shiprocket.token.js";
 
@@ -171,6 +171,21 @@ export function parseTracking(json: unknown, awb: string): TrackingResult | null
       return { date: asString(row.date), status: asString(row["sr-status-label"] ?? row.activity), location: asString(row.location) };
     }),
   };
+}
+
+export interface CancelReply {
+  message: string | null;
+  /** The reply body, trimmed to 500 characters. */
+  raw: string;
+}
+
+export function parseCancelReply(json: unknown): CancelReply {
+  const body = asRecord(json);
+  const raw = json === null || json === undefined ? "" : JSON.stringify(json);
+  // Shiprocket can refuse inside an HTTP 200 (a numeric status / status_code of 400 or more in the body): that is a refusal, not a success.
+  const inBody = Number(body.status_code ?? body.status);
+  if (Number.isFinite(inBody) && inBody >= 400) throw new ProviderHttpError("SHIPROCKET", inBody, safeMessage(asString(body.message) ?? raw, "Shiprocket refused the cancellation"), inBody >= 500);
+  return { message: asString(body.message), raw: raw.slice(0, 500) };
 }
 
 export interface ListOrdersParams {
@@ -387,6 +402,27 @@ export class ShiprocketClient {
 
   async track(awb: string): Promise<TrackingResult | null> {
     return parseTracking(await this.call("GET", `/courier/track/awb/${encodeURIComponent(awb)}`), awb);
+  }
+
+  /**
+   * Cancels Shiprocket ORDERS by Shiprocket's own order id (never the CRM order number or the channel order id): POST /orders/cancel {ids:[...]} (i.e. /v1/external/orders/cancel).
+   * `raw` is the reply, trimmed, kept for the audit trail. A refusal (e.g. the shipment has progressed too far) throws ProviderHttpError carrying Shiprocket's own text.
+   */
+  async cancelOrders(shiprocketOrderIds: string[]): Promise<CancelReply> {
+    const ids = shiprocketOrderIds.map((id) => (/^\d+$/.test(id) ? Number(id) : id));
+    return parseCancelReply(await this.call("POST", "/orders/cancel", { ids }));
+  }
+
+  /** Cancels the AWB (the courier booking) of a shipment that has one, so its order can then be cancelled: POST /orders/cancel/shipment/awbs {awbs:[...]}. */
+  async cancelAwbs(awbs: string[]): Promise<CancelReply> {
+    return parseCancelReply(await this.call("POST", "/orders/cancel/shipment/awbs", { awbs }));
+  }
+
+  /** Read-only: Shiprocket's own status text for one order (GET /orders/show/{id}), or null when the reply carries none. */
+  async getOrderStatus(shiprocketOrderId: string): Promise<string | null> {
+    const body = asRecord(await this.call("GET", `/orders/show/${encodeURIComponent(shiprocketOrderId)}`));
+    const data = asRecord(body.data);
+    return asString(data.status) ?? asString(body.status_name);
   }
 
   /** Read-only: the Shiprocket order(s) imported for this Shopify order name (e.g. "AWL105195"), matched EXACTLY on channel_order_id. Never creates, updates or cancels anything. */

@@ -172,9 +172,10 @@ describe("creating a shipment", () => {
   it("says exactly what is missing before anything reaches Shiprocket", async () => {
     await inRollback(async (tx, runner) => {
       const { manager, lead } = await managerWithLead(tx);
-      const order = await makeOrder(tx, lead.id, { shippingAddress: { name: "Priya" } });
+      // shippingPincode: null - the order's own saved pincode column is a legitimate source, so this order has none anywhere
+      const order = await makeOrder(tx, lead.id, { shippingAddress: { name: "Priya" }, shippingPincode: null });
       const fake = fakeApi();
-      await assert.rejects(service(runner, fake.api).createShipment(as(manager, Role.MANAGER), order.id, DIMS), /missing: .*pincode/);
+      await assert.rejects(service(runner, fake.api).createShipment(as(manager, Role.MANAGER), order.id, DIMS), /missing: shipping address line 1, city, state, 6-digit pincode/);
       assert.equal(fake.calls.create.length, 0);
     });
   });

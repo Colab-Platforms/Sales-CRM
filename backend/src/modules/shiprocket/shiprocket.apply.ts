@@ -1,6 +1,7 @@
 import { ActivitySource, ActivityType, ShipmentStatus, type Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { advisoryLock, asRecord, type Db } from "../integrations/integrations.common.js";
+import { confirmShiprocketCancellation } from "./shiprocket.cancellation.js";
 
 // The single place a Shiprocket result is applied to a CRM Shipment. The webhook processor, the manual "refresh
 // tracking" action and every operational step (AWB, pickup, label) all go through it.
@@ -142,6 +143,8 @@ export async function applyShipmentUpdate(tx: Db, shipmentId: string, update: Sh
     rows.push({ ...base, type: ActivityType.SHIPMENT_STATUS_CHANGED, title: `Shipment status changed for order ${orderRef}`, description: `${from} -> ${to}`, oldValue: { status: from }, newValue: { status: to, providerStatus: update.providerStatus ?? null }, metadata: meta });
   }
   if (rows.length > 0) await tx.activity.createMany({ data: rows });
+  // Shiprocket itself now reports the shipment cancelled: that is what confirms a cancellation the CRM requested (no-op when the CRM never requested one).
+  if (moves && to === ShipmentStatus.CANCELLED) await confirmShiprocketCancellation(tx, shipment.orderId, now);
 
   return moves ? { outcome: "updated", orderId: shipment.orderId, leadId, from, to } : { outcome: "unchanged", orderId: shipment.orderId, leadId };
 }

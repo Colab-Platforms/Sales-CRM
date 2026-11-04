@@ -5,6 +5,7 @@ import { integrationsApi } from "../endpoints/integrations.api";
 export const integrationsKeys = {
   all: ["integrations"] as const,
   status: () => [...integrationsKeys.all, "status"] as const,
+  shopifyCrmOrderSync: () => [...integrationsKeys.all, "shopify-crm-order-sync"] as const,
   couriers: (shipmentId: string) => [...integrationsKeys.all, "couriers", shipmentId] as const,
 };
 
@@ -33,5 +34,15 @@ export function couriersQueryOptions(shipmentId: string) {
     staleTime: 0,
     gcTime: 0,
     retry: false,
+  });
+}
+
+// Always read fresh: it is an Admin switch, and what the page shows must be what the server will apply to the next CRM order.
+export function shopifyCrmOrderSyncQueryOptions() {
+  return queryOptions({
+    queryKey: integrationsKeys.shopifyCrmOrderSync(),
+    queryFn: integrationsApi.getShopifyCrmOrderSync,
+    staleTime: 0,
+    retry: retryUnlessClientError,
   });
 }

@@ -303,6 +303,7 @@ export const ORDER_BY_ID_QUERY = /* GraphQL */ `
           variantTitle
           sku
           quantity
+          currentQuantity
           originalUnitPriceSet {
             ...Money
           }

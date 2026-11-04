@@ -1,16 +1,20 @@
+import { readShipToAddress } from "./shiprocket.address.js";
+import { mergeShiprocketSync } from "./shiprocket.sync-record.js";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
 import { getLeadScope } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { ActivitySource, ActivityType, OrderStatus, PaymentStatus, ShipmentStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, ActivityType, OrderStatus, PaymentStatus, ShipmentStatus, type Role } from "../../../generated/prisma/enums.js";
+import { logger } from "@/utils/logger.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown, derivePaymentMode, fullName, scopedOrderWhere } from "../orders/orders.filters.js";
 import { fromCents, toCents } from "../shopify/shopify.money.js";
-import { advisoryLock, asRecord, ProviderHttpError, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
+import { advisoryLock, asRecord, ProviderHttpError, safeMessage, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { applyShipmentUpdate, shipmentOrderLockKey, SHIPMENT_REFERENCE_TYPE } from "./shiprocket.apply.js";
-import { ShiprocketClient, type CourierOption, type CreateOrderRequest, type CreatedOrder } from "./shiprocket.client.js";
+import { ShiprocketClient, type CancelReply, type CourierOption, type CreateOrderRequest, type CreatedOrder } from "./shiprocket.client.js";
+import { confirmShiprocketCancellation, isCancelledText, mergeShiprocketCancellation, planCancellation, readShiprocketCancellation, type ShiprocketCancelStatus, type ShiprocketCancellationRecord } from "./shiprocket.cancellation.js";
 import { isShiprocketEnabled, loadShiprocketConfig, ShiprocketConfigError, type ShiprocketConfig } from "./shiprocket.config.js";
 import { mapShiprocketStatus, parseEtd } from "./shiprocket.events.js";
 import { buildShipmentListWhere, buildShipmentSummary, mapShipmentDetailRow, mapShipmentListRow, scopedShipmentWhere, SHIPROCKET_SOURCE } from "./shiprocket.list.filters.js";
@@ -28,6 +32,19 @@ export interface ShiprocketApi {
   generatePickup(shipmentId: string): Promise<{ scheduledDate: string | null; tokenNumber: string | null }>;
   generateLabel(shipmentId: string): Promise<string>;
   track(awb: string): Promise<{ awb: string; currentStatus: string | null; trackUrl: string | null; etd: string | null; courierName: string | null } | null>;
+}
+
+/** The three Shiprocket calls cancellation uses (a separate interface, so the creation / tracking fakes need not know about it). */
+export interface ShiprocketCancelApi {
+  cancelOrders(shiprocketOrderIds: string[]): Promise<CancelReply>;
+  cancelAwbs(awbs: string[]): Promise<CancelReply>;
+  getOrderStatus(shiprocketOrderId: string): Promise<string | null>;
+}
+
+export interface ShiprocketCancelOutcome {
+  status: ShiprocketCancelStatus | "NOT_APPLICABLE";
+  reason?: string;
+  record: ShiprocketCancellationRecord | null;
 }
 
 export interface ShipmentInput {
@@ -61,6 +78,7 @@ export interface ShipmentResult {
 export interface ShipmentServiceDeps {
   config?: () => ShiprocketConfig;
   client?: (config: ShiprocketConfig) => ShiprocketApi;
+  cancelClient?: (config: ShiprocketConfig) => ShiprocketCancelApi;
   now?: () => Date;
 }
 
@@ -156,17 +174,6 @@ export function providerFailure(error: unknown, action: string): ApiError {
   return new ApiError(`Shiprocket returned an unexpected answer while trying to ${action}.`, BAD_GATEWAY);
 }
 
-interface AddressShape {
-  name?: string | null;
-  address1?: string | null;
-  address2?: string | null;
-  city?: string | null;
-  province?: string | null;
-  zip?: string | null;
-  country?: string | null;
-  phone?: string | null;
-}
-
 interface OrderForShipment {
   orderNumber: string;
   placedAt: Date | null;
@@ -176,6 +183,8 @@ interface OrderForShipment {
   discountAmount: { toString(): string };
   shippingAmount: { toString(): string };
   shippingAddress: unknown;
+  /** The order's own saved pincode column, used only when the address object carries none. */
+  shippingPincode?: string | null;
   lead: { firstName: string; lastName: string | null; mobile: string | null; normalizedMobile: string | null; email: string | null };
   items: { productNameSnapshot: string; variantNameSnapshot: string | null; skuSnapshot: string | null; quantity: number; unitPrice: { toString(): string }; discountAmount: { toString(): string }; taxAmount: { toString(): string } }[];
   payments: { status: PaymentStatus; amount: { toString(): string }; refundedAmount: { toString(): string } | null }[];
@@ -190,18 +199,15 @@ export function formatOrderDate(date: Date): string {
 
 /** Everything Shiprocket needs, built from the CRM order - or a plain list of what is missing so the user can fix it. */
 export function buildShiprocketOrder(order: OrderForShipment, input: ShipmentInput, pickupLocation: string, channelOrderId: string): { request: CreateOrderRequest; collectCents: number } {
-  const address = asRecord(order.shippingAddress) as AddressShape;
-  const missing: string[] = [];
-  const name = (address.name ?? "").trim() || fullName(order.lead.firstName, order.lead.lastName);
-  if (!(address.address1 ?? "").trim()) missing.push("shipping address line");
-  if (!(address.city ?? "").trim()) missing.push("city");
-  if (!(address.province ?? "").trim()) missing.push("state");
-  const pincode = (address.zip ?? "").trim();
-  if (!/^\d{6}$/.test(pincode)) missing.push("6-digit pincode");
-  const phone = toTenDigitMobile(address.phone) ?? toTenDigitMobile(order.lead.normalizedMobile) ?? toTenDigitMobile(order.lead.mobile);
+  // The address as the CRM actually saved it (the order address editor and Create Order save line1 / state / pincode; Shopify-synced orders save address1 / province / zip) - see shiprocket.address.ts.
+  const shipTo = readShipToAddress(order.shippingAddress, order.shippingPincode);
+  const missing: string[] = shipTo.ok ? [] : [...shipTo.missing];
+  const address = shipTo.ok ? shipTo.address : null;
+  const name = (address?.name ?? "").trim() || fullName(order.lead.firstName, order.lead.lastName);
+  const phone = toTenDigitMobile(address?.phone) ?? toTenDigitMobile(order.lead.normalizedMobile) ?? toTenDigitMobile(order.lead.mobile);
   if (!phone) missing.push("10-digit phone number");
   if (order.items.length === 0) missing.push("order items");
-  if (missing.length > 0) throw new ApiError(`This order can not be shipped yet - missing: ${missing.join(", ")}`, STATUS_CODES.BAD_REQUEST);
+  if (!address || missing.length > 0) throw new ApiError(`This order can not be shipped yet - missing: ${missing.join(", ")}`, STATUS_CODES.BAD_REQUEST);
 
   const [first, ...rest] = name.split(/\s+/);
   const breakdown = computePaymentBreakdown(order.payments);
@@ -215,12 +221,12 @@ export function buildShiprocketOrder(order: OrderForShipment, input: ShipmentInp
     pickup_location: pickupLocation,
     billing_customer_name: first,
     billing_last_name: rest.join(" "),
-    billing_address: address.address1!.trim(),
-    ...(address.address2?.trim() ? { billing_address_2: address.address2.trim() } : {}),
-    billing_city: address.city!.trim(),
-    billing_pincode: pincode,
-    billing_state: address.province!.trim(),
-    billing_country: (address.country ?? "").trim() || "India",
+    billing_address: address.line1,
+    ...(address.line2 ? { billing_address_2: address.line2 } : {}),
+    billing_city: address.city,
+    billing_pincode: address.pincode,
+    billing_state: address.state,
+    billing_country: address.country || "India",
     billing_email: order.lead.email ?? "",
     billing_phone: phone!,
     shipping_is_billing: true,
@@ -267,6 +273,139 @@ class ShiprocketShipmentsService {
     return (this.deps.now ?? (() => new Date()))();
   }
 
+  // ---------------------------------------------------------------- cancellation
+
+  /**
+   * Cancels the Shiprocket order of a CRM order that has just been cancelled (or retries a cancellation that did not finish). Never throws and never touches the CRM order.
+   *
+   *  - Uses the stored Shiprocket order id of the order's latest Shiprocket shipment - never the CRM order number or the channel order id.
+   *  - No AWB: POST /orders/cancel. With an AWB (courier booked, not yet picked up): the AWB booking is cancelled first, then the order. Picked up / on its way / delivered: nothing is sent, the reason is recorded.
+   *  - Once per order: the claim below (under the order's lock) is PENDING, so a second click or a concurrent retry sends nothing. A request Shiprocket accepted is REQUESTED and is never re-sent; a later call only checks.
+   *  - "Cancelled" is only recorded when Shiprocket itself shows the order as cancelled (read back here, or its tracking webhook, see applyShipmentUpdate).
+   *  - An unreachable / refusing Shiprocket leaves the record FAILED with Shiprocket's own text; calling this again retries (it first checks whether an earlier request in fact went through).
+   */
+  async cancelForOrder(orderId: string, actor?: { id: string; role: Role } | null): Promise<ShiprocketCancelOutcome> {
+    try {
+      return await this.cancelForOrderUnsafe(orderId, actor ?? null);
+    } catch (error) {
+      const reason = safeMessage(error instanceof Error ? error.message : String(error));
+      logger.warn(`Shiprocket cancellation errored for order ${orderId}: ${reason}`);
+      return { status: "FAILED", reason, record: null };
+    }
+  }
+
+  private async cancelForOrderUnsafe(orderId: string, actor: { id: string; role: Role } | null): Promise<ShiprocketCancelOutcome> {
+    const now = this.now();
+    const read = () => this.runner.$transaction(async (tx) => readShiprocketCancellation((await tx.order.findUnique({ where: { id: orderId }, select: { metadata: true } }))?.metadata));
+    const done = async (status: ShiprocketCancelOutcome["status"], reason?: string): Promise<ShiprocketCancelOutcome> => ({ status, reason, record: await read() });
+
+    // Phase 1 (locked): decide, and claim the request so nobody else sends it.
+    const claim = await this.runner.$transaction(async (tx) => {
+      await advisoryLock(tx, shipmentOrderLockKey(orderId));
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        select: { metadata: true, shipments: { where: { externalSource: "SHIPROCKET" }, orderBy: { createdAt: "desc" }, take: 1, select: { id: true, status: true, providerStatus: true, providerOrderId: true, externalId: true, trackingNumber: true } } },
+      });
+      if (!order) return { kind: "end" as const, status: "NOT_APPLICABLE" as const };
+      const shipment = order.shipments[0] ?? null;
+      const plan = planCancellation(shipment);
+      if (plan.kind === "none") return { kind: "end" as const, status: "NOT_APPLICABLE" as const };
+      if (plan.kind === "submitting") {
+        const reason = "The order is still being submitted to Shiprocket, so there is nothing to cancel yet. Cancel it again in a moment.";
+        await mergeShiprocketCancellation(tx, orderId, { status: "FAILED", error: reason, lastAttemptAt: now.toISOString() });
+        return { kind: "end" as const, status: "FAILED" as const, reason };
+      }
+      const prior = readShiprocketCancellation(order.metadata);
+      const same = prior !== null && prior.shiprocketOrderId === plan.shiprocketOrderId;
+      if (same && prior.status === "CANCELLED") return { kind: "end" as const, status: "CANCELLED" as const };
+      // A new cancellation cycle (the order was re-submitted to Shiprocket after an earlier one) starts from a clean record.
+      const fresh: Partial<ShiprocketCancellationRecord> = same ? {} : { attempts: 0, requestedAt: null, cancelledAt: null, awbCancelled: false, response: null, awbResponse: null };
+      const ids: Partial<ShiprocketCancellationRecord> = { shiprocketOrderId: plan.shiprocketOrderId, awb: shipment!.trackingNumber ?? null };
+
+      if (plan.kind === "already_cancelled") {
+        await mergeShiprocketCancellation(tx, orderId, { ...fresh, ...ids, status: "CANCELLED", cancelledAt: prior?.cancelledAt ?? now.toISOString(), error: null });
+        return { kind: "end" as const, status: "CANCELLED" as const, reason: "Shiprocket already shows this order as cancelled" };
+      }
+      if (plan.kind === "too_far") {
+        await mergeShiprocketCancellation(tx, orderId, { ...fresh, ...ids, status: "FAILED", error: plan.reason, lastAttemptAt: now.toISOString() });
+        return { kind: "end" as const, status: "FAILED" as const, reason: plan.reason };
+      }
+      if (same && prior.status === "PENDING" && prior.lastAttemptAt && now.getTime() - new Date(prior.lastAttemptAt).getTime() < STALE_RESERVATION_MS) {
+        return { kind: "end" as const, status: "PENDING" as const, reason: "A cancellation request for this order is already in progress" };
+      }
+      if (same && prior.status === "REQUESTED") return { kind: "check" as const, shiprocketOrderId: plan.shiprocketOrderId, shipmentId: shipment!.id };
+      const attempts = (same ? prior.attempts : 0) + 1;
+      await mergeShiprocketCancellation(tx, orderId, { ...fresh, ...ids, status: "PENDING", attempts, lastAttemptAt: now.toISOString(), error: null });
+      return { kind: "send" as const, shiprocketOrderId: plan.shiprocketOrderId, shipmentId: shipment!.id, awb: plan.awb, attempts, awbCancelled: same && prior.awbCancelled };
+    });
+    if (claim.kind === "end") return done(claim.status, "reason" in claim ? claim.reason : undefined);
+
+    let api: ShiprocketCancelApi;
+    try {
+      const config = this.config();
+      api = this.deps.cancelClient ? this.deps.cancelClient(config) : new ShiprocketClient(config);
+    } catch (error) {
+      const reason = safeMessage(error instanceof Error ? error.message : String(error));
+      if (claim.kind === "send") await this.runner.$transaction((tx) => mergeShiprocketCancellation(tx, orderId, { status: "FAILED", error: reason }));
+      return done(claim.kind === "send" ? "FAILED" : "REQUESTED", reason);
+    }
+
+    const confirmed = async (): Promise<boolean> => isCancelledText(await api.getOrderStatus(claim.shiprocketOrderId));
+    const markCancelled = async (): Promise<ShiprocketCancelOutcome> => {
+      await this.runner.$transaction(async (tx) => {
+        await applyShipmentUpdate(tx, claim.shipmentId, { status: ShipmentStatus.CANCELLED, providerStatus: "CANCELED" }, { source: actor ? ActivitySource.USER : ActivitySource.SYSTEM, actor, now });
+        await confirmShiprocketCancellation(tx, orderId, now);
+      });
+      return done("CANCELLED");
+    };
+
+    if (claim.kind === "check") {
+      // Accepted earlier; never re-sent. Only look at what Shiprocket shows now.
+      try {
+        if (await confirmed()) return await markCancelled();
+      } catch {
+        // Shiprocket could not be read: still requested, not confirmed.
+      }
+      return done("REQUESTED", "Shiprocket has accepted the cancellation but does not show the order as cancelled yet");
+    }
+
+    const fail = async (step: string, error: unknown): Promise<ShiprocketCancelOutcome> => {
+      const detail = error instanceof ProviderHttpError ? error.message : error instanceof Error ? safeMessage(error.message) : "Unexpected answer";
+      const reason = `${step}: ${detail}`.slice(0, 500);
+      await this.runner.$transaction((tx) => mergeShiprocketCancellation(tx, orderId, { status: "FAILED", error: reason }));
+      return done("FAILED", reason);
+    };
+
+    // A retry first asks Shiprocket: an earlier request may have gone through even though its reply was lost.
+    if (claim.attempts > 1) {
+      try {
+        if (await confirmed()) return await markCancelled();
+      } catch {
+        // could not read; carry on with the request
+      }
+    }
+    try {
+      if (claim.awb && !claim.awbCancelled) {
+        const reply = await api.cancelAwbs([claim.awb]);
+        await this.runner.$transaction((tx) => mergeShiprocketCancellation(tx, orderId, { awbCancelled: true, awbResponse: reply.raw }));
+      }
+    } catch (error) {
+      return fail("Shiprocket would not cancel the courier booking (AWB)", error);
+    }
+    try {
+      const reply = await api.cancelOrders([claim.shiprocketOrderId]);
+      await this.runner.$transaction((tx) => mergeShiprocketCancellation(tx, orderId, { status: "REQUESTED", requestedAt: now.toISOString(), response: reply.raw, error: null }));
+    } catch (error) {
+      return fail("Shiprocket did not cancel the order", error);
+    }
+    try {
+      if (await confirmed()) return await markCancelled();
+    } catch {
+      // accepted but not yet confirmable
+    }
+    return done("REQUESTED", "Cancellation requested; Shiprocket does not show the order as cancelled yet");
+  }
+
   /** Whether Shiprocket is switched on and complete - never returns credentials. */
   status(): { enabled: boolean; configured: boolean } {
     if (!isShiprocketEnabled()) return { enabled: false, configured: false };
@@ -294,9 +433,10 @@ class ShiprocketShipmentsService {
 
   // ---------------------------------------------------------------- create
 
-  async createShipment(user: AuthUser, orderId: string, input: ShipmentInput): Promise<ShipmentResult> {
+  /** `system: true` = the automatic submission of a CRM-created order: the order is found without the caller's lead scope (the creator may only see the order through the WhatsApp inbox); every other rule is the same. */
+  async createShipment(user: AuthUser, orderId: string, input: ShipmentInput, opts: { system?: boolean } = {}): Promise<ShipmentResult> {
     const config = this.config();
-    const prepared = await this.runner.$transaction((tx) => this.prepare(tx, user, orderId, input, config));
+    const prepared = await this.runner.$transaction((tx) => this.prepare(tx, user, orderId, input, config, opts.system === true));
 
     let created: CreatedOrder;
     try {
@@ -320,6 +460,8 @@ class ShiprocketShipmentsService {
           metadata: { shiprocket: { created: true, channelOrderId: prepared.request.order_id } },
         },
       });
+      // The order's Shiprocket status (shown on the order page) - for the automatic submission, a retry and a shipment created by hand alike.
+      await mergeShiprocketSync(tx, orderId, { status: "SYNCED", syncedAt: this.now().toISOString(), lastAttemptAt: this.now().toISOString(), shiprocketOrderId: created.orderId ?? null, channelOrderId: prepared.request.order_id, error: null });
       await tx.activity.create({
         data: {
           leadId: prepared.leadId,
@@ -341,9 +483,9 @@ class ShiprocketShipmentsService {
   }
 
   /** Phase 1 (locked): validate, build the Shiprocket order, and reserve a Shipment row so a second click finds it. Nothing is sent yet. */
-  private async prepare(tx: Db, user: AuthUser, orderId: string, input: ShipmentInput, config: ShiprocketConfig) {
+  private async prepare(tx: Db, user: AuthUser, orderId: string, input: ShipmentInput, config: ShiprocketConfig, system = false) {
     await advisoryLock(tx, shipmentOrderLockKey(orderId));
-    const scope = await getLeadScope(user, tx);
+    const scope = system ? {} : await getLeadScope(user, tx);
     const order = await tx.order.findFirst({
       where: scopedOrderWhere(orderId, scope),
       select: {
@@ -357,6 +499,7 @@ class ShiprocketShipmentsService {
         discountAmount: true,
         shippingAmount: true,
         shippingAddress: true,
+        shippingPincode: true,
         lead: { select: { id: true, firstName: true, lastName: true, mobile: true, normalizedMobile: true, email: true } },
         items: { select: { productNameSnapshot: true, variantNameSnapshot: true, skuSnapshot: true, quantity: true, unitPrice: true, discountAmount: true, taxAmount: true } },
         payments: { select: { status: true, method: true, amount: true, refundedAmount: true } },
@@ -392,7 +535,8 @@ class ShiprocketShipmentsService {
     }
 
     const shipmentId = randomUUID();
-    const channelOrderId = `${order.orderNumber}-${shipmentId.slice(0, 8)}`.slice(0, 50);
+    // The first submission of an order uses the CRM order number itself as Shiprocket's channel order id. Any later one (after a cancelled / failed attempt) keeps a suffix, so the two never share an id.
+    const channelOrderId = (order.shipments.length === 0 ? order.orderNumber : `${order.orderNumber}-${shipmentId.slice(0, 8)}`).slice(0, 50);
     const { request, collectCents } = buildShiprocketOrder(order, input, config.pickupLocation, channelOrderId);
 
     await tx.shipment.create({

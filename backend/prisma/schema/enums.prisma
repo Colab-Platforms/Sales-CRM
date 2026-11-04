@@ -636,3 +636,17 @@ enum SessionEndReason {
 
   @@map("session_end_reason")
 }
+
+enum CustomerType {
+  REGULAR
+  DISTRIBUTOR
+
+  @@map("customer_type")
+}
+
+enum CouponDiscountType {
+  FIXED
+  PERCENT
+
+  @@map("coupon_discount_type")
+}

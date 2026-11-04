@@ -5,7 +5,7 @@ import { toShopifyOrderGid, type ShopifyOrderCreateAddress } from "./shopify.ord
 // Editing an EXISTING Shopify order from the CRM: swapping a line's flavour (variant) and changing the shipping address. Both use Shopify's documented, supported mutations:
 //   flavour  - the order EDIT workflow: orderEditBegin -> orderEditSetQuantity (old line to 0) -> orderEditAddVariant (new variant, same quantity) -> orderEditCommit (needs write_order_edits)
 //   address  - orderUpdate with a MailingAddressInput (needs write_orders); the billing address is not part of this input and stays as it is.
-// Nothing here charges, refunds or changes a payment: the flavour swap is committed only when the staged order total is EXACTLY the current total (the caller has already refused any price difference), the
+// Nothing here charges, refunds or changes a payment: the flavour swap is committed only when the staged order total is EXACTLY the current total, the
 // customer is never notified, and every change is read back from Shopify so a 200 that did not stick is reported. No second order is created.
 
 export class ShopifyOrderEditError extends Error {
@@ -114,6 +114,19 @@ const EDIT_SET_QUANTITY = `
 const EDIT_ADD_VARIANT = `
   mutation crmFlavourEditAddVariant($id: ID!, $variantId: ID!, $quantity: Int!) {
     orderEditAddVariant(id: $id, variantId: $variantId, quantity: $quantity, allowDuplicates: true) {
+      calculatedLineItem { id }
+      calculatedOrder { id totalPriceSet { shopMoney { amount } } }
+      userErrors { field message }
+    }
+  }
+`;
+// The agreed price is kept when the new flavour's catalogue price differs. Shopify prices an added variant at its CURRENT catalogue price and offers no "set price" for a variant line, so:
+//   catalogue HIGHER than agreed -> a line-item discount for exactly the difference (the line then costs the agreed price)
+//   catalogue LOWER than agreed  -> NOT supported: Shopify cannot raise a variant line's price, and an extra "price adjustment" line would reach Shiprocket as a phantom parcel item (the caller refuses before editing)
+// Either way the staged total is checked to equal the current total before anything is committed.
+const EDIT_ADD_LINE_DISCOUNT = `
+  mutation crmFlavourEditAddDiscount($id: ID!, $lineItemId: ID!, $discount: OrderEditAppliedDiscountInput!) {
+    orderEditAddLineItemDiscount(id: $id, lineItemId: $lineItemId, discount: $discount) {
       calculatedOrder { id totalPriceSet { shopMoney { amount } } }
       userErrors { field message }
     }
@@ -136,11 +149,18 @@ export interface SwapVariantInput {
   quantity: number;
   /** The order total that must be unchanged by the swap (cents). */
   expectedTotalCents: number;
+  /** The unit price the line must keep (cents): the price the customer agreed, whatever the new flavour costs in the catalogue now. */
+  agreedUnitPriceCents: number;
+  /** What Shopify's catalogue charges for the new variant today (cents), read from Shopify just before the edit. */
+  catalogueUnitCents: number;
+  currency?: string;
   staffNote: string;
 }
 
+export type PriceAdjustment = { kind: "none" } | { kind: "discount"; catalogueUnitCents: number; amountCents: number };
+
 /** Replaces one line's variant with another, keeping its quantity, and commits only if the order total is unchanged. Re-reads the order afterwards to confirm. */
-export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">, shopifyOrderId: string, input: SwapVariantInput, opts: { verifyAttempts?: number; verifyDelayMs?: number } = {}): Promise<EditableOrder> {
+export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">, shopifyOrderId: string, input: SwapVariantInput, opts: { verifyAttempts?: number; verifyDelayMs?: number } = {}): Promise<EditableOrder & { adjustment: PriceAdjustment }> {
   const gid = toShopifyOrderGid(shopifyOrderId);
   const begun = await run<{ orderEditBegin: { calculatedOrder: { id: string; lineItems: { nodes: { id: string; quantity: number; variant: { id: string } | null }[] } } | null; userErrors: UserErrors } }>(client, "edit_begin", EDIT_BEGIN, { id: gid });
   failIfErrors("edit_begin", begun.orderEditBegin.userErrors);
@@ -151,9 +171,26 @@ export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">,
 
   const removed = await run<{ orderEditSetQuantity: { userErrors: UserErrors } }>(client, "edit_set_quantity", EDIT_SET_QUANTITY, { id: calculated.id, lineItemId: line.id, quantity: 0 });
   failIfErrors("edit_set_quantity", removed.orderEditSetQuantity.userErrors);
-  const added = await run<{ orderEditAddVariant: { calculatedOrder: { totalPriceSet: { shopMoney: { amount: string } } } | null; userErrors: UserErrors } }>(client, "edit_add_variant", EDIT_ADD_VARIANT, { id: calculated.id, variantId: input.newVariantId, quantity: input.quantity });
+  const added = await run<{ orderEditAddVariant: { calculatedLineItem: { id: string } | null; calculatedOrder: { totalPriceSet: { shopMoney: { amount: string } } } | null; userErrors: UserErrors } }>(client, "edit_add_variant", EDIT_ADD_VARIANT, { id: calculated.id, variantId: input.newVariantId, quantity: input.quantity });
   failIfErrors("edit_add_variant", added.orderEditAddVariant.userErrors);
-  const staged = added.orderEditAddVariant.calculatedOrder ? toCents(added.orderEditAddVariant.calculatedOrder.totalPriceSet.shopMoney.amount) : null;
+  let staged = added.orderEditAddVariant.calculatedOrder ? toCents(added.orderEditAddVariant.calculatedOrder.totalPriceSet.shopMoney.amount) : null;
+
+  let adjustment: PriceAdjustment = { kind: "none" };
+  const currency = input.currency ?? "INR";
+  const catalogueUnit = input.catalogueUnitCents;
+  const diff = (catalogueUnit - input.agreedUnitPriceCents) * input.quantity;
+  if (diff < 0) throw new ShopifyOrderEditError("The new flavour's catalogue price is lower than the agreed price, and Shopify has no way to keep the agreed price on a variant line.", "edit_check");
+  if (diff > 0) {
+    const money = (c: number) => ({ amount: (Math.abs(c) / 100).toFixed(2), currencyCode: currency });
+    if (diff > 0) {
+      const lineId = added.orderEditAddVariant.calculatedLineItem?.id;
+      if (!lineId) throw new ShopifyOrderEditError("Shopify did not return the new line, so the agreed price could not be kept.", "edit_add_variant");
+      const r = await run<{ orderEditAddLineItemDiscount: { calculatedOrder: { totalPriceSet: { shopMoney: { amount: string } } } | null; userErrors: UserErrors } }>(client, "edit_add_discount", EDIT_ADD_LINE_DISCOUNT, { id: calculated.id, lineItemId: lineId, discount: { description: "Agreed price kept", fixedValue: money(diff) } });
+      failIfErrors("edit_add_discount", r.orderEditAddLineItemDiscount.userErrors);
+      staged = r.orderEditAddLineItemDiscount.calculatedOrder ? toCents(r.orderEditAddLineItemDiscount.calculatedOrder.totalPriceSet.shopMoney.amount) : null;
+      adjustment = { kind: "discount", catalogueUnitCents: catalogueUnit, amountCents: diff };
+    }
+  }
   // Nothing is committed unless the swap leaves the order total exactly as it was: no silent extra charge, no silent credit. An uncommitted edit is simply discarded by Shopify.
   if (staged === null || staged !== input.expectedTotalCents) {
     throw new ShopifyOrderEditError(`The change would alter the order total (Shopify would show ${staged === null ? "an unknown total" : (staged / 100).toFixed(2)} instead of ${(input.expectedTotalCents / 100).toFixed(2)}), so it was not applied.`, "edit_check");
@@ -182,7 +219,7 @@ export async function swapOrderLineVariant(client: Pick<ShopifyClient, "query">,
   }
   if (oldQty > 0) throw new ShopifyOrderEditError(`Shopify accepted the edit but the order still shows ${oldQty} of the old flavour next to the new one. Check the order in Shopify before retrying.`, "verify");
   if (after.totalCents !== input.expectedTotalCents) throw new ShopifyOrderEditError("Shopify accepted the edit but the order total changed.", "verify");
-  return after;
+  return { ...after, adjustment };
 }
 
 /** The order now holds exactly the wanted quantity of the new variant and none of the old one (ignoring removed lines). */

@@ -193,11 +193,12 @@ describe("what did NOT widen", () => {
     });
   });
 
-  it("the order action does not open the strict actions: a salesperson who only has the chat cannot cancel the order or touch the customer record", async () => {
+  it("the order action does not open the strict actions: a salesperson who only has the chat (neither the order's creator nor the lead's owner) cannot cancel the order", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
+      // The creator may act on their OWN order (orderActionWhere, 2026-10-28 - see orders.prepaid-cancel.db-test.ts), so the order is created by `stranger` and the person without any claim on it is the chat assignee.
       const r = await w.create(w.stranger, Role.SALESPERSON, { sendPaymentLinkViaWhatsApp: false });
-      await assert.rejects(() => w.orders.cancelOrder(asUser(w.stranger, Role.SALESPERSON), r.order.id, { reason: "x" } as never), /not found|Order not found|Customer not found/i);
+      await assert.rejects(() => w.orders.cancelOrder(asUser(w.assignee, Role.SALESPERSON), r.order.id, { reason: "x" } as never), /not found|Order not found|Customer not found/i);
       const order = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { status: true } });
       assert.notEqual(order.status, "CANCELLED");
     });

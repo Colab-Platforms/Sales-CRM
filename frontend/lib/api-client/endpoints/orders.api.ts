@@ -1,4 +1,5 @@
 import { apiClient } from "../client";
+import type { ShiprocketCancellationRetryResult, ShiprocketSyncRetryResult } from "../types/orders.types";
 import type { WhatsAppPaymentOptions } from "../../whatsapp-payment";
 import type { ApiEnvelope } from "../types/common.types";
 import type {
@@ -168,6 +169,16 @@ export const ordersApi = {
 
   async pushToShopify(orderId: string): Promise<ShopifyPushResult> {
     const res = await apiClient.post<ApiEnvelope<ShopifyPushResult>>(`/orders/${orderId}/shopify-order`);
+    return res.data.data;
+  },
+
+  async retryShiprocketSync(orderId: string): Promise<ShiprocketSyncRetryResult> {
+    const res = await apiClient.post<ApiEnvelope<ShiprocketSyncRetryResult>>(`/orders/${orderId}/shiprocket-sync`);
+    return res.data.data;
+  },
+
+  async retryShiprocketCancellation(orderId: string): Promise<ShiprocketCancellationRetryResult> {
+    const res = await apiClient.post<ApiEnvelope<ShiprocketCancellationRetryResult>>(`/orders/${orderId}/shiprocket-cancellation`);
     return res.data.data;
   },
 
