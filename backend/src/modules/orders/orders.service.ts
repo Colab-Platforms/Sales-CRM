@@ -20,6 +20,11 @@ import { sanitizeSyncError, syncAdvice } from "../shopify/shopify.sync-status.js
 import type { ShopifySyncRecord } from "./orders.types.js";
 import { buildShopifyOrderPayload, type CrmOrderForShopify } from "../shopify/shopify.order-mapping.js";
 import { materializeShopifyCustomer, resolveShopifyCustomer } from "../shopify/shopify.order-customer.js";
+import { syncOrderToShiprocket, type ShiprocketSyncOutcome, type ShiprocketSyncTrigger } from "../shiprocket/shiprocket.auto-sync.js";
+import { readShiprocketSync } from "../shiprocket/shiprocket.sync-record.js";
+import { readShiprocketCancellation } from "../shiprocket/shiprocket.cancellation.js";
+import ShiprocketShipmentsService, { type ShiprocketCancelOutcome } from "../shiprocket/shiprocket.shipments.service.js";
+import { decideShopifySyncForNewOrder, shopifyPushBlocked, SHOPIFY_SYNC_OFF_REASON } from "../settings/shopify-sync.setting.js";
 import { addShopifyOrderTags, repairAndVerify, verifyShopifyOrder, cancelShopifyOrder, createShopifyOrder, findShopifyOrderBySourceIdentifier, isShopifyRejection, ShopifyOrderCancelError, ShopifyOrderCreateError, type ShopifyOrderCreateInput } from "../shopify/shopify.orders.write.js";
 import { computePercentDiscount } from "./orders.discount.js";
 import { ABANDONMENT_WORK_ROLES, abandonmentLeadScope } from "../abandonment/abandonment.filters.js";
@@ -36,6 +41,7 @@ const customKey = (name: string, unitPrice: string): string => `${name.trim().to
 const weightToGrams = (value: string, unit: "KG" | "G"): string => String(Math.round(Number(value) * (unit === "KG" ? 1000 : 1) * 1000) / 1000);
 const SUPERSEDE_REASON_PREFIX = "Replaced by";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
+import { buildOrderTracking } from "./orders.tracking.js";
 import type { LiveTracking } from "../shiprocket/shiprocket.types.js";
 import CashfreePaymentsService from "../cashfree/cashfree.payments.service.js";
 import { getWhatsAppPaymentOptions, recordWhatsAppConsent, validateWhatsAppPaymentSend, type WhatsAppPaymentOptions } from "./orders.whatsapp-payment.js";
@@ -348,7 +354,29 @@ class OrdersService {
     // Real WhatsApp sends by default; tests inject trivial stubs so order-creation tests never touch
     // WhatsApp/Meta/template resolution at all.
     private readonly notify: { confirmation: typeof notifyOrderConfirmation; paymentLink: typeof notifyPaymentLink; paymentQr?: typeof sendPaymentQr } = { confirmation: notifyOrderConfirmation, paymentLink: notifyPaymentLink, paymentQr: sendPaymentQr },
+    // The existing Shiprocket shipment service, used by the automatic submission of a CRM-created order (tests inject a fake).
+    private readonly getShiprocket: () => Pick<ShiprocketShipmentsService, "createShipment" | "cancelForOrder"> = () => new ShiprocketShipmentsService(),
   ) {}
+
+  /** Submits a CRM-created order to Shiprocket (once; see shiprocket.auto-sync.ts). Independent of Shopify and of the Shopify sync setting. Never throws and never undoes the order. */
+  async submitToShiprocket(user: AuthUser, orderId: string, trigger: ShiprocketSyncTrigger): Promise<ShiprocketSyncOutcome> {
+    return syncOrderToShiprocket({ db: this.db as never, service: this.getShiprocket() }, orderId, user, trigger);
+  }
+
+  /** The Shiprocket half of a cancellation, again: retries a failed request, or re-checks one Shiprocket has accepted. Only for an order that is already cancelled in the CRM; never sends a second request for one in flight. */
+  async retryShiprocketCancellation(user: AuthUser, orderId: string): Promise<ShiprocketCancelOutcome> {
+    const order = await this.db.order.findFirst({ where: await this.orderActionWhere(user, orderId), select: { id: true, status: true } });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    if (order.status !== "CANCELLED") throw new ApiError("Only a cancelled order has a Shiprocket cancellation to retry.", STATUS_CODES.CONFLICT);
+    return this.getShiprocket().cancelForOrder(orderId, { id: user.id, role: user.role });
+  }
+
+  /** The "Retry Shiprocket sync" action: the same idempotent submission, for an order the caller may act on. */
+  async retryShiprocketSync(user: AuthUser, orderId: string): Promise<ShiprocketSyncOutcome> {
+    const order = await this.db.order.findFirst({ where: await this.orderActionWhere(user, orderId), select: { id: true } });
+    if (!order) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
+    return this.submitToShiprocket(user, orderId, "RETRY");
+  }
 
   async listOrders(user: AuthUser, query: ListOrdersQuery): Promise<OrderListResult> {
     return this.listOrdersWhere(user, query);
@@ -490,6 +518,8 @@ class OrdersService {
       // Last Shopify-cancellation outcome recorded by cancelOrder (Order.metadata) - lets the UI offer a retry after a reload.
       shopifyCancellation: ((order.metadata as Record<string, unknown> | null)?.shopifyCancellation as ShopifyCancelResult | undefined) ?? null,
       paymentLinkCancellation: ((order.metadata as Record<string, unknown> | null)?.paymentLinkCancellation as PaymentLinkCancelResult | undefined) ?? null,
+      shiprocketSync: readShiprocketSync(order.metadata),
+      shiprocketCancellation: readShiprocketCancellation(order.metadata),
       shopifyPaymentSync: ((order.metadata as Record<string, unknown> | null)?.shopifyPaymentSync as OrderDetail["shopifyPaymentSync"] | undefined) ?? null,
       whatsappNotification: ((order.metadata as Record<string, unknown> | null)?.whatsappNotification as OrderWhatsAppNotification | undefined) ?? null,
       confirmedBy: order.confirmedByUserId && order.confirmedByName ? { id: order.confirmedByUserId, name: order.confirmedByName } : null,
@@ -583,6 +613,10 @@ class OrdersService {
         linkedShipmentId: shipment.externalSource === "SHOPIFY" && shipment.trackingNumber ? (directByAwb.get(normalizeAwb(shipment.trackingNumber)) ?? null) : null,
         liveTracking: shipment.trackingNumber ? liveTrackingByAwb.get(shipment.trackingNumber) : undefined,
       })),
+      tracking: buildOrderTracking({
+        confirmedAt: order.confirmedAt,
+        shipments: order.shipments.map((shipment) => ({ ...shipment, shiprocketOrderId: shipment.providerOrderId, liveTracking: shipment.trackingNumber ? liveTrackingByAwb.get(shipment.trackingNumber) : undefined })),
+      }),
       shopifyLive: shopifyLiveResult.order,
       shopifyLiveError: shopifyLiveResult.error,
     };
@@ -773,7 +807,8 @@ class OrdersService {
       await this.completeIdempotency(user.id, input.idempotencyKey!, { shopify: done.shopify, paymentLink: null, whatsapp: { sent: false, via: null, provider: null, reason: "Payment already received: no payment link or QR was sent." }, manualPayment: done.manualPayment } as CreateManualOrderResult);
       return;
     }
-    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
+    await this.submitToShiprocket(user, orderId, "ORDER_CREATED");
+    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : await this.prepaidShopifyPlaceholder(orderId);
     let paymentLink: OrderPaymentLinkResult | null = null;
     if (input.paymentMethod === "PAYMENT_LINK") {
       try {
@@ -789,7 +824,7 @@ class OrdersService {
 
   private async createManualOrderOnce(user: AuthUser, input: CreateManualOrderInput, idem?: { key: string; hash: string }): Promise<CreateManualOrderResult> {
     const leadScope = await getOrderFlowScope(user, this.db);
-    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, leadScope), select: { id: true, normalizedMobile: true } });
+    const lead = await this.db.lead.findFirst({ where: scopedLeadWhere(input.leadId, leadScope), select: { id: true, normalizedMobile: true, customerType: true } });
     // Out-of-scope reads the same as missing, same convention as every other single-lead lookup.
     if (!lead) throw new ApiError("Customer not found", STATUS_CODES.NOT_FOUND);
     // An order created from an abandoned checkout: that checkout must be THIS customer's (never another lead's cart), or the request is refused.
@@ -877,7 +912,7 @@ class OrdersService {
     }
     const percentDiscount = input.discountPercent !== undefined ? computePercentDiscount(subtotalCents - itemDiscountCents, input.discountPercent) : null;
     // New selection model: resolved here against the live Fastrr offers and the real subtotal (items after line discounts).
-    const resolvedDiscount: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents) : null;
+    const resolvedDiscount: ResolvedDiscount | null = input.discount !== undefined ? await new DiscountsService(this.db).resolve("ORDER", input.discount, subtotalCents - itemDiscountCents, { customerType: lead.customerType }) : null;
     // Billing rules, decided HERE (the browser's figures are only a preview):
     //  - the configured default discount (Rs 50 unless the business changes it) is a PREPAID promotion: it never applies to a COD order. A discount chosen on purpose
     //    (a Fastrr coupon, or a custom value that is not the default) is not "automatic" and is left exactly as it was;
@@ -910,6 +945,8 @@ class OrdersService {
     // Who creates this order: read from the authenticated user's own User row (never from the request) and stored on the order, so the "Order Created by <name>" tag and the
     // audit of the creator do not depend on who is logged in later. null (user not found) -> no creator is stored and no creator tag is ever made.
     const creator = await resolveCreatorSnapshot(this.db as never, { id: user.id, role: user.role });
+    // The Admin's "Shopify sync for CRM-created orders" switch is read ONCE, here, and saved on the order: every later push (COD, after a verified prepaid payment, retries) follows this saved decision.
+    const shopifySyncDecision = await decideShopifySyncForNewOrder(this.db as never, now);
     let createdOrderId: string | null = null;
     for (let attempt = 0; attempt < 5 && !createdOrderId; attempt++) {
       try {
@@ -930,7 +967,9 @@ class OrdersService {
               taxAmount: "0",
               shippingAmount: fromCents(shippingCents),
               totalAmount: fromCents(totalCents),
-              discountReason: input.discountReason ?? (selected && selected.source !== "NONE" ? (selected.couponCode ? `Fastrr coupon ${selected.couponCode}` : "Custom discount") : undefined),
+              discountReason: input.discountReason ?? (selected && selected.source !== "NONE" ? (selected.couponCode ? `${selected.couponSource === "CRM" ? "Coupon" : "Fastrr coupon"} ${selected.couponCode}` : "Custom discount") : undefined),
+              // The CRM coupon applied (a link for reports, and what keeps a used coupon soft-deleted) and a copy of its code; a Fastrr coupon is only a code.
+              ...(selected?.couponSource === "CRM" ? { couponId: selected.couponId, couponCode: selected.couponCode } : selected?.couponCode ? { couponCode: selected.couponCode } : {}),
               shippingAddress: input.shippingAddress ?? undefined,
               shippingPincode: input.shippingPincode ?? input.shippingAddress?.pincode,
               ...(input.parcelWeightKg !== undefined ? { parcelWeightKg: input.parcelWeightKg } : {}),
@@ -939,6 +978,7 @@ class OrdersService {
               metadata: {
                 paymentMode: isCod ? "COD" : "PREPAID",
                 createdVia: "WHATSAPP_INBOX",
+                shopifySyncDecision: shopifySyncDecision as unknown as Prisma.InputJsonValue,
                 ...(abandonmentRef ? { abandonment: { id: abandonmentRef.id, referenceId: abandonmentRef.referenceId } } : {}),
                 ...(creator ? { createdBy: creator as unknown as Prisma.InputJsonValue } : {}),
                 // The discount that was actually applied and why - kept on the order, so the reason for a reduced total never
@@ -992,8 +1032,10 @@ class OrdersService {
     // that's always safe).
     // PREPAID: the CRM order is only a payment request (PENDING_PAYMENT) until Cashfree verifies the payment; the Shopify order is created then (see orders.prepaid-confirm.ts). COD is pushed at once, as before.
     // "Payment already received": the payment is recorded and the Shopify order created AND marked paid right here, through the audited manual-payment path (see recordExternalPayment).
+    // Shiprocket gets the saved order first and on its own: it needs no Shopify order and does not wait for one. COD is submitted now; prepaid once its payment is verified (immediately, if it was already received).
     const external = externallyPaid ? await this.recordExternalPayment(user, createdOrderId, input) : null;
-    const shopify: ShopifyPushResult = external ? external.shopify : input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
+    await this.submitToShiprocket(user, createdOrderId, "ORDER_CREATED");
+    const shopify: ShopifyPushResult = external ? external.shopify : input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : shopifySyncDecision.enabled ? { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." } : { status: "skipped", reason: SHOPIFY_SYNC_OFF_REASON };
     const order = await this.getOrder(user, createdOrderId);
 
     // Prepaid: create exactly one Cashfree payment link for this order (best-effort - see
@@ -1075,6 +1117,12 @@ class OrdersService {
     return result;
   }
 
+  /** A prepaid order has no Shopify order until its payment is verified; with the order's saved decision OFF it never will. */
+  private async prepaidShopifyPlaceholder(orderId: string): Promise<ShopifyPushResult> {
+    const o = await this.db.order.findUnique({ where: { id: orderId }, select: { source: true, metadata: true } });
+    return o && shopifyPushBlocked(o) ? { status: "skipped", reason: SHOPIFY_SYNC_OFF_REASON } : { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." };
+  }
+
   /** Marks the just-created Shopify order paid, but only when the CRM holds a SUCCESSFUL (verified) payment for it. Idempotent (syncShopifyPayment is guarded). Never throws. */
   private async settlePaidPrepaidOnShopify(orderId: string): Promise<void> {
     try {
@@ -1131,9 +1179,11 @@ class OrdersService {
   // The claim is a conditional UPDATE on the order row, so it holds across processes; a claim older than the lease belongs to a dead process and is taken over.
   private async linkOrderToShopify(user: AuthUser | null, orderId: string): Promise<ShopifyPushResult> {
     const leadScope = user ? await getOrderFlowScope(user, this.db) : {}; // null = the system finishing a verified payment (no user in a webhook)
-    const visible = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, externalId: true, externalNumber: true } });
+    const visible = await this.db.order.findFirst({ where: scopedOrderWhere(orderId, leadScope), select: { id: true, externalId: true, externalNumber: true, source: true, metadata: true } });
     if (!visible) throw new ApiError("Order not found", STATUS_CODES.NOT_FOUND);
     if (visible.externalId) return { status: "already_linked", shopifyOrderId: visible.externalId, shopifyOrderName: visible.externalNumber ?? undefined };
+    // The order's SAVED sync decision (made when it was created) is the one gate every Shopify create passes through - the COD push, the push after a verified payment, manual and recovery retries.
+    if (shopifyPushBlocked(visible)) return { status: "skipped", reason: SHOPIFY_SYNC_OFF_REASON };
     const deadline = Date.now() + idempotencyTuning.waitMs;
     for (;;) {
       // Taking over an EXPIRED claim (its holder died, or hung) also marks the order "uncertain": the previous holder may have got as far as creating the Shopify
@@ -1414,8 +1464,12 @@ class OrdersService {
     const openLinks = order.payments.filter(isOpenCashfreeLink);
     const priorShopify: ShopifyCancelResult = priorCancellation ?? { status: order.externalId ? "failed" : "not_linked", reason: order.externalId ? "Shopify cancellation was not recorded for this order (cancelled before this feature existed)." : undefined };
 
-    // Nothing left to do: already cancelled, Shopify not in a failed state, and no Cashfree link still open.
-    if (alreadyCancelled && priorCancellation?.status !== "failed" && openLinks.length === 0) {
+    // The Shiprocket side is outstanding while its record exists and is not CANCELLED (FAILED = retry; PENDING / REQUESTED = only looked at, never re-sent).
+    const priorShiprocket = readShiprocketCancellation(meta);
+    const shiprocketOutstanding = priorShiprocket !== null && priorShiprocket.status !== "CANCELLED";
+
+    // Nothing left to do: already cancelled, Shopify not in a failed state, no Cashfree link still open, and nothing outstanding at Shiprocket.
+    if (alreadyCancelled && priorCancellation?.status !== "failed" && openLinks.length === 0 && !shiprocketOutstanding) {
       return { order: await this.getOrder(user, orderId, opts), shopify: priorShopify, paymentLink: summarizePaymentLink(order.payments, priorLinkCancellation), alreadyCancelled: true };
     }
 
@@ -1507,6 +1561,9 @@ class OrdersService {
         },
       });
 
+      // Shiprocket: after the metadata write above (that write replaces the whole metadata object, so an earlier Shiprocket record would be lost). The CRM cancellation is already saved; whatever happens here only sets the Shiprocket status.
+      if (cancelledNow || shiprocketOutstanding) await this.getShiprocket().cancelForOrder(orderId, { id: user.id, role: user.role });
+
       if (cancelledNow) {
         await this.db.activity.create({
           data: {
@@ -1550,13 +1607,20 @@ class OrdersService {
       throw new ApiError("The status before cancellation was not recorded for this order (it was cancelled before reverting was supported), so it cannot be restored automatically.", STATUS_CODES.CONFLICT);
     }
     const restoredStatus = previous as OrderStatus;
+    // Shiprocket is cancelling (or has accepted cancelling) this order: reactivating it in the CRM would leave a live order with a dying Shiprocket order. A FAILED request cancelled nothing, so it is simply dropped below.
+    const shiprocketCancel = readShiprocketCancellation(meta);
+    if (shiprocketCancel && (shiprocketCancel.status === "PENDING" || shiprocketCancel.status === "REQUESTED")) {
+      throw new ApiError("Shiprocket is cancelling this order, so its cancellation can not be reverted. Wait until Shiprocket shows it as cancelled (or the request fails), then revert.", STATUS_CODES.CONFLICT);
+    }
 
     // Conditional on still being CANCELLED, so two concurrent reverts (a double click) cannot both win.
     const { count } = await this.db.order.updateMany({ where: { id: orderId, status: "CANCELLED" }, data: { status: restoredStatus, cancelledAt: null, cancelReason: null } });
     if (count === 0) return { order: await this.getOrder(user, orderId), restoredStatus, alreadyActive: true };
     clearLiveOrderCaches();
 
-    const { preCancelStatus: _consumed, ...rest } = meta;
+    // A cancellation record that is CANCELLED stays as history; a FAILED one (nothing was cancelled at Shiprocket) is dropped so it does not linger on the active order.
+    const { preCancelStatus: _consumed, shiprocketCancellation: _record, ...others } = meta;
+    const rest = shiprocketCancel && shiprocketCancel.status !== "FAILED" ? { ...others, shiprocketCancellation: meta.shiprocketCancellation } : others;
     await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...rest, cancellationReverted: { at: new Date().toISOString(), by: user.id, restoredStatus } } as Prisma.InputJsonValue } });
     await this.db.activity.create({
       data: {

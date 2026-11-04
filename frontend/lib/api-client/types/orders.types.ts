@@ -57,6 +57,24 @@ export type ExternalSource = "SHOPIFY" | "CASHFREE" | "SHIPROCKET";
 // Live from Shiprocket (backend: shiprocket.live-tracking.ts) - fetched read-only, cached briefly,
 // never written back to the CRM's own shipment row. Absent (undefined) when the shipment has no AWB
 // to look up; `tracking: null` with `error` set when Shiprocket couldn't answer.
+export type TrackingStage = "ORDER_CONFIRMED" | "SHIPMENT_CREATED" | "AWB_ASSIGNED" | "PICKUP_SCHEDULED" | "PICKED_UP" | "IN_TRANSIT" | "REACHED_DESTINATION_HUB" | "OUT_FOR_DELIVERY" | "DELIVERED" | "DELIVERY_FAILED" | "RTO_INITIATED" | "RTO_DELIVERED" | "CANCELLED" | "OTHER";
+export interface TrackingEvent { at: string | null; stage: TrackingStage; label: string; detail: string | null; location: string | null; source: "SHIPROCKET" | "CRM" }
+export interface ShipmentTracking {
+  shipmentId: string;
+  courier: string | null;
+  awb: string | null;
+  shiprocketOrderId: string | null;
+  trackingUrl: string | null;
+  createdAt: string;
+  status: { stage: TrackingStage; label: string; providerText: string | null };
+  latestUpdateAt: string | null;
+  estimatedDelivery: string | null;
+  live: "live" | "unavailable" | "none";
+  liveError: string | null;
+  events: TrackingEvent[];
+}
+export interface OrderTracking { state: "NOT_CREATED" | "SHIPMENT"; headline: string; shipments: ShipmentTracking[]; orderEvents: TrackingEvent[] }
+
 export interface LiveTracking {
   tracking: {
     awb: string;
@@ -167,7 +185,8 @@ export interface CreateManualOrderInput {
 }
 
 /** awaiting_payment = a prepaid order: the Shopify order is created only after Cashfree verifies the payment. */
-export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment";
+/** skipped = the Admin setting "Shopify sync for CRM-created orders" was OFF when the order was created: the order lives in the CRM only. */
+export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment" | "skipped";
 
 export interface ShopifyPushResult {
   status: ShopifyPushStatus;
@@ -522,6 +541,10 @@ export interface OrderDetail {
   paymentLinkCancellation: PaymentLinkCancelResult | null;
   // Last Shopify payment-reconciliation outcome (set once a Cashfree payment on this order settles).
   shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  /** Shiprocket submission of a CRM-created order; independent of every Shopify status. Null = never attempted. */
+  shiprocketSync: ShiprocketOrderSync | null;
+  /** Shiprocket side of cancelling this order. Null = there was no Shiprocket order to cancel. */
+  shiprocketCancellation: ShiprocketCancellation | null;
   // Who confirmed the order in the CRM (current confirmer), the tag derived from it ("CRM Confirmed by <name>"), and the outcome of
   // writing that tag to the linked Shopify order. confirmedAt (below) is when.
   confirmedBy?: { id: string; name: string } | null;
@@ -563,6 +586,8 @@ export interface OrderDetail {
   items: OrderItemDetail[];
   payments: PaymentDetail[];
   shipments: ShipmentDetail[];
+  /** Read-only tracking view built by the backend from the shipments + Shiprocket scans (see backend orders.tracking.ts). */
+  tracking?: OrderTracking;
   // Live snapshot fetched directly from Shopify for a synced order - additive overlay, never replaces
   // the CRM-owned fields above. null when unlinked, not yet fetched, or Shopify was unreachable
   // (see shopifyLiveError). See backend: orders.service.ts's getOrder().
@@ -758,4 +783,39 @@ export interface MarkPaidResult {
   payment: { id: string; verification: "MANUAL_EXTERNAL" | "CASHFREE"; amount: string; paidAt: string | null };
   shopify: { linked: boolean; paymentSync: "synced" | "failed" | "pending"; reason?: string };
   openCashfreeLink: boolean;
+}
+
+export type ShiprocketOrderSyncStatus = "PENDING" | "SYNCED" | "FAILED" | "AWAITING_PAYMENT" | "NOT_CONFIGURED";
+
+export interface ShiprocketOrderSync {
+  status: ShiprocketOrderSyncStatus;
+  attempts: number;
+  lastAttemptAt: string | null;
+  syncedAt: string | null;
+  shiprocketOrderId: string | null;
+  channelOrderId: string | null;
+  error: string | null;
+}
+
+export interface ShiprocketSyncRetryResult {
+  status: ShiprocketOrderSyncStatus | "NOT_APPLICABLE";
+  reason?: string;
+}
+
+export type ShiprocketCancellationStatus = "PENDING" | "REQUESTED" | "CANCELLED" | "FAILED";
+
+export interface ShiprocketCancellation {
+  status: ShiprocketCancellationStatus;
+  attempts: number;
+  lastAttemptAt: string | null;
+  requestedAt: string | null;
+  cancelledAt: string | null;
+  shiprocketOrderId: string | null;
+  awb: string | null;
+  error: string | null;
+}
+
+export interface ShiprocketCancellationRetryResult {
+  status: ShiprocketCancellationStatus | "NOT_APPLICABLE";
+  reason?: string;
 }

@@ -5,6 +5,7 @@ import { customersKeys } from "../queries/customers.queries";
 import { auditKeys } from "../queries/audit.queries";
 import { deliveryKeys } from "../queries/delivery.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
+import type { ShiprocketCancellationRetryResult, ShiprocketSyncRetryResult } from "../types/orders.types";
 import type { AmountApplyResponse, AmountPreview, SyncActionId, SyncApplyResponse, SyncPreview, OrderEditResult, UpdateShippingAddressInput, MarkPaidInput, MarkPaidResult, PaymentQrResult, ShopifySyncRecord, CancelOrderInput, CancelOrderResult, RevertCancellationResult, CreateManualOrderInput, CreateManualOrderResult, LiveOrderCancelResult, LiveOrderSyncResult, ShopifyPushResult } from "../types/orders.types";
 
 export function useCreateOrderMutation() {
@@ -168,6 +169,26 @@ export function useRetryConfirmationTagSyncMutation() {
   const queryClient = useQueryClient();
   return useMutation<{ status: "synced" | "unchanged" | "not_linked" | "not_confirmed" | "failed"; tag?: string; reason?: string }, unknown, string>({
     mutationFn: (orderId) => ordersApi.retryConfirmationTagSync(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}
+
+export function useRetryShiprocketCancellationMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<ShiprocketCancellationRetryResult, unknown, string>({
+    mutationFn: (orderId) => ordersApi.retryShiprocketCancellation(orderId),
+    onSuccess: (_, orderId) => {
+      queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
+    },
+  });
+}
+
+export function useRetryShiprocketSyncMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<ShiprocketSyncRetryResult, unknown, string>({
+    mutationFn: (orderId) => ordersApi.retryShiprocketSync(orderId),
     onSuccess: (_, orderId) => {
       queryClient.invalidateQueries({ queryKey: ordersKeys.detail(orderId) });
     },

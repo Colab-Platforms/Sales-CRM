@@ -13,21 +13,41 @@ export interface CouponOption {
   minCartTotal: number | null;
 }
 
+/** A CRM coupon (Admin > Coupons) as the order screen gets it. `eligible` / `reason` say whether THIS customer may use it; the server checks again. */
+export interface CrmCouponOption {
+  code: string;
+  id: string;
+  type: DiscountType;
+  value: string;
+  minOrderValue: string | null;
+  maxDiscount: string | null;
+  eligibility: "ALL" | "REGULAR" | "DISTRIBUTOR";
+  eligible: boolean;
+  reason: string | null;
+}
+
 /** GET /discounts/options */
 export interface DiscountOptions {
   defaultDiscount: { type: DiscountType; value: string };
   fastrr: { available: boolean; coupons: CouponOption[]; reason: string | null };
+  /** ORDER flow: the CRM coupons for this customer (the screen never needs Fastrr). */
+  coupons?: CrmCouponOption[];
+  customerType?: "REGULAR" | "DISTRIBUTOR";
 }
 
 export type DiscountChoice =
   | { mode: "NONE" }
-  | { mode: "COUPON"; code: string; type: DiscountType; value: string }
+  | { mode: "COUPON"; code: string; type: DiscountType; value: string; /** a CRM coupon; maxCents = the cap of a percentage coupon */ crm?: true; maxCents?: number | null }
   | { mode: "CUSTOM"; type: DiscountType; value: string };
 
 export const NO_DISCOUNT: DiscountChoice = { mode: "NONE" };
 
 export function choiceFromCoupon(c: CouponOption): DiscountChoice {
   return { mode: "COUPON", code: c.code, type: c.type, value: c.value };
+}
+
+export function choiceFromCrmCoupon(c: CrmCouponOption): DiscountChoice {
+  return { mode: "COUPON", code: c.code, type: c.type, value: c.value, crm: true, maxCents: c.maxDiscount === null ? null : Math.round(Number(c.maxDiscount) * 100) };
 }
 
 /** The configured default - a CUSTOM discount (₹50 fixed unless the business changes it), never a coupon. */
@@ -72,12 +92,13 @@ export function previewDiscount(baseCents: number, type: DiscountType, raw: stri
 export function choiceCents(baseCents: number, choice: DiscountChoice, strict = false): number {
   if (choice.mode === "NONE") return 0;
   const p = previewDiscount(baseCents, choice.type, choice.value, strict);
-  return p.ok ? p.cents : 0;
+  if (!p.ok) return 0;
+  return choice.mode === "COUPON" && choice.maxCents != null ? Math.min(p.cents, choice.maxCents) : p.cents;
 }
 
 /** Row label next to "Discount": the coupon code, "Custom", or nothing. */
 export function choiceCaption(choice: DiscountChoice): string | null {
-  if (choice.mode === "COUPON") return `Fastrr: ${choice.code}`;
+  if (choice.mode === "COUPON") return choice.crm ? choice.code : `Fastrr: ${choice.code}`;
   if (choice.mode === "CUSTOM") return "Custom";
   return null;
 }
@@ -85,7 +106,7 @@ export function choiceCaption(choice: DiscountChoice): string | null {
 export function choiceSummary(choice: DiscountChoice): string {
   if (choice.mode === "NONE") return "No discount";
   const v = choice.type === "PERCENT" ? `${Number(choice.value)}%` : `₹${Number(choice.value)}`;
-  return choice.mode === "COUPON" ? `Fastrr: ${choice.code}` : `Custom ${v}`;
+  return choice.mode === "COUPON" ? (choice.crm ? choice.code : `Fastrr: ${choice.code}`) : `Custom ${v}`;
 }
 
 /** What goes on the wire: only the choice - never an amount or a total. */

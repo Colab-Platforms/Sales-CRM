@@ -3,7 +3,7 @@ import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
-import { previewOrderAmount, correctOrderAmount, applyOrderSync, getOrderSyncReport, previewOrderSync, changeOrderFlavour, getOrderFlavours, updateOrderShippingAddress, cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
+import { previewOrderAmount, correctOrderAmount, applyOrderSync, getOrderSyncReport, previewOrderSync, changeOrderFlavour, getOrderFlavours, updateOrderShippingAddress, cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShiprocketSync, retryShiprocketCancellation, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
 import { LIVE_ORDER_SYNC_ROLES } from "./orders.filters.js";
 import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
@@ -60,6 +60,8 @@ router.get("/:id/audit", requireAuth, getOrderAudit);
 // SALESPERSON) - the real restriction is server-side lead scope (createManualOrder/pushOrderToShopify
 // both use getLeadScope), never just which roles can reach the route.
 router.post("/", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), createOrder);
+router.post("/:id/shiprocket-cancellation", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), retryShiprocketCancellation);
+router.post("/:id/shiprocket-sync", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), retryShiprocketSync);
 router.post("/:id/shopify-order", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), pushOrderToShopify);
 // Verify and repair a partial Shopify sync (shipping address, crm metafields, missing tags). Admin / manager only.
 router.post("/:id/shopify-sync/retry", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), resyncShopifyOrder);

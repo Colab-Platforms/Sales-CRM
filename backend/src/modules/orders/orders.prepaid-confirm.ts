@@ -70,6 +70,7 @@ export async function confirmPaidPrepaidOrder(db: Runner, orderId: string, deps:
       await recordFailure(db, orderId, pushed.reason ?? "Shopify did not accept the order", now);
       return { confirmed: true, shopify: "failed", reason: pushed.reason };
     }
+    if (pushed.status === "skipped") return { confirmed: true, shopify: "not_applicable", reason: pushed.reason }; // saved decision: Shopify sync OFF for this order
     return { confirmed: true, shopify: pushed.status === "created" ? "created" : "already_linked" };
   } catch (error) {
     const reason = safeMessage(error instanceof Error ? error.message : String(error));

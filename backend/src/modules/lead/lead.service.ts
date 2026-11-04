@@ -905,17 +905,14 @@ class LeadService {
     if (!config?.enabled) return;
 
     // Only salespeople who are present right now: an open WorkSession (endedAt null) means they are
-    // logged in and heartbeating; logout or a stale timeout closes it. Absent ones are skipped, and if
-    // nobody is present the lead stays with the manager unassigned.
-    const salespeople = await tx.user.findMany({
-      where: {
-        role: Role.SALESPERSON,
-        status: UserStatus.ACTIVE,
-        reportingManagerId: lead.assignedManagerId,
-        workSessions: { some: { endedAt: null } },
-      },
-      orderBy: { id: "asc" },
-    });
+    // logged in and heartbeating; logout or a stale timeout closes it. Absent ones are skipped.
+    const activeWhere = { role: Role.SALESPERSON, status: UserStatus.ACTIVE, reportingManagerId: lead.assignedManagerId };
+    let salespeople = await tx.user.findMany({ where: { ...activeWhere, workSessions: { some: { endedAt: null } } }, orderBy: { id: "asc" } });
+    // Off-hours: nobody under this manager is clocked in (evening / night / before the first clock-in), so
+    // the lead goes round-robin to every active salesperson instead of waiting for the manager. The manager
+    // moves the absent people's untouched leads to present people the next morning (redistributeAbsentLeads).
+    // The same per-manager cursor is used; indexOf falls back to 0 when the last owner is not in this list.
+    if (salespeople.length === 0) salespeople = await tx.user.findMany({ where: activeWhere, orderBy: { id: "asc" } });
     if (salespeople.length === 0) return;
 
     const cursorRows = await tx.$queryRaw<{ id: string; lastAssignedSalespersonId: string | null }[]>`
@@ -1031,10 +1028,10 @@ class LeadService {
    *  manager was just assigned or already present) the salesperson stage. Each stage's own toggle
    *  decides whether anything actually happens - safe to call unconditionally. */
   async autoAssignAbandonedLead(tx: TxClient, lead: Lead): Promise<void> {
-    // The 24/7 pool goes first: when it is on it owns abandoned-lead assignment (attendance / shift / online status are not consulted). Off, missing or empty -> the existing two stages below, unchanged.
-    if ((await this.autoAssignAbandonedFromPool(tx, lead)).assigned) return;
     const withManager = await this.autoAssignManagerForLead(tx, lead);
     await this.autoAssignSalespersonForLead(tx, withManager);
+    // The fixed pool is only a last resort now (it ignores attendance, so it must not take leads from the present-people rule above); it no-ops when off or when the lead already has an owner.
+    await this.autoAssignAbandonedFromPool(tx, withManager);
   }
 
   // ---------- CSV import ----------

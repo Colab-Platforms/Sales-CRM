@@ -15,6 +15,7 @@ import {
   verifyProviderChallenge,
   receiveWebhook,
 } from "./integrations.controller.js";
+import { getShopifyCrmOrderSync, setShopifyCrmOrderSync } from "./integrations.shopify-sync.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 
@@ -31,6 +32,10 @@ router.get("/webhooks/:provider", verifyProviderChallenge);
 router.post("/webhooks/:provider", receiveWebhook);
 
 router.use(requireAuth, requireRole(Role.ADMIN));
+
+// Admin-only (router.use above): the Shopify sync switch for CRM-created orders. Shiprocket and Shopify-originated orders are not affected by it.
+router.get("/shopify/crm-order-sync", getShopifyCrmOrderSync);
+router.put("/shopify/crm-order-sync", setShopifyCrmOrderSync);
 
 router.get("/sources", listSources);
 router.get("/sources/:id", getSource);

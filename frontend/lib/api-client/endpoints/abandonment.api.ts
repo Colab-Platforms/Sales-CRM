@@ -18,6 +18,7 @@ import type {
   IngestionStatus,
   ManagerAutoAssignConfig,
   OrderPrefill,
+  RedistributeAbsentResult,
   TelecallerSummary,
 } from "../types/abandonment.types";
 
@@ -127,6 +128,12 @@ export const abandonmentApi = {
 
   async setSalespersonAutoAssignConfig(enabled: boolean): Promise<AutoAssignConfig> {
     const res = await apiClient.patch<ApiEnvelope<AutoAssignConfig>>("/abandonments/auto-assign/salesperson-config", { enabled });
+    return res.data.data;
+  },
+
+  /** Manager only. `confirm` false = preview; true = move absent salespeople's untouched leads to present ones. */
+  async redistributeAbsent(confirm: boolean): Promise<RedistributeAbsentResult> {
+    const res = await apiClient.post<ApiEnvelope<RedistributeAbsentResult>>("/abandonments/auto-assign/redistribute-absent", { confirm });
     return res.data.data;
   },
 

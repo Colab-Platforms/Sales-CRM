@@ -25,6 +25,7 @@ import { OrderAuditHistory } from "./order-audit-history";
 import { customerDetailsTarget } from "./customer-details-link";
 import { useAuthStore } from "@/stores/auth-store";
 import { OrderShipmentSection } from "./order-shipment-section";
+import { OrderTrackingSection } from "./order-tracking-section";
 import { OrderRefundAction, OrderRefundSection } from "@/components/refunds/order-refund-section";
 import { paymentFigures } from "@/lib/payment-figures";
 import { goodsValue } from "@/lib/package-dimensions";
@@ -39,7 +40,7 @@ import { OrderSyncButton } from "./order-sync-button";
 import { ReviewAmountButton } from "./review-amount-button";
 import { MarkPaidButton } from "./mark-paid-button";
 import { customItemFlags } from "@/lib/custom-item";
-import { CreatePaymentLinkButton, PaymentLinkPanel, ShopifyPaymentSyncStatus } from "./payment-link-panel";
+import { CreatePaymentLinkButton, PaymentLinkPanel, ShiprocketCancellationStatus, ShiprocketSyncStatus, ShopifyPaymentSyncStatus } from "./payment-link-panel";
 import { PrepaidUpgradeAction } from "./prepaid-upgrade-action";
 import { PrepaidUpgradeCard } from "./prepaid-upgrade-card";
 import { PaymentStatusBadge } from "./payment-status-badge";
@@ -224,6 +225,9 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
         </p>
       </div>
 
+      {/* ---- Tracking: right under the header so "where is my order?" is answered without scrolling ---- */}
+      <OrderTrackingSection tracking={order.tracking} />
+
       {/* ---- Customer + Order information ---- */}
       <div className="grid gap-6 lg:grid-cols-2">
         <AccentCard accent="purple">
@@ -333,6 +337,8 @@ function OrderDetailContent({ order }: { order: OrderDetail }) {
             <OrderPaymentSummary order={order} />
             <CreatePaymentLinkButton order={order} />
             <ShopifyPaymentSyncStatus order={order} />
+            <ShiprocketSyncStatus order={order} />
+            <ShiprocketCancellationStatus order={order} />
             {order.payments.length === 0 ? (
               <EmptyState title="No payment recorded" message="No payment has been recorded for this order yet." icon={<CreditCard className="size-6 text-muted-foreground" aria-hidden />} />
             ) : (

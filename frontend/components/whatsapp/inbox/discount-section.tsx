@@ -45,6 +45,10 @@ interface DiscountPricingProps {
   choice: DiscountChoice;
   onChange: (choice: DiscountChoice) => void;
   fastrr: DiscountOptions["fastrr"];
+  /** CRM coupons for this customer (Admin > Coupons). When given, they replace the Fastrr list in the editor. */
+  crmCoupons?: DiscountOptions["coupons"];
+  customerType?: DiscountOptions["customerType"];
+  leadId?: string;
   isPrepaid: boolean;
   disabled?: boolean;
 }
@@ -54,7 +58,7 @@ interface DiscountPricingProps {
  * the shared discount editor. The total is a PREVIEW (subtotal - discount + shipping); the server recomputes it from the real
  * items and coupon and refuses the order if the two disagree.
  */
-export function DiscountPricing({ subtotalCents, shippingCents, choice, onChange, fastrr, isPrepaid, disabled }: DiscountPricingProps) {
+export function DiscountPricing({ subtotalCents, shippingCents, choice, onChange, fastrr, crmCoupons, customerType, leadId, isPrepaid, disabled }: DiscountPricingProps) {
   const [editing, setEditing] = useState(false);
   const [celebrate, setCelebrate] = useState<string | null>(null);
 
@@ -123,7 +127,7 @@ export function DiscountPricing({ subtotalCents, shippingCents, choice, onChange
         )}
       </div>
 
-      <DiscountEditor open={editing} onOpenChange={setEditing} current={choice} fastrr={fastrr} baseCents={subtotalCents} onApply={apply} />
+      <DiscountEditor open={editing} onOpenChange={setEditing} current={choice} fastrr={fastrr} crmCoupons={crmCoupons} customerType={customerType} leadId={leadId} baseCents={subtotalCents} onApply={apply} />
     </div>
   );
 }

@@ -13,6 +13,7 @@ import type { ShopifyClient } from "../shopify/shopify.client.js";
 import type { OrderNotifyDeps } from "../whatsapp/whatsapp.order-notify.service.js";
 import { applyPaymentUpdate, type ApplyResult, type PaymentUpdate } from "./cashfree.apply.js";
 import { sendPaymentSuccessNotification, syncShopifyPayment } from "./cashfree.payment-success.js";
+import { submitPaidOrderToShiprocket } from "../shiprocket/shiprocket.auto-sync.js";
 import { confirmPaidPrepaidOrder } from "../orders/orders.prepaid-confirm.js";
 import { clearLiveOrderCaches } from "../orders/orders.live.service.js";
 
@@ -27,6 +28,8 @@ export interface PaymentReconcileDeps {
    * After a payment becomes SUCCESS or FAILED: close what is still open for it at Cashfree (the UPI QR's order after the link was paid or the payment failed; the payment link after the QR was paid).
    * Best effort: a failure here is logged and recorded, never undoes the payment - a payment that still arrives is caught as a duplicate / late payment by applyPaymentUpdate.
    */
+  /** Test seam: submits the just-paid order to Shiprocket. */
+  submitToShiprocket?: (orderId: string) => Promise<unknown>;
   closeOpenMethods?: (paymentId: string, to: "SUCCESS" | "FAILED", via: string | null) => Promise<void>;
 }
 
@@ -70,6 +73,8 @@ export async function reconcileCashfreePayment(deps: PaymentReconcileDeps, payme
 
 /** Confirms the order, creates/links its Shopify order, marks it paid there, and refreshes the cached Orders list. Each step is best effort and idempotent; a failure is logged, never thrown. */
 export async function confirmAndSyncPaidOrder(deps: PaymentReconcileDeps, orderId: string, ctx: PaymentReconcileContext, now: () => Date): Promise<void> {
+  // Shiprocket first and on its own: it needs neither the Shopify order nor its outcome (Shopify sync OFF, failed or slow changes nothing here). Idempotent; never throws.
+  await (deps.submitToShiprocket ?? submitPaidOrderToShiprocket)(orderId).catch((error) => logger.warn(`Shiprocket submission errored for order ${orderId}: ${safeMessage(error instanceof Error ? error.message : String(error))}`));
   // A prepaid CRM order exists only as a payment request until now: confirm it and create its Shopify order (idempotent; a Shopify failure is recorded, never undoes the payment).
   try {
     await deps.runner.$transaction((tx) => confirmPaidPrepaidOrder(tx, orderId, { getShopifyClient: deps.getShopifyClient, now: now() }), FOLLOW_UP_TX);

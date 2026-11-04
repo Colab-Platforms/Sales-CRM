@@ -816,8 +816,10 @@ export function ResultView({
           </ul>
         </ResultRow>
 
-        <ResultRow label="Shopify" state={shopify.status === "failed" ? "fail" : shopify.status === "awaiting_payment" ? "warn" : "ok"}>
-          {shopify.status === "awaiting_payment" ? (
+        <ResultRow label="Shopify" state={shopify.status === "failed" ? "fail" : shopify.status === "awaiting_payment" || shopify.status === "skipped" ? "warn" : "ok"}>
+          {shopify.status === "skipped" ? (
+            <span data-testid="shopify-sync-off">Not sent - Shopify sync for CRM-created orders is OFF. This order is saved in the CRM only; shipping and payment continue as usual.</span>
+          ) : shopify.status === "awaiting_payment" ? (
             <span data-testid="shopify-awaiting-payment">Not created yet - the Shopify order is created automatically once Cashfree confirms the payment. Until then this is an awaiting-payment request, not a confirmed order.</span>
           ) : shopify.status === "failed" ? (
             <span className="grid gap-2">

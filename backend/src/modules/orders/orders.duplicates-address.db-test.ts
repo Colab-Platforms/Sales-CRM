@@ -34,6 +34,8 @@ function fakeShopify(opts: { dropShipping?: boolean; dropBilling?: boolean; repa
   const client = {
     query: async (doc: string, vars: any) => {
       if (/customers\(/.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: opts.customerNodes ?? [] } };
+      // Since 2026-10-26 a missing Shopify customer is created from the CRM name + phone before the order (shopify.order-customer.ts); this fake answers that call like Shopify does.
+      if (/customerCreate/.test(doc)) return { customerCreate: { customer: { id: "gid://shopify/Customer/777", firstName: vars.input?.firstName ?? null, lastName: vars.input?.lastName ?? null }, userErrors: [] } };
       if (/crmOrderIdentity/.test(doc)) {
         const o = state.created.find((c) => c.id === vars.id);
         return { order: o ? { name: o.name, sourceIdentifier: o.sourceIdentifier ?? null, cancelledAt: o.cancelledAt ?? null } : null };
@@ -608,17 +610,17 @@ describe("Shopify order totals: customer fallback and the amount guard (MOCKED S
   const syncOf = async (tx: Prisma.TransactionClient, orderId: string) => ((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true } })).metadata as any)?.shopifySync;
   const linked = async (tx: Prisma.TransactionClient, orderId: string) => (await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { externalId: true, totalAmount: true } }));
 
-  it("an e-mail-less lead with no Shopify customer: NO customer upsert is attempted, so Shopify is asked once, keeps the 50 shipping line, and the totals match (CRM 699 = Shopify 699)", async () => {
+  it("an e-mail-less lead with no Shopify customer: no e-mail upsert is attempted (the customer is created from name + phone and associated), so Shopify is asked once, keeps the 50 shipping line, and the totals match (CRM 699 = Shopify 699)", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx, { rejectUpsertWithoutEmail: true });
       const r = await w.create("COD");
       assert.equal(r.order.totalAmount.toString(), "699");
-      assert.deepEqual(w.shop.state.attempts, [{ customer: false, shippingLines: true, discount: false }], "one request, no customer, shipping line sent");
+      assert.deepEqual(w.shop.state.attempts, [{ customer: true, shippingLines: true, discount: false }], "one request, the created customer associated, shipping line sent");
       assert.equal(w.shop.state.created.length, 1);
       assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 50);
       const sync = await syncOf(tx, r.order.id);
       assert.equal(sync.status, "complete", JSON.stringify({ s: sync.status, m: sync.missing }));
-      assert.match(sync.customer, /no e-mail/);
+      assert.match(sync.customer, /created from the CRM name and phone/);
       assert.equal(sync.totals, undefined);
     });
   });
@@ -688,11 +690,11 @@ describe("Shopify order totals: customer fallback and the amount guard (MOCKED S
     });
   });
 
-  it("an e-mail-less lead whose shipping line is refused fails straight away (one request) instead of dropping the charge", async () => {
+  it("an e-mail-less lead whose shipping line is refused fails (the order is retried once WITHOUT the customer only, never without the charge) instead of dropping the charge", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx, { rejectShippingLines: true });
       const r = await w.create("COD");
-      assert.equal(w.shop.state.attempts.length, 1);
+      assert.deepEqual(w.shop.state.attempts.map((a) => [a.customer, a.shippingLines]), [[true, true], [false, true]], "staged fallback: only the customer is dropped, the shipping line is sent both times");
       assert.equal(w.shop.state.created.length, 0);
       assert.equal((await syncOf(tx, r.order.id)).totals.category, "shipping_or_discount_rejected");
     });
@@ -761,11 +763,11 @@ describe("refusal category: shipping/discount only when Shopify names them (MOCK
     });
   });
 
-  it("an e-mail-less lead refused for a PRODUCT / variant field: one request, same category, nothing created", async () => {
+  it("an e-mail-less lead refused for a PRODUCT / variant field: two requests (with, then without the customer), same category, nothing created", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx, { rejectAll: { field: ["order", "lineItems", "0", "variantId"], message: "Variant does not exist" } });
       const r = await w.create("COD");
-      assert.equal(w.shop.state.attempts.length, 1);
+      assert.deepEqual(w.shop.state.attempts.map((a) => a.customer), [true, false]);
       assert.equal(w.shop.state.created.length, 0);
       assert.equal((await syncOf(tx, r.order.id)).totals.category, "order_rejected");
     });

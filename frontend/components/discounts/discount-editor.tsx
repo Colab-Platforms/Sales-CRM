@@ -7,7 +7,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { formatMoney } from "@/lib/order-status";
-import { choiceCents, choiceFromCoupon, previewDiscount, type DiscountChoice, type DiscountOptions, type DiscountType } from "@/lib/discount";
+import { toast } from "sonner";
+import { useAuthStore } from "@/stores/auth-store";
+import { useSetCustomerTypeMutation } from "@/hooks/useCoupons";
+import { getErrorMessage } from "@/lib/api-client/client";
+import { choiceCents, choiceFromCoupon, choiceFromCrmCoupon, previewDiscount, type DiscountChoice, type DiscountOptions, type DiscountType } from "@/lib/discount";
 
 const CUSTOM = "CUSTOM";
 const COUPON = "COUPON";
@@ -20,6 +24,11 @@ interface EditorProps {
   current: DiscountChoice;
   /** Live Fastrr coupons (or why they are unavailable). The CRM has no coupons of its own. */
   fastrr: DiscountOptions["fastrr"];
+  /** The CRM coupons for this customer (Admin > Coupons). When given they are what "Coupon Code" lists, and Fastrr is not used. */
+  crmCoupons?: DiscountOptions["coupons"];
+  customerType?: DiscountOptions["customerType"];
+  /** Needed to let an Admin / Manager mark the customer as a distributor from here. */
+  leadId?: string;
   /** The amount the discount applies to (subtotal, or the COD amount for a Prepaid Upgrade). */
   baseCents: number;
   currency?: string;
@@ -35,17 +44,40 @@ function selectedKey(c: DiscountChoice): string {
 
 // "Edit Discount": enter a Custom Discount (Fixed ₹ or Percentage %), pick a live Fastrr coupon, or remove it. The picked value
 // REPLACES the current one (the default is never added to it). Only the choice is applied; the server decides the real amount.
-export function EditorBody({ onOpenChange, current, fastrr, baseCents, currency = "INR", strict, onApply }: Omit<EditorProps, "open" | "title">) {
+export function EditorBody({ onOpenChange, current, fastrr, crmCoupons, customerType, leadId, baseCents, currency = "INR", strict, onApply }: Omit<EditorProps, "open" | "title">) {
   const [key, setKey] = useState<string>(selectedKey(current));
   const [couponCode, setCouponCode] = useState(current.mode === "COUPON" ? current.code : "");
   const [type, setType] = useState<DiscountType>(current.mode === "CUSTOM" ? current.type : "FIXED");
   const [value, setValue] = useState(current.mode === "CUSTOM" ? current.value : "");
 
+  const role = useAuthStore((st) => st.user?.role);
+  const setCustomerType = useSetCustomerTypeMutation();
+  const crm = crmCoupons !== undefined;
+  const crmCoupon = crmCoupons?.find((c) => c.code === couponCode);
   const coupon = fastrr.coupons.find((c) => c.code === couponCode);
-  const choice: DiscountChoice | null = key === NONE ? { mode: "NONE" } : key === CUSTOM ? { mode: "CUSTOM", type, value } : coupon ? choiceFromCoupon(coupon) : null;
-  const minOrder = key === COUPON && coupon?.minCartTotal != null && baseCents < Math.round(coupon.minCartTotal * 100) ? `This coupon needs a minimum order of ${formatMoney(String(coupon.minCartTotal), currency)}` : null;
+  const choice: DiscountChoice | null =
+    key === NONE ? { mode: "NONE" } : key === CUSTOM ? { mode: "CUSTOM", type, value } : crm ? (crmCoupon?.eligible ? choiceFromCrmCoupon(crmCoupon) : null) : coupon ? choiceFromCoupon(coupon) : null;
+  const minCart = crm ? (crmCoupon?.minOrderValue != null ? Number(crmCoupon.minOrderValue) : null) : (coupon?.minCartTotal ?? null);
+  const minOrder = key === COUPON && minCart != null && baseCents < Math.round(minCart * 100) ? `This coupon needs a minimum order of ${formatMoney(String(minCart), currency)}` : null;
+  const picked = crm ? crmCoupon : coupon;
+  const couponChoice = crm && crmCoupon ? choiceFromCrmCoupon(crmCoupon) : null;
   const preview: ReturnType<typeof previewDiscount> =
-    key === CUSTOM ? previewDiscount(baseCents, type, value, strict) : key === NONE ? { ok: true, cents: 0 } : !coupon ? { ok: false, error: null } : minOrder ? { ok: false, error: minOrder } : previewDiscount(baseCents, coupon.type, coupon.value, strict);
+    key === CUSTOM
+      ? previewDiscount(baseCents, type, value, strict)
+      : key === NONE
+        ? { ok: true, cents: 0 }
+        : !picked
+          ? { ok: false, error: null }
+          : crm && crmCoupon && !crmCoupon.eligible
+            ? { ok: false, error: crmCoupon.reason ?? "This coupon is not available for this customer" }
+            : minOrder
+              ? { ok: false, error: minOrder }
+              : crm && couponChoice
+                ? (() => {
+                    const p = previewDiscount(baseCents, picked.type, picked.value, strict);
+                    return p.ok && couponChoice.mode === "COUPON" && couponChoice.maxCents != null ? { ok: true as const, cents: Math.min(p.cents, couponChoice.maxCents) } : p;
+                  })()
+                : previewDiscount(baseCents, picked.type, picked.value, strict);
   const valid = preview.ok;
   const discountCents = preview.ok ? preview.cents : 0;
   const currentCents = choiceCents(baseCents, current, strict);
@@ -69,7 +101,50 @@ export function EditorBody({ onOpenChange, current, fastrr, baseCents, currency 
           </NativeSelect>
         </div>
 
-        {key === COUPON ? (
+        {key === COUPON && crm ? (
+          <div className="grid gap-1.5">
+            <Label htmlFor="discount-crm-coupon" className="text-xs">Coupon Code</Label>
+            {crmCoupons!.length > 0 ? (
+              <NativeSelect id="discount-crm-coupon" value={couponCode} onChange={(e) => setCouponCode(e.target.value)}>
+                <option value="">Select a coupon</option>
+                {crmCoupons!.map((c) => (
+                  <option key={c.code} value={c.code} disabled={!c.eligible}>
+                    {c.code} — {c.type === "PERCENT" ? `${Number(c.value)}% off` : `₹${Number(c.value)} off`}
+                    {c.eligible ? "" : " (not eligible)"}
+                  </option>
+                ))}
+              </NativeSelect>
+            ) : (
+              <p role="status" className="rounded-md border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">No active coupons right now. You can still use a Custom Discount.</p>
+            )}
+            {crmCoupons!.filter((c) => !c.eligible).map((c) => (
+              <p key={c.code} className="text-xs text-muted-foreground" data-testid="coupon-ineligible">
+                <span className="font-mono text-foreground">{c.code}</span> is not available: {c.reason}
+              </p>
+            ))}
+            {minOrder ? <p role="alert" className="text-xs text-destructive">{minOrder}</p> : null}
+            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span>Customer: {customerType === "DISTRIBUTOR" ? "Distributor" : "Regular"}</span>
+              {leadId && (role === "ADMIN" || role === "MANAGER") ? (
+                <button
+                  type="button"
+                  className="font-medium text-primary hover:underline disabled:opacity-50"
+                  disabled={setCustomerType.isPending}
+                  onClick={() =>
+                    setCustomerType.mutate(
+                      { leadId, customerType: customerType === "DISTRIBUTOR" ? "REGULAR" : "DISTRIBUTOR" },
+                      { onSuccess: () => { setCouponCode(""); toast.success("Customer type updated."); }, onError: (error) => toast.error(getErrorMessage(error)) },
+                    )
+                  }
+                >
+                  {customerType === "DISTRIBUTOR" ? "Mark as regular" : "Mark as distributor"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        {key === COUPON && !crm ? (
           <div className="grid gap-1.5">
             <Label htmlFor="discount-fastrr" className="text-xs">Coupon Code</Label>
             {fastrr.available && fastrr.coupons.length > 0 ? (

@@ -61,3 +61,10 @@ export interface CreateShipmentInput {
   // Only after the backend reported that a previous attempt's outcome at Shiprocket is unknown.
   acknowledgeUnconfirmed?: boolean;
 }
+
+/** The Admin switch "Shopify Sync for CRM-Created Orders". updatedAt is null until an Admin first saves it (default OFF). */
+export interface ShopifyCrmOrderSync {
+  enabled: boolean;
+  updatedAt: string | null;
+  updatedById: string | null;
+}

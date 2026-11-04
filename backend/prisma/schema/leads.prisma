@@ -38,6 +38,9 @@ model Lead {
 
   lifecycleStage LifecycleStage @default(LEAD) @map("lifecycle_stage")
 
+  // How the customer buys. Drives coupon eligibility (e.g. DISTRIBUTOR500). REGULAR unless an Admin / Manager marks the customer otherwise.
+  customerType CustomerType @default(REGULAR) @map("customer_type")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

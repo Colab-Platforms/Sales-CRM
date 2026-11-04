@@ -15,6 +15,8 @@
     "test:db": "tsx --test src/**/*.db-test.ts",
     "db:seed:dev-orders": "tsx prisma/seed-dev-orders.ts",
     "abandoned-pool": "tsx src/scripts/abandoned-pool.ts",
+    "catalog-fill": "tsx src/scripts/catalog-fill.ts",
+    "catalog-correct": "tsx src/scripts/catalog-correct.ts",
     "shopify:sync": "tsx src/scripts/shopify-sync.ts",
     "shiprocket:sync": "tsx src/scripts/shiprocket-sync.ts",
     "shopify:repair-addresses": "tsx src/scripts/repair-shopify-addresses.ts",
