@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ShoppingCart, Upload } from "lucide-react";
@@ -28,8 +28,39 @@ import { X } from "lucide-react";
 import { IngestionHealthPanel } from "@/components/abandonment/ingestion-health";
 import { BucketSummary } from "@/components/leads/bucket-summary";
 import { ImportAbandonedLeadsDialog } from "@/components/abandonment/import-abandoned-leads-dialog";
+import { BulkRecordingsPanel } from "@/components/abandonment/bulk-recordings-panel";
 
-const PAGE_SIZE = 20;
+const PAGE_SIZES = [20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 20;
+
+function parsePageSize(params: URLSearchParams): number {
+  const size = Number(params.get("size"));
+  return (PAGE_SIZES as readonly number[]).includes(size) ? size : DEFAULT_PAGE_SIZE;
+}
+
+// The search / column filters live in the URL too (`f`), next to `page`: a refresh or Back from a lead can never leave "page 2" pointing at an unfiltered list.
+const NUMBER_FILTERS = ["valueMin", "valueMax"] as const;
+const STRING_FILTERS = ["search", "workingStatus", "lead", "contact", "assignee", "lastAction", "detectedFrom", "detectedTo"] as const;
+function parseFilters(raw: string | null): AbandonmentFilterState {
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of STRING_FILTERS) if (typeof parsed[key] === "string" && parsed[key]) out[key] = String(parsed[key]).slice(0, 100);
+    for (const key of NUMBER_FILTERS) if (typeof parsed[key] === "number" && Number.isFinite(parsed[key])) out[key] = parsed[key];
+    if (Array.isArray(parsed.items)) {
+      const items = parsed.items.filter((k): k is string => typeof k === "string").slice(0, 50);
+      if (items.length > 0) out.items = items;
+    }
+    return out as AbandonmentFilterState;
+  } catch {
+    return {};
+  }
+}
+function serializeFilters(f: AbandonmentFilterState): string | undefined {
+  const clean = Object.fromEntries(Object.entries(f).filter(([, v]) => v !== undefined && v !== "" && !(Array.isArray(v) && v.length === 0)));
+  return Object.keys(clean).length > 0 ? JSON.stringify(clean) : undefined;
+}
 
 // `page` lives in the URL (same pattern as CustomersListView/OrdersListView) so a refresh, or Back
 // from a lead's detail page, returns to the same page instead of silently resetting to page 1.
@@ -44,6 +75,7 @@ export function AbandonedLeadsView() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const page = parsePage(searchParams);
+  const pageSize = parsePageSize(searchParams);
   // Today is the default working view. It lives in the URL so a refresh, Back from a lead, and everything that happens after an assignment keep it.
   const range = parseDateRange(searchParams.get("range"));
   // Drill-down filters from the dashboards (?salespersonId=, ?assignment=UNASSIGNED_TELECALLER). Validated here; a telecaller never sends them (the server also refuses them).
@@ -51,7 +83,7 @@ export function AbandonedLeadsView() {
   const isTelecaller = user?.role === "SALESPERSON";
   const salespersonId = isTelecaller ? undefined : urlFilters.salespersonId;
   const assignment = isTelecaller ? undefined : urlFilters.assignment;
-  const [filters, setFilters] = useState<AbandonmentFilterState>({});
+  const [filters, setFiltersState] = useState<AbandonmentFilterState>(() => parseFilters(searchParams.get("f")));
   // Daily bucket / RINGING pool views are about when a lead was ASSIGNED, not when the cart was abandoned, so they ignore the Today / Yesterday tabs.
   const [bucketOnly, setBucketOnly] = useState(false);
   const [allDays, setAllDays] = useState(false);
@@ -64,48 +96,88 @@ export function AbandonedLeadsView() {
   const [updateStatusOpen, setUpdateStatusOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
-  const goToPage = useCallback(
-    (nextPage: number) => {
-      const next = new URLSearchParams(window.location.search);
-      if (nextPage > 1) next.set("page", String(nextPage));
-      else next.delete("page");
+  // Every URL change goes through one place that builds on the LAST URL written (not window.location, which lags a pending router.replace),
+  // so a filter change and "back to page 1" made together can never overwrite each other.
+  const urlRef = useRef(searchParams.toString());
+  const currentQuery = searchParams.toString();
+  useEffect(() => {
+    urlRef.current = currentQuery;
+  }, [currentQuery]);
+  const updateUrl = useCallback(
+    (change: (query: URLSearchParams) => void) => {
+      const next = new URLSearchParams(urlRef.current);
+      change(next);
       const query = next.toString();
+      urlRef.current = query;
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
     [router, pathname],
   );
+  const goToPage = useCallback(
+    (nextPage: number) =>
+      updateUrl((next) => {
+        if (nextPage > 1) next.set("page", String(nextPage));
+        else next.delete("page");
+      }),
+    [updateUrl],
+  );
   const resetPage = useCallback(() => goToPage(1), [goToPage]);
-  const changeRange = useCallback(
-    (next: AbandonmentDateRange) => {
-      const query = new URLSearchParams(window.location.search);
-      if (next === DEFAULT_DATE_RANGE) query.delete("range");
-      else query.set("range", next);
-      query.delete("page"); // a new range always starts on page 1
-      const text = query.toString();
-      router.replace(text ? `${pathname}?${text}` : pathname, { scroll: false });
+  // Search / filter change: kept in the URL and always back to page 1, in one write.
+  const setFilters = useCallback(
+    (next: AbandonmentFilterState) => {
+      setFiltersState(next);
+      updateUrl((query) => {
+        const serialized = serializeFilters(next);
+        if (serialized) query.set("f", serialized);
+        else query.delete("f");
+        query.delete("page");
+      });
     },
-    [router, pathname],
+    [updateUrl],
+  );
+  const changePageSize = useCallback(
+    (size: number) =>
+      updateUrl((query) => {
+        if (size === DEFAULT_PAGE_SIZE) query.delete("size");
+        else query.set("size", String(size));
+        query.delete("page");
+      }),
+    [updateUrl],
+  );
+  const changeRange = useCallback(
+    (next: AbandonmentDateRange) =>
+      updateUrl((query) => {
+        if (next === DEFAULT_DATE_RANGE) query.delete("range");
+        else query.set("range", next);
+        query.delete("page"); // a new range always starts on page 1
+      }),
+    [updateUrl],
   );
   // Removes a drill-down filter chip (telecaller / unassigned) from the URL; back to page 1.
   const removeUrlFilter = useCallback(
-    (name: "salespersonId" | "assignment") => {
-      const query = new URLSearchParams(window.location.search);
-      query.delete(name);
-      query.delete("page");
-      const text = query.toString();
-      router.replace(text ? `${pathname}?${text}` : pathname, { scroll: false });
-    },
-    [router, pathname],
+    (name: "salespersonId" | "assignment") =>
+      updateUrl((query) => {
+        query.delete(name);
+        query.delete("page");
+      }),
+    [updateUrl],
   );
 
   // A custom Detected range from the column filter replaces the Today / Yesterday / All tabs (see toApiFilters).
   const customDates = Boolean(filters.detectedFrom || filters.detectedTo);
   const effectiveRange: AbandonmentDateRange = customDates ? "all" : apiRange;
-  const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize: PAGE_SIZE, ...toApiFilters(filters, apiRange), ...(bucketOnly ? { bucket: "TODAY" as const } : {}), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, filters, apiRange, bucketOnly, salespersonId, assignment]);
+  const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize, ...toApiFilters(filters, apiRange), ...(bucketOnly ? { bucket: "TODAY" as const } : {}), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, pageSize, filters, apiRange, bucketOnly, salespersonId, assignment]);
   // Rows of another day are never kept on screen while a new range loads (they would be selectable under the wrong heading); page/filter changes within a day still are.
   const { data, isPending, isFetching, error } = useQuery({
     ...abandonmentListQueryOptions(params),
-    placeholderData: (previous, previousQuery) => ((previousQuery?.queryKey[2] as ListAbandonmentsParams | undefined)?.dateRange === effectiveRange ? previous : undefined),
+    // Only the page number (or page size) may change while old rows stay on screen; a different filter, search or day never shows the previous result set.
+    placeholderData: (previous, previousQuery) => {
+      const before = previousQuery?.queryKey[2] as ListAbandonmentsParams | undefined;
+      if (!before) return undefined;
+      const { page: _p, pageSize: _s, ...beforeFilters } = before;
+      const { page: _p2, pageSize: _s2, ...nowFilters } = params;
+      return JSON.stringify(beforeFilters) === JSON.stringify(nowFilters) ? previous : undefined;
+    },
   });
   const itemOptions = useQuery(abandonmentItemOptionsQueryOptions());
   const [selectingAll, setSelectingAll] = useState(false);
@@ -119,6 +191,7 @@ export function AbandonedLeadsView() {
   const isHr = user.role === "HR";
   // Who works the queue as a team lead: pick leads, assign them to telecallers. (HR distributes but does not work leads.)
   const isStaff = isAdmin || isManager || isHr;
+  const canHearRecordings = isAdmin || isManager;
   const hasUrlFilters = Boolean(salespersonId || assignment);
 
   function clearSelection() {
@@ -206,7 +279,6 @@ export function AbandonedLeadsView() {
             setBucketOnly(false);
             setAllDays(true);
             setFilters({ workingStatus: "RINGING" });
-            resetPage();
           }}
         />
       ) : null}
@@ -236,11 +308,12 @@ export function AbandonedLeadsView() {
         value={filters}
         onChange={(next) => {
           setFilters(next);
-          resetPage();
           clearSelectionForFilterChange();
         }}
         role={user.role}
       />
+
+      {canHearRecordings ? <BulkRecordingsPanel /> : null}
 
       {(isStaff) && data && data.pagination.totalItems > data.items.length && selectedIds.size < data.pagination.totalItems ? (
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -276,7 +349,7 @@ export function AbandonedLeadsView() {
         <Card>
           <CardContent>
             {isPending ? (
-              <AbandonmentTableSkeleton withSelection={isStaff} />
+              <AbandonmentTableSkeleton withSelection={isStaff} withRecording={canHearRecordings} />
             ) : data && data.items.length === 0 ? (
               <div className="flex flex-col items-center gap-2 py-12 text-center">
                 <div className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground">
@@ -307,7 +380,7 @@ export function AbandonedLeadsView() {
                   </div>
                 ) : null}
                 {hasActiveFilters ? (
-                  <Button type="button" size="sm" variant="outline" onClick={() => { setFilters({}); setBucketOnly(false); setAllDays(false); resetPage(); clearSelectionForFilterChange(); if (salespersonId) removeUrlFilter("salespersonId"); if (assignment) removeUrlFilter("assignment"); }}>
+                  <Button type="button" size="sm" variant="outline" onClick={() => { setFilters({}); setBucketOnly(false); setAllDays(false); clearSelectionForFilterChange(); if (salespersonId) removeUrlFilter("salespersonId"); if (assignment) removeUrlFilter("assignment"); }}>
                     Clear filters
                   </Button>
                 ) : null}
@@ -323,7 +396,6 @@ export function AbandonedLeadsView() {
                     selected: filters.items ?? [],
                     onChange: (next) => {
                       setFilters({ ...filters, items: next.length > 0 ? next : undefined });
-                      resetPage();
                       clearSelectionForFilterChange();
                     },
                   }}
@@ -331,7 +403,6 @@ export function AbandonedLeadsView() {
                     value: filters,
                     onChange: (next) => {
                       setFilters(next);
-                      resetPage();
                       clearSelectionForFilterChange();
                     },
                   }}
@@ -341,7 +412,30 @@ export function AbandonedLeadsView() {
                   onToggleAll={isStaff ? toggleAll : undefined}
                   role={user.role}
                 />
-                {data ? <OrdersPagination pagination={data.pagination} onPageChange={goToPage} disabled={isFetching} /> : null}
+                {data ? (
+                  <>
+                    <div className="flex items-center justify-end gap-2 pt-4 text-sm text-muted-foreground">
+                      <label htmlFor="abandonment-page-size">Rows per page</label>
+                      <select
+                        id="abandonment-page-size"
+                        value={pageSize}
+                        onChange={(e) => {
+                          clearSelectionForFilterChange();
+                          changePageSize(Number(e.target.value));
+                        }}
+                        disabled={isFetching}
+                        className="h-8 rounded-md border bg-background px-2 text-sm text-foreground"
+                      >
+                        {PAGE_SIZES.map((size) => (
+                          <option key={size} value={size}>
+                            {size}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <OrdersPagination pagination={data.pagination} onPageChange={goToPage} disabled={isFetching} />
+                  </>
+                ) : null}
               </>
             )}
           </CardContent>

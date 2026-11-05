@@ -15,7 +15,7 @@ import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./aba
 import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
 import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
 import { cachedDuplicateCheckoutIds } from "../orders/abandoned.dashboard.canonical.js";
-import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
+import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope, canAccessRecordings } from "./abandonment.filters.js";
 import { loadCustomerContext } from "./abandonment.customer-context.js";
 import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
 import type {
@@ -179,7 +179,7 @@ class AbandonmentService {
       items: rows.map((row) => {
         const typed = row as AbandonmentListRow;
         typed.lead.workingStatus = statusForRole(typed.lead.workingStatus, user.role);
-        if (user.role === Role.SALESPERSON) {
+        if (!canAccessRecordings(user.role)) {
           typed.lead.calls = typed.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
         }
         const item = mapAbandonmentListRow(typed, summaries.get(row.id) ?? null);
@@ -263,7 +263,7 @@ class AbandonmentService {
     }));
 
     row.lead.workingStatus = statusForRole(row.lead.workingStatus, user.role);
-    if (user.role === Role.SALESPERSON || user.role === Role.HR) {
+    if (!canAccessRecordings(user.role)) {
       row.lead.calls = row.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
     }
 

@@ -460,6 +460,7 @@ const orderListNodeSchema = z.object({
 const orderListResponse = z.object({
   orders: z.object({
     pageInfo: z.object({ hasNextPage: z.boolean(), hasPreviousPage: z.boolean(), startCursor: z.string().nullish(), endCursor: z.string().nullish() }),
+    edges: z.array(z.object({ cursor: z.string() })).nullish(),
     nodes: z.array(orderListNodeSchema),
   }),
 });
@@ -505,6 +506,8 @@ export interface LiveOrdersPage {
   hasPreviousPage: boolean;
   startCursor: string | null;
   endCursor: string | null;
+  /** Cursor of each row in `items` (same order); empty when Shopify did not return them. */
+  cursors: string[];
 }
 
 function normalizeOrderListNode(node: z.infer<typeof orderListNodeSchema>): NormalizedOrderListItem {
@@ -574,5 +577,6 @@ export async function listOrdersForDisplay(client: ShopifyClient, params: LiveLi
     hasPreviousPage: data.orders.pageInfo.hasPreviousPage,
     startCursor: data.orders.pageInfo.startCursor ?? null,
     endCursor: data.orders.pageInfo.endCursor ?? null,
+    cursors: (data.orders.edges ?? []).map((e) => e.cursor),
   };
 }
