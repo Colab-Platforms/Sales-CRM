@@ -15,9 +15,13 @@ import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.typ
 import type { Role } from "@/lib/api-client/types/auth.types";
 import { cartLines, lineLabel, type ItemOption } from "@/lib/abandonment-items";
 import { ItemsFilter } from "./items-filter";
+import { RecordingCell } from "./recording-cell";
 import { AbandonmentColumnFilter, type AbandonmentFilterState } from "./abandonment-column-filters";
 
 const COLUMN_COUNT = 9;
+// Call recordings are for admins and managers only (the server enforces it too; a telecaller's list never carries the recording links).
+const canSeeRecordings = (role: Role) => role === "ADMIN" || role === "MANAGER";
+const RECORDING_HEADER = { label: "Recording", className: "w-[260px] min-w-[240px]" };
 const HEADERS = [
   { label: "Lead", className: "w-[180px] min-w-[150px]" },
   { label: "Contact", className: "w-[180px] min-w-[160px]" },
@@ -57,13 +61,13 @@ function CartItems({ item }: { item: AbandonmentListItem }) {
   );
 }
 
-export function AbandonmentTableSkeleton({ rows = 6, withSelection = false }: { rows?: number; withSelection?: boolean }) {
+export function AbandonmentTableSkeleton({ rows = 6, withSelection = false, withRecording = false }: { rows?: number; withSelection?: boolean; withRecording?: boolean }) {
   return (
     <Table aria-busy="true" aria-label="Loading abandoned leads">
       <TableHeader>
         <TableRow>
           {withSelection ? <TableHead className="w-12">&nbsp;</TableHead> : null}
-          {HEADERS.map((header) => (
+          {[...HEADERS, ...(withRecording ? [RECORDING_HEADER] : [])].map((header) => (
             <TableHead key={header.label} className={header.className}>
               {header.label}
             </TableHead>
@@ -74,7 +78,7 @@ export function AbandonmentTableSkeleton({ rows = 6, withSelection = false }: { 
       <TableBody>
         {Array.from({ length: rows }).map((_, i) => (
           <TableRow key={i}>
-            {Array.from({ length: COLUMN_COUNT + (withSelection ? 1 : 0) }).map((__, j) => (
+            {Array.from({ length: COLUMN_COUNT + (withSelection ? 1 : 0) + (withRecording ? 1 : 0) }).map((__, j) => (
               <TableCell key={j}>
                 <div className="h-4 w-full max-w-24 animate-pulse rounded bg-muted" />
               </TableCell>
@@ -130,6 +134,8 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
     return [...items].sort((a, b) => new Date(b.detectedAt).getTime() - new Date(a.detectedAt).getTime());
   }, [items]);
   const withSelection = Boolean(selectedIds && onToggleOne && onToggleAll);
+  const withRecording = canSeeRecordings(role);
+  const headers = withRecording ? [...HEADERS, RECORDING_HEADER] : HEADERS;
   const allSelected = withSelection && sortedItems.length > 0 && sortedItems.every((item) => selectedIds!.has(item.id));
 
   return (
@@ -146,11 +152,11 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
               />
             </TableHead>
           ) : null}
-          {HEADERS.map((header) => (
+          {headers.map((header) => (
             <TableHead key={header.label} className={header.className}>
               {header.label}
               {header.label === "Items" && itemsFilter ? <ItemsFilter {...itemsFilter} /> : null}
-              {header.label !== "Items" && columnFilters ? <AbandonmentColumnFilter column={header.label} value={columnFilters.value} onChange={columnFilters.onChange} role={role} /> : null}
+              {header.label !== "Items" && header.label !== "Recording" && columnFilters ? <AbandonmentColumnFilter column={header.label} value={columnFilters.value} onChange={columnFilters.onChange} role={role} /> : null}
             </TableHead>
           ))}
           <TableHead className="w-[50px] sr-only">Actions</TableHead>
@@ -248,6 +254,12 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
                   <span className="text-muted-foreground" data-testid="assignee-none">Unassigned</span>
                 )}
               </TableCell>
+
+              {withRecording ? (
+                <TableCell className="w-[260px] min-w-[240px]" onClick={(e) => e.stopPropagation()}>
+                  <RecordingCell calls={item.lead.calls} />
+                </TableCell>
+              ) : null}
 
               <TableCell className="w-[50px] text-right">
                 {canOpenLead ? (

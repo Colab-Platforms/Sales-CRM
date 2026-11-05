@@ -4,6 +4,8 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import AbandonmentService from "./abandonment.service.js";
 import AbandonmentImportService from "./abandonment.import.js";
+import { AbandonmentRecordingsService } from "./abandonment.recordings.js";
+import { RecordingExportService } from "./recording-export.service.js";
 import {
   validateBulkAssignManager,
   validateBulkAssignSalesperson,
@@ -204,6 +206,90 @@ export const previewAbandonmentImport = async (req: AuthRequest, res: Response):
 export const confirmAbandonmentImport = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     sendResponse(res, true, await importService.confirmImport(req.user!, req.params.batchId as string), "Abandoned leads imported successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+// ---- Call recordings (admin / manager only - the routes gate the role and the service checks it again) ----
+const recordings = new AbandonmentRecordingsService();
+const recordingRange = (query: Record<string, unknown>) => ({ from: typeof query.from === "string" ? query.from : "", to: typeof query.to === "string" ? query.to : "" });
+
+export const getRecordingsSummary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await recordings.summary(req.user!, recordingRange(req.query)), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+// Background ZIP exports: create / list / status / retry / download. Admin and manager only (routes + service); an export is visible only to the user who started it.
+const exportsService = new RecordingExportService();
+export const createRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    sendResponse(res, true, await exportsService.create(req.user!, recordingRange(body)), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+export const listRecordingExports = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await exportsService.list(req.user!), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+export const getRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await exportsService.get(req.user!, String(req.params.exportId ?? "")), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+export const retryRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await exportsService.retry(req.user!, String(req.params.exportId ?? "")), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+export const getRecordingExportLink = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await exportsService.downloadLink(req.user!, String(req.params.exportId ?? "")), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+// Opened by the browser itself (no Authorization header): authorised by the signed, short-lived link the owner was given.
+export const downloadRecordingExportByLink = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const q = req.query;
+    await exportsService.downloadByLink(String(req.params.exportId ?? ""), String(q.u ?? ""), Number(q.e), String(q.s ?? ""), res);
+  } catch (error: any) {
+    if (res.headersSent) return void res.destroy(error);
+    fail(res, error);
+  }
+};
+export const downloadRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    await exportsService.download(req.user!, String(req.params.exportId ?? ""), res);
+  } catch (error: any) {
+    if (res.headersSent) return void res.destroy(error);
+    fail(res, error);
+  }
+};
+
+export const downloadRecording = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const callId = String(req.params.callId ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(callId)) return void bad(res, "Invalid call id");
+    const file = await recordings.single(req.user!, callId);
+    res.setHeader("Content-Type", file.contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="${file.fileName}"`);
+    res.setHeader("Content-Length", String(file.data.length));
+    res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
+    res.status(200).end(file.data);
   } catch (error: any) {
     fail(res, error);
   }

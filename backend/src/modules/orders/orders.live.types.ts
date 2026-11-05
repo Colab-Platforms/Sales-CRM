@@ -13,7 +13,7 @@ export const LIVE_ORDER_ID_PREFIX = "shopify:";
 export interface LiveOrdersQuery {
   /** Relay cursor from a previous page's endCursor - omit for the first page. */
   after?: string;
-  /** Page size, 25-50 (never the whole history). */
+  /** Page size, 1-100 (the UI offers 20 / 50 / 100; never the whole history). */
   first: number;
   search?: string;
   dateFrom?: Date;

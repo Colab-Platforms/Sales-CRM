@@ -26,6 +26,10 @@ export function abandonmentLeadScope(user: { id: string; role: Role }): Prisma.L
   return { id: { in: [] } };
 }
 
+/** Only these roles may hear or download call recordings of abandoned leads (list, detail, single and bulk download). Everyone else gets the URL blanked or a 403. */
+export const RECORDING_ROLES: Role[] = [Role.ADMIN, Role.MANAGER];
+export const canAccessRecordings = (role: Role): boolean => RECORDING_ROLES.includes(role);
+
 /** Who may OPEN (not just list) an abandoned lead: HR distributes them but never works one. */
 export const ABANDONMENT_WORK_ROLES: Role[] = [Role.ADMIN, Role.MANAGER, Role.SALESPERSON];
 
@@ -63,18 +67,32 @@ export async function abandonmentDerivedWhere(db: DbClient, query: ListAbandonme
   return { id: { in: rows.map((r) => r.id) } };
 }
 
+/**
+ * Free-text search: every whitespace-separated term must match at least one of customer name, phone number, e-mail, lead number or an Order ID
+ * (the checkout/order reference on the abandoned lead, or the order number / Shopify order number of any order the same customer placed).
+ * Partial matches work (contains, case-insensitive) and the whole filtered result set is searched, not just the visible page.
+ * A phone number typed with spaces, dashes or a +91 prefix still matches (its digits are compared on their own).
+ */
 export function abandonmentSearchWhere(search: string): Prisma.AbandonmentWhereInput {
-  const terms = search.split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_TERMS);
+  // A phone number typed with spaces ("98765 43210" / "+91 98765-43210") is ONE term, not several.
+  const collapsed = search.replace(/[\s().-]/g, "");
+  const terms = /^\+?\d{6,}$/.test(collapsed) ? [collapsed] : search.split(/\s+/).filter(Boolean).slice(0, MAX_SEARCH_TERMS);
   return {
     AND: terms.map((term): Prisma.AbandonmentWhereInput => {
       const contains = { contains: term, mode: "insensitive" as const };
+      const orderRef = { contains: term.replace(/^#/, "") || term, mode: "insensitive" as const }; // "#AWL1234" and "AWL1234" are the same order
+      const digits = term.replace(/\D/g, "");
+      const phone: Prisma.AbandonmentWhereInput[] = digits.length >= 3 ? [{ lead: { mobile: { contains: digits.length > 10 ? digits.slice(-10) : digits } } }] : [];
       return {
         OR: [
           { lead: { firstName: contains } },
           { lead: { lastName: contains } },
           { lead: { mobile: contains } },
+          ...phone,
           { lead: { email: contains } },
           { lead: { leadNumber: contains } },
+          { referenceId: orderRef },
+          { lead: { orders: { some: { OR: [{ orderNumber: orderRef }, { externalNumber: orderRef }, { externalId: orderRef }] } } } },
         ],
       };
     }),
