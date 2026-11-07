@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BadgeCheck, BadgeIndianRupee, Calculator, Download, Hourglass, Plus, Trash2, Users, Wallet } from "lucide-react";
+import { BadgeCheck, BadgeIndianRupee, Calculator, Download, Hourglass, Loader2, Plus, RotateCw, Trash2, Users, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -30,11 +30,40 @@ import { monthLabel, recentMonths } from "./my-incentive-plan";
 
 type Tab = "people" | "queries" | "policy" | "audit";
 
-const errorBox = (error: unknown, fallback: string) => (
-  <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-    {getErrorMessage(error, fallback)}
-  </div>
-);
+/** A failed request: what went wrong, and a Retry button when the caller can re-run it. */
+const errorBox = (error: unknown, fallback: string, onRetry?: () => void) => {
+  const timedOut = (error as { code?: string } | null)?.code === "ECONNABORTED";
+  return (
+    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+      <span>{timedOut ? "The server took too long to respond. Check that the backend is running and the database is reachable, then retry." : getErrorMessage(error, fallback)}</span>
+      {onRetry ? (
+        <Button size="sm" variant="outline" onClick={onRetry}>
+          <RotateCw data-icon="inline-start" /> Retry
+        </Button>
+      ) : null}
+    </div>
+  );
+};
+
+/**
+ * Loading state that is visible on the page background: card-shaped placeholders (white, like the real cards) and a
+ * spinner with text. A plain bg-muted block is almost the same colour as the page, so it read as an empty page.
+ */
+function LoadingBlock({ label }: { label: string }) {
+  return (
+    <div className="space-y-4" aria-busy="true" aria-live="polite">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="h-28 animate-pulse rounded-[6px] border border-border bg-card" />
+        ))}
+      </div>
+      <div className="flex h-72 flex-col items-center justify-center gap-3 rounded-lg border border-border bg-card text-sm text-muted-foreground">
+        <Loader2 className="size-6 animate-spin" aria-hidden="true" />
+        {label}
+      </div>
+    </div>
+  );
+}
 
 export function AdminIncentivesPage() {
   const [tab, setTab] = useState<Tab>("people");
@@ -74,6 +103,8 @@ const PAYMENT: Record<PaymentStatus, { label: string; cls: string }> = {
   UNPAID: { label: "Unpaid", cls: "bg-amber-400/20 text-amber-900 ring-amber-600/30 dark:text-amber-200" },
   NOT_DUE: { label: "—", cls: "text-muted-foreground ring-transparent" },
 };
+/** Stands in for performance figures an older backend does not send, so the table never crashes on them. */
+const NO_PERF = { from: "", to: "", days: 0, presentDays: 0, metDays: 0, calls: 0, orders: 0, revenue: 0, netLoginMinutes: 0 };
 const Tag = ({ s }: { s: { label: string; cls: string } }) => <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset", s.cls)}>{s.label}</span>;
 
 function People() {
@@ -101,7 +132,7 @@ function People() {
         : period === "custom" && from <= to
           ? { month: to.slice(0, 7), range: { from, to } }
           : { month, range: undefined };
-  const { data, isPending, error, isPlaceholderData } = useQuery(incentiveOverviewQueryOptions(sel.month, sel.range));
+  const { data, isPending, error, isPlaceholderData, isFetching, refetch } = useQuery(incentiveOverviewQueryOptions(sel.month, sel.range));
 
   const rows = (data?.rows ?? []).filter(
     (r) =>
@@ -129,15 +160,15 @@ function People() {
             `Calls ${data.range.from}..${data.range.to}`, `Orders ${data.range.from}..${data.range.to}`, `Days targets met ${data.range.from}..${data.range.to}`,
           ],
           rows: rows.map((r) => {
-            const c = (k: string) => r.conditions.find((x) => x.key === k)?.actual ?? "";
+            const c = (k: string) => (r.conditions ?? []).find((x) => x.key === k)?.actual ?? "";
             return [
               r.name, r.employeeId, data.month, r.revenue, r.currentSlab ? r.currentSlab.minRevenue : "None", c("PREPAID"), c("DELIVERY"), c("ATTENDANCE"), c("NET_LOGIN"), c("DAILY_CALLS"), c("AVG_ORDERS"),
-              STATUS_LABEL[r.eligibility], r.incentive ?? 0, APPROVAL[r.approvalStatus].label.replace("—", "Not due"), PAYMENT[r.paymentStatus].label.replace("—", "Not due"), r.approvedAmount ?? 0, r.paidAmount ?? 0,
-              r.performance.range.calls, r.performance.range.orders, `${r.performance.range.metDays} of ${r.performance.range.presentDays}`,
+              STATUS_LABEL[r.eligibility ?? r.status] ?? "", r.incentive ?? 0, (APPROVAL[r.approvalStatus] ?? APPROVAL.NOT_DUE).label.replace("—", "Not due"), (PAYMENT[r.paymentStatus] ?? PAYMENT.NOT_DUE).label.replace("—", "Not due"), r.approvedAmount ?? 0, r.paidAmount ?? 0,
+              r.performance?.range?.calls ?? 0, r.performance?.range?.orders ?? 0, `${r.performance?.range?.metDays ?? 0} of ${r.performance?.range?.presentDays ?? 0}`,
             ];
           }),
           money: [3, 12, 15, 16],
-          totals: ["Total", "", "", sum((r) => r.revenue), "", "", "", "", "", "", "", "", sum((r) => r.incentive), "", "", sum((r) => r.approvedAmount), sum((r) => r.paidAmount), sum((r) => r.performance.range.calls), sum((r) => r.performance.range.orders), ""],
+          totals: ["Total", "", "", sum((r) => r.revenue), "", "", "", "", "", "", "", "", sum((r) => r.incentive), "", "", sum((r) => r.approvedAmount), sum((r) => r.paidAmount), sum((r) => r.performance?.range?.calls ?? 0), sum((r) => r.performance?.range?.orders ?? 0), ""],
         },
       ]);
     } catch (e) {
@@ -225,11 +256,17 @@ function People() {
       ) : null}
 
       {isPending ? (
-        <Skeleton className="h-96 rounded-lg" />
-      ) : error || !data ? (
-        errorBox(error, "Incentives could not be loaded.")
+        <LoadingBlock label="Loading salesperson incentives…" />
+      ) : !data ? (
+        errorBox(error, "Incentives could not be loaded.", () => void refetch())
       ) : (
         <div className={cn("space-y-4 transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
+          {isPlaceholderData && isFetching ? (
+            <p className="flex items-center gap-2 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" /> Loading the selected period…
+            </p>
+          ) : null}
+          {error ? errorBox(error, "Could not load the selected period - showing the last loaded figures.", () => void refetch()) : null}
           <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
             <KpiCard label="Total Salespeople" tone="blue" icon={Users} value={String(rows.length)} lines={[{ text: "active salespeople" }]} />
             <KpiCard label="Eligible Salespeople" tone="emerald" icon={BadgeCheck} value={String(eligible.length)} lines={[{ text: `for ${monthLabel(data.month)}` }]} />
@@ -268,16 +305,16 @@ function People() {
                   </thead>
                   <tbody>
                     {rows.map((r) => {
-                      const d = r.performance.day;
-                      const w = r.performance.week;
-                      const g = r.performance.range;
+                      const d = r.performance?.day ?? null;
+                      const w = r.performance?.week ?? NO_PERF;
+                      const g = r.performance?.range ?? NO_PERF;
                       return (
                         <tr key={r.id} className="border-t border-border/60 hover:bg-muted/30">
                           <td className="px-4 py-3">
                             <p className="font-medium">{r.name}</p>
                             {r.openQueries > 0 ? <p className="text-xs text-amber-700 dark:text-amber-300">{r.openQueries} open {r.openQueries === 1 ? "query" : "queries"}</p> : null}
                           </td>
-                          <td className="px-4 py-3 text-right tabular-nums">{inr(r.revenue)}</td>
+                          <td className="px-4 py-3 text-right tabular-nums">{inr(r.revenue ?? 0)}</td>
                           <td className="px-4 py-3">{r.currentSlab ? inr(r.currentSlab.minRevenue) : <span className="text-muted-foreground">None</span>}</td>
                           <td className="px-4 py-3 text-xs">
                             {!d || !d.present ? (
@@ -310,14 +347,14 @@ function People() {
                             </td>
                           ) : null}
                           <td className="px-4 py-3">
-                            <StatusPill status={r.eligibility} />
+                            <StatusPill status={r.eligibility ?? r.status} />
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">{r.incentive === null ? <span className="text-muted-foreground">—</span> : inr(r.incentive)}</td>
                           <td className="px-4 py-3">
-                            <Tag s={APPROVAL[r.approvalStatus]} />
+                            <Tag s={APPROVAL[r.approvalStatus] ?? APPROVAL.NOT_DUE} />
                           </td>
                           <td className="px-4 py-3">
-                            <Tag s={PAYMENT[r.paymentStatus]} />
+                            <Tag s={PAYMENT[r.paymentStatus] ?? PAYMENT.NOT_DUE} />
                           </td>
                           <td className="px-4 py-3 text-right">
                             <Button size="sm" variant="outline" onClick={() => setOpenId(r.id)}>
@@ -340,7 +377,7 @@ function People() {
 }
 
 function MonthDialog({ userId, month, onClose }: { userId: string; month: string; onClose: () => void }) {
-  const { data, isPending, error } = useQuery(incentiveMonthQueryOptions(userId, month));
+  const { data, isPending, error, refetch } = useQuery(incentiveMonthQueryOptions(userId, month));
   return (
     <Dialog open onOpenChange={(o) => (!o ? onClose() : undefined)}>
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-6xl">
@@ -351,9 +388,9 @@ function MonthDialog({ userId, month, onClose }: { userId: string; month: string
           </DialogDescription>
         </DialogHeader>
         {isPending ? (
-          <Skeleton className="h-96 w-full" />
+          <LoadingBlock label="Loading the calculation…" />
         ) : error || !data ? (
-          errorBox(error, "This month could not be loaded.")
+          errorBox(error, "This month could not be loaded.", () => void refetch())
         ) : (
           <div className="space-y-5">
             <Actions data={data} />

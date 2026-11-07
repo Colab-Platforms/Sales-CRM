@@ -2,13 +2,12 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageSquareWarning } from "lucide-react";
+import { Loader2, MessageSquareWarning, RotateCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { NativeSelect } from "@/components/ui/native-select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { incentivesApi } from "@/lib/api-client/endpoints/incentives.api";
 import { incentiveKeys, myIncentiveQueryOptions } from "@/lib/api-client/queries/incentives.queries";
@@ -31,7 +30,7 @@ export function MyIncentivePlan() {
   const months = recentMonths(istToday());
   const [month, setMonth] = useState(months[0]!);
   const [asking, setAsking] = useState(false);
-  const { data, isPending, error, isPlaceholderData } = useQuery(myIncentiveQueryOptions(month));
+  const { data, isPending, error, isPlaceholderData, refetch } = useQuery(myIncentiveQueryOptions(month));
 
   return (
     <section className="space-y-4" aria-labelledby="incentive-plan-title">
@@ -57,17 +56,23 @@ export function MyIncentivePlan() {
       </div>
 
       {isPending ? (
-        <div className="space-y-4">
+        // White placeholders with a spinner: a plain muted block is nearly the page colour and looked like nothing.
+        <div className="space-y-4" aria-busy="true" aria-live="polite">
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {Array.from({ length: 4 }).map((_, i) => (
-              <Skeleton key={i} className="h-28 rounded-xl" />
+              <div key={i} className="h-28 animate-pulse rounded-xl border border-border bg-card" />
             ))}
           </div>
-          <Skeleton className="h-40 rounded-xl" />
+          <div className="flex h-40 items-center justify-center gap-2 rounded-xl border border-border bg-card text-sm text-muted-foreground">
+            <Loader2 className="size-5 animate-spin" aria-hidden="true" /> Loading your incentive plan…
+          </div>
         </div>
       ) : error || !data ? (
-        <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
-          {getErrorMessage(error, "Your incentive plan could not be loaded.")}
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+          <span>{(error as { code?: string } | null)?.code === "ECONNABORTED" ? "The server took too long to respond. Please retry." : getErrorMessage(error, "Your incentive plan could not be loaded.")}</span>
+          <Button size="sm" variant="outline" onClick={() => void refetch()}>
+            <RotateCw data-icon="inline-start" /> Retry
+          </Button>
         </div>
       ) : (
         <div className={isPlaceholderData ? "space-y-5 opacity-60 transition-opacity" : "space-y-5 transition-opacity"} aria-busy={isPlaceholderData}>

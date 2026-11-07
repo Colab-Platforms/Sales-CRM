@@ -119,50 +119,17 @@ export async function soldOrders(userIds: string[], start: Date, end: Date, f: S
   const touchedFrom = new Date(start.getTime() - ASSIST_WINDOW_DAYS * DAY_MS);
   const recentTouch = { gte: touchedFrom, lt: end };
 
-  // 1. Everything the team did with customers in the window: calls and actions, keyed by the customer. A customer
-  //    is their standard phone number (Lead.normalizedMobile, "+91XXXXXXXXXX"), because an abandoned checkout and the
-  //    Shopify order that follows can land on two different lead records for the same person.
-  const [windowCalls, windowActions] = await Promise.all([
-    prisma.call.findMany({
-      where: { agentId: { in: userIds }, leadId: { not: null }, createdAt: recentTouch },
-      select: { leadId: true, agentId: true, status: true, startedAt: true, createdAt: true, lead: { select: { normalizedMobile: true } } },
-    }),
-    prisma.activity.findMany({
-      where: { actorId: { in: userIds }, leadId: { not: null }, createdAt: recentTouch },
-      select: { leadId: true, actorId: true, createdAt: true, lead: { select: { normalizedMobile: true } } },
-    }),
-  ]);
-  const customerKey = (leadId: string, phone: string | null | undefined) => phone || `lead:${leadId}`;
-  const touchesByCustomer = new Map<string, Touch[]>();
-  const callsByCustomer = new Map<string, (typeof windowCalls)[number][]>();
-  const push = <T,>(map: Map<string, T[]>, key: string, value: T) => map.set(key, [...(map.get(key) ?? []), value]);
-  for (const c of windowCalls) {
-    const key = customerKey(c.leadId!, c.lead?.normalizedMobile);
-    push(touchesByCustomer, key, { userId: c.agentId, at: c.startedAt ?? c.createdAt });
-    push(callsByCustomer, key, c);
-  }
-  for (const a of windowActions) push(touchesByCustomer, customerKey(a.leadId!, a.lead?.normalizedMobile), { userId: a.actorId!, at: a.createdAt });
-  const touchedLeadIds = [...new Set([...windowCalls, ...windowActions].map((t) => t.leadId!))];
-  const touchedPhones = [...new Set([...windowCalls, ...windowActions].map((t) => t.lead?.normalizedMobile).filter((p): p is string => Boolean(p)))];
-
-  // 2. Orders in the period: confirmed by the team, or not confirmed by any salesperson and bought by a customer the team worked.
+  // 1. Candidate orders in the period: confirmed by the team, or not confirmed by any salesperson (a customer-placed
+  //    order the team may have assisted). Loaded first because they are few; the team's calls and actions are then
+  //    loaded only for these orders' customers, instead of every call and action in the window (tens of thousands of
+  //    rows) - the credit rules below are unchanged.
   const orders = await prisma.order.findMany({
     where: {
       status: f.orderStatus === "ALL" ? { in: SOLD_STATUSES } : f.orderStatus,
       AND: [
         // When the sale happened.
         { OR: [{ confirmedAt: inRange }, { confirmedAt: null, placedAt: inRange }, { confirmedAt: null, placedAt: null, createdAt: inRange }] },
-        {
-          OR: [
-            { confirmedByUserId: { in: userIds } },
-            {
-              AND: [
-                { OR: [{ confirmedByUserId: null }, { confirmedBy: { role: { not: "SALESPERSON" } } }] },
-                { lead: { OR: [{ id: { in: touchedLeadIds } }, { normalizedMobile: { in: touchedPhones } }] } },
-              ],
-            },
-          ],
-        },
+        { OR: [{ confirmedByUserId: { in: userIds } }, { confirmedByUserId: null }, { confirmedBy: { role: { not: "SALESPERSON" } } }] },
       ],
     },
     select: {
@@ -185,6 +152,33 @@ export async function soldOrders(userIds: string[], start: Date, end: Date, f: S
     },
   });
   if (orders.length === 0) return [];
+
+  // 2. What the team did with those customers in the window: calls and actions, keyed by the customer. A customer is
+  //    their standard phone number (Lead.normalizedMobile, "+91XXXXXXXXXX"), because an abandoned checkout and the
+  //    Shopify order that follows can land on two different lead records for the same person.
+  const orderLeadIds = [...new Set(orders.map((o) => o.leadId))];
+  const orderPhones = [...new Set(orders.map((o) => o.lead.normalizedMobile).filter((x): x is string => Boolean(x)))];
+  const ofTheseCustomers = { OR: [{ leadId: { in: orderLeadIds } }, ...(orderPhones.length ? [{ lead: { normalizedMobile: { in: orderPhones } } }] : [])] };
+  const [windowCalls, windowActions] = await Promise.all([
+    prisma.call.findMany({
+      where: { agentId: { in: userIds }, leadId: { not: null }, createdAt: recentTouch, ...ofTheseCustomers },
+      select: { leadId: true, agentId: true, status: true, startedAt: true, createdAt: true, lead: { select: { normalizedMobile: true } } },
+    }),
+    prisma.activity.findMany({
+      where: { actorId: { in: userIds }, leadId: { not: null }, createdAt: recentTouch, ...ofTheseCustomers },
+      select: { leadId: true, actorId: true, createdAt: true, lead: { select: { normalizedMobile: true } } },
+    }),
+  ]);
+  const customerKey = (leadId: string, phone: string | null | undefined) => phone || `lead:${leadId}`;
+  const touchesByCustomer = new Map<string, Touch[]>();
+  const callsByCustomer = new Map<string, (typeof windowCalls)[number][]>();
+  const push = <T,>(map: Map<string, T[]>, key: string, value: T) => map.set(key, [...(map.get(key) ?? []), value]);
+  for (const c of windowCalls) {
+    const key = customerKey(c.leadId!, c.lead?.normalizedMobile);
+    push(touchesByCustomer, key, { userId: c.agentId, at: c.startedAt ?? c.createdAt });
+    push(callsByCustomer, key, c);
+  }
+  for (const a of windowActions) push(touchesByCustomer, customerKey(a.leadId!, a.lead?.normalizedMobile), { userId: a.actorId!, at: a.createdAt });
 
   // 3. Closing calls for the call-status filter: the window calls above, plus older calls on the orders' own leads
   //    (a CRM confirmation can follow a call made long before the period).

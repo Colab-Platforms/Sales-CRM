@@ -16,7 +16,7 @@ export const myIncentiveQueryOptions = (month: string) =>
   queryOptions({ queryKey: incentiveKeys.mine(month), queryFn: () => incentivesApi.mine(month), placeholderData: keepPreviousData, refetchInterval: 5 * 60_000 });
 
 export const incentiveOverviewQueryOptions = (month: string, range?: { from: string; to: string }) =>
-  queryOptions({ queryKey: incentiveKeys.overview(month, range), queryFn: () => incentivesApi.overview(month, range), placeholderData: keepPreviousData });
+  queryOptions({ queryKey: incentiveKeys.overview(month, range), queryFn: ({ signal }) => incentivesApi.overview(month, range, signal), placeholderData: keepPreviousData, retry: 1 });
 
 export const incentiveMonthQueryOptions = (userId: string, month: string) =>
   queryOptions({ queryKey: incentiveKeys.month(userId, month), queryFn: () => incentivesApi.salespersonMonth(userId, month) });
