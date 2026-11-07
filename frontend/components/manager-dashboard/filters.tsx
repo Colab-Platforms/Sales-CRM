@@ -126,6 +126,19 @@ export function LeadStatusSelect({ value, onChange }: { value: LeadStatusFilter;
   );
 }
 
+export function SourceSelect({ value, sources, onChange }: { value: string; sources: { id: string; name: string }[]; onChange: (v: string) => void }) {
+  return (
+    <NativeSelect aria-label="Lead source" value={value} onChange={(e) => onChange(e.target.value)} wrapperClassName="sm:w-44">
+      <option value="">All Lead Sources</option>
+      {sources.map((s) => (
+        <option key={s.id} value={s.id}>
+          {s.name}
+        </option>
+      ))}
+    </NativeSelect>
+  );
+}
+
 export function PaymentModeSelect({ value, onChange }: { value: PaymentModeFilter; onChange: (v: PaymentModeFilter) => void }) {
   return (
     <NativeSelect aria-label="Payment method" value={value} onChange={(e) => onChange(e.target.value as PaymentModeFilter)} wrapperClassName="sm:w-36">
@@ -158,6 +171,7 @@ export function FilterBar({
   filters,
   onChange,
   people,
+  sources,
   showSalesperson = true,
   showLeadStatus = true,
   variant = "activity",
@@ -167,6 +181,8 @@ export function FilterBar({
   filters: DashboardFilters;
   onChange: Patch;
   people: { id: string; name: string }[];
+  /** Lead sources; the Source filter shows only when given. */
+  sources?: { id: string; name: string }[];
   showSalesperson?: boolean;
   showLeadStatus?: boolean;
   /** "report" adds the payment-method and order-status filters (for the sales section) and drops the lead-status one. */
@@ -226,6 +242,7 @@ export function FilterBar({
         <>
           <CallStatusSelect value={draft.callStatus} onChange={(callStatus) => edit({ callStatus })} />
           {showLeadStatus ? <LeadStatusSelect value={draft.leadStatus} onChange={(leadStatus) => edit({ leadStatus })} /> : null}
+          {sources ? <SourceSelect value={draft.sourceId} sources={sources} onChange={(sourceId) => edit({ sourceId })} /> : null}
         </>
       )}
     </>

@@ -26,6 +26,7 @@ import attendanceRoutes from "@modules/attendance/attendance.routes.js";
 import reportAutomationRoutes, { cronRouter as reportAutomationCronRouter } from "@modules/report-automation/report-automation.routes.js";
 import ticketsRoutes from "@modules/tickets/tickets.routes.js";
 import performanceMatrixRoutes from "@modules/performance-matrix/matrix.routes.js";
+import incentivesRoutes from "@modules/incentives/incentives.routes.js";
 import { prisma } from "@/lib/prisma.js";
 import { createCachedDatabaseCheck } from "@/lib/dbHealth.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
@@ -77,5 +78,6 @@ router.use("/report-automation/cron", reportAutomationCronRouter);
 router.use("/report-automation", reportAutomationRoutes);
 router.use("/tickets", ticketsRoutes);
 router.use("/performance-matrix", performanceMatrixRoutes);
+router.use("/incentives", incentivesRoutes);
 
 export default router;

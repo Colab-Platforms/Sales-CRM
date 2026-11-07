@@ -8,6 +8,8 @@ export interface AnalyticsQuery {
   from: string; // YYYY-MM-DD
   to: string; // YYYY-MM-DD
   salespersonId?: string;
+  /** Lead source (Source.id); narrows the lead figures only. */
+  sourceId?: string;
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
   paymentMode: PaymentModeFilter;
@@ -69,6 +71,15 @@ export interface DailyBucket extends CallCounts, SalesCounts {
 }
 
 export interface AnalyticsKpis extends SalesCounts {
+  /** Every lead received in the period (by arrival time), assigned or not: assignedLeads + unassignedLeads. */
+  receivedLeads: number;
+  previousReceivedLeads: number;
+  /** Received in the period and now with a salesperson (each lead once, under its current owner). */
+  assignedLeads: number;
+  previousAssignedLeads: number;
+  /** Received in the period and still without a salesperson. */
+  unassignedLeads: number;
+  /** Assigned leads matching the lead-status filter - the base for the contacted / converted rates. */
   totalLeads: number;
   previousTotalLeads: number;
   notContacted: number;
@@ -114,6 +125,8 @@ export interface ManagerAnalytics {
   range: { from: string; to: string; days: number; tzOffsetMinutes: number };
   targets: { conversionRatePercent: number; productiveMsPerDay: number };
   team: { id: string; name: string; username: string }[];
+  /** Lead sources, for the Source filter. */
+  sources: { id: string; name: string }[];
   kpis: AnalyticsKpis;
   salespeople: SalespersonStats[];
   products: ProductSales[];

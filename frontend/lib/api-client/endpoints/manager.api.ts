@@ -25,6 +25,7 @@ function analyticsParams(q: AnalyticsQuery) {
     orderStatus: q.orderStatus,
     tzOffsetMinutes: q.tzOffsetMinutes,
     ...(q.salespersonId ? { salespersonId: q.salespersonId } : {}),
+    ...(q.sourceId ? { sourceId: q.sourceId } : {}),
   };
 }
 

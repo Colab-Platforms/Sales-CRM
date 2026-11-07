@@ -23,8 +23,10 @@ import { emptySales, addSale, mergeSales, ordersCsv, salesOut, soldOrders, type 
 //  Not connected  everything else (NO_ANSWER, BUSY, NOT_REACHABLE, still ringing, ...)
 //  Talk time      sum of durationSeconds of connected calls
 //  Unique leads   distinct leadIds called in the period - deliberately NOT the same as calls made
-//  Lead metrics   a cohort: leads currently owned by the salesperson whose assignment date falls in
-//                 the selected range. Contacted = has a call (or has moved past NEW/ASSIGNED),
+//  Lead metrics   a cohort: leads that came in (createdAt) during the selected range and are currently owned
+//                 by a team salesperson - one row per lead, so a reassigned lead counts once, under its current
+//                 owner. Total leads = that cohort + the leads received in the range that no salesperson has yet,
+//                 so Total = Assigned + Unassigned always holds. Contacted = has a call (or has moved past NEW/ASSIGNED),
 //                 Interested = INTERESTED/CONVERTED or has an interested period, Converted = CONVERTED.
 //  Productivity   WorkSession/StatusLog via the attendance module's computeSummary (productiveMs).
 //  Sales          orders in a sold state (CONFIRMED through DELIVERED; never draft, pending payment,
@@ -52,6 +54,8 @@ export interface AnalyticsFilters extends SalesFilters {
   from: string; // YYYY-MM-DD, inclusive, in the manager's timezone
   to: string; // YYYY-MM-DD, inclusive
   salespersonId?: string;
+  /** Lead source (Source.id); narrows the lead metrics only, not calls or sales. */
+  sourceId?: string;
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
   tzOffsetMinutes: number;
@@ -108,16 +112,14 @@ class ManagerAnalyticsService {
     });
   }
 
-  private async leadCohort(ownerIds: string[], start: Date, end: Date): Promise<LeadRow[]> {
+  private async leadCohort(ownerIds: string[], start: Date, end: Date, sourceId?: string): Promise<LeadRow[]> {
     if (ownerIds.length === 0) return [];
     const leads = await prisma.lead.findMany({
       where: {
         ownerId: { in: ownerIds },
         workingStatus: { not: LeadWorkingStatus.DEACTIVATED },
-        OR: [
-          { assignments: { some: { isCurrent: true, assignedAt: { gte: start, lt: end } } } },
-          { assignments: { none: {} }, createdAt: { gte: start, lt: end } },
-        ],
+        createdAt: { gte: start, lt: end },
+        ...(sourceId ? { sourceId } : {}),
       },
       select: {
         id: true,
@@ -149,6 +151,23 @@ class ManagerAnalyticsService {
           orders: l.orders,
         }),
       };
+    });
+  }
+
+  /**
+   * Leads that came in during [start, end) and that no salesperson has yet: no owner, or held by an admin / manager (e.g.
+   * a lead that arrives after hours waits with its manager). A manager counts those given to them; an admin every one.
+   * Deactivated leads are left out.
+   */
+  private unassignedLeads(viewer: AnalyticsViewer, start: Date, end: Date, sourceId?: string) {
+    return prisma.lead.count({
+      where: {
+        OR: [{ ownerId: null }, { owner: { role: { not: Role.SALESPERSON } } }],
+        createdAt: { gte: start, lt: end },
+        workingStatus: { not: LeadWorkingStatus.DEACTIVATED },
+        ...(sourceId ? { sourceId } : {}),
+        ...(viewer.role === Role.MANAGER ? { assignedManagerId: viewer.id } : {}),
+      },
     });
   }
 
@@ -244,8 +263,19 @@ class ManagerAnalyticsService {
       throw new ApiError(`Date range must be between 1 and ${MAX_RANGE_DAYS} days`, STATUS_CODES.BAD_REQUEST);
     }
     const prevStart = new Date(start.getTime() - (end.getTime() - start.getTime()));
+    // Lead totals cover every salesperson who owns a lead from the period, including one since deactivated (their leads
+    // were still received and assigned); the per-salesperson rows list only the active team.
+    const leadOwnerIds = f.salespersonId
+      ? ids
+      : (
+          await prisma.user.findMany({
+            where: { role: Role.SALESPERSON, ...(viewer.role === Role.MANAGER ? { reportingManagerId: viewer.id } : {}) },
+            select: { id: true },
+          })
+        ).map((u) => u.id);
 
-    const [calls, cohort, prevCohort, productivity, statuses, interestedEvents, convertedEvents, sales, prevSales] = await Promise.all([
+    // Leads received overall only make sense for the whole team; for one salesperson it is their assigned leads.
+    const [calls, cohort, prevCohort, productivity, statuses, interestedEvents, convertedEvents, sales, prevSales, unassigned, sources] = await Promise.all([
       prisma.call.findMany({
         where: {
           agentId: { in: ids },
@@ -257,8 +287,8 @@ class ManagerAnalyticsService {
         },
         select: { agentId: true, leadId: true, status: true, startedAt: true, createdAt: true, durationSeconds: true },
       }),
-      this.leadCohort(ids, start, end),
-      this.leadCohort(ids, prevStart, start),
+      this.leadCohort(leadOwnerIds, start, end, f.sourceId),
+      this.leadCohort(leadOwnerIds, prevStart, start, f.sourceId),
       this.productivityByDay(ids, start, end, tz),
       this.currentStatuses(ids),
       prisma.interestedLeadPeriod.findMany({
@@ -276,6 +306,9 @@ class ManagerAnalyticsService {
       }),
       soldOrders(ids, start, end, f),
       soldOrders(ids, prevStart, start, f),
+      // Unassigned leads belong to the team, not to one salesperson.
+      f.salespersonId ? [0, 0] : Promise.all([this.unassignedLeads(viewer, start, end, f.sourceId), this.unassignedLeads(viewer, prevStart, start, f.sourceId)]),
+      prisma.source.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
     ]);
 
     const salesByPerson = new Map<string, SalesCents>();
@@ -451,15 +484,26 @@ class ManagerAnalyticsService {
     const sum = (pick: (s: (typeof salespeople)[number]) => number) => salespeople.reduce((a, s) => a + pick(s), 0);
     const allLeadIds = new Set<string>();
     for (const c of calls) if (c.leadId && matchesCall(classify(c.status))) allLeadIds.add(c.leadId);
-    const totalLeads = sum((s) => s.leads);
-    const contacted = sum((s) => s.contacted);
+    const stages = leads.map(leadStages);
+    const totalLeads = leads.length;
+    const contacted = stages.filter((x) => x.contacted).length;
+    const previousTotalLeads = prevCohort.filter((l) => matchesLeadStatus(l, f.leadStatus)).length;
     const kpis = {
+      /** Every lead received in the period (arrival time), assigned or not: assignedLeads + unassignedLeads. */
+      receivedLeads: cohort.length + unassigned[0],
+      previousReceivedLeads: prevCohort.length + unassigned[1],
+      /** Received in the period and now with a salesperson (each lead once, under its current owner). */
+      assignedLeads: cohort.length,
+      previousAssignedLeads: prevCohort.length,
+      /** Received in the period and still without a salesperson. */
+      unassignedLeads: unassigned[0],
+      /** Assigned leads matching the lead-status filter - the base for the contacted / converted rates. */
       totalLeads,
-      previousTotalLeads: prevCohort.filter((l) => matchesLeadStatus(l, f.leadStatus)).length,
+      previousTotalLeads,
       notContacted: totalLeads - contacted,
       contacted,
-      interested: sum((s) => s.interested),
-      converted: sum((s) => s.converted),
+      interested: stages.filter((x) => x.interested).length,
+      converted: stages.filter((x) => x.converted).length,
       callsMade: sum((s) => s.calls),
       connectedCalls: sum((s) => s.connected),
       notConnectedCalls: sum((s) => s.notConnected),
@@ -474,7 +518,8 @@ class ManagerAnalyticsService {
 
     return {
       range: { from: f.from, to: f.to, days: days.length, tzOffsetMinutes: tz },
-      filters: { callStatus: f.callStatus, leadStatus: f.leadStatus, salespersonId: f.salespersonId ?? null },
+      filters: { callStatus: f.callStatus, leadStatus: f.leadStatus, salespersonId: f.salespersonId ?? null, sourceId: f.sourceId ?? null },
+      sources,
       targets: { conversionRatePercent: TEAM_CONVERSION_TARGET_PERCENT, productiveMsPerDay: PRODUCTIVE_TARGET_MS },
       team: allTeam.map((p) => ({ id: p.id, name: p.name, username: p.username })),
       kpis,

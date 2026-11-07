@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowRight, Ban, ChartColumnIncreasing, CircleCheck, Clock, Phone, PhoneCall, UserRound, Users } from "lucide-react";
+import { ArrowRight, Ban, ChartColumnIncreasing, CircleCheck, Clock, Phone, PhoneCall, UserCheck, UserRound, Users, UserX } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { managerAnalyticsQueryOptions } from "@/lib/api-client/queries/manager.queries";
@@ -115,6 +115,7 @@ export function ManagerSalesDashboard({
           filters={filters}
           onChange={patch}
           people={data?.team ?? []}
+          sources={view === "report" ? undefined : (data?.sources ?? [])}
           variant={view === "report" ? "report" : "activity"}
           exportOptions={exportOptions}
           exporting={exporting}
@@ -140,6 +141,7 @@ export function ManagerSalesDashboard({
 
               <div className="grid gap-6 xl:grid-cols-2">
                 <LeadFunnel
+                  totalLabel="Assigned Leads"
                   total={data.kpis.totalLeads}
                   notContacted={data.kpis.notContacted}
                   contacted={data.kpis.contacted}
@@ -218,22 +220,30 @@ function Kpis({ data }: { data: ManagerAnalytics }) {
   const callsSpark = data.daily.map((d) => d.calls);
   const prodSpark = data.daily.map((d) => d.productiveMs);
   const convertedSpark = data.daily.map((d) => d.converted);
-  const delta = k.previousTotalLeads > 0 ? ((k.totalLeads - k.previousTotalLeads) / k.previousTotalLeads) * 100 : null;
+  const change = (now: number, before: number) =>
+    before > 0
+      ? { text: `${now >= before ? "+" : ""}${(((now - before) / before) * 100).toFixed(1)}% vs previous period`, tone: now >= before ? ("positive" as const) : ("negative" as const) }
+      : { text: "No previous period data" };
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
+    <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
       <KpiCard
         label="Total Leads" tone="blue" icon={Users}
-        value={formatNumber(k.totalLeads)}
+        value={formatNumber(k.receivedLeads)}
         accent
-        lines={[
-          delta === null
-            ? { text: "No previous period data" }
-            : { text: `${delta >= 0 ? "+" : ""}${delta.toFixed(1)}% vs previous period`, tone: delta >= 0 ? "positive" : "negative" },
-          ...(k.totalLeads > 0 ? [{ text: "100% of total leads" }] : [{ text: "No leads assigned in this period" }]),
-        ]}
+        lines={[change(k.receivedLeads, k.previousReceivedLeads), { text: k.receivedLeads > 0 ? "received, assigned or not" : "No leads received in this period" }]}
       />
-      <KpiCard label="Not Contacted" tone="slate" icon={Ban} value={formatNumber(k.notContacted)} lines={[{ text: `${formatPct(pct(k.notContacted, k.totalLeads))} of total leads` }]} />
-      <KpiCard label="Contacted" tone="teal" icon={Phone} value={formatNumber(k.contacted)} lines={[{ text: `${formatPct(pct(k.contacted, k.totalLeads))} of total leads` }]} />
+      <KpiCard
+        label="Assigned Leads" tone="teal" icon={UserCheck}
+        value={formatNumber(k.assignedLeads)}
+        lines={[{ text: `${formatPct(pct(k.assignedLeads, k.receivedLeads))} of total leads` }, { text: "with a salesperson" }]}
+      />
+      <KpiCard
+        label="Unassigned Leads" tone={k.unassignedLeads > 0 ? "red" : "slate"} icon={UserX}
+        value={formatNumber(k.unassignedLeads)}
+        lines={[{ text: `${formatPct(pct(k.unassignedLeads, k.receivedLeads))} of total leads` }, { text: k.unassignedLeads > 0 ? "waiting for a salesperson" : "every lead is assigned" }]}
+      />
+      <KpiCard label="Not Contacted" tone="slate" icon={Ban} value={formatNumber(k.notContacted)} lines={[{ text: `${formatPct(pct(k.notContacted, k.totalLeads))} of assigned leads` }]} />
+      <KpiCard label="Contacted" tone="teal" icon={Phone} value={formatNumber(k.contacted)} lines={[{ text: `${formatPct(pct(k.contacted, k.totalLeads))} of assigned leads` }]} />
       <KpiCard label="Interested" tone="amber" icon={UserRound} value={formatNumber(k.interested)} lines={[{ text: `${formatPct(pct(k.interested, k.contacted))} of contacted leads` }]} />
       <KpiCard label="Converted" tone="emerald" icon={CircleCheck} spark={convertedSpark} value={formatNumber(k.converted)} lines={[{ text: `${formatPct(pct(k.converted, k.totalLeads))} conversion rate` }]} />
       <KpiCard

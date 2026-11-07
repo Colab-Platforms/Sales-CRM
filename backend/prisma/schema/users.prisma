@@ -68,6 +68,8 @@ model User {
   salespersonAutoAssignConfigAsManager SalespersonAutoAssignConfig? @relation("SalespersonAutoAssignConfigManager")
   breakLimitConfigAsManager            BreakLimitConfig?            @relation("BreakLimitConfigManager")
   managerAutoAssignTarget              ManagerAutoAssignTarget?     @relation("ManagerAutoAssignTargetManager")
+  incentiveMonths                      IncentiveMonth[]             @relation("IncentiveMonthUser")
+  incentiveQueries                     IncentiveQuery[]             @relation("IncentiveQueryUser")
 
   callsAsAgent Call[] @relation("CallAgent")
 
