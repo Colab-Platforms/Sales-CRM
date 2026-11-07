@@ -6,6 +6,7 @@ import { PageHeader } from "@/components/page-header";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { SalespersonDashboard } from "@/lib/api-client/types/dashboard.types";
+import { MyIncentivePlan } from "@/components/incentives/my-incentive-plan";
 
 export function SalespersonDashboardView({ data }: { data: SalespersonDashboard }) {
   const conversionRate =
@@ -32,6 +33,8 @@ export function SalespersonDashboardView({ data }: { data: SalespersonDashboard 
           tone="emerald"
         />
       </div>
+
+      <MyIncentivePlan />
 
       <Card>
         <CardHeader>

@@ -1,0 +1,108 @@
+// ---------------------------------------------------------------------------------------------
+// Sales revenue incentives (backend/src/modules/incentives). Monthly figures - revenue, orders, calls,
+// attendance, login time - are always computed live from the CRM's own records; these tables hold only
+// what cannot be derived: the admin's policy, the admin's approval / payment decision for a month (with the
+// figures frozen at approval), salespeople's queries about a calculation, and an audit trail of every change.
+// ---------------------------------------------------------------------------------------------
+
+// The incentive policy. At most one row; without a row the defaults from the Sales Revenue Incentive Policy
+// sheet apply (incentives.policy.ts). Only an admin changes it.
+model IncentivePolicy {
+  id String @id @default(uuid()) @db.Uuid
+
+  // [{ "minRevenue": 100000, "amount": 1000 }, ..., { "minRevenue": 300000, "percent": 2.5 }] - rupees.
+  slabs        Json    @map("slabs")
+  // How a percentage slab is applied, as confirmed by the admin: "TOTAL" (of the month's whole revenue) or
+  // "ABOVE_SLAB" (of the revenue above that slab). Null = not confirmed yet, so that incentive is not calculated.
+  percentBasis String? @map("percent_basis") @db.VarChar(20)
+
+  minPrepaidPercent     Int @default(40) @map("min_prepaid_percent")
+  minDeliveryPercent    Int @default(80) @map("min_delivery_percent")
+  minAttendanceDays     Int @default(26) @map("min_attendance_days")
+  minNetLoginMinutes    Int @default(480) @map("min_net_login_minutes")
+  minLoginDays          Int @default(26) @map("min_login_days")
+  minDailyCalls         Int @default(100) @map("min_daily_calls")
+  minCallDays           Int @default(26) @map("min_call_days")
+  minAvgDailyOrdersX100 Int @default(1200) @map("min_avg_daily_orders_x100")
+
+  updatedById String?  @map("updated_by_id") @db.Uuid
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("incentive_policy")
+}
+
+// The admin's decision on one salesperson's month. No row = nothing decided yet (the month's status is then
+// derived live: In Progress / Eligible - Awaiting Admin Approval / Not Eligible / Pending Data Verification).
+model IncentiveMonth {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation("IncentiveMonthUser", fields: [userId], references: [id])
+
+  // "YYYY-MM", IST.
+  month String @map("month") @db.VarChar(7)
+
+  // APPROVED (locked) or PAID.
+  status String @map("status") @db.VarChar(20)
+
+  // Incentive approved, in rupees, and the whole calculation as it stood when it was approved and locked.
+  amount   Decimal @map("amount") @db.Decimal(12, 2)
+  snapshot Json    @map("snapshot")
+
+  approvedById String   @map("approved_by_id") @db.Uuid
+  approvedAt   DateTime @map("approved_at")
+
+  paidById    String?   @map("paid_by_id") @db.Uuid
+  paidAt      DateTime? @map("paid_at")
+  paymentRef  String?   @map("payment_ref") @db.VarChar(120)
+  paymentNote String?   @map("payment_note")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([userId, month])
+  @@index([month])
+  @@map("incentive_months")
+}
+
+// A salesperson's query about their month's calculation, and the admin's answer.
+model IncentiveQuery {
+  id String @id @default(uuid()) @db.Uuid
+
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation("IncentiveQueryUser", fields: [userId], references: [id])
+
+  month   String @map("month") @db.VarChar(7)
+  message String @map("message")
+
+  // OPEN or RESOLVED.
+  status       String    @default("OPEN") @map("status") @db.VarChar(20)
+  response     String?   @map("response")
+  resolvedById String?   @map("resolved_by_id") @db.Uuid
+  resolvedAt   DateTime? @map("resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId, month])
+  @@index([status])
+  @@map("incentive_queries")
+}
+
+// Every change to incentives: policy edits, approvals, payments, query answers. Append-only.
+model IncentiveAuditLog {
+  id String @id @default(uuid()) @db.Uuid
+
+  actorId String  @map("actor_id") @db.Uuid
+  // The salesperson and month the change concerns; null for a policy change.
+  userId  String? @map("user_id") @db.Uuid
+  month   String? @map("month") @db.VarChar(7)
+
+  action  String @map("action") @db.VarChar(40)
+  details Json   @map("details")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([userId, month])
+  @@map("incentive_audit_logs")
+}
