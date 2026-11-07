@@ -1,4 +1,5 @@
 import type { Response } from "express";
+import { logger } from "@/utils/logger.js";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
@@ -219,46 +220,55 @@ export const getRecordingsSummary = async (req: AuthRequest, res: Response): Pro
   try {
     sendResponse(res, true, await recordings.summary(req.user!, recordingRange(req.query)), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 
-// Background ZIP exports: create / list / status / retry / download. Admin and manager only (routes + service); an export is visible only to the user who started it.
+// Background exports (ZIP of recordings / Excel of leads): create / list / status / retry / download. Admin and manager only (routes + service); an export is visible only to the user who started it.
+// A client error (4xx) is answered quietly; anything else is logged WITH the request, the user and the stack, so a failing endpoint can be diagnosed from the server log alone.
 const exportsService = new RecordingExportService();
+const failExport = (req: AuthRequest, res: Response, error: any) => {
+  const status = error?.statusCode ?? STATUS_CODES.SERVER_ERROR;
+  if (status >= 500) logger.error(`[recording-export] ${req.method} ${req.originalUrl.split("?")[0]} user=${req.user?.id ?? "-"} role=${req.user?.role ?? "-"} status=${status}: ${error?.stack ?? error?.message ?? error}`);
+  if (res.headersSent) return void res.destroy(error);
+  fail(res, error);
+};
 export const createRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    sendResponse(res, true, await exportsService.create(req.user!, recordingRange(body)), "OK", STATUS_CODES.OK);
+    const kind = body.kind === "EXCEL" ? "EXCEL" : body.kind === undefined || body.kind === "ZIP" ? "ZIP" : null;
+    if (!kind) return void bad(res, "kind must be ZIP or EXCEL");
+    sendResponse(res, true, await exportsService.create(req.user!, { kind, ...recordingRange(body), filters: body.filters }), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 export const listRecordingExports = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     sendResponse(res, true, await exportsService.list(req.user!), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 export const getRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     sendResponse(res, true, await exportsService.get(req.user!, String(req.params.exportId ?? "")), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 export const retryRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     sendResponse(res, true, await exportsService.retry(req.user!, String(req.params.exportId ?? "")), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 export const getRecordingExportLink = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     sendResponse(res, true, await exportsService.downloadLink(req.user!, String(req.params.exportId ?? "")), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 // Opened by the browser itself (no Authorization header): authorised by the signed, short-lived link the owner was given.
@@ -267,16 +277,14 @@ export const downloadRecordingExportByLink = async (req: AuthRequest, res: Respo
     const q = req.query;
     await exportsService.downloadByLink(String(req.params.exportId ?? ""), String(q.u ?? ""), Number(q.e), String(q.s ?? ""), res);
   } catch (error: any) {
-    if (res.headersSent) return void res.destroy(error);
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 export const downloadRecordingExport = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     await exportsService.download(req.user!, String(req.params.exportId ?? ""), res);
   } catch (error: any) {
-    if (res.headersSent) return void res.destroy(error);
-    fail(res, error);
+    failExport(req, res, error);
   }
 };
 

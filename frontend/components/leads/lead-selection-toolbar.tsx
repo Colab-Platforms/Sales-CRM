@@ -7,12 +7,17 @@ export function LeadSelectionToolbar({
   onAssignManager,
   onAssignSalesperson,
   onUpdateStatus,
+  onDownload,
+  downloading,
 }: {
   count: number;
   onClear: () => void;
   onAssignManager?: () => void;
   onAssignSalesperson?: () => void;
   onUpdateStatus?: () => void;
+  /** Download the selected leads as an Excel file. */
+  onDownload?: () => void;
+  downloading?: boolean;
 }) {
   return (
     <div className="sketch-outline flex flex-wrap items-center justify-between gap-3 border-transparent bg-highlight px-4 py-3 text-highlight-foreground">
@@ -26,6 +31,11 @@ export function LeadSelectionToolbar({
         {onAssignManager ? (
           <Button size="sm" onClick={onAssignManager}>
             Assign Manager
+          </Button>
+        ) : null}
+        {onDownload ? (
+          <Button size="sm" variant="outline" onClick={onDownload} disabled={downloading} data-testid="download-leads">
+            {downloading ? "Starting…" : "Download Leads"}
           </Button>
         ) : null}
         {onAssignSalesperson ? (

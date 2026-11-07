@@ -15,8 +15,11 @@ export interface RecordingSummary {
 
 export type RecordingExportStatus = "QUEUED" | "PROCESSING" | "COMPLETED" | "FAILED";
 
+export type RecordingExportKind = "ZIP" | "EXCEL";
+
 export interface RecordingExport {
   id: string;
+  kind: RecordingExportKind;
   status: RecordingExportStatus;
   from: string;
   to: string;
@@ -33,6 +36,15 @@ export interface RecordingExport {
   finishedAt: string | null;
   expiresAt: string;
   canDownload: boolean;
+  /** "IDS": exactly the leads that were ticked; "MATCHING": every lead the list filters matched; null: the date range. */
+  selection: "IDS" | "MATCHING" | null;
+  selectedCount: number | null;
+  /** Salesperson / lead status / search filters were applied on top of the date range. */
+  filtered: boolean;
+  /** Running with no sign of life (the worker restarted): the server picks it up again by itself. */
+  stalled: boolean;
+  /** Times a server-side problem interrupted it (it resumes each time). */
+  attempts: number;
   canRetry: boolean;
   reused?: boolean;
 }
@@ -40,6 +52,20 @@ export interface RecordingExport {
 export interface RecordingFile {
   blob: Blob;
   fileName: string;
+}
+
+/**
+ * What to tell the user about a failed request, without hiding the cause: the server's own message when it sent one, otherwise whether the server could not be reached at all
+ * or answered with an error status (a proxy / gateway page has no message, which is why a bare fallback text used to be all anyone saw).
+ */
+export function describeRequestError(error: unknown, fallback: string): string {
+  if (axios.isAxiosError(error)) {
+    const message = (error.response?.data as { message?: string } | undefined)?.message;
+    if (message) return message;
+    if (!error.response) return `${fallback} The server could not be reached - check your connection and try again.`;
+    return `${fallback} (server error ${error.response.status}).`;
+  }
+  return error instanceof Error ? error.message : fallback;
 }
 
 /** Error text from a failed blob download (the server's JSON error arrives as a Blob). */
@@ -77,8 +103,8 @@ export const abandonmentRecordingsApi = {
   },
 
   /** Starts a background export (or returns the one already running for the same range). */
-  async startExport(range: { from: string; to: string }): Promise<RecordingExport> {
-    const res = await apiClient.post<ApiEnvelope<RecordingExport>>("/abandonments/recordings/exports", range);
+  async startExport(input: { kind: RecordingExportKind; from: string; to: string; filters?: Record<string, unknown> }): Promise<RecordingExport> {
+    const res = await apiClient.post<ApiEnvelope<RecordingExport>>("/abandonments/recordings/exports", input);
     return res.data.data;
   },
 
