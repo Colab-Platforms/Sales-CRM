@@ -1,5 +1,8 @@
 import { Buffer } from "node:buffer";
+import zlib from "node:zlib";
 import { prisma } from "@/lib/prisma.js";
+import { Prisma } from "../../../generated/prisma/client.js";
+import { Role } from "../../../generated/prisma/enums.js";
 import type { DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
@@ -178,11 +181,15 @@ const CRC_TABLE = (() => {
   return table;
 })();
 
-export function crc32(data: Uint8Array): number {
+function crc32Js(data: Uint8Array): number {
   let crc = 0xffffffff;
   for (let i = 0; i < data.length; i++) crc = CRC_TABLE[(crc ^ data[i]!) & 0xff]! ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
+
+// Native (zlib.crc32, Node 22.2+) when available: an export checksums hundreds of MB of audio, and a byte-at-a-time JS loop would hold the event loop - and every web request - for seconds.
+const nativeCrc32 = (zlib as unknown as { crc32?: (data: Uint8Array) => number }).crc32;
+export const crc32: (data: Uint8Array) => number = nativeCrc32 ? (data) => nativeCrc32(data) >>> 0 : crc32Js;
 
 export interface ZipEntryInfo {
   name: string;
@@ -361,11 +368,14 @@ export class AbandonmentRecordingsService {
     if (!canAccessRecordings(user.role)) throw new ApiError("Only admins and managers can access call recordings", STATUS_CODES.FORBIDDEN);
   }
 
-  /** Calls (with a recording entry) to leads the user may see that have an abandoned checkout. */
-  async rowsFor(user: AuthUser, where: Record<string, unknown>): Promise<RecordingRow[]> {
+  /**
+   * Calls (with a recording entry) to leads the user may see that have an abandoned checkout. Without `page` everything matching is returned (single lookups); with it, one keyset page
+   * (ordered by id, `take` rows after `afterId`) so a year of data is read in bounded chunks and never as one result.
+   */
+  async rowsFor(user: AuthUser, where: Record<string, unknown>, page?: { afterId?: string; take: number }): Promise<RecordingRow[]> {
     const leadScope = abandonmentLeadScope(user);
     const calls = await this.db.call.findMany({
-      where: { ...where, recording: { isNot: null }, lead: { AND: [leadScope, { abandonments: { some: {} } }] } },
+      where: { ...where, ...(page?.afterId ? { id: { gt: page.afterId } } : {}), recording: { isNot: null }, lead: { AND: [leadScope, { abandonments: { some: {} } }] } },
       select: {
         id: true,
         startedAt: true,
@@ -373,7 +383,8 @@ export class AbandonmentRecordingsService {
         recording: { select: { recordingUrl: true, expiresAt: true } },
         lead: { select: { leadNumber: true, firstName: true, lastName: true } },
       },
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      orderBy: page ? [{ id: "asc" }] : [{ createdAt: "asc" }, { id: "asc" }],
+      ...(page ? { take: page.take } : {}),
     });
     return calls.map((c) => ({
       callId: c.id,
@@ -391,18 +402,38 @@ export class AbandonmentRecordingsService {
     return { OR: [{ startedAt: { gte, lt } }, { startedAt: null, createdAt: { gte, lt } }] };
   }
 
+  /**
+   * How many recordings a date range holds, counted by the database (one aggregate query - never every row loaded into the server), so it stays fast for a year of data.
+   * Same rules as the export: usable = has a link, not expired, https on an approved host; duplicates = the same link used by more than one call.
+   */
   async summary(user: AuthUser, range: RecordingRange): Promise<RecordingSummary> {
     this.assertAllowed(user);
-    const rows = await this.rowsFor(user, this.rangeWhere(range));
-    const plan = planRecordings(rows);
-    return {
-      from: range.from,
-      to: range.to,
-      total: rows.length,
-      available: plan.usable.length,
-      unavailable: plan.unavailable.length,
-      duplicates: plan.duplicates,
-    };
+    const { gte, lt } = recordingRangeBounds(range);
+    const host = Prisma.sql`lower(substring(r.recording_url from '^https://([^/:?#@]+)'))`;
+    const approved = allowedRecordingHosts()
+      .map((h) => h.replace(/[^a-z0-9.*-]/g, ""))
+      .filter(Boolean)
+      .map((h) => (h.startsWith("*.") ? Prisma.sql`${host} LIKE ${"%." + h.slice(2)}` : Prisma.sql`(${host} = ${h} OR ${host} LIKE ${"%." + h})`));
+    const scope = user.role === Role.MANAGER ? Prisma.sql`AND l.assigned_manager_id = ${user.id}::uuid` : Prisma.empty;
+    const rows = await this.db.$queryRaw<{ total: bigint; usable: bigint; distinct_urls: bigint }[]>(Prisma.sql`
+      SELECT count(*) AS total,
+             count(*) FILTER (WHERE t.ok) AS usable,
+             count(DISTINCT t.url) FILTER (WHERE t.ok) AS distinct_urls
+      FROM (
+        SELECT r.recording_url AS url,
+               (r.recording_url IS NOT NULL AND btrim(r.recording_url) <> '' AND (r.expires_at IS NULL OR r.expires_at > now())
+                AND ${approved.length > 0 ? Prisma.join(approved, " OR ") : Prisma.sql`false`}) AS ok
+        FROM calls c
+        JOIN call_recordings r ON r.call_id = c.id
+        JOIN leads l ON l.id = c.lead_id
+        WHERE ((c.started_at >= ${gte}::timestamp AND c.started_at < ${lt}::timestamp) OR (c.started_at IS NULL AND c.created_at >= ${gte}::timestamp AND c.created_at < ${lt}::timestamp))
+          AND EXISTS (SELECT 1 FROM abandonments a WHERE a.lead_id = l.id)
+          ${scope}
+      ) t`);
+    const total = Number(rows[0]?.total ?? 0);
+    const usable = Number(rows[0]?.usable ?? 0);
+    const distinct = Number(rows[0]?.distinct_urls ?? 0);
+    return { from: range.from, to: range.to, total, available: distinct, unavailable: total - usable, duplicates: usable - distinct };
   }
 
   /** One recording, for download. The same permission and lead-scope rules as the list. */

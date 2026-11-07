@@ -291,7 +291,7 @@ describe("staff assignment (admin / HR) and its permissions", () => {
     });
   });
 
-  it("refuses an invalid target (a manager, an inactive telecaller, a made-up id), round-robin from admin/HR, and any telecaller caller", async () => {
+  it("refuses an invalid target (a manager, an inactive telecaller, a made-up id), a round robin onto a non-telecaller, and any telecaller caller", async () => {
     await inRollback(async (tx) => {
       const w = await world(tx);
       const a = await w.cart(w.at.today(1));
@@ -299,7 +299,7 @@ describe("staff assignment (admin / HR) and its permissions", () => {
       await assert.rejects(() => go(w.as(w.admin), { salespersonId: w.mgrA.id }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => go(w.as(w.admin), { salespersonId: w.inactive.id }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => go(w.as(w.admin), { salespersonId: uid() }), (e: any) => e.statusCode === 400);
-      await assert.rejects(() => go(w.as(w.hr), { method: "ROUND_ROBIN", salespersonIds: [w.t1.id] }), (e: any) => e.statusCode === 400);
+      await assert.rejects(() => go(w.as(w.hr), { method: "ROUND_ROBIN", salespersonIds: [w.mgrA.id] }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => go(w.as(w.t1), { salespersonId: w.t1.id }), (e: any) => e.statusCode === 403);
       assert.equal((await tx.lead.findUniqueOrThrow({ where: { id: a.leadId }, select: { ownerId: true } })).ownerId, null);
     });

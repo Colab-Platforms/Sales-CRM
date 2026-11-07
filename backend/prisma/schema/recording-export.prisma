@@ -6,6 +6,12 @@ model RecordingExportJob {
   createdById String @map("created_by_id") @db.Uuid
   role        String @map("role") @db.VarChar(30)
 
+  // ZIP (call recordings) | EXCEL (abandoned-lead records). The Excel export reuses the job / progress / storage machinery; it has no per-item rows.
+  kind String @default("ZIP") @map("kind") @db.VarChar(10)
+
+  // The list filters an Excel export applies on top of the date range (validated server-side; null = date range only).
+  filters Json? @map("filters")
+
   // Inclusive calendar days (IST), as chosen in the UI.
   fromDay String @map("from_day") @db.VarChar(10)
   toDay   String @map("to_day") @db.VarChar(10)
@@ -36,6 +42,7 @@ model RecordingExportJob {
   chunks RecordingExportChunk[]
 
   @@index([createdById, createdAt])
+  @@index([createdById, kind, status])
   @@index([status])
   @@index([expiresAt])
   @@map("recording_export_jobs")

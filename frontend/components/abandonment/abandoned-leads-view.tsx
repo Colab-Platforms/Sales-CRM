@@ -28,7 +28,13 @@ import { X } from "lucide-react";
 import { IngestionHealthPanel } from "@/components/abandonment/ingestion-health";
 import { BucketSummary } from "@/components/leads/bucket-summary";
 import { ImportAbandonedLeadsDialog } from "@/components/abandonment/import-abandoned-leads-dialog";
-import { BulkRecordingsPanel } from "@/components/abandonment/bulk-recordings-panel";
+import { LeadExcelPanel } from "@/components/abandonment/lead-excel-panel";
+import { RecordingZipPanel } from "@/components/abandonment/recording-zip-panel";
+import { EXPORTS_KEY, istDay, type ExportFilters } from "@/components/abandonment/export-shared";
+import { abandonmentRecordingsApi, describeRequestError } from "@/lib/api-client/endpoints/abandonment.recordings.api";
+import { toast } from "sonner";
+import { useQueryClient } from "@tanstack/react-query";
+import { encodeItemKeys } from "@/lib/abandonment-items";
 
 const PAGE_SIZES = [20, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 20;
@@ -167,6 +173,11 @@ export function AbandonedLeadsView() {
   const customDates = Boolean(filters.detectedFrom || filters.detectedTo);
   const effectiveRange: AbandonmentDateRange = customDates ? "all" : apiRange;
   const params = useMemo<ListAbandonmentsParams>(() => ({ page, pageSize, ...toApiFilters(filters, apiRange), ...(bucketOnly ? { bucket: "TODAY" as const } : {}), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) }), [page, pageSize, filters, apiRange, bucketOnly, salespersonId, assignment]);
+  // The list's own search / column filters, offered to the Excel export (the date range comes from the export panel itself).
+  const exportFilters = useMemo<ExportFilters>(
+    () => ({ search: filters.search, workingStatus: filters.workingStatus, lead: filters.lead, contact: filters.contact, assignee: filters.assignee, lastAction: filters.lastAction, valueMin: filters.valueMin, valueMax: filters.valueMax, items: filters.items && filters.items.length > 0 ? encodeItemKeys(filters.items) : undefined }),
+    [filters],
+  );
   // Rows of another day are never kept on screen while a new range loads (they would be selectable under the wrong heading); page/filter changes within a day still are.
   const { data, isPending, isFetching, error } = useQuery({
     ...abandonmentListQueryOptions(params),
@@ -180,6 +191,13 @@ export function AbandonedLeadsView() {
     },
   });
   const itemOptions = useQuery(abandonmentItemOptionsQueryOptions());
+  const queryClient = useQueryClient();
+  // Lead names for the Manual assignment list: remembered from every page that was shown and from "Select all", so leads picked across pages are named.
+  const leadLabels = useRef(new Map<string, { name: string; leadNumber: string }>());
+  useEffect(() => {
+    for (const item of data?.items ?? []) leadLabels.current.set(item.id, { name: item.lead.name, leadNumber: item.lead.leadNumber });
+  }, [data]);
+  const [downloadingLeads, setDownloadingLeads] = useState(false);
   const [selectingAll, setSelectingAll] = useState(false);
   const [selectAllError, setSelectAllError] = useState<string | null>(null);
 
@@ -223,12 +241,43 @@ export function AbandonedLeadsView() {
     setSelectAllError(null);
     try {
       const result = await abandonmentApi.listMatchingIds({ ...toApiFilters(filters, apiRange), ...(bucketOnly ? { bucket: "TODAY" as const } : {}), ...(salespersonId ? { salespersonId } : {}), ...(assignment ? { assignment } : {}) });
+      for (const l of result.labels) leadLabels.current.set(l.id, { name: l.name, leadNumber: l.leadNumber });
       setSelectedIds(new Set(result.ids));
       if (result.capped) setSelectAllError(`Only the first ${result.ids.length} of ${result.total} matches were selected. Narrow the filters to assign the rest.`);
     } catch (e) {
       setSelectAllError(getErrorMessage(e, "Could not select all matching leads."));
     } finally {
       setSelectingAll(false);
+    }
+  }
+
+  // "Download Leads": an Excel of exactly the ticked leads (what was filtered, searched and ticked - nothing else), built in the background; it appears in the lead-exports history below.
+  async function downloadSelectedLeads() {
+    setDownloadingLeads(true);
+    try {
+      await abandonmentRecordingsApi.startExport({ kind: "EXCEL", from: istDay(), to: istDay(), filters: { ids: [...selectedIds] } });
+      void queryClient.invalidateQueries({ queryKey: EXPORTS_KEY });
+      toast.success(`Excel of ${selectedIds.size} selected lead${selectedIds.size === 1 ? "" : "s"} is being prepared. Follow it under "Download abandoned leads" - you can leave this page.`);
+    } catch (e) {
+      toast.error(describeRequestError(e, "Could not start the lead export."));
+    } finally {
+      setDownloadingLeads(false);
+    }
+  }
+
+  // "Download all N matching": every lead the current search, filters and day range match - across all pages, not only the 1,000 that "Select all" can tick.
+  async function downloadAllMatching() {
+    setDownloadingLeads(true);
+    try {
+      const { page: _page, pageSize: _size, items, ...rest } = params;
+      const filtersOut: Record<string, unknown> = { matching: true, ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined && v !== "")), ...(items && items.length > 0 ? { items: encodeItemKeys(items) } : {}) };
+      await abandonmentRecordingsApi.startExport({ kind: "EXCEL", from: istDay(), to: istDay(), filters: filtersOut });
+      void queryClient.invalidateQueries({ queryKey: EXPORTS_KEY });
+      toast.success("Excel of all matching leads is being prepared. Follow it under \"Download abandoned leads\" - you can leave this page.");
+    } catch (e) {
+      toast.error(describeRequestError(e, "Could not start the lead export."));
+    } finally {
+      setDownloadingLeads(false);
     }
   }
 
@@ -313,7 +362,8 @@ export function AbandonedLeadsView() {
         role={user.role}
       />
 
-      {canHearRecordings ? <BulkRecordingsPanel /> : null}
+      {canHearRecordings ? <LeadExcelPanel filters={exportFilters} /> : null}
+      {canHearRecordings ? <RecordingZipPanel /> : null}
 
       {(isStaff) && data && data.pagination.totalItems > data.items.length && selectedIds.size < data.pagination.totalItems ? (
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
@@ -321,6 +371,11 @@ export function AbandonedLeadsView() {
           <Button type="button" size="sm" variant="outline" onClick={selectAllMatching} disabled={selectingAll}>
             {selectingAll ? "Selecting…" : `Select all ${data.pagination.totalItems}`}
           </Button>
+          {canHearRecordings ? (
+            <Button type="button" size="sm" variant="outline" onClick={downloadAllMatching} disabled={downloadingLeads} data-testid="download-all-matching">
+              {downloadingLeads ? "Starting…" : `Download all ${data.pagination.totalItems} matching (Excel)`}
+            </Button>
+          ) : null}
         </div>
       ) : null}
       {selectAllError ? <p role="alert" className="text-sm text-destructive">{selectAllError}</p> : null}
@@ -336,6 +391,8 @@ export function AbandonedLeadsView() {
           count={selectedIds.size}
           onClear={clearSelection}
           onAssignManager={isAdmin ? () => setAssignManagerOpen(true) : undefined}
+          onDownload={canHearRecordings ? downloadSelectedLeads : undefined}
+          downloading={downloadingLeads}
           onAssignSalesperson={isStaff ? () => setAssignSalespersonOpen(true) : undefined}
           onUpdateStatus={isAdmin ? () => setUpdateStatusOpen(true) : undefined}
         />
@@ -456,6 +513,7 @@ export function AbandonedLeadsView() {
         open={assignSalespersonOpen}
         onOpenChange={setAssignSalespersonOpen}
         abandonmentIds={[...selectedIds]}
+        labelOf={(id) => leadLabels.current.get(id)}
         onDone={() => {
           setAssignSalespersonOpen(false);
           clearSelection();

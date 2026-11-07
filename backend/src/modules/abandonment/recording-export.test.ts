@@ -14,6 +14,8 @@ class MemoryRepo implements ExportRepo {
   heartbeatAt: Date | null = null;
   finished: { status: string; sizeBytes?: number; errorMessage?: string | null; fileName?: string } | null = null;
   checkpoints = 0;
+  attempts = 0;
+  releaseMessage: string | null = null;
   deleted = false;
   readonly rows: ExportItem[];
   constructor(count: number, readonly failIds: Set<number> = new Set(), readonly job: ExportJobRow = { id: "job-1", fromDay: "2026-11-01", toDay: "2026-11-05", status: "QUEUED", total: count, duplicates: 0, createdAt: new Date("2026-11-05T10:00:00Z") }) {
@@ -24,12 +26,26 @@ class MemoryRepo implements ExportRepo {
     if (this.deleted || !(this.status === "QUEUED" || stale)) return null;
     this.status = "PROCESSING";
     this.heartbeatAt = new Date();
+    this.attempts++;
     return { ...this.job, status: "PROCESSING" as const };
+  }
+  async progress() {
+    return !this.deleted;
+  }
+  async release(_id: string, message: string, maxAttempts: number) {
+    if (this.attempts >= maxAttempts) {
+      this.status = "FAILED";
+      this.finished = { status: "FAILED", errorMessage: message };
+      return "failed" as const;
+    }
+    this.status = "QUEUED";
+    this.releaseMessage = message;
+    return "requeued" as const;
   }
   async items() {
     return this.rows.map((r) => ({ ...r }));
   }
-  async checkpoint(_id: string, results: ItemResult[]) {
+  async checkpoint(_id: string, results: ItemResult[], _end?: number) {
     if (this.deleted) return false;
     this.checkpoints++;
     for (const r of results) Object.assign(this.rows[r.seq]!, { status: r.status, reason: r.reason ?? null, crc32: r.crc32 ?? null, size: r.size ?? null, localOffset: r.localOffset ?? null, endOffset: r.endOffset ?? null });
@@ -38,8 +54,10 @@ class MemoryRepo implements ExportRepo {
   async heartbeat() {
     this.heartbeatAt = new Date();
   }
-  async source(callId: string) {
-    return { recordingUrl: `https://rec.callerdesk.io/${callId}.mp3`, expiresAt: null };
+  sourceCalls = 0;
+  async sources(callIds: string[]) {
+    this.sourceCalls++;
+    return new Map(callIds.map((id) => [id, { recordingUrl: `https://rec.callerdesk.io/${id}.mp3`, expiresAt: null }]));
   }
   async finish(_id: string, patch: { status: "COMPLETED" | "FAILED"; sizeBytes?: number; errorMessage?: string | null; fileName?: string }) {
     this.status = patch.status;
@@ -123,6 +141,7 @@ for (const count of [300, 1000, 2000, 5000]) {
     const outcome = await runExport({ repo, store, fetchFile }, "job-1", { concurrency: 4, checkpointEvery: 25 });
     assert.equal(outcome, "completed");
     assert.equal(state.calls, count, "each recording is downloaded exactly once");
+    assert.ok(repo.sourceCalls <= Math.ceil(count / 200), `recording links are looked up in batches, not one query per recording (${repo.sourceCalls} queries for ${count})`);
     assert.ok(state.maxInFlight <= 4, `never more than the configured concurrency in flight (saw ${state.maxInFlight})`);
     const done = repo.rows.filter((r) => r.status === "DONE").length;
     assert.equal(done, count - failing.size);
@@ -158,14 +177,14 @@ test("a crash mid-export resumes from the last checkpoint and never downloads a 
   const store = new MemoryStore();
   const first = makeFetcher();
   store.failWriteAfter = 400; // the storage dies part-way through
-  assert.equal(await runExport({ repo, store, fetchFile: first.fetchFile }, "job-1", { concurrency: 3, checkpointEvery: 20 }), "failed");
-  assert.equal(repo.status, "FAILED");
-  assert.match(repo.finished?.errorMessage ?? "", /storage unavailable/);
+  // A storage problem is the server's, not the job's: the job goes back to the queue with its progress, it is NOT marked failed.
+  assert.equal(await runExport({ repo, store, fetchFile: first.fetchFile }, "job-1", { concurrency: 3, checkpointEvery: 20, sleep: async () => undefined }), "retry");
+  assert.equal(repo.status, "QUEUED");
+  assert.match(repo.releaseMessage ?? "", /storage unavailable/);
   const savedBefore = repo.rows.filter((r) => r.status === "DONE").length;
   assert.ok(savedBefore > 0 && savedBefore < count);
 
   store.failWriteAfter = Infinity;
-  repo.retry();
   const second = makeFetcher();
   assert.equal(await runExport({ repo, store, fetchFile: second.fetchFile }, "job-1", { concurrency: 3, checkpointEvery: 20 }), "completed");
   assert.equal(second.state.calls, count - savedBefore, "only the recordings that were not yet in the ZIP are downloaded");
@@ -329,7 +348,7 @@ test("an export is invisible to everyone but its creator, and an expired one is 
 });
 
 test("an identical active export is reused instead of starting a second one", async () => {
-  const job = { id: "j1", createdById: "owner", fromDay: "2026-11-05", toDay: "2026-11-05", status: "PROCESSING", total: 500, processed: 120, failed: 5, duplicates: 0, sizeBytes: 0n, fileName: null, errorMessage: null, createdAt: new Date(), finishedAt: null, expiresAt: new Date(Date.now() + 3_600_000) };
+  const job = { id: "j1", kind: "ZIP", filters: null, heartbeatAt: new Date(), attempts: 0, createdById: "owner", fromDay: "2026-11-05", toDay: "2026-11-05", status: "PROCESSING", total: 500, processed: 120, failed: 5, duplicates: 0, sizeBytes: 0n, fileName: null, errorMessage: null, createdAt: new Date(), finishedAt: null, expiresAt: new Date(Date.now() + 3_600_000) };
   const db = { recordingExportJob: { findMany: async () => [job], findUniqueOrThrow: async () => job } } as never;
   const service = new RecordingExportService(db, undefined, noQueue);
   const dto = await service.create({ id: "owner", role: Role.MANAGER, username: "m" }, { from: "2026-11-05", to: "2026-11-05" });
@@ -426,4 +445,67 @@ test("the download link is bound to one export and one user, expires, and cannot
   await assert.rejects(() => service.downloadByLink("99999999-2222-3333-4444-555555555555", u, e, s, res), { statusCode: 403 });
   // a telecaller / HR can never be issued a link
   await assert.rejects(() => service.downloadLink({ id: "owner", role: Role.SALESPERSON, username: "t" }, id), { statusCode: 403 });
+});
+
+// ---------- transient problems never fail a good job ----------
+
+test("a database blip during a checkpoint is retried in place; the export still completes with no extra downloads", async () => {
+  const repo = new MemoryRepo(120);
+  const realCheckpoint = repo.checkpoint.bind(repo);
+  let blips = 2;
+  repo.checkpoint = async (id: string, results: ItemResult[], end: number) => {
+    if (blips-- > 0) throw new Error("connection reset by peer");
+    return realCheckpoint(id, results, end);
+  };
+  const { fetchFile, state } = makeFetcher();
+  assert.equal(await runExport({ repo, store: new MemoryStore(), fetchFile }, "job-1", { checkpointEvery: 20, sleep: async () => undefined }), "completed");
+  assert.equal(state.calls, 120);
+  assert.equal(repo.status, "COMPLETED");
+});
+
+test("a database outage that outlasts the retries re-queues the job (progress kept); only after maxAttempts does it fail, with the reason", async () => {
+  const repo = new MemoryRepo(60);
+  const realCheckpoint = repo.checkpoint.bind(repo);
+  let down = true;
+  repo.checkpoint = async (id: string, results: ItemResult[], end: number) => {
+    if (down) throw new Error("database unavailable");
+    return realCheckpoint(id, results, end);
+  };
+  const store = new MemoryStore();
+  const opts = { checkpointEvery: 10, sleep: async () => undefined, maxAttempts: 3 };
+  assert.equal(await runExport({ repo, store, fetchFile: makeFetcher().fetchFile }, "job-1", opts), "retry");
+  assert.equal(repo.status, "QUEUED");
+  assert.equal(await runExport({ repo, store, fetchFile: makeFetcher().fetchFile }, "job-1", opts), "retry");
+  assert.equal(await runExport({ repo, store, fetchFile: makeFetcher().fetchFile }, "job-1", opts), "failed");
+  assert.equal(repo.status, "FAILED");
+  assert.match(repo.finished?.errorMessage ?? "", /database unavailable/);
+  // the database comes back, the user retries: a fresh attempt budget, the job completes
+  down = false;
+  repo.attempts = 0;
+  repo.status = "QUEUED";
+  assert.equal(await runExport({ repo, store, fetchFile: makeFetcher().fetchFile }, "job-1", opts), "completed");
+  await verifyZip(store.data, repo.rows);
+});
+
+test("the sliding window keeps downloads flowing: a slow recording does not stall the others, and output order is unchanged", async () => {
+  const repo = new MemoryRepo(40);
+  const order: string[] = [];
+  let inFlight = 0;
+  let max = 0;
+  const fetchFile = async (url: string) => {
+    inFlight++;
+    max = Math.max(max, inFlight);
+    const id = /(call-\d+)/.exec(url)![1]!;
+    await new Promise((r) => setTimeout(r, id === "call-0" ? 60 : 2)); // the first one is slow
+    inFlight--;
+    order.push(id);
+    return { data: audio(id), contentType: null };
+  };
+  const store = new MemoryStore();
+  const outcome = await runExport({ repo, store, fetchFile }, "job-1", { concurrency: 5 });
+  assert.equal(outcome, "completed", repo.finished?.errorMessage ?? repo.releaseMessage ?? "");
+  assert.equal(max, 5, "the window stays full while the slow one is outstanding");
+  assert.notEqual(order[0], "call-0", "later downloads finish before the slow first one");
+  const zip = await verifyZip(store.data, repo.rows);
+  assert.deepEqual(Object.keys(zip.files).filter((n) => n !== "_summary.txt"), repo.rows.map((r) => r.fileName), "entries are written in item order regardless of finish order");
 });

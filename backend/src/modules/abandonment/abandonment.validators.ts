@@ -82,15 +82,18 @@ const bulkAssignManagerSchema = z
     message: "managerId is required for manual assignment, managerIds is required for round robin",
   });
 
+// One request never carries more than this many leads (a request body stays small and one transaction stays short).
+const MAX_BULK_ASSIGN = 5000;
 const bulkAssignSalespersonSchema = z
   .object({
-    abandonmentIds: z.array(z.uuid()).min(1, "No abandoned leads selected"),
+    abandonmentIds: z.array(z.uuid()).min(1, "No abandoned leads selected").max(MAX_BULK_ASSIGN, `Select at most ${MAX_BULK_ASSIGN} leads at a time`),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
     salespersonId: z.uuid().optional(),
-    salespersonIds: z.array(z.uuid()).optional(),
+    salespersonIds: z.array(z.uuid()).max(100).optional(),
+    assignments: z.array(z.object({ abandonmentId: z.uuid(), salespersonId: z.uuid() })).max(MAX_BULK_ASSIGN).optional(),
   })
-  .refine((data) => (data.method === "MANUAL" ? Boolean(data.salespersonId) : Boolean(data.salespersonIds?.length)), {
-    message: "salespersonId is required for manual assignment, salespersonIds is required for round robin",
+  .refine((data) => (data.method === "MANUAL" ? Boolean(data.salespersonId) || Boolean(data.assignments?.length) : Boolean(data.salespersonIds?.length)), {
+    message: "Choose at least one salesperson: a salesperson for the leads (manual) or the salespeople to share them between (round robin)",
   });
 
 const bulkUpdateLeadStatusSchema = z.object({
