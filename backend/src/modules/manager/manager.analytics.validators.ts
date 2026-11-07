@@ -11,6 +11,7 @@ const schema = z
     from: day.optional(),
     to: day.optional(),
     salespersonId: z.string().uuid().optional(),
+    sourceId: z.string().uuid().optional(),
     callStatus: z.enum(["ALL", "CONNECTED", "NOT_CONNECTED", "FAILED"]).default("ALL"),
     leadStatus: z.enum(["ALL", "NOT_CONTACTED", "CONTACTED", "INTERESTED", "CONVERTED"]).default("ALL"),
     paymentMode: z.enum(["ALL", "COD", "PREPAID"]).default("ALL"),

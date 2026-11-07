@@ -93,6 +93,7 @@ export interface DashboardFilters {
   /** The date for the "single" preset. */
   singleDate: string;
   salespersonId: string; // "" = all
+  sourceId: string; // "" = all lead sources
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
   paymentMode: PaymentModeFilter;
@@ -119,7 +120,7 @@ export function presetRange(preset: RangePreset, customFrom: string, customTo: s
 
 export function defaultFilters(): DashboardFilters {
   const today = toYmd(new Date());
-  return { preset: "today", customFrom: today, customTo: today, singleDate: today, salespersonId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
+  return { preset: "today", customFrom: today, customTo: today, singleDate: today, salespersonId: "", sourceId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
 }
 
 export function toQuery(f: DashboardFilters): AnalyticsQuery {
@@ -132,6 +133,7 @@ export function toQuery(f: DashboardFilters): AnalyticsQuery {
     paymentMode: f.paymentMode,
     orderStatus: f.orderStatus,
     salespersonId: f.salespersonId || undefined,
+    sourceId: f.sourceId || undefined,
     tzOffsetMinutes: REPORT_TZ_OFFSET_MINUTES,
   };
 }
@@ -312,6 +314,7 @@ export function filtersToSearch(f: DashboardFilters): string {
   const p = new URLSearchParams({ range: f.preset, callStatus: f.callStatus, leadStatus: f.leadStatus });
   if (f.paymentMode !== "ALL") p.set("payment", f.paymentMode);
   if (f.orderStatus !== "ALL") p.set("orderStatus", f.orderStatus);
+  if (f.sourceId) p.set("source", f.sourceId);
   if (f.preset === "custom") {
     p.set("from", f.customFrom);
     p.set("to", f.customTo);
@@ -337,5 +340,6 @@ export function filtersFromSearch(sp: { get(name: string): string | null }): Das
     leadStatus: leadStatus && leadStatus in LEAD_STATUS_LABELS ? leadStatus : "ALL",
     paymentMode: paymentMode && paymentMode in PAYMENT_MODE_LABELS ? paymentMode : "ALL",
     orderStatus: orderStatus && orderStatus in ORDER_STATUS_LABELS ? orderStatus : "ALL",
+    sourceId: sp.get("source") ?? "",
   };
 }

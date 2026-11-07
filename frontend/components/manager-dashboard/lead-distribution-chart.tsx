@@ -9,7 +9,7 @@ import { Panel, Segmented } from "./panel";
 type Metric = "leads" | "contacted" | "interested" | "converted";
 
 const OPTIONS: { value: Metric; label: string }[] = [
-  { value: "leads", label: "Total Leads" },
+  { value: "leads", label: "Assigned Leads" },
   { value: "contacted", label: "Contacted" },
   { value: "interested", label: "Interested" },
   { value: "converted", label: "Converted" },
