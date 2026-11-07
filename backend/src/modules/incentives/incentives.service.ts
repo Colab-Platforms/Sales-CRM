@@ -10,6 +10,7 @@ import { dayBounds, todayString } from "../attendance/attendance.calc.js";
 import { zoneDay } from "../attendance/attendance.records.js";
 import { attendanceRecords } from "../attendance/attendance.service.js";
 import { soldOrders } from "../manager/manager.sales.js";
+import { dailyPerformance, totalsOf } from "./incentives.performance.js";
 import { DEFAULT_POLICY, evaluateMonth, monthDays, policyError, type DayInput, type IncentivePolicyRules, type MonthResult, type MonthStatus, type PercentBasis, type Slab } from "./incentives.calc.js";
 
 // ---------------------------------------------------------------------------------------------
@@ -54,7 +55,9 @@ async function stored<T>(query: PromiseLike<T>, fallback: T): Promise<T> {
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export interface MonthRecord {
-  status: "APPROVED" | "PAID";
+  /** APPROVED (locked) / PAID, or REJECTED with a reason. approvedAt / approvedBy = when and by whom it was decided. */
+  status: "APPROVED" | "PAID" | "REJECTED";
+  rejectionReason: string | null;
   amount: number;
   approvedAt: string;
   approvedBy: string | null;
@@ -105,6 +108,16 @@ class IncentivesService {
 
   /** The live calculation for one salesperson and month. */
   async calculate(userId: string, month: string, rules?: IncentivePolicyRules): Promise<MonthResult> {
+    const self = { id: userId, role: Role.SALESPERSON, username: "" } as AuthUser;
+    return (await this.calculateMany([userId], month, self, rules)).get(userId)!;
+  }
+
+  /**
+   * The live calculation for several salespeople at once: orders, calls and attendance are each loaded once for all of
+   * them (not once per person), then split per salesperson. `viewer` decides whose attendance is read: an admin reads
+   * the active team; a salesperson only themselves.
+   */
+  async calculateMany(userIds: string[], month: string, viewer: AuthUser, rules?: IncentivePolicyRules): Promise<Map<string, MonthResult>> {
     const now = new Date();
     const today = todayString(now, TZ);
     this.checkMonth(month, today);
@@ -115,79 +128,89 @@ class IncentivesService {
     const start = dayBounds(first, TZ).from;
     const end = dayBounds(last, TZ).to;
     const lastSoFar = last < today ? last : today;
+    const out = new Map<string, MonthResult>();
+    if (userIds.length === 0) return out;
 
     const [sold, returned, calls, attendance] = await Promise.all([
-      soldOrders([userId], start, end, { paymentMode: "ALL", orderStatus: "ALL", callStatus: "ALL", leadStatus: "ALL" }),
+      soldOrders(userIds, start, end, { paymentMode: "ALL", orderStatus: "ALL", callStatus: "ALL", leadStatus: "ALL" }),
       prisma.order.findMany({
         where: {
           status: OrderStatus.RETURNED,
-          confirmedByUserId: userId,
+          confirmedByUserId: { in: userIds },
           OR: [{ confirmedAt: { gte: start, lt: end } }, { confirmedAt: null, placedAt: { gte: start, lt: end } }],
         },
-        select: { id: true },
+        select: { id: true, confirmedByUserId: true },
       }),
       prisma.call.findMany({
-        where: { agentId: userId, leadId: { not: null }, OR: [{ startedAt: { gte: start, lt: end } }, { startedAt: null, createdAt: { gte: start, lt: end } }] },
-        select: { id: true, providerCallId: true, startedAt: true, createdAt: true },
+        where: { agentId: { in: userIds }, leadId: { not: null }, OR: [{ startedAt: { gte: start, lt: end } }, { startedAt: null, createdAt: { gte: start, lt: end } }] },
+        select: { id: true, providerCallId: true, agentId: true, startedAt: true, createdAt: true },
       }),
-      attendanceRecords({ id: userId, role: Role.SALESPERSON, username: "" } as AuthUser, { from: first, to: lastSoFar, userId, status: "ALL", page: 1, pageSize: 1 }),
+      attendanceRecords(viewer, { from: first, to: lastSoFar, ...(userIds.length === 1 ? { userId: userIds[0] } : {}), status: "ALL", page: 1, pageSize: 10_000 }),
     ]);
 
     // One count per order and per call (a webhook can write the same call twice under one provider id).
     const seenOrders = new Set<string>();
     const orders = sold.filter((o) => (seenOrders.has(o.id) ? false : (seenOrders.add(o.id), true)));
-    const returnedIds = returned.map((r) => r.id).filter((id) => !seenOrders.has(id));
     const seenCalls = new Set<string>();
-    const callsByDay = new Map<string, number>();
+    const callsByPersonDay = new Map<string, number>();
     for (const c of calls) {
       const keys = [c.id, c.providerCallId ? `p:${c.providerCallId}` : null].filter((k): k is string => k !== null);
       if (keys.some((k) => seenCalls.has(k))) continue;
       keys.forEach((k) => seenCalls.add(k));
-      const day = zoneDay(c.startedAt ?? c.createdAt, TZ);
-      callsByDay.set(day, (callsByDay.get(day) ?? 0) + 1);
+      const k = `${c.agentId}|${zoneDay(c.startedAt ?? c.createdAt, TZ)}`;
+      callsByPersonDay.set(k, (callsByPersonDay.get(k) ?? 0) + 1);
     }
-    const ordersByDay = new Map<string, number>();
-    for (const o of orders) {
-      const day = zoneDay(o.at, TZ);
-      ordersByDay.set(day, (ordersByDay.get(day) ?? 0) + 1);
+    const recordsByPerson = new Map(attendance.employees.map((e) => [e.id, new Map(e.records.map((r) => [r.date, r]))]));
+
+    for (const userId of userIds) {
+      const mine = orders.filter((o) => o.userId === userId);
+      const returnedIds = returned.filter((r) => r.confirmedByUserId === userId && !seenOrders.has(r.id));
+      const ordersByDay = new Map<string, number>();
+      for (const o of mine) {
+        const day = zoneDay(o.at, TZ);
+        ordersByDay.set(day, (ordersByDay.get(day) ?? 0) + 1);
+      }
+      const records = recordsByPerson.get(userId) ?? new Map();
+      const dayInputs: DayInput[] = days.map((date) => {
+        const r = records.get(date);
+        const status: DayInput["attendance"] =
+          date > today ? "UPCOMING" : !r ? "ABSENT" : r.status === "PRESENT" ? "PRESENT" : r.status === "PENDING" ? "PENDING" : r.status === "ABSENT" ? "ABSENT" : "NOT_JOINED";
+        return {
+          date,
+          attendance: status,
+          netLoginMinutes: r && r.status === "PRESENT" ? Math.max(0, Math.round((r.workingMs - r.breakMs) / 60_000)) : 0,
+          calls: callsByPersonDay.get(`${userId}|${date}`) ?? 0,
+          orders: ordersByDay.get(date) ?? 0,
+        };
+      });
+      const delivered = mine.filter((o) => o.status === OrderStatus.DELIVERED).length;
+      const inTransit = mine.filter((o) => o.status === OrderStatus.SHIPPED || o.status === OrderStatus.OUT_FOR_DELIVERY).length;
+      out.set(
+        userId,
+        evaluateMonth({
+          month,
+          today,
+          days: dayInputs,
+          revenue: Math.round(mine.reduce((a, o) => a + o.cents, 0)) / 100,
+          orders: {
+            total: mine.length + returnedIds.length,
+            prepaid: mine.filter((o) => o.mode === "PREPAID").length,
+            delivered,
+            returned: returnedIds.length,
+            inTransit,
+            notDispatched: mine.length - delivered - inTransit,
+          },
+          policy,
+        }),
+      );
     }
-
-    const records = new Map((attendance.employees[0]?.records ?? []).map((r) => [r.date, r]));
-    const dayInputs: DayInput[] = days.map((date) => {
-      const r = records.get(date);
-      const status: DayInput["attendance"] =
-        date > today ? "UPCOMING" : !r ? "ABSENT" : r.status === "PRESENT" ? "PRESENT" : r.status === "PENDING" ? "PENDING" : r.status === "ABSENT" ? "ABSENT" : "NOT_JOINED";
-      return {
-        date,
-        attendance: status,
-        netLoginMinutes: r && r.status === "PRESENT" ? Math.max(0, Math.round((r.workingMs - r.breakMs) / 60_000)) : 0,
-        calls: callsByDay.get(date) ?? 0,
-        orders: ordersByDay.get(date) ?? 0,
-      };
-    });
-
-    const delivered = orders.filter((o) => o.status === OrderStatus.DELIVERED).length;
-    const inTransit = orders.filter((o) => o.status === OrderStatus.SHIPPED || o.status === OrderStatus.OUT_FOR_DELIVERY).length;
-    return evaluateMonth({
-      month,
-      today,
-      days: dayInputs,
-      revenue: Math.round(orders.reduce((a, o) => a + o.cents, 0)) / 100,
-      orders: {
-        total: orders.length + returnedIds.length,
-        prepaid: orders.filter((o) => o.mode === "PREPAID").length,
-        delivered,
-        returned: returnedIds.length,
-        inTransit,
-        notDispatched: orders.length - delivered - inTransit,
-      },
-      policy,
-    });
+    return out;
   }
 
   private recordOut(row: Prisma.IncentiveMonthGetPayload<object>, who: Map<string, string>): MonthRecord {
     return {
       status: row.status as MonthRecord["status"],
+      rejectionReason: row.status === "REJECTED" ? (((row.snapshot as { rejectionReason?: string }) ?? {}).rejectionReason ?? null) : null,
       amount: Number(row.amount),
       approvedAt: row.approvedAt.toISOString(),
       approvedBy: who.get(row.approvedById) ?? null,
@@ -203,12 +226,13 @@ class IncentivesService {
     const person = await this.salesperson(userId);
     const today = todayString(new Date(), TZ);
     this.checkMonth(month, today);
-    const [row, queries, policy] = await Promise.all([
+    const [row, queries, policy, log] = await Promise.all([
       stored(prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } }), null),
       stored(prisma.incentiveQuery.findMany({ where: { userId, month }, orderBy: { createdAt: "desc" } }), []),
       this.policy(),
+      stored(prisma.incentiveAuditLog.findMany({ where: { userId, month, action: { in: ["MONTH_APPROVED", "MONTH_REJECTED", "MONTH_REOPENED", "PAYMENT_RECORDED"] } }, orderBy: { createdAt: "asc" } }), []),
     ]);
-    const who = await names([row?.approvedById, row?.paidById, ...queries.map((q) => q.resolvedById)]);
+    const who = await names([row?.approvedById, row?.paidById, ...queries.map((q) => q.resolvedById), ...log.map((l) => l.actorId)]);
     let result: MonthResult;
     let status: MonthStatus;
     if (row) {
@@ -223,8 +247,10 @@ class IncentivesService {
       month,
       today,
       status,
+      // Approved / paid months show the figures frozen at approval; a rejected month keeps the figures it was rejected on.
       locked: row !== null,
       record: row ? this.recordOut(row, who) : null,
+      history: log.map((l) => ({ action: l.action, by: who.get(l.actorId) ?? null, at: l.createdAt.toISOString(), details: l.details })),
       result,
       policy: { percentBasis: policy.rules.percentBasis, configured: policy.configured },
       queries: queries.map((q) => ({
@@ -239,10 +265,21 @@ class IncentivesService {
     };
   }
 
-  /** Admin: every active salesperson's month at a glance. */
-  async overview(month: string) {
+  /**
+   * Admin: every active salesperson's official month (the payable incentive, monthly policy) plus performance tracking
+   * for a chosen range: the range itself, its last day, and the 7 days ending on it.
+   */
+  async overview(admin: AuthUser, month: string, range?: { from: string; to: string }) {
     const today = todayString(new Date(), TZ);
     this.checkMonth(month, today);
+    const monthDaysList = monthDays(month);
+    const to = range?.to ?? (monthDaysList.at(-1)! < today ? monthDaysList.at(-1)! : today);
+    const from = range?.from ?? monthDaysList[0]!;
+    if (from > to) throw new ApiError("From date must not be after To date", STATUS_CODES.BAD_REQUEST);
+    if (to > today) throw new ApiError("The range cannot end in the future", STATUS_CODES.BAD_REQUEST);
+    const weekFrom = new Date(Date.parse(`${to}T00:00:00Z`) - 6 * 86_400_000).toISOString().slice(0, 10);
+    const loadFrom = weekFrom < from ? weekFrom : from;
+    if ((Date.parse(to) - Date.parse(loadFrom)) / 86_400_000 > 92) throw new ApiError("Choose a range of at most 92 days", STATUS_CODES.BAD_REQUEST);
     const [people, rows, openQueries, policy] = await Promise.all([
       prisma.user.findMany({ where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE }, select: { id: true, name: true, username: true }, orderBy: { name: "asc" } }),
       stored(prisma.incentiveMonth.findMany({ where: { month } }), []),
@@ -251,10 +288,18 @@ class IncentivesService {
     ]);
     const byUser = new Map(rows.map((r) => [r.userId, r]));
     const queriesBy = new Map(openQueries.map((q) => [q.userId, q._count._all]));
+    const [perf, calculated] = await Promise.all([
+      dailyPerformance(admin, people.map((p) => p.id), loadFrom, to, policy.rules),
+      // Months already decided show their frozen figures; the rest are calculated together in one pass.
+      this.calculateMany(people.filter((p) => !byUser.has(p.id)).map((p) => p.id), month, admin, policy.rules),
+    ]);
     const out = [];
     for (const p of people) {
       const row = byUser.get(p.id);
-      const r = row ? (row.snapshot as unknown as MonthResult) : await this.calculate(p.id, month, policy.rules);
+      const r = row ? (row.snapshot as unknown as MonthResult) : calculated.get(p.id)!;
+      const days = perf.get(p.id) ?? [];
+      const last = days.find((d) => d.date === to);
+      const live = r.status;
       out.push({
         id: p.id,
         name: p.name,
@@ -264,11 +309,30 @@ class IncentivesService {
         conditions: r.conditions.map((c) => ({ key: c.key, label: c.label, light: c.light, actual: c.actual })),
         incentive: row ? Number(row.amount) : r.potentialIncentive,
         status: row ? (row.status as MonthStatus) : r.status,
-        statusReason: row ? (row.status === "PAID" ? "Paid" : "Approved and locked") : r.statusReason,
+        statusReason: row ? (row.status === "PAID" ? "Paid" : row.status === "REJECTED" ? "Rejected" : "Approved and locked") : r.statusReason,
+        // The month's eligibility under the policy (as calculated, before any decision).
+        eligibility: row ? (row.status === "REJECTED" ? live : "ELIGIBLE") : live,
+        approvalStatus: row ? (row.status === "REJECTED" ? "REJECTED" : "APPROVED") : live === "ELIGIBLE" ? "PENDING" : "NOT_DUE",
+        paymentStatus: row?.status === "PAID" ? "PAID" : row?.status === "APPROVED" ? "UNPAID" : "NOT_DUE",
+        calculatedIncentive: r.slabIncentive,
+        approvedAmount: row && row.status !== "REJECTED" ? Number(row.amount) : null,
+        paidAmount: row?.status === "PAID" ? Number(row.amount) : null,
+        performance: {
+          range: totalsOf(days, from, to),
+          day: last ? { date: last.date, present: last.present, calls: last.calls, orders: last.orders, netLoginMinutes: last.netLoginMinutes, met: last.met } : null,
+          week: totalsOf(days, weekFrom, to),
+        },
         openQueries: queriesBy.get(p.id) ?? 0,
       });
     }
-    return { month, today, policy: { percentBasis: policy.rules.percentBasis, configured: policy.configured }, rows: out };
+    return {
+      month,
+      today,
+      range: { from, to, weekFrom },
+      targets: { minNetLoginMinutes: policy.rules.minNetLoginMinutes, minDailyCalls: policy.rules.minDailyCalls },
+      policy: { percentBasis: policy.rules.percentBasis, configured: policy.configured },
+      rows: out,
+    };
   }
 
   private audit(tx: Prisma.TransactionClient, actorId: string, action: string, details: object, userId?: string, month?: string) {
@@ -308,7 +372,7 @@ class IncentivesService {
     this.checkMonth(month, today);
     if (month >= today.slice(0, 7)) throw new ApiError("A month can be approved only after it has ended", STATUS_CODES.BAD_REQUEST);
     const existing = await prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } });
-    if (existing) throw new ApiError("This month is already approved", STATUS_CODES.CONFLICT);
+    if (existing) throw new ApiError(existing.status === "REJECTED" ? "This month was rejected - reopen it before approving" : "This month is already approved", STATUS_CODES.CONFLICT);
     const r = await this.calculate(userId, month);
     if (r.status !== "ELIGIBLE" || r.slabIncentive === null) throw new ApiError(`Cannot approve: ${r.statusReason}`, STATUS_CODES.BAD_REQUEST);
     await prisma.$transaction(async (tx) => {
@@ -323,12 +387,41 @@ class IncentivesService {
   /** Record that an approved incentive has been paid. */
   async recordPayment(admin: AuthUser, userId: string, month: string, p: { paymentRef?: string; note?: string; paidOn?: string }) {
     const row = await prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } });
-    if (!row) throw new ApiError("Approve the month before recording a payment", STATUS_CODES.BAD_REQUEST);
+    if (!row || row.status === "REJECTED") throw new ApiError("Approve the month before recording a payment", STATUS_CODES.BAD_REQUEST);
     if (row.status === "PAID") throw new ApiError("This incentive is already marked paid", STATUS_CODES.CONFLICT);
     const paidAt = p.paidOn ? dayBounds(p.paidOn, TZ).from : new Date();
     await prisma.$transaction(async (tx) => {
       await tx.incentiveMonth.update({ where: { id: row.id }, data: { status: "PAID", paidById: admin.id, paidAt, paymentRef: p.paymentRef ?? null, paymentNote: p.note ?? null } });
       await this.audit(tx, admin.id, "PAYMENT_RECORDED", { amount: Number(row.amount), paymentRef: p.paymentRef ?? null, paidOn: paidAt.toISOString(), note: p.note ?? null }, userId, month);
+    });
+    return this.month(userId, month);
+  }
+
+  /** Reject a finished month with a reason: the figures are kept as they were, and nothing is payable. */
+  async reject(admin: AuthUser, userId: string, month: string, reason: string) {
+    await this.salesperson(userId);
+    const today = todayString(new Date(), TZ);
+    this.checkMonth(month, today);
+    if (month >= today.slice(0, 7)) throw new ApiError("A month can be decided only after it has ended", STATUS_CODES.BAD_REQUEST);
+    const existing = await prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } });
+    if (existing) throw new ApiError(existing.status === "REJECTED" ? "This month is already rejected" : "This month is already approved and locked", STATUS_CODES.CONFLICT);
+    const r = await this.calculate(userId, month);
+    await prisma.$transaction(async (tx) => {
+      await tx.incentiveMonth.create({
+        data: { userId, month, status: "REJECTED", amount: 0, snapshot: { ...r, rejectionReason: reason } as unknown as Prisma.InputJsonValue, approvedById: admin.id, approvedAt: new Date() },
+      });
+      await this.audit(tx, admin.id, "MONTH_REJECTED", { reason, calculated: r.slabIncentive, revenue: r.revenue, status: r.status }, userId, month);
+    });
+    return this.month(userId, month);
+  }
+
+  /** Undo a rejection, so the month is calculated live again and can be approved. Approved months stay locked. */
+  async reopen(admin: AuthUser, userId: string, month: string) {
+    const row = await prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } });
+    if (!row || row.status !== "REJECTED") throw new ApiError("Only a rejected month can be reopened", STATUS_CODES.BAD_REQUEST);
+    await prisma.$transaction(async (tx) => {
+      await tx.incentiveMonth.delete({ where: { id: row.id } });
+      await this.audit(tx, admin.id, "MONTH_REOPENED", { previousReason: ((row.snapshot as { rejectionReason?: string }) ?? {}).rejectionReason ?? null }, userId, month);
     });
     return this.month(userId, month);
   }

@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2 } from "lucide-react";
+import { BadgeCheck, BadgeIndianRupee, Calculator, Download, Hourglass, Plus, Trash2, Users, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { KpiCard } from "@/components/manager-dashboard/kpi-card";
 import { DashboardHeader } from "@/components/manager-dashboard/manager-sales-dashboard";
 import { EmptyState, Panel, Segmented } from "@/components/manager-dashboard/panel";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -21,10 +22,10 @@ import {
   incentivePolicyQueryOptions,
   incentiveQueriesQueryOptions,
 } from "@/lib/api-client/queries/incentives.queries";
-import type { IncentiveMonth, IncentivePolicyRules } from "@/lib/api-client/types/incentives.types";
-import { istToday } from "@/lib/date-presets";
+import type { ApprovalStatus, IncentiveMonth, IncentiveOverviewRow, IncentivePolicyRules, PaymentStatus } from "@/lib/api-client/types/incentives.types";
+import { istToday, shiftDay } from "@/lib/date-presets";
 import { cn } from "@/lib/utils";
-import { IncentiveMonthView, LIGHT_STYLE, StatusPill, inr } from "./incentive-month-view";
+import { IncentiveMonthView, STATUS_LABEL, StatusPill, inr } from "./incentive-month-view";
 import { monthLabel, recentMonths } from "./my-incentive-plan";
 
 type Tab = "people" | "queries" | "policy" | "audit";
@@ -39,7 +40,7 @@ export function AdminIncentivesPage() {
   const [tab, setTab] = useState<Tab>("people");
   return (
     <div className="space-y-5">
-      <DashboardHeader title="Incentives" subtitle="Review each salesperson's monthly incentive, approve and record payments.">
+      <DashboardHeader title="Sales Incentives" subtitle="View and manage salesperson revenue incentives, eligibility, approvals and payments.">
         <Segmented
           label="Incentive section"
           value={tab}
@@ -57,78 +58,283 @@ export function AdminIncentivesPage() {
   );
 }
 
+type Period = "daily" | "weekly" | "monthly" | "custom";
+
+const hrs = (m: number) => (m <= 0 ? "0h" : `${Math.floor(m / 60)}h ${String(Math.round(m % 60)).padStart(2, "0")}m`);
+const day = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
+
+const APPROVAL: Record<ApprovalStatus, { label: string; cls: string }> = {
+  PENDING: { label: "Pending approval", cls: "bg-amber-400/20 text-amber-900 ring-amber-600/30 dark:text-amber-200" },
+  APPROVED: { label: "Approved", cls: "bg-emerald-500/12 text-emerald-900 ring-emerald-600/25 dark:text-emerald-200" },
+  REJECTED: { label: "Rejected", cls: "bg-red-500/12 text-red-900 ring-red-600/25 dark:text-red-200" },
+  NOT_DUE: { label: "—", cls: "text-muted-foreground ring-transparent" },
+};
+const PAYMENT: Record<PaymentStatus, { label: string; cls: string }> = {
+  PAID: { label: "Paid", cls: "bg-emerald-600 text-white ring-emerald-700" },
+  UNPAID: { label: "Unpaid", cls: "bg-amber-400/20 text-amber-900 ring-amber-600/30 dark:text-amber-200" },
+  NOT_DUE: { label: "—", cls: "text-muted-foreground ring-transparent" },
+};
+const Tag = ({ s }: { s: { label: string; cls: string } }) => <span className={cn("inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium whitespace-nowrap ring-1 ring-inset", s.cls)}>{s.label}</span>;
+
 function People() {
-  const months = recentMonths(istToday());
+  const today = istToday();
+  const months = recentMonths(today);
+  const [period, setPeriod] = useState<Period>("monthly");
   const [month, setMonth] = useState(months[0]!);
+  const [onDay, setOnDay] = useState(today);
+  const [from, setFrom] = useState(shiftDay(today, -6));
+  const [to, setTo] = useState(today);
+  const [personId, setPersonId] = useState("");
+  const [eligibility, setEligibility] = useState("");
+  const [approval, setApproval] = useState("");
+  const [payment, setPayment] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
-  const { data, isPending, error, isPlaceholderData } = useQuery(incentiveOverviewQueryOptions(month));
+  const [exporting, setExporting] = useState(false);
+
+  // The official incentive always follows the month the period ends in; daily / weekly / custom only move the
+  // performance-tracking window.
+  const sel =
+    period === "daily"
+      ? { month: onDay.slice(0, 7), range: { from: onDay, to: onDay } }
+      : period === "weekly"
+        ? { month: onDay.slice(0, 7), range: { from: shiftDay(onDay, -6), to: onDay } }
+        : period === "custom" && from <= to
+          ? { month: to.slice(0, 7), range: { from, to } }
+          : { month, range: undefined };
+  const { data, isPending, error, isPlaceholderData } = useQuery(incentiveOverviewQueryOptions(sel.month, sel.range));
+
+  const rows = (data?.rows ?? []).filter(
+    (r) =>
+      (!personId || r.id === personId) &&
+      (!eligibility || r.eligibility === eligibility) &&
+      (!approval || r.approvalStatus === approval) &&
+      (!payment || r.paymentStatus === payment),
+  );
+  const sum = (pick: (r: IncentiveOverviewRow) => number | null) => rows.reduce((a, r) => a + (pick(r) ?? 0), 0);
+  const eligible = rows.filter((r) => r.eligibility === "ELIGIBLE");
+  const approved = rows.filter((r) => r.approvedAmount !== null);
+  const paid = rows.filter((r) => r.paidAmount !== null);
+
+  const exportXlsx = async () => {
+    if (!data) return;
+    setExporting(true);
+    try {
+      const { downloadXlsx } = await import("@/lib/report-xlsx");
+      await downloadXlsx(`sales-incentives-${data.month}.xlsx`, [
+        {
+          name: "Sales Incentives",
+          header: [
+            "Salesperson", "Employee ID", "Month", "Monthly Revenue", "Revenue Slab", "Prepaid", "Delivery", "Attendance", "Net Login", "Daily Calls", "Avg Daily Orders",
+            "Monthly Eligibility", "Calculated Incentive", "Approval Status", "Payment Status", "Approved Amount", "Paid Amount",
+            `Calls ${data.range.from}..${data.range.to}`, `Orders ${data.range.from}..${data.range.to}`, `Days targets met ${data.range.from}..${data.range.to}`,
+          ],
+          rows: rows.map((r) => {
+            const c = (k: string) => r.conditions.find((x) => x.key === k)?.actual ?? "";
+            return [
+              r.name, r.employeeId, data.month, r.revenue, r.currentSlab ? r.currentSlab.minRevenue : "None", c("PREPAID"), c("DELIVERY"), c("ATTENDANCE"), c("NET_LOGIN"), c("DAILY_CALLS"), c("AVG_ORDERS"),
+              STATUS_LABEL[r.eligibility], r.incentive ?? 0, APPROVAL[r.approvalStatus].label.replace("—", "Not due"), PAYMENT[r.paymentStatus].label.replace("—", "Not due"), r.approvedAmount ?? 0, r.paidAmount ?? 0,
+              r.performance.range.calls, r.performance.range.orders, `${r.performance.range.metDays} of ${r.performance.range.presentDays}`,
+            ];
+          }),
+          money: [3, 12, 15, 16],
+          totals: ["Total", "", "", sum((r) => r.revenue), "", "", "", "", "", "", "", "", sum((r) => r.incentive), "", "", sum((r) => r.approvedAmount), sum((r) => r.paidAmount), sum((r) => r.performance.range.calls), sum((r) => r.performance.range.orders), ""],
+        },
+      ]);
+    } catch (e) {
+      toast.error(getErrorMessage(e, "The export failed."));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <NativeSelect value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" wrapperClassName="w-48">
-          {months.map((m) => (
-            <option key={m} value={m}>
-              {monthLabel(m)}
+      <div className="flex flex-wrap items-end gap-2">
+        <Segmented
+          label="Period"
+          value={period}
+          onChange={setPeriod}
+          options={[
+            { value: "daily", label: "Daily" },
+            { value: "weekly", label: "Weekly" },
+            { value: "monthly", label: "Monthly" },
+            { value: "custom", label: "Custom" },
+          ]}
+        />
+        {period === "monthly" ? (
+          <NativeSelect value={month} onChange={(e) => setMonth(e.target.value)} aria-label="Month" wrapperClassName="w-44">
+            {months.map((m) => (
+              <option key={m} value={m}>
+                {monthLabel(m)}
+              </option>
+            ))}
+          </NativeSelect>
+        ) : period === "custom" ? (
+          <>
+            <Input type="date" value={from} max={to} onChange={(e) => e.target.value && setFrom(e.target.value)} className="w-40" aria-label="From" />
+            <Input type="date" value={to} min={from} max={today} onChange={(e) => e.target.value && setTo(e.target.value)} className="w-40" aria-label="To" />
+          </>
+        ) : (
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            {period === "weekly" ? "Week ending" : "Date"}
+            <Input type="date" value={onDay} max={today} onChange={(e) => e.target.value && setOnDay(e.target.value)} className="w-40" />
+          </label>
+        )}
+        <NativeSelect value={personId} onChange={(e) => setPersonId(e.target.value)} aria-label="Salesperson" wrapperClassName="w-44">
+          <option value="">All salespeople</option>
+          {(data?.rows ?? []).map((r) => (
+            <option key={r.id} value={r.id}>
+              {r.name}
             </option>
           ))}
         </NativeSelect>
-        {data && data.policy.percentBasis === null ? (
-          <p className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs text-amber-900 dark:text-amber-200">The 2.5% slab&apos;s basis is not confirmed yet - set it in Policy.</p>
-        ) : null}
+        <NativeSelect value={eligibility} onChange={(e) => setEligibility(e.target.value)} aria-label="Eligibility" wrapperClassName="w-48">
+          <option value="">Any eligibility</option>
+          {(["ELIGIBLE", "IN_PROGRESS", "PENDING_VERIFICATION", "NOT_ELIGIBLE"] as const).map((s) => (
+            <option key={s} value={s}>
+              {STATUS_LABEL[s].replace(" – Awaiting Admin Approval", "")}
+            </option>
+          ))}
+        </NativeSelect>
+        <NativeSelect value={approval} onChange={(e) => setApproval(e.target.value)} aria-label="Approval status" wrapperClassName="w-44">
+          <option value="">Any approval</option>
+          <option value="PENDING">Pending approval</option>
+          <option value="APPROVED">Approved</option>
+          <option value="REJECTED">Rejected</option>
+          <option value="NOT_DUE">Not due</option>
+        </NativeSelect>
+        <NativeSelect value={payment} onChange={(e) => setPayment(e.target.value)} aria-label="Payment status" wrapperClassName="w-40">
+          <option value="">Any payment</option>
+          <option value="PAID">Paid</option>
+          <option value="UNPAID">Unpaid</option>
+          <option value="NOT_DUE">Not due</option>
+        </NativeSelect>
+        <Button variant="outline" size="sm" className="ml-auto" onClick={exportXlsx} disabled={!data || exporting || rows.length === 0}>
+          <Download data-icon="inline-start" /> {exporting ? "Exporting…" : "Export Excel"}
+        </Button>
       </div>
+
+      {period !== "monthly" ? (
+        <p className="rounded-md bg-blue-500/8 px-3 py-2 text-xs text-blue-900 dark:text-blue-200">
+          {period === "daily" ? "Daily" : period === "weekly" ? "Weekly" : "Custom range"} figures track performance only. The payable incentive always follows the monthly policy - shown here for{" "}
+          {monthLabel(sel.month)}.
+        </p>
+      ) : null}
+      {data && data.policy.percentBasis === null ? (
+        <p className="rounded-md bg-amber-400/15 px-3 py-1.5 text-xs text-amber-900 dark:text-amber-200">The 2.5% slab&apos;s basis is not confirmed yet - set it in Policy.</p>
+      ) : null}
+
       {isPending ? (
-        <Skeleton className="h-80 rounded-lg" />
+        <Skeleton className="h-96 rounded-lg" />
       ) : error || !data ? (
         errorBox(error, "Incentives could not be loaded.")
       ) : (
-        <Panel title={monthLabel(month)} description="Select a salesperson to see the full calculation, approve it or record the payment." bodyClassName="p-0">
-          {data.rows.length === 0 ? (
-            <EmptyState>No active salespeople.</EmptyState>
-          ) : (
-            <div className={cn("overflow-x-auto", isPlaceholderData && "opacity-60")}>
-              <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
-                <thead className="bg-muted/60 text-xs text-muted-foreground">
-                  <tr>
-                    <th className="px-4 py-2.5 text-left font-medium">Salesperson</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Revenue</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Slab</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Conditions</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Incentive</th>
-                    <th className="px-4 py-2.5 text-left font-medium">Status</th>
-                    <th className="px-4 py-2.5 text-right font-medium">Queries</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.rows.map((r) => (
-                    <tr key={r.id} className="cursor-pointer border-t border-border/60 hover:bg-muted/30" onClick={() => setOpenId(r.id)}>
-                      <td className="px-4 py-3 font-medium">
-                        <button type="button" className="text-left hover:underline" onClick={() => setOpenId(r.id)}>
-                          {r.name}
-                        </button>
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{inr(r.revenue)}</td>
-                      <td className="px-4 py-3">{r.currentSlab ? inr(r.currentSlab.minRevenue) : <span className="text-muted-foreground">—</span>}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          {r.conditions.map((c) => (
-                            <span key={c.key} title={`${c.label}: ${c.actual} (${LIGHT_STYLE[c.light].label})`} className={cn("size-3 rounded-full", LIGHT_STYLE[c.light].dot)} />
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{r.incentive === null ? "—" : inr(r.incentive)}</td>
-                      <td className="px-4 py-3">
-                        <StatusPill status={r.status} />
-                      </td>
-                      <td className="px-4 py-3 text-right tabular-nums">{r.openQueries > 0 ? <span className="font-medium text-amber-700 dark:text-amber-300">{r.openQueries} open</span> : "—"}</td>
+        <div className={cn("space-y-4 transition-opacity", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <KpiCard label="Total Salespeople" tone="blue" icon={Users} value={String(rows.length)} lines={[{ text: "active salespeople" }]} />
+            <KpiCard label="Eligible Salespeople" tone="emerald" icon={BadgeCheck} value={String(eligible.length)} lines={[{ text: `for ${monthLabel(data.month)}` }]} />
+            <KpiCard label="Pending Approvals" tone="amber" icon={Hourglass} value={String(rows.filter((r) => r.approvalStatus === "PENDING").length)} lines={[{ text: "eligible, not decided" }]} />
+            <KpiCard label="Total Calculated Incentives" tone="violet" icon={Calculator} value={inr(sum((r) => (r.eligibility === "ELIGIBLE" ? r.calculatedIncentive : 0)))} lines={[{ text: "for eligible salespeople" }]} />
+            <KpiCard label="Approved Incentives" tone="teal" icon={BadgeIndianRupee} value={inr(sum((r) => r.approvedAmount))} lines={[{ text: `${approved.length} approved` }]} />
+            <KpiCard label="Paid Incentives" tone="emerald" icon={Wallet} value={inr(sum((r) => r.paidAmount))} lines={[{ text: `${paid.length} paid` }]} />
+          </div>
+
+          <Panel
+            title={`${monthLabel(data.month)} · performance ${data.range.from === data.range.to ? day(data.range.to) : `${day(data.range.from)} – ${day(data.range.to)}`}`}
+            description={`Daily = ${day(data.range.to)} · Weekly = ${day(data.range.weekFrom)} – ${day(data.range.to)}. A day's targets: ${hrs(data.targets.minNetLoginMinutes)} net login and ${data.targets.minDailyCalls} calls.`}
+            bodyClassName="p-0"
+          >
+            {rows.length === 0 ? (
+              <EmptyState>No salespeople match these filters.</EmptyState>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
+                  <thead className="bg-muted/60 text-xs text-muted-foreground">
+                    <tr>
+                      <th className="px-4 py-2.5 text-left font-medium">Salesperson</th>
+                      <th className="px-4 py-2.5 text-right font-medium">Monthly Revenue</th>
+                      <th className="px-4 py-2.5 text-left font-medium">Revenue Slab</th>
+                      <th className="px-4 py-2.5 text-left font-medium">Daily Performance</th>
+                      <th className="px-4 py-2.5 text-left font-medium">Weekly Performance</th>
+                      {period === "custom" ? <th className="px-4 py-2.5 text-left font-medium">Selected Range</th> : null}
+                      <th className="px-4 py-2.5 text-left font-medium">Monthly Eligibility</th>
+                      <th className="px-4 py-2.5 text-right font-medium">Calculated Incentive</th>
+                      <th className="px-4 py-2.5 text-left font-medium">Approval</th>
+                      <th className="px-4 py-2.5 text-left font-medium">Payment</th>
+                      <th className="px-4 py-2.5 text-right font-medium">
+                        <span className="sr-only">Actions</span>
+                      </th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Panel>
+                  </thead>
+                  <tbody>
+                    {rows.map((r) => {
+                      const d = r.performance.day;
+                      const w = r.performance.week;
+                      const g = r.performance.range;
+                      return (
+                        <tr key={r.id} className="border-t border-border/60 hover:bg-muted/30">
+                          <td className="px-4 py-3">
+                            <p className="font-medium">{r.name}</p>
+                            {r.openQueries > 0 ? <p className="text-xs text-amber-700 dark:text-amber-300">{r.openQueries} open {r.openQueries === 1 ? "query" : "queries"}</p> : null}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{inr(r.revenue)}</td>
+                          <td className="px-4 py-3">{r.currentSlab ? inr(r.currentSlab.minRevenue) : <span className="text-muted-foreground">None</span>}</td>
+                          <td className="px-4 py-3 text-xs">
+                            {!d || !d.present ? (
+                              <span className="text-muted-foreground">Absent{d && d.calls ? ` · ${d.calls} calls` : ""}</span>
+                            ) : (
+                              <>
+                                <span className={d.met ? "font-medium text-emerald-700 dark:text-emerald-300" : "font-medium text-red-700 dark:text-red-300"}>{d.met ? "Targets met" : "Short"}</span>
+                                <span className="block text-muted-foreground tabular-nums">
+                                  {d.calls} calls · {d.orders} orders · {hrs(d.netLoginMinutes)}
+                                </span>
+                              </>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className="font-medium tabular-nums">
+                              {w.metDays} of {w.presentDays} days met
+                            </span>
+                            <span className="block text-muted-foreground tabular-nums">
+                              {w.calls} calls · {w.orders} orders
+                            </span>
+                          </td>
+                          {period === "custom" ? (
+                            <td className="px-4 py-3 text-xs">
+                              <span className="font-medium tabular-nums">
+                                {g.metDays} of {g.presentDays} days met
+                              </span>
+                              <span className="block text-muted-foreground tabular-nums">
+                                {g.calls} calls · {g.orders} orders · {inr(g.revenue)}
+                              </span>
+                            </td>
+                          ) : null}
+                          <td className="px-4 py-3">
+                            <StatusPill status={r.eligibility} />
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{r.incentive === null ? <span className="text-muted-foreground">—</span> : inr(r.incentive)}</td>
+                          <td className="px-4 py-3">
+                            <Tag s={APPROVAL[r.approvalStatus]} />
+                          </td>
+                          <td className="px-4 py-3">
+                            <Tag s={PAYMENT[r.paymentStatus]} />
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <Button size="sm" variant="outline" onClick={() => setOpenId(r.id)}>
+                              View Details
+                            </Button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Panel>
+        </div>
       )}
-      {openId ? <MonthDialog userId={openId} month={month} onClose={() => setOpenId(null)} /> : null}
+      {openId ? <MonthDialog userId={openId} month={sel.month} onClose={() => setOpenId(null)} /> : null}
     </div>
   );
 }
@@ -140,12 +346,20 @@ function MonthDialog({ userId, month, onClose }: { userId: string; month: string
       <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-6xl">
         <DialogHeader>
           <DialogTitle>{data ? `${data.salesperson.name} · ${monthLabel(month)}` : monthLabel(month)}</DialogTitle>
-          <DialogDescription>{data?.locked ? "Approved and locked: these are the figures frozen at approval." : "Live calculation from the CRM's calls, orders and attendance."}</DialogDescription>
+          <DialogDescription>
+            {data?.record?.status === "REJECTED" ? "Rejected: these are the figures it was rejected on." : data?.locked ? "Approved and locked: these are the figures frozen at approval." : "Live calculation from the CRM's calls, orders and attendance."}
+          </DialogDescription>
         </DialogHeader>
-        {isPending ? <Skeleton className="h-96 w-full" /> : error || !data ? errorBox(error, "This month could not be loaded.") : (
+        {isPending ? (
+          <Skeleton className="h-96 w-full" />
+        ) : error || !data ? (
+          errorBox(error, "This month could not be loaded.")
+        ) : (
           <div className="space-y-5">
             <Actions data={data} />
+            <FinalCalculation data={data} />
             <IncentiveMonthView data={data} />
+            <History data={data} />
           </div>
         )}
       </DialogContent>
@@ -153,50 +367,115 @@ function MonthDialog({ userId, month, onClose }: { userId: string; month: string
   );
 }
 
+/** The final incentive, step by step: slab -> conditions -> payable amount. */
+function FinalCalculation({ data }: { data: IncentiveMonth }) {
+  const r = data.result;
+  const failed = r.conditions.filter((c) => c.light !== "GREEN");
+  const steps = [
+    `Revenue: ${inr(r.revenue)} from ${r.totals.orders} verified orders`,
+    r.currentSlab ? `Highest slab reached: ${inr(r.currentSlab.minRevenue)} → ${r.currentSlab.incentive}` : `No slab reached (first slab ${inr(r.slabs[0]?.minRevenue ?? 0)})`,
+    r.slabIncentive !== null ? `Slab incentive: ${inr(r.slabIncentive)}` : r.slabIncentiveNote ?? "Slab incentive: none",
+    failed.length === 0 ? "All 6 mandatory conditions met" : `Not met yet: ${failed.map((c) => c.label).join(", ")}`,
+    data.record ? (data.record.status === "REJECTED" ? `Final: ₹0 - rejected (${data.record.rejectionReason ?? "no reason"})` : `Final: ${inr(data.record.amount)} - ${data.record.status === "PAID" ? "approved and paid" : "approved, awaiting payment"}`) : `Final: ${r.potentialIncentive === null ? "—" : inr(r.potentialIncentive)} (${STATUS_LABEL[data.status]})`,
+  ];
+  return (
+    <Panel title="Final incentive calculation">
+      <ol className="list-decimal space-y-1 pl-5 text-sm">
+        {steps.map((s, i) => (
+          <li key={i}>{s}</li>
+        ))}
+      </ol>
+    </Panel>
+  );
+}
+
+const HISTORY_LABEL: Record<string, string> = { MONTH_APPROVED: "Approved & locked", MONTH_REJECTED: "Rejected", MONTH_REOPENED: "Reopened", PAYMENT_RECORDED: "Payment recorded" };
+
+function History({ data }: { data: IncentiveMonth }) {
+  const h = data.history ?? [];
+  return (
+    <Panel title="Approval and payment history">
+      {h.length === 0 ? (
+        <p className="text-sm text-muted-foreground">No decisions yet for this month.</p>
+      ) : (
+        <ul className="space-y-2 text-sm">
+          {h.map((e, i) => (
+            <li key={i} className="flex flex-wrap gap-x-2">
+              <span className="font-medium">{HISTORY_LABEL[e.action] ?? e.action}</span>
+              <span className="text-muted-foreground">
+                by {e.by ?? "an admin"} · {new Date(e.at).toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" })}
+              </span>
+              <span className="w-full text-xs text-muted-foreground">{detailText(e.action, e.details)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Panel>
+  );
+}
+
 function Actions({ data }: { data: IncentiveMonth }) {
   const qc = useQueryClient();
   const [paying, setPaying] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [reason, setReason] = useState("");
   const [ref, setRef] = useState("");
   const [paidOn, setPaidOn] = useState(istToday());
   const [note, setNote] = useState("");
   const refresh = () => qc.invalidateQueries({ queryKey: incentiveKeys.all });
-  const approve = useMutation({
-    mutationFn: () => incentivesApi.approve(data.salesperson.id, data.month),
+  const act = (fn: () => Promise<unknown>, done: string, fail: string, after?: () => void) => ({
+    mutationFn: fn,
     onSuccess: async () => {
-      toast.success("Incentive approved and locked.");
+      toast.success(done);
+      after?.();
       await refresh();
     },
-    onError: (e) => toast.error(getErrorMessage(e, "Could not approve.")),
+    onError: (e: unknown) => toast.error(getErrorMessage(e, fail)),
   });
-  const pay = useMutation({
-    mutationFn: () => incentivesApi.recordPayment(data.salesperson.id, data.month, { paymentRef: ref.trim() || undefined, note: note.trim() || undefined, paidOn }),
-    onSuccess: async () => {
-      toast.success("Payment recorded.");
-      setPaying(false);
-      await refresh();
-    },
-    onError: (e) => toast.error(getErrorMessage(e, "Could not record the payment.")),
-  });
+  const approve = useMutation(act(() => incentivesApi.approve(data.salesperson.id, data.month), "Incentive approved and locked.", "Could not approve."));
+  const reject = useMutation(act(() => incentivesApi.reject(data.salesperson.id, data.month, reason.trim()), "Incentive rejected.", "Could not reject.", () => setRejecting(false)));
+  const reopen = useMutation(act(() => incentivesApi.reopen(data.salesperson.id, data.month), "Month reopened.", "Could not reopen."));
+  const pay = useMutation(
+    act(() => incentivesApi.recordPayment(data.salesperson.id, data.month, { paymentRef: ref.trim() || undefined, note: note.trim() || undefined, paidOn }), "Payment recorded.", "Could not record the payment.", () => setPaying(false)),
+  );
 
   const r = data.record;
+  const monthOver = data.month < data.today.slice(0, 7);
+  const canDecide = !r && monthOver && (data.status === "ELIGIBLE" || data.status === "PENDING_VERIFICATION");
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
-      <div>
-        {r ? (
+      <div className="max-w-2xl">
+        {r?.status === "REJECTED" ? (
+          <span>
+            Rejected by {r.approvedBy ?? "an admin"} on {new Date(r.approvedAt).toLocaleDateString("en-IN")}: {r.rejectionReason}
+          </span>
+        ) : r ? (
           <span>
             Approved {inr(r.amount)} by {r.approvedBy ?? "an admin"} on {new Date(r.approvedAt).toLocaleDateString("en-IN")}
             {r.status === "PAID" ? ` · Paid ${r.paidAt ? new Date(r.paidAt).toLocaleDateString("en-IN") : ""}${r.paymentRef ? ` (ref ${r.paymentRef})` : ""} by ${r.paidBy ?? "an admin"}` : " · payment not recorded yet"}
           </span>
+        ) : !monthOver ? (
+          <span className="text-muted-foreground">The month is still running - it can be approved or rejected after it ends.</span>
         ) : data.status === "ELIGIBLE" ? (
           <span>All conditions are met. Approving locks the figures and the amount of {data.result.slabIncentive === null ? "—" : inr(data.result.slabIncentive)}.</span>
         ) : (
           <span className="text-muted-foreground">Cannot be approved: {data.result.statusReason}.</span>
         )}
       </div>
-      <div className="flex gap-2">
-        {!r && data.status === "ELIGIBLE" ? (
+      <div className="flex flex-wrap gap-2">
+        {canDecide && data.status === "ELIGIBLE" ? (
           <Button size="sm" onClick={() => approve.mutate()} disabled={approve.isPending}>
             {approve.isPending ? "Approving…" : "Approve & lock"}
+          </Button>
+        ) : null}
+        {canDecide ? (
+          <Button size="sm" variant="outline" onClick={() => setRejecting(true)}>
+            Reject
+          </Button>
+        ) : null}
+        {r?.status === "REJECTED" ? (
+          <Button size="sm" variant="outline" onClick={() => reopen.mutate()} disabled={reopen.isPending}>
+            {reopen.isPending ? "Reopening…" : "Reopen"}
           </Button>
         ) : null}
         {r?.status === "APPROVED" ? (
@@ -205,6 +484,35 @@ function Actions({ data }: { data: IncentiveMonth }) {
           </Button>
         ) : null}
       </div>
+      {rejecting ? (
+        <Dialog open onOpenChange={(o) => (!o ? setRejecting(false) : undefined)}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Reject incentive</DialogTitle>
+              <DialogDescription>
+                {data.salesperson.name} · {monthLabel(data.month)}. The salesperson sees the reason on their plan.
+              </DialogDescription>
+            </DialogHeader>
+            <textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={4}
+              maxLength={500}
+              aria-label="Rejection reason"
+              placeholder="e.g. Delivery figures could not be verified for this month."
+              className="w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRejecting(false)}>
+                Cancel
+              </Button>
+              <Button variant="destructive" onClick={() => reject.mutate()} disabled={reject.isPending || reason.trim().length < 5}>
+                {reject.isPending ? "Rejecting…" : "Reject"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
       {paying ? (
         <Dialog open onOpenChange={(o) => (!o ? setPaying(false) : undefined)}>
           <DialogContent className="sm:max-w-md">
@@ -393,6 +701,8 @@ function PolicyForm({ initial, configured }: { initial: IncentivePolicyRules; co
 const ACTION_LABEL: Record<string, string> = {
   POLICY_UPDATED: "Policy updated",
   MONTH_APPROVED: "Approved & locked",
+  MONTH_REJECTED: "Rejected",
+  MONTH_REOPENED: "Reopened",
   PAYMENT_RECORDED: "Payment recorded",
   QUERY_RAISED: "Query raised",
   QUERY_ANSWERED: "Query answered",
@@ -441,6 +751,8 @@ function Audit() {
 function detailText(action: string, d: Record<string, unknown>): string {
   if (action === "MONTH_APPROVED") return `${inr(Number(d.amount))} on revenue ${inr(Number(d.revenue))}${d.note ? ` · ${d.note}` : ""}`;
   if (action === "PAYMENT_RECORDED") return `${inr(Number(d.amount))}${d.paymentRef ? ` · ref ${d.paymentRef}` : ""}${d.note ? ` · ${d.note}` : ""}`;
+  if (action === "MONTH_REJECTED") return `Reason: ${String(d.reason ?? "")}`;
+  if (action === "MONTH_REOPENED") return d.previousReason ? `Previously rejected: ${String(d.previousReason)}` : "Rejection undone";
   if (action === "QUERY_RAISED") return String(d.message ?? "");
   if (action === "QUERY_ANSWERED") return String(d.response ?? "");
   if (action === "POLICY_UPDATED") return "Slabs and conditions changed (before / after stored)";

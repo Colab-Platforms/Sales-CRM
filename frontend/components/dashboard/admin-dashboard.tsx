@@ -1,4 +1,5 @@
-import { Users, LayoutGrid, Trophy, UserCog } from "lucide-react";
+import Link from "next/link";
+import { Users, LayoutGrid, Trophy, UserCog, Wallet, ArrowRight } from "lucide-react";
 import { StatCard } from "./stat-card";
 import { StatusBreakdown } from "./status-breakdown";
 import { PageHeader } from "@/components/page-header";
@@ -42,6 +43,26 @@ export function AdminDashboardView({ data }: { data: AdminDashboard }) {
           tone="amber"
         />
       </div>
+
+      {/* This view only renders for admins (dashboard role ADMIN); the page and its APIs check the role again. */}
+      <Link
+        href="/admin/sales-incentives"
+        className="group block rounded-xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        aria-label="Open Sales Incentives"
+      >
+        <Card className="transition-all group-hover:-translate-y-0.5 group-hover:shadow-md">
+          <CardContent className="flex items-center gap-4">
+            <div className="flex size-11 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+              <Wallet className="size-5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">Sales Incentives</p>
+              <p className="text-sm text-muted-foreground">View and manage salesperson revenue incentives, eligibility, approvals and payments.</p>
+            </div>
+            <ArrowRight className="size-5 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-foreground" aria-hidden="true" />
+          </CardContent>
+        </Card>
+      </Link>
 
       <Card>
         <CardHeader>

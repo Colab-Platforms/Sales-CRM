@@ -22,5 +22,7 @@ router.get("/audit", admin, c.getAudit);
 router.get("/salespeople/:userId/:month", admin, c.getSalespersonMonth);
 router.post("/salespeople/:userId/:month/approve", admin, c.approveMonth);
 router.post("/salespeople/:userId/:month/payment", admin, c.recordPayment);
+router.post("/salespeople/:userId/:month/reject", admin, c.rejectMonth);
+router.post("/salespeople/:userId/:month/reopen", admin, c.reopenMonth);
 
 export default router;

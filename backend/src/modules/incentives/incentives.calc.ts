@@ -69,7 +69,7 @@ export const DEFAULT_POLICY: IncentivePolicyRules = {
 };
 
 export type Light = "GREEN" | "AMBER" | "RED";
-export type MonthStatus = "IN_PROGRESS" | "ELIGIBLE" | "APPROVED" | "PAID" | "NOT_ELIGIBLE" | "PENDING_VERIFICATION";
+export type MonthStatus = "IN_PROGRESS" | "ELIGIBLE" | "APPROVED" | "PAID" | "REJECTED" | "NOT_ELIGIBLE" | "PENDING_VERIFICATION";
 
 export interface DayInput {
   date: string;

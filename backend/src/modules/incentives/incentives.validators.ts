@@ -6,6 +6,17 @@ const month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, "month must be YYYY-MM
 
 export const validateMonthQuery = (q: unknown) => validateSchema<{ month?: string }>(z.object({ month: month.optional() }), q);
 
+const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "dates must be YYYY-MM-DD");
+export const validateOverviewQuery = (q: unknown) =>
+  validateSchema<{ month?: string; from?: string; to?: string }>(
+    z
+      .object({ month: month.optional(), from: day.optional(), to: day.optional() })
+      .refine((v) => (v.from === undefined) === (v.to === undefined), { message: "Give both from and to, or neither" }),
+    q,
+  );
+
+export const validateRejectBody = (b: unknown) => validateSchema<{ reason: string }>(z.object({ reason: z.string().trim().min(5, "Give a reason for the rejection").max(500) }), b);
+
 export const validateMonthParams = (p: unknown) => validateSchema<{ userId: string; month: string }>(z.object({ userId: z.uuid({ error: "Invalid salesperson" }), month }), p);
 
 const slab = z

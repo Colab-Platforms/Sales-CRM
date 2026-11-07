@@ -1,5 +1,7 @@
 export type Light = "GREEN" | "AMBER" | "RED";
-export type IncentiveStatus = "IN_PROGRESS" | "ELIGIBLE" | "APPROVED" | "PAID" | "NOT_ELIGIBLE" | "PENDING_VERIFICATION";
+export type IncentiveStatus = "IN_PROGRESS" | "ELIGIBLE" | "APPROVED" | "PAID" | "REJECTED" | "NOT_ELIGIBLE" | "PENDING_VERIFICATION";
+export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED" | "NOT_DUE";
+export type PaymentStatus = "PAID" | "UNPAID" | "NOT_DUE";
 export type PercentBasis = "TOTAL" | "ABOVE_SLAB";
 
 export interface IncentiveCondition {
@@ -56,7 +58,8 @@ export interface IncentiveMonth {
   /** Approved months are locked: `result` is the calculation frozen at approval. */
   locked: boolean;
   record: {
-    status: "APPROVED" | "PAID";
+    status: "APPROVED" | "PAID" | "REJECTED";
+    rejectionReason: string | null;
     amount: number;
     approvedAt: string;
     approvedBy: string | null;
@@ -68,6 +71,20 @@ export interface IncentiveMonth {
   result: IncentiveResult;
   policy: { percentBasis: PercentBasis | null; configured: boolean };
   queries: IncentiveQuery[];
+  /** Approvals, rejections, reopenings and payments for this month, oldest first. Admin view only. */
+  history?: { action: string; by: string | null; at: string; details: Record<string, unknown> }[];
+}
+
+export interface PerfTotals {
+  from: string;
+  to: string;
+  days: number;
+  presentDays: number;
+  metDays: number;
+  calls: number;
+  orders: number;
+  revenue: number;
+  netLoginMinutes: number;
 }
 
 export interface IncentiveOverviewRow {
@@ -80,12 +97,26 @@ export interface IncentiveOverviewRow {
   incentive: number | null;
   status: IncentiveStatus;
   statusReason: string;
+  eligibility: IncentiveStatus;
+  approvalStatus: ApprovalStatus;
+  paymentStatus: PaymentStatus;
+  calculatedIncentive: number | null;
+  approvedAmount: number | null;
+  paidAmount: number | null;
+  /** Performance tracking (not the payable incentive): the chosen range, its last day, and the 7 days ending on it. */
+  performance: {
+    range: PerfTotals;
+    day: { date: string; present: boolean; calls: number; orders: number; netLoginMinutes: number; met: boolean } | null;
+    week: PerfTotals;
+  };
   openQueries: number;
 }
 
 export interface IncentiveOverview {
   month: string;
   today: string;
+  range: { from: string; to: string; weekFrom: string };
+  targets: { minNetLoginMinutes: number; minDailyCalls: number };
   policy: { percentBasis: PercentBasis | null; configured: boolean };
   rows: IncentiveOverviewRow[];
 }
