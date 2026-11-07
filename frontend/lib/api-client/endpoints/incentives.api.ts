@@ -10,7 +10,9 @@ export const incentivesApi = {
   raiseQuery: (month: string, message: string) => data(apiClient.post<ApiEnvelope<IncentiveMonth>>("/incentives/me/queries", { month, message })),
 
   // Admin.
-  overview: (month: string) => data(apiClient.get<ApiEnvelope<IncentiveOverview>>("/incentives/overview", { params: { month } })),
+  overview: (month: string, range?: { from: string; to: string }) => data(apiClient.get<ApiEnvelope<IncentiveOverview>>("/incentives/overview", { params: { month, ...range } })),
+  reject: (userId: string, month: string, reason: string) => data(apiClient.post<ApiEnvelope<IncentiveMonth>>(`/incentives/salespeople/${userId}/${month}/reject`, { reason })),
+  reopen: (userId: string, month: string) => data(apiClient.post<ApiEnvelope<IncentiveMonth>>(`/incentives/salespeople/${userId}/${month}/reopen`, {})),
   salespersonMonth: (userId: string, month: string) => data(apiClient.get<ApiEnvelope<IncentiveMonth>>(`/incentives/salespeople/${userId}/${month}`)),
   approve: (userId: string, month: string, note?: string) => data(apiClient.post<ApiEnvelope<IncentiveMonth>>(`/incentives/salespeople/${userId}/${month}/approve`, { note })),
   recordPayment: (userId: string, month: string, body: { paymentRef?: string; note?: string; paidOn?: string }) =>

@@ -45,9 +45,23 @@ export const raiseQuery = handle("query", async (req, res) => {
 
 // Admin.
 export const getOverview = handle("overview", async (req, res) => {
-  const { error, value } = v.validateMonthQuery(req.query);
+  const { error, value } = v.validateOverviewQuery(req.query);
   if (error) return bad(res, error.message);
-  return incentivesService.overview(value.month ?? thisMonth());
+  return incentivesService.overview(req.user!, value.month ?? thisMonth(), value.from && value.to ? { from: value.from, to: value.to } : undefined);
+});
+
+export const rejectMonth = handle("reject", async (req, res) => {
+  const p = v.validateMonthParams(req.params);
+  if (p.error) return bad(res, p.error.message);
+  const b = v.validateRejectBody(req.body);
+  if (b.error) return bad(res, b.error.message);
+  return incentivesService.reject(req.user!, p.value.userId, p.value.month, b.value.reason);
+});
+
+export const reopenMonth = handle("reopen", async (req, res) => {
+  const p = v.validateMonthParams(req.params);
+  if (p.error) return bad(res, p.error.message);
+  return incentivesService.reopen(req.user!, p.value.userId, p.value.month);
 });
 
 export const getSalespersonMonth = handle("salesperson month", async (req, res) => {

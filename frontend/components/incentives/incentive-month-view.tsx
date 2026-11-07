@@ -17,6 +17,7 @@ export const STATUS_LABEL: Record<IncentiveStatus, string> = {
   ELIGIBLE: "Eligible – Awaiting Admin Approval",
   APPROVED: "Approved",
   PAID: "Paid",
+  REJECTED: "Rejected",
   NOT_ELIGIBLE: "Not Eligible",
   PENDING_VERIFICATION: "Pending Data Verification",
 };
@@ -26,6 +27,7 @@ export const STATUS_STYLE: Record<IncentiveStatus, string> = {
   ELIGIBLE: "bg-emerald-500/10 text-emerald-800 ring-emerald-600/25 dark:text-emerald-200",
   APPROVED: "bg-emerald-500/15 text-emerald-900 ring-emerald-600/30 dark:text-emerald-200",
   PAID: "bg-emerald-600 text-white ring-emerald-700",
+  REJECTED: "bg-red-500/15 text-red-900 ring-red-600/30 dark:text-red-200",
   NOT_ELIGIBLE: "bg-red-500/10 text-red-800 ring-red-600/25 dark:text-red-200",
   PENDING_VERIFICATION: "bg-amber-400/20 text-amber-900 ring-amber-600/30 dark:text-amber-200",
 };
@@ -51,7 +53,9 @@ export function IncentiveMonthView({ data }: { data: IncentiveMonth }) {
   const incentiveHint = data.record
     ? data.record.status === "PAID"
       ? "paid"
-      : "approved"
+      : data.record.status === "REJECTED"
+        ? "rejected by the admin"
+        : "approved"
     : !r.currentSlab
       ? "no slab reached yet"
       : r.potentialIncentive === null
@@ -79,7 +83,7 @@ export function IncentiveMonthView({ data }: { data: IncentiveMonth }) {
             <div className="space-y-1.5">
               <StatusPill status={data.status} />
               <p className="text-xs text-muted-foreground">
-                {met} of {r.conditions.length} conditions met · {data.record ? (data.record.status === "PAID" ? `paid${data.record.paidAt ? ` ${new Date(data.record.paidAt).toLocaleDateString("en-IN")}` : ""}` : "approved and locked") : r.statusReason}
+                {met} of {r.conditions.length} conditions met · {data.record?.status === "REJECTED" ? `rejected: ${data.record.rejectionReason ?? "no reason given"}` : data.record ? (data.record.status === "PAID" ? `paid${data.record.paidAt ? ` ${new Date(data.record.paidAt).toLocaleDateString("en-IN")}` : ""}` : "approved and locked") : r.statusReason}
               </p>
             </div>
           </CardContent>

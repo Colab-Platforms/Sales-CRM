@@ -395,7 +395,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         },
         { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
         { title: "Performance Matrix", href: "/dashboard/performance-matrix", icon: Grid3x3 },
-        { title: "Incentives", href: "/dashboard/incentives", icon: BadgeIndianRupee },
+        { title: "Sales Incentives", href: "/admin/sales-incentives", icon: BadgeIndianRupee },
       ],
     },
     {
