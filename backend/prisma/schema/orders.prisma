@@ -23,6 +23,11 @@ model Order {
 
   discountReason String? @map("discount_reason")
 
+  // The CRM coupon applied to this order, if any. couponCode is a copy kept with the order so its history never depends on the coupon row (renamed, deactivated or soft-deleted later).
+  couponId   String? @map("coupon_id") @db.Uuid
+  coupon     Coupon? @relation(fields: [couponId], references: [id], onDelete: Restrict)
+  couponCode String? @map("coupon_code") @db.VarChar(50)
+
   // Identity in an external system (Shopify). Null for records created inside the CRM.
   externalSource    ExternalSource? @map("external_source")
   externalId        String?         @map("external_id") @db.VarChar(100)
@@ -72,6 +77,7 @@ model Order {
 
   @@unique([externalSource, externalId])
   @@index([leadId])
+  @@index([couponId])
   @@index([createdById])
   @@index([confirmedByUserId])
   @@index([status])

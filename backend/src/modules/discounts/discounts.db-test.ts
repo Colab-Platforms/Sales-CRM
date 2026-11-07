@@ -134,16 +134,19 @@ describe("Create Order: default, edit, Fastrr coupon, custom, persistence, tampe
     return { create };
   }
   const meta = async (tx: Prisma.TransactionClient, orderId: string) => ((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true } })).metadata as any).discount;
-  const FIFTY = { type: "FIXED", value: "50" };
+  const FIFTY = { type: "FIXED", value: "50" }; // the configured default: a COD order drops it (the prepaid incentive), so these tests use SIXTY where a discount must stick
+  const SIXTY = { type: "FIXED", value: "60" };
 
-  it("default custom ₹50: 499 - 50 = 449, persisted as a CUSTOM discount (no coupon) with original subtotal and final total", async () => {
+  it("custom ₹60 on COD: 499 - 60 + 50 shipping = 489, persisted as a CUSTOM discount (no coupon) with original subtotal and final total; the ₹50 default is dropped on COD", async () => {
     await inRollback(async (tx) => {
       const { create } = await setup(tx);
-      const r = await create({ discount: FIFTY });
-      assert.deepEqual([Number(r.order.subtotal), Number(r.order.discountAmount), Number(r.order.totalAmount)], [499, 50, 449]);
+      const r = await create({ discount: SIXTY });
+      assert.deepEqual([Number(r.order.subtotal), Number(r.order.discountAmount), Number(r.order.totalAmount)], [499, 60, 489]);
       const d = await meta(tx, r.order.id);
-      assert.deepEqual([d.originalSubtotal, d.discountType, d.discountValue, d.discountAmount, d.couponId, d.couponCode, d.couponSource, d.source, d.wasDefault, d.finalTotal], ["499.00", "FIXED", "50.00", "50.00", null, null, null, "CUSTOM", true, "449.00"]);
+      assert.deepEqual([d.originalSubtotal, d.discountType, d.discountValue, d.discountAmount, d.couponId, d.couponCode, d.couponSource, d.source, d.wasDefault, d.finalTotal], ["499.00", "FIXED", "60.00", "60.00", null, null, null, "CUSTOM", false, "489.00"]);
       assert.equal(r.order.discountReason, "Custom discount");
+      const dropped = await create({ discount: FIFTY });
+      assert.deepEqual([Number(dropped.order.discountAmount), Number(dropped.order.totalAmount)], [0, 549], "the exact default is dropped on COD");
     });
   });
   it("Edit 50 -> 100 gives 399 (replaces, never 349); 10% gives 449.10; a Fastrr coupon is persisted with its source; none removes it", async () => {
@@ -176,27 +179,27 @@ describe("Create Order: default, edit, Fastrr coupon, custom, persistence, tampe
     await inRollback(async (tx) => {
       const { create } = await setup(tx);
       const before = await tx.order.count();
-      await assert.rejects(() => create({ discount: FIFTY, expectedTotal: "300.00" }), (e: any) => e.statusCode === 409);
+      await assert.rejects(() => create({ discount: SIXTY, expectedTotal: "300.00" }), (e: any) => e.statusCode === 409);
       for (const old of OLD_CODES) await assert.rejects(() => create({ discount: { couponCode: old } }), (e: any) => e.statusCode === 400, old);
       await assert.rejects(() => create({ discount: { couponCode: "NOPE" } }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => create({ discount: { type: "FIXED", value: "600" } }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => create({ discount: { type: "PERCENT", value: "150" } }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => create({ discount: { type: "FIXED", value: "-1" } }), (e: any) => e.statusCode === 400);
-      await assert.rejects(() => create({ discount: FIFTY, discountPercent: "5" }), (e: any) => e.statusCode === 400, "one discount only");
+      await assert.rejects(() => create({ discount: SIXTY, discountPercent: "5" }), (e: any) => e.statusCode === 400, "one discount only");
       assert.equal(await tx.order.count(), before, "a refused discount never leaves an order behind");
-      const ok = await create({ discount: FIFTY, expectedTotal: "449.00" });
-      assert.equal(Number(ok.order.totalAmount), 449);
+      const ok = await create({ discount: SIXTY, expectedTotal: "489.00" });
+      assert.equal(Number(ok.order.totalAmount), 489);
     });
   });
   it("historical orders are untouched: an order carrying a SAVE50 discount still reads back its coupon, amount and final total", async () => {
     await inRollback(async (tx) => {
       const { create } = await setup(tx);
-      const r = await create({ discount: FIFTY });
+      const r = await create({ discount: SIXTY });
       // Simulate an order created before this change (metadata + reason written by the old coupon flow).
       const old = { originalSubtotal: "499.00", discountType: "FIXED", discountValue: "50.00", discountAmount: "50.00", couponId: uid(), couponCode: "SAVE50", source: "COUPON", wasDefault: true, finalTotal: "449.00" };
       await tx.order.update({ where: { id: r.order.id }, data: { discountReason: "Coupon SAVE50", metadata: { discount: old } as never } });
       const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { discountReason: true, discountAmount: true, totalAmount: true, metadata: true } });
-      assert.deepEqual([row.discountReason, Number(row.discountAmount), Number(row.totalAmount), (row.metadata as any).discount.couponCode], ["Coupon SAVE50", 50, 449, "SAVE50"]);
+      assert.deepEqual([row.discountReason, Number(row.discountAmount), Number(row.totalAmount), (row.metadata as any).discount.couponCode], ["Coupon SAVE50", 60, 489, "SAVE50"]);
     });
   });
 });

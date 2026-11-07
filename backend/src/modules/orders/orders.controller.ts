@@ -108,6 +108,34 @@ export const pushOrderToShopify = async (req: AuthRequest, res: Response): Promi
   }
 };
 
+// Retry of the Shiprocket submission of a CRM-created order. Idempotent: an order already submitted is only reported, never created again; independent of Shopify.
+export const retryShiprocketSync = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateOrderIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await ordersService.retryShiprocketSync(req.user!, value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+// Retry (or re-check) of the Shiprocket half of a cancellation. Never sends a second request for one already in flight; the CRM cancellation itself is untouched.
+export const retryShiprocketCancellation = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateOrderIdParams(req.params);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await ordersService.retryShiprocketCancellation(req.user!, value.id), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
 // Manual retry of Shopify payment reconciliation. RBAC is server-side (getLeadScope inside the service method).
 export const retryShopifyPaymentSync = async (req: AuthRequest, res: Response): Promise<void> => {
   try {

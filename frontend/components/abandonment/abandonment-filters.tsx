@@ -55,7 +55,7 @@ export function AbandonmentFilters({
         <div className="flex gap-2">
           <Input
             id="abandonment-search"
-            placeholder="Name, phone, email or lead number"
+            placeholder="Name, phone, order ID, email or lead number"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {

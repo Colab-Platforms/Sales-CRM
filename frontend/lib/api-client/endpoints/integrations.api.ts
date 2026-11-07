@@ -1,12 +1,23 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { CourierOption, CreateShipmentInput, IntegrationStatus, PaymentLinkResult, ShipmentActionResult } from "../types/integrations.types";
+import type { CourierOption, CreateShipmentInput, IntegrationStatus, PaymentLinkResult, ShipmentActionResult, ShopifyCrmOrderSync } from "../types/integrations.types";
 import type { WhatsAppMessageResult } from "../types/whatsapp-messaging.types";
 import type { OrderNotifyResult } from "../types/orders.types";
 
 export const integrationsApi = {
   async getStatus(): Promise<IntegrationStatus> {
     const res = await apiClient.get<ApiEnvelope<IntegrationStatus>>("/integrations/status");
+    return res.data.data;
+  },
+
+  // ---- Shopify sync switch for CRM-created orders (Admin only; enforced by the backend)
+  async getShopifyCrmOrderSync(): Promise<ShopifyCrmOrderSync> {
+    const res = await apiClient.get<ApiEnvelope<ShopifyCrmOrderSync>>("/integrations/shopify/crm-order-sync");
+    return res.data.data;
+  },
+
+  async setShopifyCrmOrderSync(enabled: boolean): Promise<ShopifyCrmOrderSync> {
+    const res = await apiClient.put<ApiEnvelope<ShopifyCrmOrderSync>>("/integrations/shopify/crm-order-sync", { enabled });
     return res.data.data;
   },
 

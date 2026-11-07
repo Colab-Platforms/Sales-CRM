@@ -314,3 +314,31 @@ describe("helpers", () => {
   });
   void ({} as Coverage);
 });
+
+import { cardValueFor as cvf, formatInr as fmtInr } from "./orders-dashboard-form";
+describe("money cards never show NaN", () => {
+  it("a missing or invalid amount shows N/A (not ₹NaN, not a made-up ₹0); a real zero stays ₹0", () => {
+    for (const bad of [undefined, null, Number.NaN, Number.POSITIVE_INFINITY]) assert.equal(fmtInr(bad as never), "N/A");
+    assert.equal(fmtInr(0), "₹0");
+    assert.equal(fmtInr(21520), "₹21,520");
+    const old = { totalOrders: 237, totalValue: 155404 } as never; // a response from a server that predates the three money fields
+    for (const id of ["COD_REVENUE", "PREPAID_REVENUE", "COLLECTED"] as const) assert.equal(cvf(old, id), "N/A", id);
+    assert.equal(cvf(old, "VALUE"), "₹1,55,404");
+  });
+});
+
+import { TELECALLER_CARDS, telecallerCardValue } from "./orders-dashboard-form";
+describe("Telecaller Performance cards", () => {
+  const summary = { totalOrders: 30, cod: 23, prepaid: 7, codRevenue: 16077, prepaidRevenue: 5443, totalRevenue: 21520, paid: 8, pendingPayment: 22, collected: 5443, fulfilled: 4, assistedOrders: 0, confirmedOrders: 30 };
+  it("shows all ten requested cards with formatted values", () => {
+    assert.deepEqual(TELECALLER_CARDS.map((c) => c.label), ["Total Orders", "COD Orders", "Prepaid Orders", "Revenue - COD", "Revenue - Prepaid", "Total Revenue", "Paid", "Pending Payment", "Collected", "Fulfilled"]);
+    assert.deepEqual(TELECALLER_CARDS.map((c) => telecallerCardValue(summary, c)), ["30", "23", "7", "₹16,077", "₹5,443", "₹21,520", "8", "22", "₹5,443", "4"]);
+  });
+  it("a missing / invalid value is N/A (never NaN or a made-up 0); a real zero stays 0; no data yet is N/A", () => {
+    const money = TELECALLER_CARDS.find((c) => c.id === "collected")!;
+    assert.equal(telecallerCardValue({ ...summary, collected: Number.NaN }, money), "N/A");
+    assert.equal(telecallerCardValue({ ...summary, collected: undefined as never }, money), "N/A");
+    assert.equal(telecallerCardValue({ ...summary, collected: 0 }, money), "₹0");
+    assert.equal(telecallerCardValue(undefined, money), "N/A");
+  });
+});

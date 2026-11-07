@@ -8,14 +8,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useLiveOrders, useOrderTagOptions } from "@/hooks/useOrders";
 import type { LiveOrdersListParams } from "@/lib/api-client/types/orders.types";
 import { OrdersFiltersBar } from "./orders-filters";
-import { OrdersCursorPagination } from "./orders-cursor-pagination";
+import { OrdersCursorPagination, ORDER_PAGE_SIZES } from "./orders-cursor-pagination";
 import { OrdersTable, OrdersTableSkeleton, orderDetailHref } from "./orders-table";
 import { FILTER_COLUMNS, filtersToApi, filtersToParams, hasActiveColumnFilters, isColumnActive, parseColumnFilters, type ColumnFilters } from "./orders-column-filters";
 import { headerFilterNodes } from "./orders-header-filters";
 
 // This page reads live from Shopify (GET /orders/live), not the CRM DB - see orders.live.service.ts.
-// 25 is within the 25-50 initial-page-size range the live endpoint is meant to be used at.
-const PAGE_SIZE = 25;
+// The rows-per-page choices are 20 / 50 / 100 (default 20); the size lives in the URL (?size=) with the filters.
+const DEFAULT_PAGE_SIZE = 20;
 const SEARCH_DEBOUNCE_MS = 350;
 
 // Search + every column filter live in the URL so a refresh, Back from an order, or a shared link returns to the same
@@ -38,6 +38,8 @@ export function OrdersListView() {
   const queryString = searchParams.toString();
   const filters: ColumnFilters = useMemo(() => parseColumnFilters(new URLSearchParams(queryString)), [queryString]);
   const search = (new URLSearchParams(queryString).get("search") ?? "").slice(0, 100);
+  const sizeParam = Number(new URLSearchParams(queryString).get("size"));
+  const pageSize = (ORDER_PAGE_SIZES as readonly number[]).includes(sizeParam) ? sizeParam : DEFAULT_PAGE_SIZE;
   const [searchText, setSearchText] = useState(search);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(searchTimer.current), []);
@@ -83,7 +85,7 @@ export function OrdersListView() {
 
   const params: LiveOrdersListParams = {
     after: currentAfter,
-    first: PAGE_SIZE,
+    first: pageSize,
     search: search || undefined,
     ...(filtersToApi(filters) as Partial<LiveOrdersListParams>),
     dateFrom: dayBoundary(filters.dateFrom, "00:00:00"),
@@ -157,6 +159,8 @@ export function OrdersListView() {
           onNext={handleNext}
           onPrevious={handlePrevious}
           disabled={isFetching}
+          pageSize={pageSize}
+          onPageSizeChange={(size) => updateUrl({ size: size === DEFAULT_PAGE_SIZE ? undefined : String(size) })}
         />
       </>
     );

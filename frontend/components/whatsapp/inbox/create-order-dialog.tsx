@@ -122,7 +122,7 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
   // The discount CHOICE (coupon / custom / none). It starts as the configured default coupon (data-driven, from the server) and
   // is replaced - never added to - when the user edits it. `null` = the user has not touched it yet.
   const [discountEdit, setDiscountEdit] = useState<DiscountChoice | null>(null);
-  const { options: discountOptions, loaded: discountsLoaded } = useDiscountOptions("ORDER", open);
+  const { options: discountOptions, loaded: discountsLoaded } = useDiscountOptions("ORDER", open, leadId);
   // The default discount is a prepaid promotion: on COD it never applies (the server drops it as well), so what is shown is what is saved.
   const discountChoice: DiscountChoice = effectiveDiscountChoice(discountEdit ?? defaultChoice(discountOptions), orderType !== "COD", discountOptions.defaultDiscount);
   const idempotencyKey = useRef<string>(crypto.randomUUID());
@@ -503,6 +503,9 @@ export function CreateOrderDialog({ open, onOpenChange, leadId, customerName, cu
                 choice={discountChoice}
                 onChange={setDiscountEdit}
                 fastrr={discountOptions.fastrr}
+                crmCoupons={discountOptions.coupons}
+                customerType={discountOptions.customerType}
+                leadId={leadId}
                 isPrepaid={orderType !== "COD"}
                 disabled={createOrder.isPending || !discountsLoaded}
               />

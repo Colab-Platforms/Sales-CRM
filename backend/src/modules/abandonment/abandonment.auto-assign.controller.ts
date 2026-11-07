@@ -37,7 +37,18 @@ export const getSalespersonAutoAssignConfig = async (req: AuthRequest, res: Resp
   }
 };
 
-export const updateSalespersonAutoAssignConfig = async (req: AuthRequest, res: Response): Promise<void> => {
+// Preview by default; `?confirm=true` (or body.confirm) actually moves the absent people's untouched leads to present people.
+export const redistributeAbsentLeads = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const confirm = req.body?.confirm === true;
+    const result = await service.redistributeAbsent(req.user!.id, confirm);
+    sendResponse(res, true, result, result.confirmed ? `${result.movable} leads moved to present salespeople.` : "Preview only. Nothing moved.", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+export const updateSalespersonAutoAssignConfig =async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { error, value } = validateSetAutoAssignEnabled(req.body);
     if (error) return void bad(res, error.message);

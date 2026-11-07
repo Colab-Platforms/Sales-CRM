@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { PageHeader } from "@/components/page-header";
 import { Card, CardContent } from "@/components/ui/card";
 import { AbandonedPanel } from "./abandoned-panel";
+import { TelecallerPanel } from "./telecaller-panel";
 import { DateRangeBar } from "./date-range-bar";
 import { WebsiteOrdersPanel } from "./website-orders-panel";
 import { DEFAULT_RANGE, type RangeState } from "./orders-dashboard-form";
@@ -32,7 +33,7 @@ export function OrdersDashboard({ allowed }: { allowed: boolean }) {
 
   return (
     <div className="space-y-8" data-testid="orders-dashboard">
-      <PageHeader title="Orders Dashboard" description="Website orders and abandoned checkouts for the selected date range. Click a card to see the records behind it." />
+      <PageHeader title="Orders Dashboard" description="Website orders, telecaller performance and abandoned checkouts for the selected date range. Click a card to see the records behind it." />
 
       <Card>
         <CardContent className="py-4">
@@ -41,6 +42,7 @@ export function OrdersDashboard({ allowed }: { allowed: boolean }) {
       </Card>
 
       <WebsiteOrdersPanel range={range} />
+      <TelecallerPanel range={range} />
       <AbandonedPanel range={range} />
     </div>
   );

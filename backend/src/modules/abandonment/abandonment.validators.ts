@@ -39,7 +39,7 @@ export const validateDistributionQuery = (query: unknown) => validateSchema<{ da
 const listQuerySchema = z
   .object({
     page: z.coerce.number({ error: "page must be a number" }).int().min(1, "page must be 1 or more").default(1),
-    pageSize: z.coerce.number({ error: "pageSize must be a number" }).int().min(1, "pageSize must be between 1 and 100").max(100, "pageSize must be between 1 and 100").default(25),
+    pageSize: z.coerce.number({ error: "pageSize must be a number" }).int().min(1, "pageSize must be between 1 and 100").max(100, "pageSize must be between 1 and 100").default(20),
     search: optional(z.string().trim().max(100, "search must be 100 characters or fewer")),
     status: optional(z.enum(AbandonmentStatus, { error: "Invalid abandonment status" })),
     type: optional(z.enum(AbandonmentType, { error: "Invalid abandonment type" })),
@@ -82,15 +82,18 @@ const bulkAssignManagerSchema = z
     message: "managerId is required for manual assignment, managerIds is required for round robin",
   });
 
+// One request never carries more than this many leads (a request body stays small and one transaction stays short).
+const MAX_BULK_ASSIGN = 5000;
 const bulkAssignSalespersonSchema = z
   .object({
-    abandonmentIds: z.array(z.uuid()).min(1, "No abandoned leads selected"),
+    abandonmentIds: z.array(z.uuid()).min(1, "No abandoned leads selected").max(MAX_BULK_ASSIGN, `Select at most ${MAX_BULK_ASSIGN} leads at a time`),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
     salespersonId: z.uuid().optional(),
-    salespersonIds: z.array(z.uuid()).optional(),
+    salespersonIds: z.array(z.uuid()).max(100).optional(),
+    assignments: z.array(z.object({ abandonmentId: z.uuid(), salespersonId: z.uuid() })).max(MAX_BULK_ASSIGN).optional(),
   })
-  .refine((data) => (data.method === "MANUAL" ? Boolean(data.salespersonId) : Boolean(data.salespersonIds?.length)), {
-    message: "salespersonId is required for manual assignment, salespersonIds is required for round robin",
+  .refine((data) => (data.method === "MANUAL" ? Boolean(data.salespersonId) || Boolean(data.assignments?.length) : Boolean(data.salespersonIds?.length)), {
+    message: "Choose at least one salesperson: a salesperson for the leads (manual) or the salespeople to share them between (round robin)",
   });
 
 const bulkUpdateLeadStatusSchema = z.object({

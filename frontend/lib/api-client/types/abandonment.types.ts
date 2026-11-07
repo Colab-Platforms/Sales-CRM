@@ -187,8 +187,20 @@ export interface BulkAssignManagerPayload {
 export interface BulkAssignSalespersonPayload {
   abandonmentIds: string[];
   method: "MANUAL" | "ROUND_ROBIN";
+  /** Legacy: every selected lead to this one salesperson. */
   salespersonId?: string;
+  /** ROUND_ROBIN: the salespeople the selected leads are dealt across, in this order, starting with the first. */
   salespersonIds?: string[];
+  /** MANUAL: which salesperson gets which lead (several salespeople allowed); a lead without an entry is not assigned. */
+  assignments?: { abandonmentId: string; salespersonId: string }[];
+}
+
+/** What a bulk salesperson assignment did: the totals and the employee-wise counts, as saved. */
+export interface BulkAssignSalespersonResult {
+  assignedCount: number;
+  unchangedCount?: number;
+  selectedCount?: number;
+  perSalesperson?: { salespersonId: string; name: string; assignedCount: number; unchangedCount: number }[];
 }
 
 export interface BulkUpdateLeadStatusPayload {
@@ -209,6 +221,15 @@ export interface AutoAssignConfig {
 // while `enabled` is false, so re-opening the picker shows the last selection.
 export interface ManagerAutoAssignConfig extends AutoAssignConfig {
   managerIds: string[];
+}
+
+/** POST /abandonments/auto-assign/redistribute-absent: preview (confirmed=false) or result of moving absent salespeople's untouched leads to present ones. */
+export interface RedistributeAbsentResult {
+  confirmed: boolean;
+  present: { userId: string; name: string }[];
+  absent: { userId: string; name: string; leads: number }[];
+  movable: number;
+  plan: { userId: string; name: string; leads: number }[];
 }
 
 /** The saved cart + address of ONE abandoned checkout, shaped for the Create Order form (GET /abandonments/:id/order-prefill). */

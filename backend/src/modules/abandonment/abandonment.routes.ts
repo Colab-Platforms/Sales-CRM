@@ -16,6 +16,15 @@ import {
   getMyAbandonmentSummary,
   listAssignableTelecallers,
   getAbandonmentOrderPrefill,
+  downloadRecording,
+  createRecordingExport,
+  downloadRecordingExport,
+  downloadRecordingExportByLink,
+  getRecordingExportLink,
+  getRecordingExport,
+  listRecordingExports,
+  retryRecordingExport,
+  getRecordingsSummary,
   listAbandonmentIds,
   listAbandonmentItems,
   listAbandonments,
@@ -25,6 +34,7 @@ import {
 import {
   getManagerAutoAssignConfig,
   getSalespersonAutoAssignConfig,
+  redistributeAbsentLeads,
   updateManagerAutoAssignConfig,
   updateSalespersonAutoAssignConfig,
 } from "./abandonment.auto-assign.controller.js";
@@ -59,10 +69,25 @@ router.get("/auto-assign/manager-config", requireAuth, requireRole(Role.ADMIN), 
 router.patch("/auto-assign/manager-config", requireAuth, requireRole(Role.ADMIN), updateManagerAutoAssignConfig);
 router.get("/auto-assign/salesperson-config", requireAuth, requireRole(Role.MANAGER), getSalespersonAutoAssignConfig);
 router.patch("/auto-assign/salesperson-config", requireAuth, requireRole(Role.MANAGER), updateSalespersonAutoAssignConfig);
+// Morning: manager previews / confirms moving absent salespeople's untouched overnight leads to present ones.
+router.post("/auto-assign/redistribute-absent", requireAuth, requireRole(Role.MANAGER), redistributeAbsentLeads);
 
 // CSV upload (admin / manager), same preview-then-confirm shape as the normal lead import. Registered ahead of "/:id".
 router.post("/import/preview", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), csvUpload.single("file"), previewAbandonmentImport);
 router.post("/import/:batchId/confirm", requireAuth, requireRole(Role.ADMIN, Role.MANAGER), confirmAbandonmentImport);
+
+// Call recordings of abandoned leads: ADMIN / MANAGER only, enforced here and again in the service. Registered ahead of "/:id".
+const recordingRoles = requireRole(Role.ADMIN, Role.MANAGER);
+router.get("/recordings/summary", requireAuth, recordingRoles, getRecordingsSummary);
+router.post("/recordings/exports", requireAuth, recordingRoles, createRecordingExport);
+router.get("/recordings/exports", requireAuth, recordingRoles, listRecordingExports);
+router.get("/recordings/exports/:exportId", requireAuth, recordingRoles, getRecordingExport);
+router.post("/recordings/exports/:exportId/retry", requireAuth, recordingRoles, retryRecordingExport);
+router.get("/recordings/exports/:exportId/download", requireAuth, recordingRoles, downloadRecordingExport);
+router.post("/recordings/exports/:exportId/download-link", requireAuth, recordingRoles, getRecordingExportLink);
+// No bearer header here (a plain browser download): the signed link from the route above is the authorisation.
+router.get("/recordings/exports/:exportId/file", downloadRecordingExportByLink);
+router.get("/recordings/:callId/download", requireAuth, recordingRoles, downloadRecording);
 
 router.get("/:id", requireAuth, allRoles, getAbandonment);
 // The saved cart + address of this one checkout, for the Create Order form.

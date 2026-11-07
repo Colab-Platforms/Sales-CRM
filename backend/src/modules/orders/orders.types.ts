@@ -94,8 +94,11 @@ export interface CreateManualOrderInput {
   discountReason?: string;
 }
 
-/** awaiting_payment = a prepaid order that is not sent to Shopify until Cashfree verifies the payment. */
-export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment";
+/** awaiting_payment = a prepaid order that is not sent to Shopify until Cashfree verifies the payment. skipped = the order's saved decision is "Shopify sync OFF" (CRM only; never sent). */
+import type { ShiprocketSyncRecord } from "../shiprocket/shiprocket.sync-record.js";
+import type { ShiprocketCancellationRecord } from "../shiprocket/shiprocket.cancellation.js";
+import type { OrderTracking } from "./orders.tracking.js";
+export type ShopifyPushStatus = "created" | "already_linked" | "failed" | "awaiting_payment" | "skipped";
 
 /** What the last Shopify sync attempt achieved, as verified by reading the order back. Stored on Order.metadata.shopifySync and shown on the order page. */
 export interface ShopifySyncRecord {
@@ -298,6 +301,10 @@ export interface OrderDetail {
   paymentLinkCancellation: PaymentLinkCancelResult | null;
   // Last Shopify payment-reconciliation outcome (Order.metadata) - set once a Cashfree payment on this order settles.
   shopifyPaymentSync: { status: "synced" | "failed"; reason?: string; syncedAt?: string; failedAt?: string } | null;
+  // Shiprocket submission of a CRM-created order (Order.metadata.shiprocketSync). Independent of every Shopify status. Null = never attempted (or not a CRM-created order).
+  shiprocketSync: ShiprocketSyncRecord | null;
+  // Shiprocket side of cancelling this order (Order.metadata.shiprocketCancellation): Pending / Cancellation Requested / Cancelled / Cancellation Failed. Null = never needed (no Shiprocket order existed).
+  shiprocketCancellation: ShiprocketCancellationRecord | null;
   // Who confirmed the order in the CRM (current confirmer; earlier ones are in the audit history). Null = not confirmed from the CRM.
   confirmedBy: { id: string; name: string } | null;
   // "CRM Confirmed by <name>" - derived from confirmedBy, shown as a tag in the CRM and written to the linked Shopify order.
@@ -345,6 +352,8 @@ export interface OrderDetail {
   items: OrderItemDetail[];
   payments: PaymentDetail[];
   shipments: OrderShipmentDetail[];
+  /** Read-only tracking view of the shipments above (status, courier, AWB, link, ETA, timeline). */
+  tracking: OrderTracking;
   // Live snapshot fetched directly from Shopify for a synced order (Order.externalId set) - see
   // orders.service.ts's getOrder(). null when the order has no Shopify link, was never fetched, or
   // Shopify couldn't be reached (see shopifyLiveError). The CRM's own fields above are never replaced

@@ -206,13 +206,14 @@ describe("bringing a live-only Shopify order into the CRM on demand (ADMIN)", ()
     });
   });
 
-  it("only an ADMIN may; Shopify problems and a vanished order change nothing and say why", async () => {
+  it("only the sync roles may (a Recruiter may not); Shopify problems and a vanished order change nothing and say why", async () => {
     await inRollback(async (tx) => {
       const a = await actors(tx);
       let ran = 0;
       const mk = (impl: () => Promise<OrderSyncOutcome>, client: () => never = () => ({}) as never) => new OrdersLiveService(prisma, client, runnerOf(tx), async () => { ran++; return impl(); });
-      for (const u of [a.sales, a.manager]) assert.deepEqual(await mk(async () => outcome(null)).syncLiveOrderToCrm(u, "123"), { synced: false, reason: "Not found" });
-      assert.equal(ran, 0, "non-admins never reach the sync");
+      const recruiter = await tx.user.create({ data: { name: "Rec", username: `rec-${uid()}`, role: Role.RECRUITER }, select: { id: true, username: true } }).then((u) => ({ id: u.id, username: u.username, role: Role.RECRUITER }) as U);
+      assert.deepEqual(await mk(async () => outcome(null)).syncLiveOrderToCrm(recruiter, "123"), { synced: false, reason: "Not found" });
+      assert.equal(ran, 0, "a role outside the list never reaches the sync");
       assert.deepEqual(await mk(async () => outcome(null, true)).syncLiveOrderToCrm(a.admin, "123"), { synced: false, reason: "Shopify no longer has this order." });
       const failed = await mk(async () => { throw new Error("socket hang up shpat_SECRET"); }).syncLiveOrderToCrm(a.admin, "123");
       assert.equal(failed.synced, false);
@@ -286,15 +287,23 @@ describe("regression: #AWL101729 - the exact id the live page uses syncs end to 
     });
   });
 
-  it("a telecaller (SALESPERSON) or manager gets nothing - and Shopify is never even asked", async () => {
+  it("Telecaller (SALESPERSON), Manager and HR may sync too - the same single order, no duplicate however many roles press it; a Recruiter gets nothing and Shopify is never asked", async () => {
     await inRollback(async (tx) => {
       const a = await actors(tx);
-      for (const u of [a.sales, a.manager]) {
+      const hr = await tx.user.create({ data: { name: "Hr", username: `hr-${uid()}`, role: Role.HR }, select: { id: true, username: true } }).then((u) => ({ id: u.id, username: u.username, role: Role.HR }) as U);
+      const ids = new Set<string>();
+      for (const u of [a.admin, a.sales, a.manager, hr]) {
         const r = await post(tx, a, EXTERNAL_ID, u);
-        assert.equal(r.status, 404);
-        assert.equal(r.asked.length, 0);
+        assert.equal(r.status, 200, u.role);
+        ids.add(r.body.data.orderId);
+        assert.equal(r.asked.length, 1);
       }
-      assert.equal(await tx.order.count({ where: { externalSource: "SHOPIFY", externalId: EXTERNAL_ID } }), 0);
+      assert.equal(ids.size, 1, "all four roles resolve to the one CRM order");
+      assert.equal(await tx.order.count({ where: { externalSource: "SHOPIFY", externalId: EXTERNAL_ID } }), 1);
+      const recruiter = await tx.user.create({ data: { name: "Rec", username: `rec-${uid()}`, role: Role.RECRUITER }, select: { id: true, username: true } }).then((u) => ({ id: u.id, username: u.username, role: Role.RECRUITER }) as U);
+      const denied = await post(tx, a, EXTERNAL_ID, recruiter);
+      assert.equal(denied.status, 404);
+      assert.equal(denied.asked.length, 0);
     });
   });
 });

@@ -216,3 +216,34 @@ export interface AbandonedChartResult {
   buckets: AbandonedChartBucket[];
   totals: { abandoned: number; openValue: number };
 }
+
+/** Telecaller Performance: the Reports' attribution and money rules (orders a telecaller confirmed in the CRM, or the customer placed within 7 days after a telecaller's call / action). */
+export interface TelecallerSummary {
+  totalOrders: number;
+  cod: number;
+  prepaid: number;
+  codRevenue: number;
+  prepaidRevenue: number;
+  totalRevenue: number;
+  paid: number;
+  pendingPayment: number;
+  collected: number;
+  fulfilled: number;
+  assistedOrders: number;
+  confirmedOrders: number;
+}
+export interface TelecallerPerformanceResult {
+  range: { kind: string; from: string; to: string; timezone: string; days: number };
+  summary: TelecallerSummary;
+  /** Orders left out because an amount was missing / invalid - the figures are then incomplete, never silently zero. */
+  invalidAmounts: number;
+  salespeople: { id: string; name: string }[];
+}
+export interface TelecallerQuery {
+  range?: string;
+  from?: string;
+  to?: string;
+  salespersonId?: string;
+  paymentMode?: "ALL" | "COD" | "PREPAID";
+  orderStatus?: string;
+}

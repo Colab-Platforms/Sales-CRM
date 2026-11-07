@@ -218,7 +218,7 @@ describe("live website orders - figures", () => {
       node({ id: 4, total: "300.00", financial: "PAID", gateways: ["Cashfree"], fulfillment: "FULFILLED" }), // prepaid, paid, fulfilled (shipped)
     ]);
     const s = summarize(orders);
-    assert.deepEqual(s, { totalOrders: 4, totalValue: 1999, cod: 2, prepaid: 2, paid: 2, pendingPayment: 2, cancelled: 1, cancelledValue: 500, fulfilled: 1 });
+    assert.deepEqual(s, { totalOrders: 4, totalValue: 1999, cod: 2, prepaid: 2, paid: 2, pendingPayment: 2, cancelled: 1, cancelledValue: 500, fulfilled: 1, codRevenue: 699, prepaidRevenue: 1300, collected: 1300 });
   });
 
   it("money is added in whole cents: ten orders of 0.10 + 0.20 never drift, totals are Shopify's order total (tax/shipping/discount already inside it)", async () => {

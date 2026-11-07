@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { useCancelPaymentLinkMutation, useCreatePaymentLinkMutation, useRefreshPaymentMutation } from "@/lib/api-client/mutations/integrations.mutations";
-import { useRetryShopifyPaymentSyncMutation } from "@/lib/api-client/mutations/orders.mutations";
+import { useRetryShiprocketCancellationMutation, useRetryShiprocketSyncMutation, useRetryShopifyPaymentSyncMutation } from "@/lib/api-client/mutations/orders.mutations";
 import { integrationStatusQueryOptions } from "@/lib/api-client/queries/integrations.queries";
 import type { OrderDetail, PaymentDetail } from "@/lib/api-client/types/orders.types";
 import { formatDateTime, formatMoney } from "@/lib/order-status";
@@ -191,6 +191,87 @@ export function ShopifyPaymentSyncStatus({ order }: { order: OrderDetail }) {
           </Button>
         </div>
       )}
+    </DetailField>
+  );
+}
+
+/** Shiprocket submission status of a CRM-created order, independent of any Shopify status. Renders nothing for an order that was never submitted (e.g. Shopify-originated). */
+export function ShiprocketSyncStatus({ order }: { order: OrderDetail }) {
+  const retry = useRetryShiprocketSyncMutation();
+  const sync = order.shiprocketSync;
+  if (!sync) return null;
+
+  function handleRetry() {
+    retry.mutate(order.id, {
+      onSuccess: (result) => {
+        if (result.status === "SYNCED") toast.success("The order is submitted to Shiprocket.");
+        else toast.error(result.reason ?? "Shiprocket submission did not complete.");
+      },
+      onError: (error) => toast.error(getErrorMessage(error, "Could not retry the Shiprocket submission.")),
+    });
+  }
+
+  const retryable = sync.status === "FAILED" || sync.status === "NOT_CONFIGURED";
+  return (
+    <DetailField label="Shiprocket sync">
+      <div className="flex flex-wrap items-center gap-2" data-testid="shiprocket-sync-status">
+        {sync.status === "SYNCED" ? (
+          <span className="text-sm text-emerald-600 dark:text-emerald-400">Submitted{sync.shiprocketOrderId ? ` · Shiprocket order ${sync.shiprocketOrderId}` : ""}</span>
+        ) : sync.status === "AWAITING_PAYMENT" ? (
+          <span className="text-sm text-muted-foreground">Waiting for the payment to be verified</span>
+        ) : sync.status === "PENDING" ? (
+          <span className="text-sm text-muted-foreground">Submitting…</span>
+        ) : (
+          <span className="text-sm text-destructive">{sync.status === "NOT_CONFIGURED" ? "Not configured" : "Failed"}{sync.error ? `: ${sync.error}` : ""}</span>
+        )}
+        {retryable && (
+          <Button type="button" size="sm" variant="outline" onClick={handleRetry} disabled={retry.isPending}>
+            <RefreshCw data-icon="inline-start" />
+            {retry.isPending ? "Retrying…" : "Retry Shiprocket sync"}
+          </Button>
+        )}
+      </div>
+    </DetailField>
+  );
+}
+
+/** Shiprocket side of cancelling an order. Renders nothing when the order had no Shiprocket order. "Cancelled" is only shown once Shiprocket itself confirmed it. */
+export function ShiprocketCancellationStatus({ order }: { order: OrderDetail }) {
+  const retry = useRetryShiprocketCancellationMutation();
+  const cancellation = order.shiprocketCancellation;
+  if (!cancellation || order.status !== "CANCELLED") return null;
+
+  function handleRetry() {
+    retry.mutate(order.id, {
+      onSuccess: (result) => {
+        if (result.status === "CANCELLED") toast.success("Shiprocket shows the order as cancelled.");
+        else if (result.status === "REQUESTED") toast.message("Cancellation requested; Shiprocket does not show it as cancelled yet.");
+        else toast.error(result.reason ?? "Shiprocket cancellation did not complete.");
+      },
+      onError: (error) => toast.error(getErrorMessage(error, "Could not retry the Shiprocket cancellation.")),
+    });
+  }
+
+  const retryable = cancellation.status === "FAILED" || cancellation.status === "REQUESTED";
+  return (
+    <DetailField label="Shiprocket cancellation">
+      <div className="flex flex-wrap items-center gap-2" data-testid="shiprocket-cancellation-status">
+        {cancellation.status === "CANCELLED" ? (
+          <span className="text-sm text-emerald-600 dark:text-emerald-400">Cancelled{cancellation.shiprocketOrderId ? ` · Shiprocket order ${cancellation.shiprocketOrderId}` : ""}</span>
+        ) : cancellation.status === "REQUESTED" ? (
+          <span className="text-sm text-muted-foreground">Cancellation requested · waiting for Shiprocket to confirm</span>
+        ) : cancellation.status === "PENDING" ? (
+          <span className="text-sm text-muted-foreground">Pending · sending the cancellation to Shiprocket…</span>
+        ) : (
+          <span className="text-sm text-destructive">Cancellation failed{cancellation.error ? `: ${cancellation.error}` : ""}</span>
+        )}
+        {retryable && (
+          <Button type="button" size="sm" variant="outline" onClick={handleRetry} disabled={retry.isPending}>
+            <RefreshCw data-icon="inline-start" />
+            {retry.isPending ? "Checking…" : cancellation.status === "FAILED" ? "Retry Shiprocket cancellation" : "Check Shiprocket status"}
+          </Button>
+        )}
+      </div>
     </DetailField>
   );
 }

@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthUser } from "@/middlewares/auth.js";
-import { ActivitySource, ActivityType, AbandonmentStatus, CallDirection, RecoveryActionStatus, Role, TaskStatus } from "../../../generated/prisma/enums.js";
+import { ActivitySource, AssignmentType, ActivityType, AbandonmentStatus, CallDirection, RecoveryActionStatus, Role, TaskStatus } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import type { DbClient } from "@/lib/leadScope.js";
 import { statusForRole } from "@/lib/leadStatusView.js";
@@ -14,7 +14,10 @@ import { getDistribution, getTelecallerSummary, listTelecallers, type Distributi
 import { getIngestionStatus, FASTRR_PROVIDER, type IngestionStatus } from "./abandonment.ingestion-status.js";
 import { reconcileFailedAbandonmentEvents, type ReconcileResult } from "../shiprocket/shiprocket.abandonment.reconcile.js";
 import { abandonmentStore } from "../shiprocket/shiprocket.abandonment.store.js";
-import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope } from "./abandonment.filters.js";
+import { cachedDuplicateCheckoutIds } from "../orders/abandoned.dashboard.canonical.js";
+import { buildPlan, PlanConflictError } from "./abandonment.assign-plan.js";
+import { fullName } from "../orders/orders.filters.js";
+import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope, canAccessRecordings } from "./abandonment.filters.js";
 import { loadCustomerContext } from "./abandonment.customer-context.js";
 import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
 import type {
@@ -23,6 +26,7 @@ import type {
   AbandonmentListResult,
   BulkAssignManagerBody,
   BulkAssignSalespersonBody,
+  BulkAssignSalespersonResult,
   BulkUpdateLeadStatusBody,
   CreateRecoveryActionBody,
   ListAbandonmentsQuery,
@@ -95,7 +99,7 @@ class AbandonmentService {
   // `db` and `leadService` default to the real ones; tests pass a rolled-back transaction and a recording stub.
   constructor(
     private readonly db: DbClient = prisma,
-    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons" | "bulkAssignSalespersonsByStaff" | "bulkUpdateStatus"> = new LeadService(),
+    private readonly leadService: Pick<LeadService, "bulkAssignManagers" | "bulkAssignSalespersons" | "bulkAssignSalespersonsByStaff" | "bulkAssignPlanned" | "bulkUpdateStatus"> = new LeadService(),
     // The store's own order history (read-only). Injectable so tests use a fake and never reach Shopify; pass null to skip it.
     private readonly liveHistory: LiveHistoryClientFactory | null = defaultLiveHistoryClient,
   ) {}
@@ -142,10 +146,15 @@ class AbandonmentService {
   }
 
   /** The list where plus the value / last-action column filters, so the list, its total, its summary and "Select all" always agree. */
-  private async listWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role): Promise<Prisma.AbandonmentWhereInput> {
+  async listWhere(query: ListAbandonmentsQuery, leadScope: Prisma.LeadWhereInput, role: Role): Promise<Prisma.AbandonmentWhereInput> {
     const where = buildAbandonmentListWhere(query, leadScope, role);
     const derived = await abandonmentDerivedWhere(this.db, query);
-    return derived ? { AND: [where, derived] } : where;
+    // One checkout re-entered under a new cart id is ONE row: the same canonical rule as the Orders Dashboard (abandoned.dashboard.canonical.ts), so the list, its total, the status counts and "select all" agree.
+    // Classified from the user's own "from" date when there is one (a smaller read), otherwise from the beginning; the result may be up to a minute old (cachedDuplicateCheckoutIds). Nothing is deleted - the duplicate rows are only left out.
+    const dups = await cachedDuplicateCheckoutIds(this.db, { start: query.dateFrom ?? new Date(0) });
+    const notDuplicate: Prisma.AbandonmentWhereInput | null = dups.length > 0 ? { id: { notIn: dups } } : null;
+    const all = [where, ...(derived ? [derived] : []), ...(notDuplicate ? [notDuplicate] : [])];
+    return all.length === 1 ? where : { AND: all };
   }
 
   async listAbandonments(user: AuthUser, query: ListAbandonmentsQuery): Promise<AbandonmentListResult> {
@@ -173,7 +182,7 @@ class AbandonmentService {
       items: rows.map((row) => {
         const typed = row as AbandonmentListRow;
         typed.lead.workingStatus = statusForRole(typed.lead.workingStatus, user.role);
-        if (user.role === Role.SALESPERSON) {
+        if (!canAccessRecordings(user.role)) {
           typed.lead.calls = typed.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
         }
         const item = mapAbandonmentListRow(typed, summaries.get(row.id) ?? null);
@@ -216,14 +225,15 @@ class AbandonmentService {
   }
 
   /** Ids of EVERY abandonment matching the filters (not just the current page), so "Select all N" can feed the existing bulk-assign. */
-  async listMatchingIds(user: AuthUser, query: ListAbandonmentsQuery): Promise<{ ids: string[]; total: number; capped: boolean }> {
+  async listMatchingIds(user: AuthUser, query: ListAbandonmentsQuery): Promise<{ ids: string[]; total: number; capped: boolean; labels: { id: string; name: string; leadNumber: string }[] }> {
     this.assertOwnTelecallerFilter(user, query);
     const where = await this.listWhere(query, this.scopeWhere(user), user.role);
     const [rows, total] = await Promise.all([
-      this.db.abandonment.findMany({ where, select: { id: true }, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], take: MAX_SELECT_ALL }),
+      this.db.abandonment.findMany({ where, select: { id: true, lead: { select: { firstName: true, lastName: true, leadNumber: true } } }, orderBy: [{ detectedAt: "desc" }, { createdAt: "desc" }], take: MAX_SELECT_ALL }),
       this.db.abandonment.count({ where }),
     ]);
-    return { ids: rows.map((r) => r.id), total, capped: total > rows.length };
+    // The names let a Manual assignment show which lead is which for leads picked across several pages.
+    return { ids: rows.map((r) => r.id), total, capped: total > rows.length, labels: rows.map((r) => ({ id: r.id, name: fullName(r.lead.firstName, r.lead.lastName), leadNumber: r.lead.leadNumber })) };
   }
 
   private readonly DETAIL_SELECT = {
@@ -257,7 +267,7 @@ class AbandonmentService {
     }));
 
     row.lead.workingStatus = statusForRole(row.lead.workingStatus, user.role);
-    if (user.role === Role.SALESPERSON || user.role === Role.HR) {
+    if (!canAccessRecordings(user.role)) {
       row.lead.calls = row.lead.calls.map((call) => (call.recording ? { ...call, recording: { recordingUrl: null } } : call));
     }
 
@@ -436,30 +446,49 @@ class AbandonmentService {
     return listTelecallers(this.db, user);
   }
 
-  async bulkAssignSalesperson(user: AuthUser, body: BulkAssignSalespersonBody) {
+  /**
+   * Assign the selected abandoned leads to telecallers. Two modes, both with several telecallers:
+   *  - MANUAL: `assignments` names the telecaller of each lead (a legacy single `salespersonId` still means "all of them to that one"); leads with no assignment are left alone.
+   *  - ROUND_ROBIN: the selected leads are dealt one by one across `salespersonIds` (34 / 33 / 33 for 100 over 3), always starting with the first.
+   * The whole request is validated first and then saved in ONE transaction: it succeeds completely or changes nothing. Only the selected leads are ever touched.
+   */
+  async bulkAssignSalesperson(user: AuthUser, body: BulkAssignSalespersonBody): Promise<BulkAssignSalespersonResult> {
     // Enforced here as well as on the route: only admin, manager and HR assign. A telecaller (or any other role) is refused whatever route is used.
     if (user.role !== Role.ADMIN && user.role !== Role.MANAGER && user.role !== Role.HR) throw new ApiError("You do not have permission to assign leads", STATUS_CODES.FORBIDDEN);
+    if (body.abandonmentIds.length === 0) throw new ApiError("No abandoned leads selected", STATUS_CODES.BAD_REQUEST);
+    if (body.method === "ROUND_ROBIN" && !(body.salespersonIds && body.salespersonIds.length > 0)) throw new ApiError("Choose at least one telecaller", STATUS_CODES.BAD_REQUEST);
+    if (body.method === "MANUAL" && !(body.assignments && body.assignments.length > 0) && !body.salespersonId) throw new ApiError("Choose a telecaller for at least one lead", STATUS_CODES.BAD_REQUEST);
+
+    // The original request - every selected lead to ONE telecaller, nothing else - keeps its original code path and behaviour untouched.
+    if (body.method === "MANUAL" && !body.assignments && body.salespersonId) return this.assignAllToOne(user, body.abandonmentIds, body.salespersonId);
+
+    // A manager only reaches leads in their own scope; admin / HR reach every abandoned lead.
+    const scope = user.role === Role.MANAGER ? this.scopeWhere(user) : {};
+    const unique = [...new Set(body.abandonmentIds)];
+    const found = await this.db.abandonment.findMany({ where: { id: { in: unique }, ...(Object.keys(scope).length > 0 ? { lead: scope } : {}) }, select: { id: true, leadId: true } });
+    if (found.length !== unique.length) throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
+
+    let plan;
+    try {
+      plan = buildPlan({ method: body.method, abandonmentIds: unique, leadIdOf: new Map(found.map((a) => [a.id, a.leadId])), salespersonIds: body.salespersonIds, salespersonId: body.salespersonId, assignments: body.assignments });
+    } catch (error) {
+      if (error instanceof PlanConflictError) throw new ApiError(error.message, STATUS_CODES.BAD_REQUEST);
+      throw error;
+    }
+    const result = await this.leadService.bulkAssignPlanned({ id: user.id, role: user.role }, plan, body.method === "ROUND_ROBIN" ? AssignmentType.ROUND_ROBIN : AssignmentType.MANUAL, this.db as never);
+    return { ...result, selectedCount: unique.length };
+  }
+
+  /** The original "all selected leads to one telecaller" assignment, exactly as it always worked (admin / HR directly, a manager inside their team). */
+  private async assignAllToOne(user: AuthUser, abandonmentIds: string[], salespersonId: string) {
     if (user.role === Role.ADMIN || user.role === Role.HR) {
-      if (body.method !== "MANUAL" || !body.salespersonId) throw new ApiError("Choose one telecaller to assign these leads to", STATUS_CODES.BAD_REQUEST);
-      const found = await this.db.abandonment.findMany({ where: { id: { in: body.abandonmentIds } }, select: { leadId: true } });
-      if (found.length !== new Set(body.abandonmentIds).size) throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
-      return this.leadService.bulkAssignSalespersonsByStaff(user.id, { leadIds: [...new Set(found.map((a) => a.leadId))], salespersonId: body.salespersonId }, this.db as never);
+      const found = await this.db.abandonment.findMany({ where: { id: { in: abandonmentIds } }, select: { leadId: true } });
+      if (found.length !== new Set(abandonmentIds).size) throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
+      return this.leadService.bulkAssignSalespersonsByStaff(user.id, { leadIds: [...new Set(found.map((a) => a.leadId))], salespersonId }, this.db as never);
     }
-    const scope = this.scopeWhere(user);
-    const abandonments = await this.db.abandonment.findMany({
-      where: { id: { in: body.abandonmentIds }, lead: scope },
-      select: { id: true, leadId: true },
-    });
-    if (abandonments.length !== body.abandonmentIds.length) {
-      throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
-    }
-    const leadIds = [...new Set(abandonments.map((a) => a.leadId))];
-    return this.leadService.bulkAssignSalespersons(user.id, {
-      leadIds,
-      method: body.method,
-      salespersonId: body.salespersonId,
-      salespersonIds: body.salespersonIds,
-    });
+    const abandonments = await this.db.abandonment.findMany({ where: { id: { in: abandonmentIds }, lead: this.scopeWhere(user) }, select: { id: true, leadId: true } });
+    if (abandonments.length !== abandonmentIds.length) throw new ApiError("One or more abandoned leads not found", STATUS_CODES.NOT_FOUND);
+    return this.leadService.bulkAssignSalespersons(user.id, { leadIds: [...new Set(abandonments.map((a) => a.leadId))], method: "MANUAL", salespersonId });
   }
 
   // Admin-only, no scope filter - same as bulkAssignManager above - since this route is ADMIN-only.

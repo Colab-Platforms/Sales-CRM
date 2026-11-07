@@ -79,6 +79,10 @@ export const ORDER_LIST_QUERY = /* GraphQL */ `
         startCursor
         endCursor
       }
+      # Per-row cursors (same order as nodes): a filtered page can stop exactly after its last kept row, so Next neither skips nor repeats rows.
+      edges {
+        cursor
+      }
       nodes {
         id
         name
@@ -303,6 +307,7 @@ export const ORDER_BY_ID_QUERY = /* GraphQL */ `
           variantTitle
           sku
           quantity
+          currentQuantity
           originalUnitPriceSet {
             ...Money
           }

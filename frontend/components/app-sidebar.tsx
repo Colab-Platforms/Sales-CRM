@@ -356,6 +356,8 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
         { title: "Attendance", href: "/dashboard/attendance", icon: Timer, exact: true },
         { title: "Attendance Calendar", href: "/dashboard/attendance/calendar", icon: CalendarDays },
         { title: "Sources", href: "/dashboard/sources", icon: Plug },
+        { title: "Integrations · Shopify", href: "/dashboard/integrations/shopify", icon: Plug },
+        { title: "Coupons", href: "/dashboard/coupons", icon: Ticket },
         {
           title: "Virtual Numbers",
           href: "/dashboard/virtual-numbers",

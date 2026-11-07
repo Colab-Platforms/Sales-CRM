@@ -1,5 +1,6 @@
 "use client";
 
+import { canSyncLiveOrder } from "./live-order-permissions";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -159,8 +160,10 @@ function lineFigures(item: LiveItem, taxesIncluded: boolean | null) {
 export function LiveOrderDetailView({ externalId }: { externalId: string }) {
   const { data, isLoading, error, refetch } = useLiveOrderDetail(externalId);
   const router = useRouter();
-  // Reading this page is open to admin, manager and salesperson; the live ACTIONS below are admin-only on the server, so only admins are offered them.
-  const isAdmin = useAuthStore((s) => s.user?.role) === "ADMIN";
+  // Reading this page is open to admin, manager and salesperson; Sync order to CRM is offered to every role the server allows (canSyncLiveOrder); cancel stays admin-only.
+  const role = useAuthStore((s) => s.user?.role);
+  const isAdmin = role === "ADMIN";
+  const canSync = canSyncLiveOrder(role); // the same button, modal-free flow and result handling for every allowed role
   const [upgradeOpen, setUpgradeOpen] = useState(false);
   // Already synced into the CRM: open the CRM order (the single source of truth) instead of a Shopify-only copy.
   const crmOrderId = data?.crmOrderId;
@@ -249,7 +252,7 @@ export function LiveOrderDetailView({ externalId }: { externalId: string }) {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <BackLink />
           <div className="flex flex-wrap items-start justify-end gap-2">
-            {isAdmin ? <SyncOrderToCrmButton externalId={externalId} /> : null}
+            {canSync ? <SyncOrderToCrmButton externalId={externalId} /> : null}
             <PrepaidUpgradeAction target={upgradeTarget} onOpen={() => setUpgradeOpen(true)} />
             {isAdmin ? <CancelLiveOrderButton externalId={externalId} orderName={order.name} alreadyCancelled={isCancelled} /> : null}
           </div>

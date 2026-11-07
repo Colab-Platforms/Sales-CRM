@@ -4,6 +4,8 @@ import { requireAuth, requireRole, type AuthRequest } from "@/middlewares/auth.j
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { Role } from "../../../generated/prisma/enums.js";
+import { getOrderFlowScope } from "@/lib/leadScope.js";
+import { prisma } from "@/lib/prisma.js";
 import DiscountsService from "./discounts.service.js";
 
 const service = new DiscountsService();
@@ -22,7 +24,14 @@ const bad = (m: string) => Object.assign(new Error(m), { statusCode: STATUS_CODE
 router.get("/options", requireAuth, requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSON), run(async (req) => {
   const flow = z.enum(["ORDER", "UPGRADE"]).safeParse(req.query.flow);
   if (!flow.success) throw bad("flow must be ORDER or UPGRADE");
-  return service.options(flow.data);
+  // ORDER: the customer decides which coupons they may use (a distributor coupon is not offered to anyone else), so the customer is read - within the caller's own scope.
+  const leadId = z.uuid().safeParse(req.query.leadId);
+  let customerType: "REGULAR" | "DISTRIBUTOR" = "REGULAR";
+  if (flow.data === "ORDER" && leadId.success) {
+    const lead = await prisma.lead.findFirst({ where: { id: leadId.data, ...(await getOrderFlowScope(req.user!)) }, select: { customerType: true } });
+    if (lead) customerType = lead.customerType;
+  }
+  return service.options(flow.data, customerType);
 }));
 
 export default router;

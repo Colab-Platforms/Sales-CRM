@@ -21,7 +21,7 @@ const liveOrdersQuerySchema = z
     after: optional(z.string().trim().max(500, "after must be a valid cursor")),
     // 25-50 per the requirement ("Initial page should load only a small page") - never the whole
     // history, and never large enough to make the per-page CRM-lookup join expensive.
-    first: z.coerce.number({ error: "first must be a number" }).int().min(1).max(50).default(25),
+    first: z.coerce.number({ error: "first must be a number" }).int().min(1).max(100).default(25),
     search: optional(z.string().trim().max(100, "search must be 100 characters or fewer")),
     dateFrom: optional(z.iso.datetime({ offset: true, error: "dateFrom must be an ISO date-time" }).transform((v) => new Date(v))),
     dateTo: optional(z.iso.datetime({ offset: true, error: "dateTo must be an ISO date-time" }).transform((v) => new Date(v))),

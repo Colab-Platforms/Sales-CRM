@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { abandonmentApi } from "../endpoints/abandonment.api";
 import { abandonmentKeys } from "../queries/abandonment.queries";
 import type { IngestionReconcileResult } from "../types/abandonment.types";
-import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, BulkUpdateLeadStatusPayload, CreateRecoveryActionInput, ManagerAutoAssignConfig } from "../types/abandonment.types";
+import type { AutoAssignConfig, BulkAssignManagerPayload, BulkAssignSalespersonPayload, BulkAssignSalespersonResult, BulkUpdateLeadStatusPayload, CreateRecoveryActionInput, ManagerAutoAssignConfig, RedistributeAbsentResult } from "../types/abandonment.types";
 
 export function useLogRecoveryActionMutation(abandonmentId: string) {
   const queryClient = useQueryClient();
@@ -26,7 +26,7 @@ export function useBulkAssignManagerMutation() {
 
 export function useBulkAssignSalespersonMutation() {
   const queryClient = useQueryClient();
-  return useMutation<{ assignedCount: number; unchangedCount?: number }, unknown, BulkAssignSalespersonPayload>({
+  return useMutation<BulkAssignSalespersonResult, unknown, BulkAssignSalespersonPayload>({
     mutationFn: (payload) => abandonmentApi.bulkAssignSalesperson(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
@@ -76,6 +76,17 @@ export function useSetSalespersonAutoAssignMutation() {
     mutationFn: (enabled) => abandonmentApi.setSalespersonAutoAssignConfig(enabled),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: abandonmentKeys.salespersonAutoAssignConfig() });
+    },
+  });
+}
+
+export function useRedistributeAbsentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<RedistributeAbsentResult, unknown, boolean>({
+    mutationFn: (confirm) => abandonmentApi.redistributeAbsent(confirm),
+    onSuccess: (result) => {
+      // only a confirmed run changes who owns what
+      if (result.confirmed) queryClient.invalidateQueries({ queryKey: abandonmentKeys.all });
     },
   });
 }

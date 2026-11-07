@@ -7,6 +7,7 @@ import type {
   AutoAssignConfig,
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
+  BulkAssignSalespersonResult,
   BulkUpdateLeadStatusPayload,
   CreateRecoveryActionInput,
   ListAbandonmentsParams,
@@ -18,6 +19,7 @@ import type {
   IngestionStatus,
   ManagerAutoAssignConfig,
   OrderPrefill,
+  RedistributeAbsentResult,
   TelecallerSummary,
 } from "../types/abandonment.types";
 
@@ -38,8 +40,8 @@ export const abandonmentApi = {
   },
 
   /** Ids of EVERY abandonment the filters match (not just this page), for "Select all". */
-  async listMatchingIds(params: Omit<ListAbandonmentsParams, "page" | "pageSize">): Promise<{ ids: string[]; total: number; capped: boolean }> {
-    const res = await apiClient.get<ApiEnvelope<{ ids: string[]; total: number; capped: boolean }>>("/abandonments/ids", { params: wireParams({ page: 1, pageSize: 25, ...params }) });
+  async listMatchingIds(params: Omit<ListAbandonmentsParams, "page" | "pageSize">): Promise<{ ids: string[]; total: number; capped: boolean; labels: { id: string; name: string; leadNumber: string }[] }> {
+    const res = await apiClient.get<ApiEnvelope<{ ids: string[]; total: number; capped: boolean; labels: { id: string; name: string; leadNumber: string }[] }>>("/abandonments/ids", { params: wireParams({ page: 1, pageSize: 25, ...params }) });
     return res.data.data;
   },
 
@@ -68,8 +70,8 @@ export const abandonmentApi = {
     return res.data.data;
   },
 
-  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number; unchangedCount?: number }> {
-    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number; unchangedCount?: number }>>("/abandonments/bulk/assign-salesperson", payload);
+  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<BulkAssignSalespersonResult> {
+    const res = await apiClient.post<ApiEnvelope<BulkAssignSalespersonResult>>("/abandonments/bulk/assign-salesperson", payload);
     return res.data.data;
   },
 
@@ -127,6 +129,12 @@ export const abandonmentApi = {
 
   async setSalespersonAutoAssignConfig(enabled: boolean): Promise<AutoAssignConfig> {
     const res = await apiClient.patch<ApiEnvelope<AutoAssignConfig>>("/abandonments/auto-assign/salesperson-config", { enabled });
+    return res.data.data;
+  },
+
+  /** Manager only. `confirm` false = preview; true = move absent salespeople's untouched leads to present ones. */
+  async redistributeAbsent(confirm: boolean): Promise<RedistributeAbsentResult> {
+    const res = await apiClient.post<ApiEnvelope<RedistributeAbsentResult>>("/abandonments/auto-assign/redistribute-absent", { confirm });
     return res.data.data;
   },
 

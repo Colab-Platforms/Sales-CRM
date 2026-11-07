@@ -1,3 +1,4 @@
+import { duplicateCheckoutIds } from "./abandoned.dashboard.canonical.js";
 import ExcelJS from "exceljs";
 import { Prisma } from "../../../generated/prisma/client.js";
 import { prisma } from "@/lib/prisma.js";
@@ -96,9 +97,10 @@ export function abandonedMetricWhere(metric: AbandonedMetric, ids: ConvertedIds 
 }
 
 /** Range (by detection time) + the checkout type + the viewer's own visibility. */
-export function abandonedBaseWhere(user: { id: string; role: Role }, range: DashboardRange): Prisma.AbandonmentWhereInput {
+/** `duplicates` = rows the canonical-checkout rule (abandoned.dashboard.canonical.ts) removes: the same one checkout re-entered under a new cart id. Excluding them here makes the total, the cards and the list agree. */
+export function abandonedBaseWhere(user: { id: string; role: Role }, range: DashboardRange, duplicates: readonly string[] = []): Prisma.AbandonmentWhereInput {
   const scope = abandonmentLeadScope(user);
-  return { type: AbandonmentType.CHECKOUT, detectedAt: { gte: range.start, lt: range.end }, ...(Object.keys(scope).length > 0 ? { lead: scope } : {}) };
+  return { type: AbandonmentType.CHECKOUT, detectedAt: { gte: range.start, lt: range.end }, ...(Object.keys(scope).length > 0 ? { lead: scope } : {}), ...(duplicates.length > 0 ? { id: { notIn: [...duplicates] } } : {}) };
 }
 
 const ROW_SELECT = {
@@ -163,20 +165,21 @@ export class AbandonedDashboardService {
     if (user.role !== Role.ADMIN && user.role !== Role.MANAGER) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
   }
 
-  private async openValue(user: AuthUser, range: DashboardRange, ids: ConvertedIds): Promise<{ value: number; withoutValue: number; otherCurrency: number }> {
+  private async openValue(user: AuthUser, range: DashboardRange, ids: ConvertedIds, dups: readonly string[] = []): Promise<{ value: number; withoutValue: number; otherCurrency: number }> {
     // The cart value is a decimal string inside the saved cart (see abandonmentDerivedWhere): summed in the database, never cast unless it is a plain number.
     const num_ = Prisma.sql`(CASE WHEN a.cart_snapshot->>'cartValue' ~ '^[0-9]+([.][0-9]+)?$' THEN (a.cart_snapshot->>'cartValue')::numeric END)`;
     const inr = Prisma.sql`(a.cart_snapshot->>'currency' IS NULL OR a.cart_snapshot->>'currency' = '' OR upper(a.cart_snapshot->>'currency') = 'INR')`;
     const scope = abandonmentLeadScope(user);
     const manager = Object.keys(scope).length > 0 ? Prisma.sql`AND l.assigned_manager_id = ${user.id}::uuid` : Prisma.empty;
     const notConverted = ids.converted.length > 0 ? Prisma.sql`AND a.id::text <> ALL(${[...ids.converted]}::text[])` : Prisma.empty;
+    const notDuplicate = dups.length > 0 ? Prisma.sql`AND a.id::text <> ALL(${[...dups]}::text[])` : Prisma.empty;
     const rows = await this.db.$queryRaw<{ value: Prisma.Decimal | null; without_value: bigint; other_currency: bigint }[]>(Prisma.sql`
       SELECT COALESCE(SUM(CASE WHEN ${inr} THEN ${num_} END), 0) AS value,
              COUNT(*) FILTER (WHERE ${num_} IS NULL) AS without_value,
              COUNT(*) FILTER (WHERE NOT ${inr}) AS other_currency
       FROM abandonments a JOIN leads l ON l.id = a.lead_id
       WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${range.start} AND a.detected_at < ${range.end}
-        AND a.status IN ('ACTIVE'::abandonment_status, 'IN_PROGRESS'::abandonment_status) ${manager} ${notConverted}`);
+        AND a.status IN ('ACTIVE'::abandonment_status, 'IN_PROGRESS'::abandonment_status) ${manager} ${notConverted} ${notDuplicate}`);
     const r = rows[0];
     return { value: r?.value ? Number(r.value.toString()) : 0, withoutValue: Number(r?.without_value ?? 0), otherCurrency: Number(r?.other_currency ?? 0) };
   }
@@ -185,7 +188,8 @@ export class AbandonedDashboardService {
   async overview(user: AuthUser, f: AbandonedFilters, page: number, pageSize: number) {
     this.assertAllowed(user);
     const range = resolveDashboardRange(f, this.now());
-    const base = abandonedBaseWhere(user, range);
+    const dups = await duplicateCheckoutIds(this.db, range);
+    const base = abandonedBaseWhere(user, range, dups);
     const conv = await this.conversions(user, range);
     const of = (m: AbandonedMetric): Prisma.AbandonmentWhereInput => ({ AND: [base, abandonedMetricWhere(m, conv.ids)] });
     const [total, pending, done, recovered, open, latest, detected] = await Promise.all([
@@ -193,7 +197,7 @@ export class AbandonedDashboardService {
       this.db.abandonment.count({ where: of("PENDING") }),
       this.db.abandonment.count({ where: of("DONE") }),
       this.db.abandonment.count({ where: of("RECOVERED") }),
-      this.openValue(user, range, conv.ids),
+      this.openValue(user, range, conv.ids, dups),
       this.db.abandonment.aggregate({ where: { type: AbandonmentType.CHECKOUT }, _max: { detectedAt: true }, _min: { detectedAt: true } }),
       this.db.abandonment.count({ where: base }),
     ]);
@@ -205,11 +209,11 @@ export class AbandonedDashboardService {
     if (coverage === "FULL") {
       const prev = previousRange(range);
       const prevCoverage = coverageOf(prev, oldest, latest._max.detectedAt);
-      if (prevCoverage === "FULL") comparison = { totalAbandoned: compare(total, await this.db.abandonment.count({ where: { AND: [abandonedBaseWhere(user, prev), abandonedMetricWhere("TOTAL", (await this.conversions(user, prev)).ids)] } }), coverage, prevCoverage) };
+      if (prevCoverage === "FULL") comparison = { totalAbandoned: compare(total, await this.db.abandonment.count({ where: { AND: [abandonedBaseWhere(user, prev, await duplicateCheckoutIds(this.db, prev)), abandonedMetricWhere("TOTAL", (await this.conversions(user, prev)).ids)] } }), coverage, prevCoverage) };
     }
     let details: null | { metric: AbandonedMetric; items: ReturnType<typeof mapAbandonedRow>[]; pagination: { page: number; pageSize: number; totalItems: number; totalPages: number } } = null;
     if (f.metric) {
-      const where = this.detailsWhere(user, range, f, conv.ids);
+      const where = this.detailsWhere(user, range, f, conv.ids, dups);
       const [rows, totalItems] = await Promise.all([
         this.db.abandonment.findMany({ where, select: ROW_SELECT, orderBy: [{ detectedAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize }),
         this.db.abandonment.count({ where }),
@@ -228,8 +232,8 @@ export class AbandonedDashboardService {
     };
   }
 
-  private detailsWhere(user: AuthUser, range: DashboardRange, f: AbandonedFilters, ids: ConvertedIds): Prisma.AbandonmentWhereInput {
-    const and: Prisma.AbandonmentWhereInput[] = [abandonedBaseWhere(user, range)];
+  private detailsWhere(user: AuthUser, range: DashboardRange, f: AbandonedFilters, ids: ConvertedIds, dups: readonly string[] = []): Prisma.AbandonmentWhereInput {
+    const and: Prisma.AbandonmentWhereInput[] = [abandonedBaseWhere(user, range, dups)];
     if (f.metric) and.push(abandonedMetricWhere(f.metric, ids));
     if (f.search?.trim()) and.push(abandonmentSearchWhere(f.search.trim()));
     return { AND: and };
@@ -331,12 +335,17 @@ export class AbandonedDashboardService {
     const manager = Object.keys(scope).length > 0 ? Prisma.sql`AND l.assigned_manager_id = ${user.id}::uuid` : Prisma.empty;
     const value = Prisma.sql`(CASE WHEN a.cart_snapshot->>'cartValue' ~ '^[0-9]+([.][0-9]+)?$' THEN (a.cart_snapshot->>'cartValue')::numeric END)`;
     const inr = Prisma.sql`(a.cart_snapshot->>'currency' IS NULL OR a.cart_snapshot->>'currency' = '' OR upper(a.cart_snapshot->>'currency') = 'INR')`;
+    // The SAME population as the headline total: canonical checkouts only (a re-entry under a new cart id is not a second checkout) and not the ones that already became an order.
+    const dups = await duplicateCheckoutIds(this.db, range);
+    const converted = (await this.conversions(user, range)).ids.converted;
+    const notDuplicate = dups.length > 0 ? Prisma.sql`AND a.id::text <> ALL(${[...dups]}::text[])` : Prisma.empty;
+    const notConverted = converted.length > 0 ? Prisma.sql`AND a.id::text <> ALL(${[...converted]}::text[])` : Prisma.empty;
     const rows = await this.db.$queryRaw<{ bucket: string; abandoned: number; open_value: Prisma.Decimal | null }[]>(Prisma.sql`
       SELECT to_char(date_trunc(${TRUNC_UNIT[interval]}, (a.detected_at AT TIME ZONE 'UTC') AT TIME ZONE ${range.timezone}), 'YYYY-MM-DD') AS bucket,
              COUNT(*) FILTER (WHERE a.status <> 'RECOVERED'::abandonment_status)::int AS abandoned,
              COALESCE(SUM(CASE WHEN a.status IN ('ACTIVE'::abandonment_status, 'IN_PROGRESS'::abandonment_status) AND ${inr} THEN ${value} END), 0) AS open_value
       FROM abandonments a JOIN leads l ON l.id = a.lead_id
-      WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${range.start} AND a.detected_at < ${range.end} ${manager}
+      WHERE a.type = 'CHECKOUT'::abandonment_type AND a.detected_at >= ${range.start} AND a.detected_at < ${range.end} ${manager} ${notDuplicate} ${notConverted}
       GROUP BY 1`);
     const byKey = new Map(rows.map((r) => [r.bucket, { orders: Number(r.abandoned), revenue: Number(r.open_value?.toString() ?? 0) }]));
     const bounds = await this.db.abandonment.aggregate({ where: { type: AbandonmentType.CHECKOUT }, _min: { detectedAt: true }, _max: { detectedAt: true } });
@@ -359,7 +368,7 @@ export class AbandonedDashboardService {
     this.assertAllowed(user);
     const range = resolveDashboardRange(f, this.now());
     f = { ...f, metric: f.metric ?? "TOTAL" }; // an export with no card chosen is the abandoned checkouts (recovered carts are a purchase, so they are only exported from the Recovered card)
-    const where = this.detailsWhere(user, range, f, (await this.conversions(user, range)).ids);
+    const where = this.detailsWhere(user, range, f, (await this.conversions(user, range)).ids, await duplicateCheckoutIds(this.db, range));
     const total = await this.db.abandonment.count({ where });
     const wb = new ExcelJS.Workbook();
     wb.creator = "AyushWellness CRM";

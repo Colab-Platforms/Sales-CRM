@@ -12,13 +12,13 @@ export type DiscountFlow = "ORDER" | "UPGRADE";
 const FALLBACK: DiscountOptions = { defaultDiscount: { type: "FIXED", value: "50" }, fastrr: { available: false, coupons: [], reason: null } };
 
 // The default custom discount and the live Fastrr coupons come from GET /discounts/options (nothing is hardcoded in the UI).
-export function useDiscountOptions(flow: DiscountFlow, enabled = true) {
+export function useDiscountOptions(flow: DiscountFlow, enabled = true, leadId?: string) {
   const token = useAuthStore((s) => s.token);
   const q = useQuery({
-    queryKey: ["discounts", "options", flow],
-    queryFn: async () => (await apiClient.get<ApiEnvelope<DiscountOptions>>("/discounts/options", { params: { flow } })).data.data,
+    queryKey: ["discounts", "options", flow, leadId ?? null],
+    queryFn: async () => (await apiClient.get<ApiEnvelope<DiscountOptions>>("/discounts/options", { params: { flow, ...(leadId ? { leadId } : {}) } })).data.data,
     enabled: Boolean(token) && enabled,
-    staleTime: 60_000,
+    staleTime: 15_000,
   });
   return { options: q.data ?? FALLBACK, isLoading: q.isPending, loaded: q.isSuccess };
 }

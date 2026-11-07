@@ -1,0 +1,37 @@
+Master SKU Code,Product Name,Current Weight (kg),Current Dimensions (LxBxH cm),Proposed Weight (kg),Proposed Length (cm),Proposed Breadth (cm),Proposed Height (cm),Update Type,Fields Needing Confirmation,Notes
+AW-HM-PN-120,Herbal Masala - Paan Masala Flavour / 120 - Pouches,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-HM-CR-180,Herbal Masala - Gutka Flavour / 180 - Pouches,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-HM-RG-180,Herbal Masala - Royal Tobacco Flavour / 180 - Pouches,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-HM-CR-150g,Ziplock Big Pouches - Gutka / 150 Grams,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-HM-CR-300g,Ziplock Big Pouches - Gutka / 300 Grams,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-HM-PN-300g,Ziplock Big Pouches - Pan Masala / 300 Grams,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-HM-RG-300g,Ziplock Big Pouches - Royal Tobacco / 300 Grams,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-BF-CP-30,Brain Fuel Capsules - Pack Of 1,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-BF-CP-60,Brain Fuel Capsules - Pack Of 2,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-BF-CP-90,Brain Fuel Capsules - Pack Of 3,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-CV-TB-60,Calcium+ Vitamins Tablets - Pack Of 2,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-CV-TB-90,Calcium+ Vitamins Tablets - Pack Of 3,,,,,,,FILL,weight,Missing in the CRM. Not in the Shiprocket CSV; its dimensions are already recorded in the CRM, so only the weight is needed.
+AW-DS-TB-40,Dia Shield Tablets - Pack Of 2,,,,,,,FILL,weight,Missing in the CRM. Not in the Shiprocket CSV; its dimensions are already recorded in the CRM, so only the weight is needed.
+AW-SG-GM-90,Dreamy Sleep Gummies - 3 Jars,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-GF-CP-60,Gut Fuel Capsules - Pack of 2,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-GF-CP-90,Gut Fuel Capsules - Pack of 3,,20x15x2,,,,,FILL,weight,Missing in the CRM.
+AW-IC-TB-60,Immune Care Tablets - Pack Of 2,,,,,,,FILL,weight,Missing in the CRM. Not in the Shiprocket CSV; its dimensions are already recorded in the CRM, so only the weight is needed.
+AW-IC-TB-90,Immune Care Tablets - Pack Of 3,,,,,,,FILL,weight,Missing in the CRM. Not in the Shiprocket CSV; its dimensions are already recorded in the CRM, so only the weight is needed.
+AW-LD-TB-30,Liver Detox Tablets - Pack Of 1,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-LD-TB-60,Liver Detox Tablets - Pack Of 2,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-LD-TB-90,Liver Detox Tablets - Pack Of 3,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-LC-TB-60,Lung Care Tablets - Pack Of 2,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-LC-TB-90,Lung Care Tablets - Pack Of 3,,,,,,,FILL,"weight, length, breadth, height",Missing in the CRM.
+AW-BV-GM-60,"Skin, Hair & Nail Gummies - 2 Jars+2 Free",,20x15x2,,,,,FILL,weight,Missing in the CRM.
+,Immunity & Vitality Bundle - Default Title,,,,,,,FILL,"SKU, weight, length, breadth, height","NO SKU: assign a unique SKU in Shopify/CRM, type it into column A, then fill the proposed values. A row is never matched by name. Missing: weight, length, breadth, height."
+,Mind & Lifestyle Balance Bundle - Default Title,,,,,,,FILL,"SKU, weight, length, breadth, height","NO SKU: assign a unique SKU in Shopify/CRM, type it into column A, then fill the proposed values. A row is never matched by name. Missing: weight, length, breadth, height."
+AW-HM-PN-60,Herbal Masala - Paan Masala Flavour / 60 - Pouches,0.120,20x15x2,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. 60 pouches at 0.120 kg equals a single jar of tablets and is under half of the 120-pouch weight (0.200-0.250 kg)"
+AW-HM-CR-60,Herbal Masala - Gutka Flavour / 60 - Pouches,0.120,20x15x2,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. same as PN-60: 0.120 kg for 60 pouches looks like a placeholder"
+AW-HM-RG-60,Herbal Masala - Royal Tobacco Flavour / 60 - Pouches,0.120,20x15x2,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. same as PN-60: 0.120 kg for 60 pouches looks like a placeholder"
+AW-HM-CR-120,Herbal Masala - Gutka Flavour / 120 - Pouches,0.250,20x15x2,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. 0.250 kg here but 0.200 kg for the same 120 pack in Royal Tobacco (RG-120)"
+AW-HM-RG-120,Herbal Masala - Royal Tobacco Flavour / 120 - Pouches,0.200,20x15x2,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. 0.200 kg here but 0.250 kg for the same 120 pack in Gutka (CR-120)"
+AW-HM-PN-180,Herbal Masala - Paan Masala Flavour / 180 - Pouches,0.300,25x20x3,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. 180 pouches at 0.300 kg is only 0.05 kg above the 120 pack; this is the ABANDON100 coupon pack"
+AW-HM-PN-150g,Ziplock Big Pouches - Pan Masala / 150 Grams,0.200,20x15x2,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. 0.200 kg, the same as the 100 g pack; the Royal Tobacco 150 g pack (RG-150g) is 0.300 kg"
+AW-HM-RG-150g,Ziplock Big Pouches - Royal Tobacco / 150 Grams,0.300,25x20x3,,,,,REPLACE,weight,"Recorded value looks wrong, so this row may replace it. 0.300 kg and a 25x20x3 box, but the Pan Masala 150 g pack (PN-150g) is 0.200 kg"
+AW-SG-GM-60,Dreamy Sleep Gummies - 2 Jars,0.120,20x15x2,,,,,REPLACE,"weight, length, breadth, height","Recorded value looks wrong, so this row may replace it. 2 jars at 0.120 kg and 20x15x2 is identical to 1 jar (SG-30): one line of this variant is sent as 0.120 kg"
+AW-DS-TB-60,Dia Shield Tablets - Pack Of 3,0.120,20x15x2,,,,,REPLACE,"weight, length, breadth, height","Recorded value looks wrong, so this row may replace it. Pack of 3 at 0.120 kg and 20x15x2 is identical to Pack of 1 (DS-20)"

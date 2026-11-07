@@ -16,6 +16,11 @@ const params = (q: Partial<OrdersDashboardQuery> | Partial<AbandonedQuery>) => {
 };
 
 export const ordersDashboardApi = {
+  /** Telecaller Performance (read-only; Admin / Manager). */
+  async telecaller(q: import("../types/orders-dashboard.types").TelecallerQuery): Promise<import("../types/orders-dashboard.types").TelecallerPerformanceResult> {
+    const params = Object.fromEntries(Object.entries(q).filter(([, v]) => v !== undefined && v !== "" && v !== "ALL"));
+    return (await apiClient.get<ApiEnvelope<import("../types/orders-dashboard.types").TelecallerPerformanceResult>>("/orders-dashboard/telecaller", { params })).data.data;
+  },
   async get(q: OrdersDashboardQuery): Promise<OrdersDashboardResult> {
     return (await apiClient.get<ApiEnvelope<OrdersDashboardResult>>("/orders-dashboard", { params: params(q) })).data.data;
   },

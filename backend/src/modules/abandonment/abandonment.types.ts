@@ -173,8 +173,20 @@ export interface BulkAssignManagerBody {
 export interface BulkAssignSalespersonBody {
   abandonmentIds: string[];
   method: "MANUAL" | "ROUND_ROBIN";
+  /** Legacy: every selected lead to this one telecaller. */
   salespersonId?: string;
+  /** ROUND_ROBIN: the telecallers the selected leads are dealt across (in this order, starting with the first). */
   salespersonIds?: string[];
+  /** MANUAL: the telecaller of each lead (several telecallers allowed); a lead without an entry is not assigned. */
+  assignments?: { abandonmentId: string; salespersonId: string }[];
+}
+
+/** What a bulk salesperson assignment did. The employee-wise counts are present for the plan-based modes (Manual with several salespersons, Round Robin). */
+export interface BulkAssignSalespersonResult {
+  assignedCount: number;
+  unchangedCount?: number;
+  selectedCount?: number;
+  perSalesperson?: { salespersonId: string; name: string; assignedCount: number; unchangedCount: number }[];
 }
 
 // Distinct from UpdateAbandonmentStatusBody above: this changes the underlying LEAD's pipeline

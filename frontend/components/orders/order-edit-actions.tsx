@@ -18,7 +18,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { addressDraft, validateAddressDraft } from "./order-edit-form";
 
 // Order page actions for an EXISTING order: switch a line's flavour and edit the delivery address. Admin, Manager and Telecaller only; the server enforces who may edit which order, whether the order is still open
-// (no shipment, not fulfilled / cancelled in Shopify) and that a flavour change never alters the price - the buttons only explain what the server says.
+// (no shipment, not fulfilled / cancelled in Shopify) and that a flavour change never alters the agreed price - the buttons only explain what the server says.
 
 const EDIT_ROLES = ["ADMIN", "MANAGER", "SALESPERSON"];
 
@@ -51,7 +51,7 @@ export function ChangeFlavourButton({ order }: { order: Pick<OrderDetail, "id" |
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Change flavour - {order.orderNumber}</DialogTitle>
-            <DialogDescription>Switch a line to another flavour of the same product at the same price. The order total does not change; Shopify is updated too.</DialogDescription>
+            <DialogDescription>Switch a line to another flavour of the same product. The price the customer agreed stays exactly as it is, even if the new flavour's catalogue price differs. The order total does not change; Shopify is updated too.</DialogDescription>
           </DialogHeader>
           {listing.isLoading ? <p className="text-sm text-muted-foreground">Loading flavours…</p> : null}
           {listing.error ? <p role="alert" className="text-sm text-destructive">{getErrorMessage(listing.error, "Could not load the flavours.")}</p> : null}
@@ -65,8 +65,8 @@ export function ChangeFlavourButton({ order }: { order: Pick<OrderDetail, "id" |
               <NativeSelect id={`flavour-${line.itemId}`} value={choice[line.itemId] ?? ""} onChange={(e) => setChoice((c) => ({ ...c, [line.itemId]: e.target.value }))} disabled={!listing.data?.editable}>
                 <option value="">Choose a flavour…</option>
                 {line.options.filter((o) => !o.current).map((o) => (
-                  <option key={o.variantId} value={o.variantId} disabled={!o.priceMatches || !o.linkedToShopify}>
-                    {o.name}{!o.priceMatches ? " (different price - not allowed)" : !o.linkedToShopify ? " (not linked to Shopify)" : ""}
+                  <option key={o.variantId} value={o.variantId} disabled={!o.linkedToShopify}>
+                    {o.name}{!o.linkedToShopify ? " (not linked to Shopify)" : !o.priceMatches ? " (catalogue price differs - a higher catalogue price is absorbed by a discount; a lower one is refused)" : ""}
                   </option>
                 ))}
               </NativeSelect>

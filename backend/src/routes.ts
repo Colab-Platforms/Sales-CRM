@@ -18,6 +18,7 @@ import tasksRoutes from "@modules/tasks/tasks.routes.js";
 import deliveryRoutes from "@modules/delivery/delivery.routes.js";
 import offersRoutes from "@modules/offers/offers.routes.js";
 import discountRoutes from "@modules/discounts/discounts.routes.js";
+import couponRoutes from "@modules/coupons/coupons.routes.js";
 import abandonmentRoutes from "@modules/abandonment/abandonment.routes.js";
 import recruitmentRoutes from "@modules/recruitment/recruitment.routes.js";
 import refundRoutes from "@modules/refunds/refunds.routes.js";
@@ -56,6 +57,7 @@ router.use("/manager", managerRoutes);
 router.use("/orders-dashboard", ordersDashboardRoutes); // Admin / Manager only (website vs telecaller orders)
 router.use("/orders", ordersRoutes);
 router.use("/discounts", discountRoutes);
+router.use("/coupons", couponRoutes);
 router.use("/offers", offersRoutes);
 router.use("/products", productsRoutes);
 router.use("/customers", customersRoutes);

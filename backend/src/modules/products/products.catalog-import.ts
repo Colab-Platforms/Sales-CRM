@@ -43,7 +43,7 @@ const same = (a: string | null, b: number | null) => (a === null || b === null ?
 /** Rows come from `rows` already keyed by headerKey(). Pure with respect to the file: only the DB is touched. */
 export async function importCatalogRows(
   rows: AsyncIterable<Record<string, string>>,
-  opts: { db?: DbClient; total?: number; batchSize?: number; onProgress?: (processed: number, summary: CatalogImportSummary) => void; failedRows?: FailedRow[] } = {},
+  opts: { db?: DbClient; /** Only write a measurement the CRM does not have yet: a recorded weight is never replaced, and the three dimensions are written together only when none is recorded. Default false (the upload keeps its replace-on-difference behaviour). */ fillMissingOnly?: boolean; /** Plan the writes without making them; every planned write is pushed to `plan`. */ dryRun?: boolean; plan?: { sku: string; kind: "product" | "variant"; data: Record<string, number> }[]; total?: number; batchSize?: number; onProgress?: (processed: number, summary: CatalogImportSummary) => void; failedRows?: FailedRow[] } = {},
 ): Promise<CatalogImportSummary> {
   const db = opts.db ?? prisma;
   const batchSize = opts.batchSize ?? BATCH_SIZE;
@@ -92,19 +92,21 @@ export async function importCatalogRows(
       let firstTime = false;
       for (const t of targets) {
         const data: Record<string, number> = {};
-        if (parsed.weightKg !== null && !same(t.weightKg, parsed.weightKg)) data.weightKg = parsed.weightKg;
+        const hasAnyDim = t.lengthCm !== null || t.widthCm !== null || t.heightCm !== null;
+        if (parsed.weightKg !== null && (opts.fillMissingOnly ? t.weightKg === null : !same(t.weightKg, parsed.weightKg))) data.weightKg = parsed.weightKg;
         const d = parsed.dimensions;
-        if (d && !(same(t.lengthCm, d.lengthCm) && same(t.widthCm, d.widthCm) && same(t.heightCm, d.heightCm))) Object.assign(data, d);
+        if (d && (opts.fillMissingOnly ? !hasAnyDim : !(same(t.lengthCm, d.lengthCm) && same(t.widthCm, d.widthCm) && same(t.heightCm, d.heightCm)))) Object.assign(data, d);
         if (Object.keys(data).length === 0) continue;
         changed = true;
         if (t.weightKg === null && t.lengthCm === null) firstTime = true;
         writes.push({ target: t, data });
+        opts.plan?.push({ sku: code, kind: t.kind, data });
       }
       if (!changed) summary.unchanged++;
       else if (firstTime) summary.imported++;
       else summary.updated++;
     }
-    if (writes.length > 0) {
+    if (writes.length > 0 && !opts.dryRun) {
       const ops = writes.map(({ target, data }) =>
         target.kind === "variant" ? db.productVariant.update({ where: { id: target.id }, data, select: { id: true } }) : db.product.update({ where: { id: target.id }, data, select: { id: true } }),
       );

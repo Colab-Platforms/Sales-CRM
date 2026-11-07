@@ -25,7 +25,7 @@ import { DEFAULT_START_DATE, resolveWindow, windowSearch, type WindowSpec } from
 import { cancelShopifyOrder, ShopifyOrderCancelError } from "../shopify/shopify.orders.write.js";
 import { getLiveTrackingBatch } from "../shiprocket/shiprocket.live-tracking.js";
 import { mapListOrderStatusAndPayments } from "../shopify/shopify.mapper.js";
-import { canViewAllOrders, derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
+import { LIVE_ORDER_SYNC_ROLES, canViewAllOrders, derivePaymentMode, derivePaymentStatus, fullName } from "./orders.filters.js";
 import { matchesAnyTag, mergeOrderTags, tagSearchClause } from "./orders.tags.js";
 import { confirmationTagFor } from "./orders.confirmation.js";
 import { creatorOf } from "./orders.creator-tag.js";
@@ -81,7 +81,8 @@ async function resolveShopTimeZone(client: ShopifyClient): Promise<string> {
   return timeZone;
 }
 
-const FILTER_EXTRA_PAGES = 3;
+// How many further Shopify pages one filtered page may read to find `first` matching rows (bounded so a very sparse filter cannot scan the whole history).
+const FILTER_EXTRA_PAGES = 8;
 
 // Shopify's own list of the shop's most-used order tags (up to 250) - the source of the Tags filter's options. Cached briefly.
 const SHOP_ORDER_TAGS_QUERY = `query crmOrderTagOptions { shop { orderTags(first: 250, sort: POPULAR) { edges { node } } } }`;
@@ -216,13 +217,33 @@ class OrdersLiveService {
       // number) until `first` matching rows are found or Shopify has no more - the returned cursor always continues from
       // the last page actually read, so Next carries on exactly where this stopped.
       if (filtering) {
-        const collected = [...(await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, overlayFilters)).items];
+        // Exact pagination: stop AFTER the `first`-th matching row and hand back that row's own cursor, so the next page starts right behind it
+        // (no row skipped, none repeated, whatever the filters). Without per-row cursors (never the case against real Shopify) it falls back to the page's end cursor.
+        const collected: LiveOrderListItem[] = [];
+        let partial: string | undefined;
         let last = page;
-        for (let extra = 0; extra < FILTER_EXTRA_PAGES && collected.length < query.first && last.hasNextPage && last.endCursor; extra++) {
+        let endCursor = page.endCursor;
+        let hasNextPage = page.hasNextPage;
+        for (let extra = 0; ; extra++) {
+          const overlaid = await this.attachCrmOverlay(user, last.items, last.hasNextPage, last.hasPreviousPage, last.endCursor, overlayFilters);
+          partial ??= overlaid.partialError;
+          const room = query.first - collected.length;
+          const taken = overlaid.items.slice(0, room);
+          collected.push(...taken);
+          const overflow = overlaid.items.length > taken.length;
+          const cutIndex = overflow ? overlaid.sourceIndexes?.[taken.length - 1] : undefined;
+          const cutCursor = cutIndex === undefined ? undefined : last.cursors[cutIndex];
+          if (overflow && cutCursor) {
+            endCursor = cutCursor;
+            hasNextPage = true;
+            break;
+          }
+          endCursor = last.endCursor;
+          hasNextPage = last.hasNextPage;
+          if (collected.length >= query.first || !last.hasNextPage || !last.endCursor || extra >= FILTER_EXTRA_PAGES) break;
           last = await listOrdersForDisplay(client, { first: query.first, after: last.endCursor, search });
-          collected.push(...(await this.attachCrmOverlay(user, last.items, last.hasNextPage, last.hasPreviousPage, last.endCursor, overlayFilters)).items);
         }
-        const result: LiveOrderListResult = { items: collected, pageInfo: { hasNextPage: last.hasNextPage, hasPreviousPage: page.hasPreviousPage, endCursor: last.endCursor } };
+        const result: LiveOrderListResult = { items: collected, pageInfo: { hasNextPage, hasPreviousPage: page.hasPreviousPage, endCursor }, ...(partial ? { partialError: partial } : {}) };
         listCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
         return result;
       }
@@ -231,7 +252,7 @@ class OrdersLiveService {
       return { items: [], pageInfo: { hasNextPage: false, hasPreviousPage: false, endCursor: null }, error: message };
     }
 
-    const result = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, overlayFilters);
+    const { sourceIndexes: _unused, ...result } = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, overlayFilters);
     listCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
   }
@@ -250,7 +271,7 @@ class OrdersLiveService {
     hasPreviousPage: boolean,
     endCursor: string | null,
     overlayFilters: OverlayFilters,
-  ): Promise<LiveOrderListResult> {
+  ): Promise<LiveOrderListResult & { sourceIndexes?: number[] }> {
     if (shopifyItems.length === 0) {
       return { items: [], pageInfo: { hasNextPage, hasPreviousPage, endCursor } };
     }
@@ -285,7 +306,8 @@ class OrdersLiveService {
       : new Set((await this.db.lead.findMany({ where: { id: { in: leadIds }, ...leadScope }, select: { id: true } })).map((l) => l.id));
 
     const items: LiveOrderListItem[] = [];
-    for (const shopifyOrder of shopifyItems) {
+    const itemSource: number[] = []; // index in shopifyItems of each entry of `items`
+    for (const [sourceIndex, shopifyOrder] of shopifyItems.entries()) {
       const crm = byExternalId.get(normalizeShopifyOrderId(shopifyOrder.externalId)) ?? null;
       const linkedInCrm = Boolean(crm);
 
@@ -293,15 +315,18 @@ class OrdersLiveService {
         // Not yet synced into the CRM at all - visible to every role that sees all orders (admin, manager, salesperson).
         if (!seesAll) continue;
         items.push(this.mapUnlinked(shopifyOrder));
+        itemSource.push(sourceIndex);
         continue;
       }
       if (!inScopeLeadIds.has(crm!.lead.id) && !seesAll) continue; // out of this caller's scope
 
       items.push(this.mapLinked(shopifyOrder, crm!));
+      itemSource.push(sourceIndex);
     }
 
     const filtered = this.applyOverlayFilters(items, overlayFilters);
-    return { items: filtered, pageInfo: { hasNextPage, hasPreviousPage, endCursor }, partialError };
+    const sourceIndexes = items.flatMap((item, i) => (filtered.includes(item) ? [itemSource[i]!] : []));
+    return { items: filtered, pageInfo: { hasNextPage, hasPreviousPage, endCursor }, partialError, sourceIndexes };
   }
 
   // status/paymentStatus/source/salespersonId are all CRM-owned - Shopify's own order list has no
@@ -597,9 +622,9 @@ class OrdersLiveService {
   // Brings a Shopify order that has no CRM Order row into the CRM, through the SAME sync every webhook and `shopify:sync` run uses (upsertOrder:
   // idempotent on the Shopify order id under an advisory lock + unique key, so repeating it - or racing a webhook - never creates a duplicate). Reads the
   // order from Shopify (read-only) and writes the Order, items, lead link and payments; it never creates a refund and never contacts Cashfree. The
-  // lifecycle WhatsApp automation is skipped: catching an order up must not message the customer late. ADMIN only, like the live page it is offered on.
+  // lifecycle WhatsApp automation is skipped: catching an order up must not message the customer late. Roles: LIVE_ORDER_SYNC_ROLES (the same list the route uses).
   async syncLiveOrderToCrm(user: AuthUser, externalId: string): Promise<LiveOrderSyncResult> {
-    if (user.role !== Role.ADMIN) return { synced: false, reason: "Not found" };
+    if (!LIVE_ORDER_SYNC_ROLES.includes(user.role)) return { synced: false, reason: "Not found" };
 
     let client: ShopifyClient;
     try {

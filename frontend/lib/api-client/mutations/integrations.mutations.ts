@@ -1,12 +1,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { integrationsApi } from "../endpoints/integrations.api";
+import { integrationsKeys } from "../queries/integrations.queries";
 import { auditKeys } from "../queries/audit.queries";
 import { customersKeys } from "../queries/customers.queries";
 import { ordersKeys } from "../queries/orders.queries";
 import { reconciliationKeys } from "../queries/reconciliation.queries";
 import { whatsappHistoryKeys } from "../queries/whatsapp-history.queries";
 import { whatsappKeys } from "../queries/whatsapp.queries";
-import type { CreateShipmentInput, PaymentLinkResult, ShipmentActionResult } from "../types/integrations.types";
+import type { CreateShipmentInput, PaymentLinkResult, ShipmentActionResult, ShopifyCrmOrderSync } from "../types/integrations.types";
 import type { WhatsAppMessageResult } from "../types/whatsapp-messaging.types";
 import type { OrderNotifyResult } from "../types/orders.types";
 
@@ -93,4 +94,12 @@ export function useGenerateLabelMutation() {
 export function useRefreshTrackingMutation() {
   const refresh = useRefreshOrderData();
   return useMutation<ShipmentActionResult, unknown, string>({ mutationFn: (shipmentId) => integrationsApi.refreshTracking(shipmentId), onSuccess: refresh });
+}
+
+export function useSetShopifyCrmOrderSyncMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<ShopifyCrmOrderSync, unknown, boolean>({
+    mutationFn: (enabled) => integrationsApi.setShopifyCrmOrderSync(enabled),
+    onSuccess: (saved) => queryClient.setQueryData(integrationsKeys.shopifyCrmOrderSync(), saved),
+  });
 }

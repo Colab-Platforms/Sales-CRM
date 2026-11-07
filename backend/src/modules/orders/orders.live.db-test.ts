@@ -291,7 +291,7 @@ describe("Order Detail for a Shopify order id: the shopify:<id> / numeric / GID 
     });
   });
 
-  it("reading grants no action: the live cancel and sync actions stay admin-only", async () => {
+  it("reading grants no action: the live cancel action stays admin-only (sync has its own role list, see orders.live.sync.rbac.test.ts)", async () => {
     await inRollback(async (tx) => {
       const mk = (role: Role) => tx.user.create({ data: { name: role, username: `u-${uid()}`, role } });
       const svc = new OrdersLiveService(tx, () => fakeShopifyDetailClient(orderByIdBody({ id: `gid://shopify/Order/${ID}`, name: "#9001" })));
@@ -299,8 +299,6 @@ describe("Order Detail for a Shopify order id: the shopify:<id> / numeric / GID 
         const u = await mk(role);
         const cancel = await svc.cancelLiveOrder(as(u, role), ID);
         assert.equal(cancel.cancelled, false);
-        const sync = await svc.syncLiveOrderToCrm(as(u, role), ID);
-        assert.equal(sync.synced, false);
       }
     });
   });

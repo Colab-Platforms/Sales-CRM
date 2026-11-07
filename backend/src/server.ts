@@ -19,8 +19,10 @@ import legalRoutes from "./modules/legal/legal.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startReportAutomationScheduler } from "./modules/report-automation/report-automation.scheduler.js";
+import { startAbandonedPoolSweep } from "./modules/abandonment/abandonment.pool.scheduler.js";
 import { startIdempotencyPruneJob } from "./modules/orders/orders.idempotency.prune.js";
 import { startCallTranscriptionWorker } from "./modules/calling/calling.transcription.js";
+import { releaseRunningExports, startRecordingExportMaintenance, startRecordingExportWorker } from "./modules/abandonment/recording-export.service.js";
 import { attendanceService } from "./modules/attendance/attendance.service.js";
 import { assertSandboxProcess } from "./modules/cashfree/cashfree.sandbox-guard.js";
 import { installGracefulShutdown } from "./lib/gracefulShutdown.js";
@@ -100,8 +102,11 @@ const server = app.listen(PORT, () => {
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
   startReportAutomationScheduler(); // daily WhatsApp telecaller report (Admin / Manager automation)
+  startAbandonedPoolSweep(); // retries unowned abandoned leads for the 24/7 pool (no-op while the pool is off)
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
+  startRecordingExportWorker().catch((error) => console.error("[recording-export] failed to start worker:", error)); // background ZIP exports of call recordings (pg-boss)
+  startRecordingExportMaintenance(); // deletes expired exports, re-queues ones whose worker disappeared
 });
 
 // Redeploys send SIGTERM: stop taking connections and give in-flight WhatsApp work (e.g. a report released by a reply) up to 10 s to finish, then exit.
-installGracefulShutdown({ server, drain: drainWhatsAppBackgroundWork, timeoutMs: 10_000 });
+installGracefulShutdown({ server, drain: async () => { await drainWhatsAppBackgroundWork(); await releaseRunningExports(); }, timeoutMs: 10_000 }); // exports running here go back to the queue at once

@@ -3,6 +3,7 @@ import { RANGE_KINDS } from "./orders.dashboard.range.js";
 import { INTERVALS, type Interval } from "./orders.dashboard.insights.js";
 import { validateSchema } from "@/utils/validate.js";
 import { MAX_PAGE_SIZE, METRICS, type DashboardFilters } from "./orders.dashboard.service.js";
+import { ORDER_STATUSES, PAYMENT_MODES } from "./orders.dashboard.telecaller.js";
 import { ABANDONED_METRICS, MAX_ABANDONED_PAGE_SIZE, type AbandonedFilters } from "./abandoned.dashboard.service.js";
 
 const emptyToUndefined = (v: unknown) => (typeof v === "string" && v.trim() === "" ? undefined : v);
@@ -51,3 +52,14 @@ const chartSchema = z.object({
   interval: z.enum(INTERVALS, { error: "interval must be daily, weekly or monthly" }).default("daily"),
 });
 export const validateChart = (query: unknown) => validateSchema<{ range?: (typeof RANGE_KINDS)[number]; from?: string; to?: string; interval: Interval }>(chartSchema as never, query);
+
+const telecallerSchema = z.object({
+  range: opt(z.enum(RANGE_KINDS, { error: "Unknown date range" })),
+  from: opt(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { error: "From must be YYYY-MM-DD" })),
+  to: opt(z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { error: "To must be YYYY-MM-DD" })),
+  salespersonId: opt(z.uuid({ error: "Invalid salesperson" })),
+  paymentMode: opt(z.enum(PAYMENT_MODES as [string, ...string[]], { error: "Unknown payment filter" })),
+  orderStatus: opt(z.enum(ORDER_STATUSES as unknown as [string, ...string[]], { error: "Unknown order status" })),
+});
+export interface TelecallerFilters { range?: (typeof RANGE_KINDS)[number]; from?: string; to?: string; salespersonId?: string; paymentMode?: "ALL" | "COD" | "PREPAID"; orderStatus?: string }
+export const validateTelecaller = (query: unknown) => validateSchema<TelecallerFilters>(telecallerSchema as never, query);

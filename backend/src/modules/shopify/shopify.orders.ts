@@ -12,6 +12,8 @@ const lineItemSchema = z.object({
   variantTitle: z.string().nullish(),
   sku: z.string().nullish(),
   quantity: z.number(),
+  /** Units still on the order (excludes removed and refunded units). Shopify keeps a REMOVED line (e.g. the old flavour after an order edit) with its original `quantity`. */
+  currentQuantity: z.number().nullish(),
   originalUnitPriceSet: moneyBag.nullish(),
   discountAllocations: z.array(z.object({ allocatedAmountSet: moneyBag })).nullish(),
   taxLines: z.array(z.object({ priceSet: moneyBag.nullish() })).nullish(),
@@ -292,6 +294,8 @@ function normalizeFulfillments(fulfillments: z.infer<typeof fulfillmentSchema>[]
   }));
 }
 
+const hasRefund = (node: z.infer<typeof orderNodeSchema>): boolean => Number(amountOf(node.totalRefundedSet) ?? 0) > 0;
+
 export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): NormalizedOrder {
   const customer = node.customer ?? null;
   const email = customer?.email ?? node.email ?? null;
@@ -333,12 +337,14 @@ export function normalizeOrder(node: z.infer<typeof orderNodeSchema>): Normalize
       total: amountOf(node.totalPriceSet),
       refunded: amountOf(node.totalRefundedSet),
     },
-    items: node.lineItems.nodes.map((item) => ({
+    // A line removed by an order edit (a flavour change) stays in Shopify with its original quantity and currentQuantity 0; it must not come back into the CRM as if it were still ordered. A removed unit and a
+    // refunded unit look the same here, so this applies only to an order with NO refund - on a refunded order every line is kept exactly as before.
+    items: node.lineItems.nodes.filter((item) => hasRefund(node) || (item.currentQuantity ?? item.quantity) > 0).map((item) => ({
       id: item.id,
       title: item.title,
       variantTitle: item.variantTitle ?? null,
       sku: item.sku ?? null,
-      quantity: item.quantity,
+      quantity: hasRefund(node) ? item.quantity : (item.currentQuantity ?? item.quantity),
       unitPrice: amountOf(item.originalUnitPriceSet),
       discounts: (item.discountAllocations ?? []).map((d) => d.allocatedAmountSet.shopMoney.amount),
       taxes: (item.taxLines ?? []).map((t) => amountOf(t.priceSet) ?? "0"),
@@ -454,6 +460,7 @@ const orderListNodeSchema = z.object({
 const orderListResponse = z.object({
   orders: z.object({
     pageInfo: z.object({ hasNextPage: z.boolean(), hasPreviousPage: z.boolean(), startCursor: z.string().nullish(), endCursor: z.string().nullish() }),
+    edges: z.array(z.object({ cursor: z.string() })).nullish(),
     nodes: z.array(orderListNodeSchema),
   }),
 });
@@ -499,6 +506,8 @@ export interface LiveOrdersPage {
   hasPreviousPage: boolean;
   startCursor: string | null;
   endCursor: string | null;
+  /** Cursor of each row in `items` (same order); empty when Shopify did not return them. */
+  cursors: string[];
 }
 
 function normalizeOrderListNode(node: z.infer<typeof orderListNodeSchema>): NormalizedOrderListItem {
@@ -568,5 +577,6 @@ export async function listOrdersForDisplay(client: ShopifyClient, params: LiveLi
     hasPreviousPage: data.orders.pageInfo.hasPreviousPage,
     startCursor: data.orders.pageInfo.startCursor ?? null,
     endCursor: data.orders.pageInfo.endCursor ?? null,
+    cursors: (data.orders.edges ?? []).map((e) => e.cursor),
   };
 }

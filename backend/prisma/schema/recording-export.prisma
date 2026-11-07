@@ -1,0 +1,82 @@
+// Background ZIP exports of abandoned-lead call recordings (Admin / Manager). The ZIP itself is kept in Postgres in fixed-size chunks (no object store is
+// provisioned for this app, and local disk does not survive a restart or a second instance). Everything here is deleted after the retention period.
+model RecordingExportJob {
+  id String @id @default(uuid()) @db.Uuid
+
+  createdById String @map("created_by_id") @db.Uuid
+  role        String @map("role") @db.VarChar(30)
+
+  // ZIP (call recordings) | EXCEL (abandoned-lead records). The Excel export reuses the job / progress / storage machinery; it has no per-item rows.
+  kind String @default("ZIP") @map("kind") @db.VarChar(10)
+
+  // The list filters an Excel export applies on top of the date range (validated server-side; null = date range only).
+  filters Json? @map("filters")
+
+  // Inclusive calendar days (IST), as chosen in the UI.
+  fromDay String @map("from_day") @db.VarChar(10)
+  toDay   String @map("to_day") @db.VarChar(10)
+
+  // QUEUED | PROCESSING | COMPLETED | FAILED
+  status String @default("QUEUED") @map("status") @db.VarChar(20)
+
+  total      Int @default(0) @map("total")
+  processed  Int @default(0) @map("processed")
+  failed     Int @default(0) @map("failed")
+  duplicates Int @default(0) @map("duplicates")
+
+  // Bytes of audio written so far, the end of the last audio entry (where a retry appends), and the size of the finished ZIP.
+  dataEnd   BigInt @default(0) @map("data_end")
+  sizeBytes BigInt @default(0) @map("size_bytes")
+  fileName  String? @map("file_name") @db.VarChar(200)
+
+  errorMessage String?   @map("error_message")
+  heartbeatAt  DateTime? @map("heartbeat_at")
+  startedAt    DateTime? @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+  attempts     Int       @default(0) @map("attempts")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  items  RecordingExportItem[]
+  chunks RecordingExportChunk[]
+
+  @@index([createdById, createdAt])
+  @@index([createdById, kind, status])
+  @@index([status])
+  @@index([expiresAt])
+  @@map("recording_export_jobs")
+}
+
+model RecordingExportItem {
+  jobId String             @map("job_id") @db.Uuid
+  job   RecordingExportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seq   Int                @map("seq")
+
+  callId String @map("call_id") @db.Uuid
+  // The name inside the ZIP, fixed when the job is created so a resumed export names files identically.
+  fileName String @map("file_name") @db.VarChar(200)
+
+  // PENDING | DONE | FAILED
+  status String  @default("PENDING") @map("status") @db.VarChar(20)
+  reason String? @map("reason") @db.VarChar(200)
+
+  crc32       BigInt? @map("crc32")
+  size        BigInt? @map("size")
+  localOffset BigInt? @map("local_offset")
+  endOffset   BigInt? @map("end_offset")
+
+  @@id([jobId, seq])
+  @@index([jobId, status])
+  @@map("recording_export_items")
+}
+
+model RecordingExportChunk {
+  jobId String             @map("job_id") @db.Uuid
+  job   RecordingExportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seq   Int                @map("seq")
+  data  Bytes              @map("data")
+
+  @@id([jobId, seq])
+  @@map("recording_export_chunks")
+}
