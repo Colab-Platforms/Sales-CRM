@@ -33,7 +33,7 @@ export const managerAnalyticsKeys = {
 export function managerAnalyticsQueryOptions(q: AnalyticsQuery) {
   return queryOptions({
     queryKey: managerAnalyticsKeys.overview(q),
-    queryFn: () => managerAnalyticsApi.overview(q),
+    queryFn: ({ signal }) => managerAnalyticsApi.overview(q, signal),
     placeholderData: keepPreviousData,
     // Live figures: re-read every minute while the tab is open (paused in background tabs).
     refetchInterval: ANALYTICS_REFRESH_MS,
@@ -43,7 +43,7 @@ export function managerAnalyticsQueryOptions(q: AnalyticsQuery) {
 export function salespersonAnalyticsQueryOptions(id: string, q: AnalyticsQuery) {
   return queryOptions({
     queryKey: managerAnalyticsKeys.salesperson(id, q),
-    queryFn: () => managerAnalyticsApi.salesperson(id, q),
+    queryFn: ({ signal }) => managerAnalyticsApi.salesperson(id, q, signal),
     placeholderData: keepPreviousData,
     refetchInterval: ANALYTICS_REFRESH_MS,
   });

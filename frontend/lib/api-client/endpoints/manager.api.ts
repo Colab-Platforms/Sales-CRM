@@ -36,14 +36,15 @@ export const managerAnalyticsApi = {
     return res.data;
   },
 
-  async overview(q: AnalyticsQuery): Promise<ManagerAnalytics> {
-    const res = await apiClient.get<ApiEnvelope<ManagerAnalytics>>("/manager/analytics", { params: analyticsParams(q) });
+  async overview(q: AnalyticsQuery, signal?: AbortSignal): Promise<ManagerAnalytics> {
+    const res = await apiClient.get<ApiEnvelope<ManagerAnalytics>>("/manager/analytics", { params: analyticsParams(q), signal });
     return res.data.data;
   },
 
-  async salesperson(id: string, q: AnalyticsQuery): Promise<SalespersonAnalytics> {
+  async salesperson(id: string, q: AnalyticsQuery, signal?: AbortSignal): Promise<SalespersonAnalytics> {
     const res = await apiClient.get<ApiEnvelope<SalespersonAnalytics>>(`/manager/analytics/salespersons/${id}`, {
       params: analyticsParams({ ...q, salespersonId: undefined }),
+      signal,
     });
     return res.data.data;
   },

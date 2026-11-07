@@ -59,6 +59,15 @@ export function restoreSession(): Promise<boolean> {
 
 const isAuthCall = (url?: string) => Boolean(url && /^\/auth\/(login|refresh|logout)/.test(url));
 
+// Reads (GET) get a time limit unless the call sets its own: when the database connection stalls, a request could
+// otherwise stay pending forever and its page section stay blank. Writes are left without one on purpose (a write that
+// times out while the server still completes it invites a second submission), and so are file downloads.
+const READ_TIMEOUT_MS = 90_000;
+apiClient.interceptors.request.use((config) => {
+  if ((config.method ?? "get").toLowerCase() === "get" && !config.timeout && config.responseType !== "blob") config.timeout = READ_TIMEOUT_MS;
+  return config;
+});
+
 apiClient.interceptors.request.use(async (config) => {
   if (!isAuthCall(config.url)) {
     const current = useAuthStore.getState().token;

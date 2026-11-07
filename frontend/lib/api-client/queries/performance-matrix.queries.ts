@@ -11,7 +11,7 @@ export const performanceMatrixKeys = {
 export function performanceMatrixQueryOptions(q: MatrixQuery) {
   return queryOptions({
     queryKey: performanceMatrixKeys.report(q),
-    queryFn: () => performanceMatrixApi.get(q),
+    queryFn: ({ signal }) => performanceMatrixApi.get(q, signal),
     placeholderData: keepPreviousData,
     refetchInterval: 60_000,
   });
