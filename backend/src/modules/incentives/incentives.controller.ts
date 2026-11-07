@@ -5,7 +5,7 @@ import { logger } from "@/utils/logger.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
 import { todayString } from "../attendance/attendance.calc.js";
-import { incentivesService } from "./incentives.service.js";
+import { NOT_SET_UP, incentivesService, isMissingTable } from "./incentives.service.js";
 import * as v from "./incentives.validators.js";
 
 const thisMonth = () => todayString(new Date(), REPORT_TZ_OFFSET_MINUTES).slice(0, 7);
@@ -17,6 +17,8 @@ function handle(what: string, fn: (req: AuthRequest, res: Response) => Promise<u
       const data = await fn(req, res);
       if (data !== undefined) sendResponse(res, true, data, "OK", STATUS_CODES.OK);
     } catch (error: any) {
+      // Saving before the incentives migration is applied: say what to do instead of a raw database error.
+      if (isMissingTable(error)) return void sendResponse(res, false, null, NOT_SET_UP, STATUS_CODES.SERVICE_UNAVAILABLE);
       if (!error.statusCode) logger.error(`Incentives ${what} failed`, error);
       sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
     }

@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma.js";
+import { logger } from "@/utils/logger.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import type { AuthUser } from "@/middlewares/auth.js";
@@ -26,6 +27,30 @@ import { DEFAULT_POLICY, evaluateMonth, monthDays, policyError, type DayInput, t
 // ---------------------------------------------------------------------------------------------
 
 const TZ = REPORT_TZ_OFFSET_MINUTES;
+
+/** Prisma P2021: a table does not exist - the incentives migration has not been applied to this database yet. */
+export const isMissingTable = (e: unknown) => (e as { code?: string } | null)?.code === "P2021";
+export const NOT_SET_UP = "Incentives are not set up on this server yet. Run `npx prisma migrate deploy` in the backend to create the incentive tables.";
+let warned = false;
+
+/**
+ * Reads of the stored incentive data (policy, approvals, queries, audit). Until the migration is applied the tables are
+ * missing; the plan is still computed from the CRM's records, with the policy sheet's defaults and nothing approved yet.
+ * Saving anything is refused with NOT_SET_UP (incentives.controller.ts).
+ */
+async function stored<T>(query: PromiseLike<T>, fallback: T): Promise<T> {
+  try {
+    return await query;
+  } catch (e) {
+    if (!isMissingTable(e)) throw e;
+    if (!warned) {
+      warned = true;
+      logger.warn(NOT_SET_UP);
+    }
+    return fallback;
+  }
+}
+
 const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export interface MonthRecord {
@@ -63,7 +88,7 @@ function toRules(row: Awaited<ReturnType<typeof prisma.incentivePolicy.findFirst
 
 class IncentivesService {
   async policy() {
-    const row = await prisma.incentivePolicy.findFirst();
+    const row = await stored(prisma.incentivePolicy.findFirst(), null);
     return { rules: toRules(row), configured: row !== null, updatedAt: row?.updatedAt.toISOString() ?? null };
   }
 
@@ -179,8 +204,8 @@ class IncentivesService {
     const today = todayString(new Date(), TZ);
     this.checkMonth(month, today);
     const [row, queries, policy] = await Promise.all([
-      prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } }),
-      prisma.incentiveQuery.findMany({ where: { userId, month }, orderBy: { createdAt: "desc" } }),
+      stored(prisma.incentiveMonth.findUnique({ where: { userId_month: { userId, month } } }), null),
+      stored(prisma.incentiveQuery.findMany({ where: { userId, month }, orderBy: { createdAt: "desc" } }), []),
       this.policy(),
     ]);
     const who = await names([row?.approvedById, row?.paidById, ...queries.map((q) => q.resolvedById)]);
@@ -220,8 +245,8 @@ class IncentivesService {
     this.checkMonth(month, today);
     const [people, rows, openQueries, policy] = await Promise.all([
       prisma.user.findMany({ where: { role: Role.SALESPERSON, status: UserStatus.ACTIVE }, select: { id: true, name: true, username: true }, orderBy: { name: "asc" } }),
-      prisma.incentiveMonth.findMany({ where: { month } }),
-      prisma.incentiveQuery.groupBy({ by: ["userId"], where: { month, status: "OPEN" }, _count: { _all: true } }),
+      stored(prisma.incentiveMonth.findMany({ where: { month } }), []),
+      stored(prisma.incentiveQuery.groupBy({ by: ["userId"], where: { month, status: "OPEN" }, _count: { _all: true } }), []),
       this.policy(),
     ]);
     const byUser = new Map(rows.map((r) => [r.userId, r]));
@@ -318,12 +343,12 @@ class IncentivesService {
   }
 
   async listQueries(status?: "OPEN" | "RESOLVED") {
-    const rows = await prisma.incentiveQuery.findMany({
+    const rows = await stored(prisma.incentiveQuery.findMany({
       where: status ? { status } : {},
       orderBy: { createdAt: "desc" },
       take: 200,
       include: { user: { select: { name: true } } },
-    });
+    }), []);
     const who = await names(rows.map((r) => r.resolvedById));
     return rows.map((q) => ({
       id: q.id,
@@ -351,11 +376,14 @@ class IncentivesService {
   }
 
   async auditLog(f: { userId?: string; month?: string }) {
-    const rows = await prisma.incentiveAuditLog.findMany({
-      where: { ...(f.userId ? { userId: f.userId } : {}), ...(f.month ? { month: f.month } : {}) },
-      orderBy: { createdAt: "desc" },
-      take: 300,
-    });
+    const rows = await stored(
+      prisma.incentiveAuditLog.findMany({
+        where: { ...(f.userId ? { userId: f.userId } : {}), ...(f.month ? { month: f.month } : {}) },
+        orderBy: { createdAt: "desc" },
+        take: 300,
+      }),
+      [],
+    );
     const who = await names(rows.flatMap((r) => [r.actorId, r.userId]));
     return rows.map((r) => ({
       id: r.id,
