@@ -15,6 +15,7 @@ import { advisoryLock, asRecord, ProviderHttpError, safeMessage, toTenDigitMobil
 import { applyShipmentUpdate, shipmentOrderLockKey, SHIPMENT_REFERENCE_TYPE } from "./shiprocket.apply.js";
 import { ShiprocketClient, type CancelReply, type CourierOption, type CreateOrderRequest, type CreatedOrder, type ShiprocketOrderLookup } from "./shiprocket.client.js";
 import { channelIdsFor, describeRemoteTwins, findLiveRemoteOrders } from "./shiprocket.duplicates.js";
+import { channelOrderIdFor, decideChannelRef, type ChannelRefDecision } from "./shiprocket.channel-ref.js";
 import { confirmShiprocketCancellation, isCancelledText, mergeShiprocketCancellation, planCancellation, readShiprocketCancellation, type ShiprocketCancelStatus, type ShiprocketCancellationRecord } from "./shiprocket.cancellation.js";
 import { isShiprocketEnabled, loadShiprocketConfig, ShiprocketConfigError, type ShiprocketConfig } from "./shiprocket.config.js";
 import { mapShiprocketStatus, parseEtd } from "./shiprocket.events.js";
@@ -452,6 +453,8 @@ class ShiprocketShipmentsService {
       throw providerFailure(error, "create the shipment");
     }
 
+    const ref: ChannelRefDecision = prepared.ref;
+    const mapping = ref.kind === "SHOPIFY" ? { shopifyOrderId: ref.shopifyOrderId, shopifyOrderName: ref.shopifyOrderName } : {};
     await this.runner.$transaction(async (tx) => {
       await advisoryLock(tx, shipmentOrderLockKey(orderId));
       await tx.shipment.update({
@@ -463,11 +466,11 @@ class ShiprocketShipmentsService {
           trackingNumber: created.awb,
           courier: created.courierName,
           courierCompanyId: created.courierCompanyId,
-          metadata: { shiprocket: { created: true, channelOrderId: prepared.request.order_id } },
+          metadata: { shiprocket: { created: true, channelOrderId: prepared.request.order_id, crmOrderNumber: prepared.orderNumber, ...mapping } },
         },
       });
       // The order's Shiprocket status (shown on the order page) - for the automatic submission, a retry and a shipment created by hand alike.
-      await mergeShiprocketSync(tx, orderId, { status: "SYNCED", syncedAt: this.now().toISOString(), lastAttemptAt: this.now().toISOString(), shiprocketOrderId: created.orderId ?? null, channelOrderId: prepared.request.order_id, error: null });
+      await mergeShiprocketSync(tx, orderId, { status: "SYNCED", syncedAt: this.now().toISOString(), lastAttemptAt: this.now().toISOString(), shiprocketOrderId: created.orderId ?? null, channelOrderId: prepared.request.order_id, crmOrderNumber: prepared.orderNumber, shopifyOrderId: mapping.shopifyOrderId ?? null, shopifyOrderName: mapping.shopifyOrderName ?? null, error: null });
       await tx.activity.create({
         data: {
           leadId: prepared.leadId,
@@ -498,6 +501,9 @@ class ShiprocketShipmentsService {
         id: true,
         orderNumber: true,
         externalNumber: true,
+        externalId: true,
+        source: true,
+        metadata: true,
         status: true,
         placedAt: true,
         createdAt: true,
@@ -541,10 +547,15 @@ class ShiprocketShipmentsService {
       throw new ApiError("A previous attempt to create this shipment did not get a reply, so it may already exist in Shiprocket. Check the Shiprocket panel, then confirm to create another.", STATUS_CODES.CONFLICT);
     }
 
+    // A CRM order that is a Shopify order is registered under its SHOPIFY reference; one still waiting for its Shopify order is not registered at all (a second route into Shiprocket would be the duplicate).
+    const ref = decideChannelRef(order);
+    if (ref.kind === "WAIT_FOR_SHOPIFY") throw new ApiError(`${ref.reason} Nothing was sent to Shiprocket.`, STATUS_CODES.CONFLICT);
+
     const shipmentId = randomUUID();
-    // The first submission of an order uses the CRM order number itself as Shiprocket's channel order id. Any later one (after a cancelled / failed attempt) keeps a suffix, so the two never share an id.
-    const channelOrderId = (order.shipments.length === 0 ? order.orderNumber : `${order.orderNumber}-${shipmentId.slice(0, 8)}`).slice(0, 50);
-    const { request, collectCents } = buildShiprocketOrder(order, input, config.pickupLocation, channelOrderId);
+    // The first submission of an order uses the base id itself (Shopify reference, or the CRM order number). Any later one (after a cancelled / failed attempt) keeps a suffix, so the two never share an id.
+    const channelOrderId = channelOrderIdFor(ref.base, order.shipments.length, shipmentId.slice(0, 8));
+    const { request: built, collectCents } = buildShiprocketOrder(order, input, config.pickupLocation, channelOrderId);
+    const request: CreateOrderRequest = ref.kind === "SHOPIFY" ? { ...built, comment: `CRM order ${order.orderNumber}`.slice(0, 200) } : built;
 
     await tx.shipment.create({
       data: {
@@ -555,11 +566,11 @@ class ShiprocketShipmentsService {
         externalId: `pending:${shipmentId}`,
         channelOrderId,
         weightKg: input.weight, // the parcel weight entered for this shipment, exactly as sent to Shiprocket
-        metadata: { shiprocket: { creating: true } },
+        metadata: { shiprocket: { creating: true, crmOrderNumber: order.orderNumber, ...(ref.kind === "SHOPIFY" ? { shopifyOrderId: ref.shopifyOrderId, shopifyOrderName: ref.shopifyOrderName } : {}) } },
       },
     });
     await tx.order.update({ where: { id: order.id }, data: { parcelWeightKg: input.weight } });
-    return { shipmentId, request, collectCents, orderNumber: order.orderNumber, externalNumber: order.externalNumber ?? null, hadEarlierAttempt: order.shipments.length > 0, leadId: order.lead.id };
+    return { shipmentId, request, collectCents, orderNumber: order.orderNumber, externalNumber: order.externalNumber ?? null, hadEarlierAttempt: order.shipments.length > 0, leadId: order.lead.id, ref };
   }
 
   /**

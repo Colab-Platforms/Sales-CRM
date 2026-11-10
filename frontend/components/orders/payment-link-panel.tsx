@@ -219,6 +219,8 @@ export function ShiprocketSyncStatus({ order }: { order: OrderDetail }) {
           <span className="text-sm text-emerald-600 dark:text-emerald-400">Submitted{sync.shiprocketOrderId ? ` · Shiprocket order ${sync.shiprocketOrderId}` : ""}</span>
         ) : sync.status === "AWAITING_PAYMENT" ? (
           <span className="text-sm text-muted-foreground">Waiting for the payment to be verified</span>
+        ) : sync.status === "AWAITING_SHOPIFY" ? (
+          <span className="text-sm text-muted-foreground">Waiting for the Shopify order — Shiprocket gets it under the Shopify order number</span>
         ) : sync.status === "PENDING" ? (
           <span className="text-sm text-muted-foreground">Submitting…</span>
         ) : (

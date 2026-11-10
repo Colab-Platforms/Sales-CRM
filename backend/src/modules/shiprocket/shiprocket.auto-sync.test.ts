@@ -18,10 +18,12 @@ const ROLES = [
 const decision = (enabled: boolean) => ({ shopifySyncDecision: { enabled, decidedAt: "2026-11-04T00:00:00.000Z" } });
 const paid = [{ status: "SUCCESS", method: "PAYMENT_LINK", amount: "1249.00", refundedAmount: null }];
 
-function setup(opts: { prepaid?: boolean; paid?: boolean; shopifyOn: boolean; role: string; source?: string; items?: unknown[]; total?: string }) {
+const SHOPIFY_REF = "AWL110591";
+function setup(opts: { prepaid?: boolean; paid?: boolean; shopifyOn: boolean; linked?: boolean; role: string; source?: string; items?: unknown[]; total?: string }) {
   const base = {
     ...ORDER,
     source: opts.source ?? "SALESPERSON",
+    ...(opts.linked ? { externalId: "9001", externalNumber: `#${SHOPIFY_REF}` } : {}),
     metadata: { ...ORDER.metadata, paymentMode: opts.prepaid ? "PREPAID" : "COD", createdBy: { role: opts.role }, ...decision(opts.shopifyOn) },
     ...(opts.items ? { items: opts.items } : {}),
     status: opts.prepaid ? "PENDING_PAYMENT" : "CONFIRMED",
@@ -31,15 +33,16 @@ function setup(opts: { prepaid?: boolean; paid?: boolean; shopifyOn: boolean; ro
   const sr = fakeShiprocket();
   const service = new ShiprocketShipmentsService(db.runner as never, { config: () => CONFIG, client: () => sr.api });
   const actor = { id: "creator-1", username: "creator", role: opts.role as never };
-  const run = (trigger: "ORDER_CREATED" | "PAYMENT_VERIFIED" | "RETRY" = "ORDER_CREATED", env: Record<string, string> = ENV) => syncOrderToShiprocket({ db: db.tx as never, service, env }, ORDER.id, actor, trigger);
+  const run = (trigger: "ORDER_CREATED" | "PAYMENT_VERIFIED" | "SHOPIFY_LINKED" | "RETRY" = "ORDER_CREATED", env: Record<string, string> = ENV) => syncOrderToShiprocket({ db: db.tx as never, service, env }, ORDER.id, actor, trigger);
   return { db, sr, run };
 }
 
 describe("every creator x payment mode x Shopify setting: exactly one Shiprocket order", () => {
   for (const { label, role } of ROLES) {
     for (const shopifyOn of [false, true]) {
-      it(`${label} COD, Shopify sync ${shopifyOn ? "ON" : "OFF"}: submitted once, with the CRM order number as channel id; repeats create nothing`, async () => {
-        const { db, sr, run } = setup({ role, shopifyOn });
+      it(`${label} COD, Shopify sync ${shopifyOn ? "ON" : "OFF"}: submitted once, with ${shopifyOn ? "the SHOPIFY order reference" : "the CRM order number"} as the Shiprocket order id; repeats create nothing`, async () => {
+        const { db, sr, run } = setup({ role, shopifyOn, linked: shopifyOn });
+        const expectedId = shopifyOn ? SHOPIFY_REF : ORDER.orderNumber;
         const first = await run();
         assert.equal(first.status, "SYNCED", first.reason ?? "");
         assert.equal((await run("RETRY")).status, "SYNCED");
@@ -47,7 +50,8 @@ describe("every creator x payment mode x Shopify setting: exactly one Shiprocket
         assert.equal(sr.sent.length, 1, "Shiprocket received the order exactly once");
         assert.equal(db.shipments.length, 1);
         const req = sr.sent[0]!;
-        assert.equal(req.order_id, ORDER.orderNumber);
+        assert.equal(req.order_id, expectedId);
+        assert.equal(req.comment, shopifyOn ? `CRM order ${ORDER.orderNumber}` : undefined, "the CRM order number stays on the Shiprocket order for reconciliation");
         assert.equal(req.payment_method, "COD");
         assert.equal(req.sub_total, 1249, "COD collectable amount");
         assert.equal(req.billing_phone, "9876500000");
@@ -59,7 +63,9 @@ describe("every creator x payment mode x Shopify setting: exactly one Shiprocket
         const rec = readShiprocketSync(db.order.metadata)!;
         assert.equal(rec.status, "SYNCED");
         assert.equal(rec.shiprocketOrderId, "SR-ORD-555");
-        assert.equal(rec.channelOrderId, ORDER.orderNumber);
+        assert.equal(rec.channelOrderId, expectedId);
+        assert.equal(rec.crmOrderNumber, ORDER.orderNumber);
+        assert.equal(rec.shopifyOrderName, shopifyOn ? `#${SHOPIFY_REF}` : null);
         assert.ok(rec.syncedAt && rec.lastAttemptAt);
         assert.equal(rec.error, null);
       });
@@ -70,12 +76,12 @@ describe("every creator x payment mode x Shopify setting: exactly one Shiprocket
         assert.equal(unpaid.sr.sent.length, 0);
         assert.equal(readShiprocketSync(unpaid.db.order.metadata)?.status, "AWAITING_PAYMENT");
 
-        const done = setup({ role, shopifyOn, prepaid: true, paid: true });
+        const done = setup({ role, shopifyOn, prepaid: true, paid: true, linked: shopifyOn });
         assert.equal((await done.run("PAYMENT_VERIFIED")).status, "SYNCED");
         assert.equal((await done.run("PAYMENT_VERIFIED")).status, "SYNCED", "a repeated payment callback");
         assert.equal(done.sr.sent.length, 1);
         assert.equal(done.sr.sent[0]!.payment_method, "Prepaid");
-        assert.equal(done.sr.sent[0]!.order_id, ORDER.orderNumber);
+        assert.equal(done.sr.sent[0]!.order_id, shopifyOn ? SHOPIFY_REF : ORDER.orderNumber);
       });
     }
   }
@@ -116,12 +122,12 @@ describe("independence from Shopify, and Shopify-originated orders", () => {
     assert.equal(sr.sent.length, 0);
   });
 
-  it("Shiprocket submission does not read or write any Shopify status, and Shopify behaviour is unchanged by it", async () => {
-    // Shopify OFF -> the push is skipped; ON -> it goes to the existing claim path. Shiprocket has submitted the same order in both cases.
+  it("Shiprocket submission never writes a Shopify status or id, and Shopify behaviour is unchanged by it", async () => {
+    // Shopify OFF -> the push is skipped and Shiprocket submits at once; ON -> the push goes to the existing claim path and Shiprocket waits for its result.
     for (const shopifyOn of [false, true]) {
       const { db, sr, run } = setup({ role: "SALESPERSON", shopifyOn });
       await run();
-      assert.equal(sr.sent.length, 1);
+      assert.equal(sr.sent.length, shopifyOn ? 0 : 1, shopifyOn ? "Shopify ON: waits for the Shopify order" : "Shopify OFF: submitted at once");
       const meta = db.order.metadata as Record<string, unknown>;
       assert.equal(meta.shopifySync, undefined, "no Shopify status was written");
       assert.equal(db.order.externalId, null, "no Shopify id was needed or set");
@@ -137,11 +143,44 @@ describe("independence from Shopify, and Shopify-originated orders", () => {
     }
   });
 
-  it("the Shiprocket module never reads the Shopify setting or decision", async () => {
+  it("the Shiprocket submission code never calls Shopify: the saved decision and the link are only READ, through the pure channel-ref rule", async () => {
     const { readFileSync } = await import("node:fs");
     for (const f of ["shiprocket.auto-sync.ts", "shiprocket.sync-record.ts"]) {
-      assert.doesNotMatch(readFileSync(new URL(`./${f}`, import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""), /shopify/i, f);
+      assert.doesNotMatch(readFileSync(new URL(`./${f}`, import.meta.url), "utf8").replace(/^\s*\/\/.*$/gm, ""), /from "\.\.\/shopify\/|ShopifyClient|shopifyPush|shopifySync\b/, f);
     }
+  });
+
+  it("Shopify sync ON but no Shopify order yet: nothing is sent to Shiprocket and the order waits (COD and prepaid); once the Shopify order exists it is submitted ONCE under the Shopify reference", async () => {
+    for (const prepaid of [false, true]) {
+      const { db, sr, run } = setup({ role: "SALESPERSON", shopifyOn: true, prepaid, paid: prepaid });
+      assert.equal((await run(prepaid ? "PAYMENT_VERIFIED" : "ORDER_CREATED")).status, "AWAITING_SHOPIFY");
+      assert.equal((await run("RETRY")).status, "AWAITING_SHOPIFY", "the retry button cannot go round Shopify");
+      assert.equal(sr.sent.length, 0);
+      assert.equal(db.shipments.length, 0, "no shipment is reserved before the Shopify order exists");
+      assert.equal(readShiprocketSync(db.order.metadata)?.status, "AWAITING_SHOPIFY");
+      db.order.externalId = "9001";
+      db.order.externalNumber = `#${SHOPIFY_REF}`;
+      assert.equal((await run("SHOPIFY_LINKED")).status, "SYNCED");
+      assert.equal((await run("RETRY")).status, "SYNCED");
+      assert.equal((await run("SHOPIFY_LINKED")).status, "SYNCED", "a repeated Shopify webhook / retry");
+      assert.equal(sr.sent.length, 1);
+      assert.equal(sr.sent[0]!.order_id, SHOPIFY_REF);
+      assert.equal(db.shipments.length, 1);
+    }
+  });
+
+  it("an order from before the setting existed (no saved decision) and not linked to Shopify is submitted as before, with the CRM order number", async () => {
+    const { db, sr, run } = setup({ role: "SALESPERSON", shopifyOn: true });
+    delete (db.order.metadata as Record<string, unknown>).shopifySyncDecision;
+    assert.equal((await run()).status, "SYNCED");
+    assert.equal(sr.sent[0]!.order_id, ORDER.orderNumber);
+  });
+
+  it("an order that IS linked to Shopify is registered under its Shopify reference, so Shiprocket sees one sale", async () => {
+    const { db, sr, run } = setup({ role: "SALESPERSON", shopifyOn: true, linked: true });
+    delete (db.order.metadata as Record<string, unknown>).shopifySyncDecision;
+    assert.equal((await run()).status, "SYNCED");
+    assert.equal(sr.sent[0]!.order_id, SHOPIFY_REF);
   });
 
   it("an order the retry may not see is reported as not found by the service (scope is checked before anything is submitted)", async () => {
@@ -191,7 +230,7 @@ describe("parcel from product-level measurements", () => {
   it("several products with different quantities: weights are summed (x quantity); the size is the LARGEST of each side, never added", async () => {
     const small = { weightKg: "0.2", lengthCm: "10", widthCm: "8", heightCm: "5" };
     const big = { weightKg: "0.75", lengthCm: "14", widthCm: "6", heightCm: "9" };
-    const { sr, run } = setup({ role: "MANAGER", shopifyOn: true, items: [line("AW-S", 3, small), line("AW-B", 2, big, "Calcium", "Pack of 2")] });
+    const { sr, run } = setup({ role: "MANAGER", shopifyOn: true, linked: true, items: [line("AW-S", 3, small), line("AW-B", 2, big, "Calcium", "Pack of 2")] });
     assert.equal((await run()).status, "SYNCED");
     const req = sr.sent[0] as unknown as Record<string, number>;
     assert.deepEqual([req.weight, req.length, req.breadth, req.height], [2.1, 14, 8, 9], "3x0.2 + 2x0.75 = 2.1 kg; max(10,14) x max(8,6) x max(5,9)");

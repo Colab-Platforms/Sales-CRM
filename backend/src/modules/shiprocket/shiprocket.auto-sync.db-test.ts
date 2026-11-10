@@ -91,7 +91,9 @@ async function creators(w: Awaited<ReturnType<typeof world>>) {
   ];
 }
 const shipmentsOf = (tx: Prisma.TransactionClient, orderId: string) => tx.shipment.findMany({ where: { orderId, externalSource: "SHIPROCKET" }, select: { status: true, externalId: true, providerOrderId: true, channelOrderId: true } });
-const metaOf = async (tx: Prisma.TransactionClient, orderId: string) => (await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true, externalId: true, status: true, orderNumber: true } }));
+const metaOf = async (tx: Prisma.TransactionClient, orderId: string) => (await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { metadata: true, externalId: true, externalNumber: true, status: true, orderNumber: true } }));
+/** The Shiprocket order id a CRM order is registered under: its Shopify reference when Shopify sync linked it, the CRM order number otherwise. */
+const expectedRef = (row: { orderNumber: string; externalId: string | null; externalNumber: string | null }) => (row.externalId && row.externalNumber ? row.externalNumber.replace(/^#/, "") : row.orderNumber);
 
 describe("full COD order creation: Telecaller / Admin / Manager x Shopify sync ON / OFF", () => {
   for (const shopifyOn of [false, true]) {
@@ -106,9 +108,10 @@ describe("full COD order creation: Telecaller / Admin / Manager x Shopify sync O
           const row = await metaOf(tx, r.order.id);
           const ships = await shipmentsOf(tx, r.order.id);
           assert.equal(ships.length, 1, `${c.label}: one Shiprocket shipment`);
-          assert.equal(ships[0]!.channelOrderId, row.orderNumber, "the CRM order number is the channel order id");
+          assert.equal(ships[0]!.channelOrderId, expectedRef(row), shopifyOn ? "Shopify ON: the Shopify order reference is the Shiprocket order id" : "Shopify OFF: the CRM order number is the Shiprocket order id");
           assert.ok(ships[0]!.externalId && !ships[0]!.externalId.startsWith("pending:"));
-          assert.equal(sr.sent.at(-1)!.order_id, row.orderNumber);
+          assert.equal(sr.sent.at(-1)!.order_id, expectedRef(row));
+          assert.equal(readShiprocketSync(row.metadata)!.crmOrderNumber, row.orderNumber, "the CRM order number is kept for reconciliation");
           assert.equal(sr.sent.at(-1)!.payment_method, "COD");
           const rec = readShiprocketSync(row.metadata)!;
           assert.equal(rec.status, "SYNCED");
@@ -165,7 +168,7 @@ describe("prepaid: submitted only after the payment is verified", () => {
           assert.equal(sr.sent.length, before + 1, `${c.label}: exactly one Shiprocket order after payment, despite a replayed callback`);
           const row = await metaOf(tx, r.order.id);
           assert.equal(sr.sent.at(-1)!.payment_method, "Prepaid");
-          assert.equal(sr.sent.at(-1)!.order_id, row.orderNumber);
+          assert.equal(sr.sent.at(-1)!.order_id, expectedRef(row));
           assert.equal(readShiprocketSync(row.metadata)!.status, "SYNCED");
           assert.equal(row.status, "CONFIRMED");
           if (!shopifyOn) assert.equal(row.externalId, null, "Shopify OFF: no Shopify order even after payment");
@@ -253,7 +256,7 @@ describe("configuration and manual retry of existing orders", () => {
         const r = await w.orders.createManualOrder({ id: c!.u.id, username: c!.u.username, role: c!.u.role } as never, { leadId: c!.leadId, items: [{ productId: w.product.id, quantity: 3, unitPrice: "1199.00" }, { productId: w.product2.id, quantity: 2, unitPrice: "299.00" }], paymentMethod: "COD", shippingAddress: ADDRESS, shippingPincode: "411001" } as never);
         assert.equal(sr.sent.length, 1);
         assert.deepEqual([sr.sent[0]!.weight, sr.sent[0]!.length, sr.sent[0]!.breadth, sr.sent[0]!.height], [2.25, 14, 8, 9], "3x0.25 + 2x0.75; max(10,14) x max(8,6) x max(5,9)");
-        assert.equal(sr.sent[0]!.order_id, (await metaOf(tx, r.order.id)).orderNumber);
+        assert.equal(sr.sent[0]!.order_id, expectedRef(await metaOf(tx, r.order.id)));
         assert.equal(w.shop.created.length, shopifyOn ? 1 : 0);
         assert.equal((await shipmentsOf(tx, r.order.id)).length, 1);
       }));

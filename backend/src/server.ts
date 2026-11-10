@@ -15,6 +15,7 @@ import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules
 import shiprocketAbandonmentWebhookRoutes, { startAbandonmentReconcileJob, startAbandonmentWebhookWorker } from "./modules/shiprocket/shiprocket.abandonment.webhook.routes.js";
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
 import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/whatsapp/whatsapp.meta.webhook.routes.js";
+import { startOmsForwardWorker } from "./modules/whatsapp/whatsapp.oms-forward.js";
 import legalRoutes from "./modules/legal/legal.routes.js";
 import { agencyJsonErrorHandler, createAgencyRoutes } from "./modules/agency/agency.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
@@ -103,6 +104,7 @@ const server = app.listen(PORT, () => {
   startAbandonmentReconcileJob(); // opt-in (ABANDONMENT_RECONCILE_MINUTES); off by default
   startAiSensyProjectWebhookWorker();
   startMetaWebhookWorker();
+  startOmsForwardWorker(); // independent OMS forwarding; no-op when OMS_WHATSAPP_FORWARD_URL/SALES_CRM_FORWARD_SECRET aren't set
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
   startReportAutomationScheduler(); // daily WhatsApp telecaller report (Admin / Manager automation)

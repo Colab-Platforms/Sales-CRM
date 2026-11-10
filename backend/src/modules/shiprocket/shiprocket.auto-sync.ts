@@ -3,7 +3,8 @@
 // This reuses the existing shipment service (ShiprocketShipmentsService.createShipment): the same order mapping, the same pickup location, the same locking, the same "one live shipment per order"
 // rule and the same ambiguity handling. It only decides WHEN to call it and records the outcome on the order (Order.metadata.shiprocketSync, see shiprocket.sync-record.ts).
 //
-//  - It does not look at the "Shopify sync for CRM-created orders" setting, a Shopify order id or any Shopify status: Shopify OFF/ON, created, skipped or failed make no difference here.
+//  - Shopify sync OFF (or an order from before the setting existed): independent of Shopify, as always - the CRM order number is the Shiprocket order id.
+//  - Shopify sync ON: the order is registered under its SHOPIFY order reference (1 CRM order = 1 Shopify order = 1 Shiprocket shipment), so it waits (AWAITING_SHOPIFY) until the Shopify order exists. See shiprocket.channel-ref.ts.
 //  - COD: submitted as soon as the order is saved. Prepaid: the existing rule stays - a prepaid order is only submitted once its payment is verified, so until then it is AWAITING_PAYMENT.
 //  - A failure never undoes the CRM order: it is recorded (FAILED + reason) and can be retried; a retry of an order that already has a live shipment submits nothing new.
 //  - AWB, courier, pickup and tracking are NOT part of this: they stay the existing manual steps and the existing webhook.
@@ -17,9 +18,10 @@ import { isShiprocketEnabled } from "./shiprocket.config.js";
 import ShiprocketShipmentsService from "./shiprocket.shipments.service.js";
 import { describeMissing, parcelFromItems } from "./shiprocket.parcel.js";
 import { mergeShiprocketSync, readShiprocketSync, type ShiprocketSyncRecord } from "./shiprocket.sync-record.js";
+import { decideChannelRef } from "./shiprocket.channel-ref.js";
 
 type Env = Record<string, string | undefined>;
-export type ShiprocketSyncTrigger = "ORDER_CREATED" | "PAYMENT_VERIFIED" | "RETRY";
+export type ShiprocketSyncTrigger = "ORDER_CREATED" | "PAYMENT_VERIFIED" | "SHOPIFY_LINKED" | "RETRY";
 export type ShiprocketSyncOutcome = { status: ShiprocketSyncRecord["status"] | "NOT_APPLICABLE"; reason?: string; record?: ShiprocketSyncRecord | null };
 
 export interface ShiprocketAutoSyncDeps {
@@ -45,6 +47,9 @@ export async function syncOrderToShiprocket(deps: ShiprocketAutoSyncDeps, orderI
       select: {
         id: true,
         source: true,
+        orderNumber: true,
+        externalId: true,
+        externalNumber: true,
         status: true,
         metadata: true,
         parcelWeightKg: true,
@@ -70,6 +75,14 @@ export async function syncOrderToShiprocket(deps: ShiprocketAutoSyncDeps, orderI
     if (prepaid && !order.payments.some((p) => p.status === PaymentStatus.SUCCESS)) {
       await mergeShiprocketSync(deps.db, orderId, { status: "AWAITING_PAYMENT", error: null });
       return { status: "AWAITING_PAYMENT", reason: "Prepaid: submitted once the payment is verified" };
+    }
+
+    // Shopify sync ON: the order goes to Shiprocket under its Shopify reference, so it waits for its Shopify order (created right after the CRM order for COD, after the verified payment for prepaid).
+    // Whoever links the Shopify order calls this again (see OrdersService.pushOrderToShopify), and the Retry button does too.
+    const ref = decideChannelRef(order);
+    if (ref.kind === "WAIT_FOR_SHOPIFY") {
+      await mergeShiprocketSync(deps.db, orderId, { status: "AWAITING_SHOPIFY", error: null });
+      return { status: "AWAITING_SHOPIFY", reason: ref.reason };
     }
 
     const attempts = (prior?.attempts ?? 0) + 1;

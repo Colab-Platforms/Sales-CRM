@@ -19,6 +19,8 @@
     "catalog-correct": "tsx src/scripts/catalog-correct.ts",
     "shopify:sync": "tsx src/scripts/shopify-sync.ts",
     "shiprocket:sync": "tsx src/scripts/shiprocket-sync.ts",
+    "shiprocket:reconcile": "tsx src/scripts/shiprocket-reconcile.ts",
+    "shiprocket:duplicate-report": "tsx src/scripts/shiprocket-duplicate-report.ts",
     "shiprocket:duplicates": "tsx src/scripts/shiprocket-duplicates.ts",
     "agency:key": "tsx src/scripts/agency-key.ts",
     "shopify:repair-addresses": "tsx src/scripts/repair-shopify-addresses.ts",

@@ -5,6 +5,7 @@ import { ActivitySource, ActivityType } from "../../../generated/prisma/enums.js
 import WhatsAppService from "./whatsapp.service.js";
 import { resolveMetaWebhookChallenge } from "./whatsapp.hmac.js";
 import { getActiveVerifyToken, getMetaWhatsAppProvider } from "./whatsapp.meta.factory.js";
+import { forwardOne } from "./whatsapp.oms-forward.js";
 import { handleWhatsAppWebhook } from "./whatsapp.webhook.handler.js";
 import { processWhatsAppWebhookEvent } from "./whatsapp.webhook.processor.js";
 import { createWhatsAppWebhookStore } from "./whatsapp.webhook.store.js";
@@ -85,7 +86,22 @@ router.post("/", async (req, res) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const result = await handleWhatsAppWebhook(
       { rawBody, headers: req.headers },
-      { provider, store, schedule: (id) => void setImmediate(() => void process(id)) },
+      {
+        provider,
+        store,
+        schedule: (id) => {
+          // Two fully independent fire-and-forget attempts: this backend's own processing (process,
+          // unchanged) and OMS forwarding (forwardOne). Each wrapped separately so one's rejection
+          // can never affect the other, and neither can affect this POST handler's own response,
+          // which has already been decided (ack timing is unchanged either way).
+          void setImmediate(() => void process(id));
+          void setImmediate(() =>
+            void forwardOne(id).catch((e) =>
+              logger.warn(`whatsapp_oms_forward_immediate_attempt_failed: ${e instanceof Error ? e.message : String(e)}`),
+            ),
+          );
+        },
+      },
     );
     res.status(result.status).json({ success: result.status < 300, message: result.message, data: null });
   } catch (error) {

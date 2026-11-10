@@ -47,7 +47,13 @@ export async function processShiprocketEvent(eventId: string, deps: ShiprocketPr
       if (event.awb) or.push({ trackingNumber: event.awb });
       if (event.srOrderId) or.push({ providerOrderId: event.srOrderId });
       if (event.channelOrderId) or.push({ channelOrderId: event.channelOrderId });
-      const shipment = await tx.shipment.findFirst({ where: { externalSource: "SHIPROCKET", OR: or }, select: { id: true } });
+      let shipment = await tx.shipment.findFirst({ where: { externalSource: "SHIPROCKET", OR: or }, select: { id: true } });
+      if (!shipment && event.channelOrderId) {
+        // Shiprocket echoes the order id the CRM sent: the Shopify reference for a Shopify-linked order, the CRM order number otherwise. Either way it names the CRM order, so a delivery that carries no AWB or Shiprocket id
+        // we know yet (the very first event) still reaches the ORIGINAL order's shipment - and never creates a new one.
+        const bare = event.channelOrderId.replace(/^#/, "").trim();
+        if (bare) shipment = await tx.shipment.findFirst({ where: { externalSource: "SHIPROCKET", order: { OR: [{ orderNumber: { in: [bare, `#${bare}`] } }, { externalNumber: { in: [bare, `#${bare}`] } }] } }, orderBy: { createdAt: "desc" }, select: { id: true } });
+      }
       if (!shipment) return null;
       return applyShipmentUpdate(tx, shipment.id, eventToUpdate(event), { source: ActivitySource.SHIPROCKET_WEBHOOK, now: now() });
     });

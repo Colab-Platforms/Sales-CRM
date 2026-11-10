@@ -50,6 +50,8 @@ export interface CreateOrderRequest {
   billing_email: string;
   billing_phone: string;
   shipping_is_billing: true;
+  /** Free text Shiprocket keeps on the order: for a Shopify-linked CRM order it carries the CRM order number so the two can be reconciled. */
+  comment?: string;
   order_items: ShiprocketOrderItem[];
   payment_method: "Prepaid" | "COD";
   shipping_charges: number;
@@ -219,6 +221,9 @@ export interface ShiprocketOrderLookup {
   totalCents: number | null;
   awb: string | null;
   courier: string | null;
+  /** When Shiprocket created the order, and its first shipment's id (read-only report fields; absent in older callers). */
+  createdAt?: string | null;
+  shiprocketShipmentId?: string | null;
 }
 
 export function parseOrderLookups(json: unknown, channelOrderId: string): ShiprocketOrderLookup[] {
@@ -236,6 +241,8 @@ export function parseOrderLookups(json: unknown, channelOrderId: string): Shipro
       totalCents: cents(o.total),
       awb: asString(first.awb) || asString(first.awb_code) || null,
       courier: asString(first.courier) || asString(first.courier_name) || null,
+      createdAt: asString(o.created_at) ?? asString(o.channel_created_at) ?? null,
+      shiprocketShipmentId: asString(first.id) ?? asString(first.shipment_id) ?? null,
     };
   });
 }
