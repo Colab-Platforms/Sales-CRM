@@ -16,6 +16,7 @@ import shiprocketAbandonmentWebhookRoutes, { startAbandonmentReconcileJob, start
 import aisensyProjectWebhookRoutes, { startAiSensyProjectWebhookWorker } from "./modules/whatsapp/whatsapp.aisensy.webhook.routes.js";
 import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/whatsapp/whatsapp.meta.webhook.routes.js";
 import legalRoutes from "./modules/legal/legal.routes.js";
+import { agencyJsonErrorHandler, createAgencyRoutes } from "./modules/agency/agency.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startReportAutomationScheduler } from "./modules/report-automation/report-automation.scheduler.js";
@@ -59,6 +60,9 @@ app.use("/api/webhooks/aisensy", express.raw({ type: "*/*", limit: "5mb" }), ais
 // async - see whatsapp.meta.webhook.routes.ts). Meta signs the exact bytes it sends, same reason as
 // every other raw-body route here.
 app.use("/api/webhooks/whatsapp-cloud", express.raw({ type: "*/*", limit: "5mb" }), whatsappMetaWebhookRoutes);
+
+// The external AI calling agency's API: its own small JSON parser and error shape, authenticated by API key (see modules/agency). Before the CRM-wide parser and sanitiser so the payload reaches it untouched.
+app.use("/api/agency", express.json({ limit: "32kb" }), createAgencyRoutes(), agencyJsonErrorHandler);
 
 app.use(
   express.json({

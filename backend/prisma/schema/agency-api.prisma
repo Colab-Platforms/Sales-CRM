@@ -1,0 +1,69 @@
+// EXTERNAL AI CALLING AGENCY API (migration 20261110000000). The agency calls ONE endpoint with its own API key to have a payment link sent to a customer over the
+// CRM's existing Meta WhatsApp Cloud API integration. Only a SHA-256 hash of a key is stored (the key itself is shown once, when it is created); every request is logged.
+model AgencyApiKey {
+  id String @id @default(uuid()) @db.Uuid
+
+  /** Who the key belongs to, e.g. the agency's name. */
+  name String @map("name") @db.VarChar(120)
+  /** The first characters of the key, so a person can tell keys apart without being able to use them. */
+  keyPrefix String @map("key_prefix") @db.VarChar(16)
+  /** SHA-256 (hex) of the full key. */
+  keyHash String @unique @map("key_hash") @db.VarChar(64)
+
+  isActive           Boolean @default(true) @map("is_active")
+  rateLimitPerMinute Int     @default(30) @map("rate_limit_per_minute")
+
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastUsedAt DateTime? @map("last_used_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  requests AgencyMessageRequest[]
+
+  @@map("agency_api_keys")
+}
+
+// One row per payment-link request: what was asked, what the CRM answered and what WhatsApp did. `id` is the requestId returned to the agency. A repeated Idempotency-Key
+// (or an identical request within minutes) finds this row and returns the stored answer instead of sending again.
+model AgencyMessageRequest {
+  id String @id @default(uuid()) @db.Uuid
+
+  apiKeyId String       @map("api_key_id") @db.Uuid
+  apiKey   AgencyApiKey @relation(fields: [apiKeyId], references: [id])
+
+  idempotencyKey String @map("idempotency_key") @db.VarChar(128)
+  /** SHA-256 of the normalised request, so the same key with a different request is refused. */
+  requestHash String @map("request_hash") @db.VarChar(64)
+
+  /** RECEIVED (in progress) | SENT | FAILED | REJECTED (refused before anything was sent). */
+  status String @map("status") @db.VarChar(20)
+
+  customerName String  @map("customer_name") @db.VarChar(200)
+  /** Masked, e.g. "+91******3210" - the number itself is kept on the lead / WhatsApp message. */
+  toMasked     String  @map("to_masked") @db.VarChar(30)
+  /** Only the host of the payment link; the full text is in the WhatsApp message body. */
+  linkHost     String  @map("link_host") @db.VarChar(255)
+  orderRef     String? @map("order_ref") @db.VarChar(100)
+
+  leadId            String? @map("lead_id") @db.Uuid
+  orderId           String? @map("order_id") @db.Uuid
+  messageId         String? @map("message_id") @db.Uuid
+  providerMessageId String? @map("provider_message_id") @db.VarChar(255)
+  templateName      String? @map("template_name") @db.VarChar(255)
+
+  httpStatus   Int?    @map("http_status")
+  errorCode    String? @map("error_code") @db.VarChar(60)
+  errorMessage String? @map("error_message")
+  /** The exact JSON answer given to the agency (never contains a credential). Returned again for a duplicate. */
+  response Json? @map("response")
+
+  sourceIp String? @map("source_ip") @db.VarChar(64)
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  completedAt DateTime? @map("completed_at")
+
+  @@unique([apiKeyId, idempotencyKey])
+  @@index([requestHash, createdAt])
+  @@index([toMasked, createdAt])
+  @@index([createdAt])
+  @@map("agency_message_requests")
+}

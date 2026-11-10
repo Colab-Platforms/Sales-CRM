@@ -13,7 +13,8 @@ import { computePaymentBreakdown, derivePaymentMode, fullName, scopedOrderWhere 
 import { fromCents, toCents } from "../shopify/shopify.money.js";
 import { advisoryLock, asRecord, ProviderHttpError, safeMessage, toTenDigitMobile, type Db, type TxRunner } from "../integrations/integrations.common.js";
 import { applyShipmentUpdate, shipmentOrderLockKey, SHIPMENT_REFERENCE_TYPE } from "./shiprocket.apply.js";
-import { ShiprocketClient, type CancelReply, type CourierOption, type CreateOrderRequest, type CreatedOrder } from "./shiprocket.client.js";
+import { ShiprocketClient, type CancelReply, type CourierOption, type CreateOrderRequest, type CreatedOrder, type ShiprocketOrderLookup } from "./shiprocket.client.js";
+import { channelIdsFor, describeRemoteTwins, findLiveRemoteOrders } from "./shiprocket.duplicates.js";
 import { confirmShiprocketCancellation, isCancelledText, mergeShiprocketCancellation, planCancellation, readShiprocketCancellation, type ShiprocketCancelStatus, type ShiprocketCancellationRecord } from "./shiprocket.cancellation.js";
 import { isShiprocketEnabled, loadShiprocketConfig, ShiprocketConfigError, type ShiprocketConfig } from "./shiprocket.config.js";
 import { mapShiprocketStatus, parseEtd } from "./shiprocket.events.js";
@@ -27,6 +28,8 @@ import type { ListShipmentsQuery, ListShipmentsResult, ShipmentDetailResult, Shi
 
 export interface ShiprocketApi {
   createOrder(request: CreateOrderRequest): Promise<CreatedOrder>;
+  /** Read-only search by channel order id; used to refuse creating an order Shiprocket already holds. Optional so a stand-in without it simply skips that check. */
+  findOrdersByChannelId?(channelOrderId: string): Promise<ShiprocketOrderLookup[]>;
   getCouriers(shiprocketOrderId: string): Promise<CourierOption[]>;
   assignAwb(shipmentId: string, courierId: number): Promise<{ awb: string; courierName: string | null; courierCompanyId: number | null }>;
   generatePickup(shipmentId: string): Promise<{ scheduledDate: string | null; tokenNumber: string | null }>;
@@ -438,9 +441,12 @@ class ShiprocketShipmentsService {
     const config = this.config();
     const prepared = await this.runner.$transaction((tx) => this.prepare(tx, user, orderId, input, config, opts.system === true));
 
+    const api = this.api(config);
+    await this.refuseIfShiprocketHasIt(api, prepared);
+
     let created: CreatedOrder;
     try {
-      created = await this.api(config).createOrder(prepared.request);
+      created = await api.createOrder(prepared.request);
     } catch (error) {
       await this.recordCreationFailure(prepared.shipmentId, error);
       throw providerFailure(error, "create the shipment");
@@ -491,6 +497,7 @@ class ShiprocketShipmentsService {
       select: {
         id: true,
         orderNumber: true,
+        externalNumber: true,
         status: true,
         placedAt: true,
         createdAt: true,
@@ -552,7 +559,35 @@ class ShiprocketShipmentsService {
       },
     });
     await tx.order.update({ where: { id: order.id }, data: { parcelWeightKg: input.weight } });
-    return { shipmentId, request, collectCents, orderNumber: order.orderNumber, leadId: order.lead.id };
+    return { shipmentId, request, collectCents, orderNumber: order.orderNumber, externalNumber: order.externalNumber ?? null, hadEarlierAttempt: order.shipments.length > 0, leadId: order.lead.id };
+  }
+
+  /**
+   * Last check before anything is sent: does Shiprocket already hold a live order for this sale? Searched by the id this request would use, the CRM order number and - when the CRM order is linked
+   * to Shopify - the Shopify name (the store's Shopify-Shiprocket channel imports Shopify orders under that name). If one exists the reservation is closed and NOTHING is created: the existing
+   * order is reported for a person to use or cancel. A failed search lets a first attempt go ahead (the order lock and the one-live-shipment rule still apply) but blocks a retry after an
+   * earlier attempt, because that is exactly when a lost reply may have left an order behind.
+   */
+  private async refuseIfShiprocketHasIt(api: ShiprocketApi, prepared: { shipmentId: string; orderNumber: string; externalNumber: string | null; hadEarlierAttempt: boolean; request: CreateOrderRequest }): Promise<void> {
+    if (!api.findOrdersByChannelId) return;
+    let twins: ShiprocketOrderLookup[];
+    try {
+      twins = await findLiveRemoteOrders((id) => api.findOrdersByChannelId!(id), channelIdsFor({ orderNumber: prepared.orderNumber, externalNumber: prepared.externalNumber }, [prepared.request.order_id]));
+    } catch (error) {
+      if (!prepared.hadEarlierAttempt) {
+        logger.warn(`Shiprocket duplicate check could not run for order ${prepared.orderNumber}: ${safeMessage(error instanceof Error ? error.message : String(error))}`);
+        return;
+      }
+      await this.closeReservation(prepared.shipmentId, { error: "Could not check Shiprocket for an existing order", creationUnconfirmed: true });
+      throw new ApiError("Shiprocket could not be checked for an order created by an earlier attempt, so nothing was sent. Try again in a moment.", STATUS_CODES.CONFLICT);
+    }
+    if (twins.length === 0) return;
+    await this.closeReservation(prepared.shipmentId, { error: describeRemoteTwins(twins).slice(0, 500), existingShiprocketOrderIds: twins.map((t) => t.shiprocketOrderId), duplicateBlocked: true });
+    throw new ApiError(describeRemoteTwins(twins), STATUS_CODES.CONFLICT);
+  }
+
+  private async closeReservation(shipmentId: string, info: Record<string, unknown>): Promise<void> {
+    await this.runner.$transaction((tx) => tx.shipment.update({ where: { id: shipmentId }, data: { status: ShipmentStatus.CANCELLED, metadata: { shiprocket: { creationFailed: true, creationUnconfirmed: false, ...info } } } }));
   }
 
   /** The reserved row must never look like a live shipment when Shiprocket did not confirm it. */
