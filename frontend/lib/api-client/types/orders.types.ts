@@ -785,7 +785,7 @@ export interface MarkPaidResult {
   openCashfreeLink: boolean;
 }
 
-export type ShiprocketOrderSyncStatus = "PENDING" | "SYNCED" | "FAILED" | "AWAITING_PAYMENT" | "NOT_CONFIGURED";
+export type ShiprocketOrderSyncStatus = "PENDING" | "SYNCED" | "FAILED" | "AWAITING_PAYMENT" | "AWAITING_SHOPIFY" | "NOT_CONFIGURED";
 
 export interface ShiprocketOrderSync {
   status: ShiprocketOrderSyncStatus;

@@ -21,6 +21,15 @@ model WebhookEvent {
   receivedAt  DateTime  @map("received_at")
   processedAt DateTime? @map("processed_at")
 
+  // OMS forwarding (independent of `status`/`attempts`/`errorMessage` above, which track this
+  // backend's OWN processing of the event -- a forwarding failure must never touch those fields,
+  // and vice versa). See whatsapp.oms-forward.worker.ts.
+  omsForwardStatus      OmsForwardStatus @default(PENDING) @map("oms_forward_status")
+  omsForwardAttempts    Int              @default(0) @map("oms_forward_attempts")
+  omsForwardNextAttemptAt DateTime?      @map("oms_forward_next_attempt_at")
+  omsForwardErrorMessage  String?        @map("oms_forward_error_message")
+  omsForwardedAt          DateTime?      @map("oms_forwarded_at")
+
   @@unique([provider, externalEventId])
   @@index([provider])
   @@index([eventType])
@@ -29,5 +38,6 @@ model WebhookEvent {
   @@index([status])
   @@index([receivedAt])
   @@index([sourceId])
+  @@index([omsForwardStatus, omsForwardNextAttemptAt])
   @@map("webhook_events")
 }

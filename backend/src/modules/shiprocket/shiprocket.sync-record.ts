@@ -3,7 +3,7 @@
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { asRecord } from "../integrations/integrations.common.js";
 
-export type ShiprocketSyncStatus = "PENDING" | "SYNCED" | "FAILED" | "AWAITING_PAYMENT" | "NOT_CONFIGURED";
+export type ShiprocketSyncStatus = "PENDING" | "SYNCED" | "FAILED" | "AWAITING_PAYMENT" | "AWAITING_SHOPIFY" | "NOT_CONFIGURED";
 
 export interface ShiprocketSyncRecord {
   status: ShiprocketSyncStatus;
@@ -12,8 +12,12 @@ export interface ShiprocketSyncRecord {
   syncedAt: string | null;
   /** Shiprocket's own order id (providerOrderId) once it accepted the order. */
   shiprocketOrderId: string | null;
-  /** The order id the CRM sent: the CRM order number for a first submission. */
+  /** The order id the CRM sent: the Shopify order reference when the order is linked to Shopify, otherwise the CRM order number. */
   channelOrderId: string | null;
+  /** The mapping kept for reconciliation: the CRM order number and the Shopify order the Shiprocket order was created for (null when the order is not a Shopify order). */
+  crmOrderNumber?: string | null;
+  shopifyOrderId?: string | null;
+  shopifyOrderName?: string | null;
   /** Safe, user-readable reason of the last failure; null when none. */
   error: string | null;
   trigger: string | null;
@@ -31,6 +35,9 @@ export function readShiprocketSync(metadata: unknown): ShiprocketSyncRecord | nu
     syncedAt: str(r.syncedAt),
     shiprocketOrderId: str(r.shiprocketOrderId),
     channelOrderId: str(r.channelOrderId),
+    crmOrderNumber: str(r.crmOrderNumber),
+    shopifyOrderId: str(r.shopifyOrderId),
+    shopifyOrderName: str(r.shopifyOrderName),
     error: str(r.error),
     trigger: str(r.trigger),
   };

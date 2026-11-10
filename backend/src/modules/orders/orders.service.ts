@@ -807,8 +807,12 @@ class OrdersService {
       await this.completeIdempotency(user.id, input.idempotencyKey!, { shopify: done.shopify, paymentLink: null, whatsapp: { sent: false, via: null, provider: null, reason: "Payment already received: no payment link or QR was sent." }, manualPayment: done.manualPayment } as CreateManualOrderResult);
       return;
     }
-    await this.submitToShiprocket(user, orderId, "ORDER_CREATED");
-    const shopify: ShopifyPushResult = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : await this.prepaidShopifyPlaceholder(orderId);
+    let shopify: ShopifyPushResult;
+    try {
+      shopify = input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, orderId) : await this.prepaidShopifyPlaceholder(orderId);
+    } finally {
+      await this.submitToShiprocket(user, orderId, "ORDER_CREATED"); // after Shopify, so a Shopify-linked order is registered under its Shopify reference
+    }
     let paymentLink: OrderPaymentLinkResult | null = null;
     if (input.paymentMethod === "PAYMENT_LINK") {
       try {
@@ -1034,8 +1038,14 @@ class OrdersService {
     // "Payment already received": the payment is recorded and the Shopify order created AND marked paid right here, through the audited manual-payment path (see recordExternalPayment).
     // Shiprocket gets the saved order first and on its own: it needs no Shopify order and does not wait for one. COD is submitted now; prepaid once its payment is verified (immediately, if it was already received).
     const external = externallyPaid ? await this.recordExternalPayment(user, createdOrderId, input) : null;
-    await this.submitToShiprocket(user, createdOrderId, "ORDER_CREATED");
-    const shopify: ShopifyPushResult = external ? external.shopify : input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : shopifySyncDecision.enabled ? { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." } : { status: "skipped", reason: SHOPIFY_SYNC_OFF_REASON };
+    // Shopify sync ON: Shiprocket is told about the order under its SHOPIFY reference, so the Shopify order is created FIRST and Shiprocket right after (also when the Shopify step throws - the order then waits as AWAITING_SHOPIFY).
+    // Shopify sync OFF: Shiprocket does not depend on Shopify at all. Either way the submission is idempotent.
+    let shopify: ShopifyPushResult;
+    try {
+      shopify = external ? external.shopify : input.paymentMethod === "COD" ? await this.pushOrderToShopify(user, createdOrderId) : shopifySyncDecision.enabled ? { status: "awaiting_payment", reason: "Prepaid: the Shopify order is created after Cashfree confirms the payment." } : { status: "skipped", reason: SHOPIFY_SYNC_OFF_REASON };
+    } finally {
+      await this.submitToShiprocket(user, createdOrderId, "ORDER_CREATED");
+    }
     const order = await this.getOrder(user, createdOrderId);
 
     // Prepaid: create exactly one Cashfree payment link for this order (best-effort - see
@@ -1107,6 +1117,7 @@ class OrdersService {
     if (result.status === "created" || result.status === "already_linked") {
       await this.syncConfirmationTagSafely(orderId);
       await this.syncCreatorTagSafely(orderId);
+      await this.submitAfterShopifyLink(user, orderId);
       // A prepaid order whose payment was ALREADY verified before it reached Shopify (the normal prepaid lifecycle, or a manual retry of a failed push) is marked paid now - and only then.
       if (result.status === "created") {
         await this.settlePaidPrepaidOnShopify(orderId);
@@ -1115,6 +1126,21 @@ class OrdersService {
       }
     }
     return result;
+  }
+
+  /**
+   * A CRM order that was waiting for its Shopify order (Shiprocket status AWAITING_SHOPIFY: the first Shopify attempt failed, or the payment was verified before Shopify answered) is registered with Shiprocket
+   * the moment the Shopify link exists - under its Shopify reference. Anything else is left alone (an order never submitted yet is submitted by its own creation flow). Idempotent; never throws.
+   */
+  private async submitAfterShopifyLink(user: AuthUser | null, orderId: string): Promise<void> {
+    try {
+      const o = await this.db.order.findUnique({ where: { id: orderId }, select: { source: true, metadata: true, createdBy: { select: { id: true, username: true, role: true } } } });
+      if (!o || o.source !== "SALESPERSON" || readShiprocketSync(o.metadata)?.status !== "AWAITING_SHOPIFY") return;
+      const actor = user ?? o.createdBy;
+      if (actor) await this.submitToShiprocket(actor as AuthUser, orderId, "SHOPIFY_LINKED");
+    } catch (error) {
+      logger.warn(`Shiprocket submission after the Shopify link errored for order ${orderId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** A prepaid order has no Shopify order until its payment is verified; with the order's saved decision OFF it never will. */

@@ -586,6 +586,20 @@ enum WebhookStatus {
   @@map("webhook_status")
 }
 
+// Independent of WebhookStatus above: a webhook event's OWN Sales-CRM processing (status/attempts)
+// and its forwarding to the OMS are two separate concerns that must never block or regress each
+// other -- see WebhookEvent.omsForward* fields and whatsapp.oms-forward.worker.ts. PENDING is the
+// default for every new webhook_events row regardless of provider; only WhatsApp Meta-provider rows
+// are ever picked up by the forward worker in practice.
+enum OmsForwardStatus {
+  PENDING
+  FORWARDING
+  FORWARDED
+  FAILED
+
+  @@map("oms_forward_status")
+}
+
 // Which external system a synced record came from. Null for records created inside the CRM.
 enum ExternalSource {
   SHOPIFY
