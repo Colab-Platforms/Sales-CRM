@@ -3,7 +3,7 @@
 import { Role } from "../../../generated/prisma/enums.js";
 import { loadShiprocketConfig } from "./shiprocket.config.js";
 import type { ShiprocketApi } from "./shiprocket.shipments.service.js";
-import type { CreateOrderRequest } from "./shiprocket.client.js";
+import type { CreateOrderRequest, ShiprocketOrderLookup } from "./shiprocket.client.js";
 
 export const CONFIG = loadShiprocketConfig({ SHIPROCKET_ENABLED: "true", SHIPROCKET_EMAIL: "api@example.com", SHIPROCKET_PASSWORD: "not-real", SHIPROCKET_PICKUP_LOCATION: "warehouse" });
 export const ADMIN = { id: "admin-1", username: "admin", role: Role.ADMIN };
@@ -72,9 +72,16 @@ export function fakeDb(base: typeof ORDER = ORDER) {
   return { tx, order, runner: { $transaction: async <T,>(cb: (t: never) => Promise<T>) => cb(tx as never) }, shipments, activities };
 }
 
-export function fakeShiprocket() {
+/** `existing`: orders Shiprocket already holds (e.g. one imported from Shopify); a search returns those whose channel id matches. `searchFails`: every search throws. */
+export function fakeShiprocket(opts: { existing?: ShiprocketOrderLookup[]; searchFails?: boolean } = {}) {
   const sent: CreateOrderRequest[] = [];
+  const searches: string[] = [];
   const api: ShiprocketApi = {
+    findOrdersByChannelId: async (id) => {
+      searches.push(id);
+      if (opts.searchFails) throw new Error("Shiprocket search unavailable");
+      return (opts.existing ?? []).filter((o) => o.channelOrderId.toLowerCase() === id.replace(/^#/, "").toLowerCase());
+    },
     createOrder: async (request) => { sent.push(request); return { orderId: "SR-ORD-555", shipmentId: "SR-SHIP-777", awb: null, courierName: null, courierCompanyId: null } as never; },
     getCouriers: async () => [],
     assignAwb: async () => ({ awb: "AWB-TEST-123", courierName: "Test Courier", courierCompanyId: 9 }),
@@ -82,6 +89,6 @@ export function fakeShiprocket() {
     generateLabel: async () => "https://example.test/label.pdf",
     track: async () => null,
   };
-  return { api, sent };
+  return { api, sent, searches };
 }
 

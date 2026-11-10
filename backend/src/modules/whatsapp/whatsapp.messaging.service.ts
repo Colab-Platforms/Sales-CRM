@@ -145,7 +145,9 @@ function maskDestination(mobile: string | null): string {
 // reach a customer, so there is no per-user scope to check. Either way the resulting WhatsAppMessage/
 // Activity honestly records who/what actually sent it (sentById + ActivitySource) - never attributed
 // to a fabricated user.
-type SendActor = { kind: "user"; user: AuthUser } | { kind: "system" };
+// "agency": the external AI calling agency's API key (see modules/agency). Not a person, so there is no lead scope and no sentById, but - unlike "system" - it goes out through the Meta Cloud
+// API like every other customer-facing send, never through the legacy providers.
+type SendActor = { kind: "user"; user: AuthUser } | { kind: "system" } | { kind: "agency" };
 
 class WhatsAppMessagingService {
   constructor(
@@ -175,6 +177,7 @@ class WhatsAppMessagingService {
       return { provider: legacy, fromConversation: false };
     }
 
+    // (user and agency senders alike)
     const meta = await this.metaProvider();
     if (!meta) throw new ApiError("Meta WhatsApp Cloud API is not configured (or its saved credentials cannot be decrypted). Check Settings → WhatsApp Config.", STATUS_CODES.SERVICE_UNAVAILABLE);
     return { provider: meta, fromConversation: false };
@@ -225,6 +228,17 @@ class WhatsAppMessagingService {
   // directly, and neither duplicates this send logic.
   async sendTemplateAsSystem(input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
     return this.send({ kind: "system" }, input);
+  }
+
+  /** The external agency's payment-link send: the same `send()` (APPROVED Meta template only, variables resolved and checked, 30 s duplicate guard, message + activity recorded), as the API key's actor. */
+  async sendTemplateAsAgency(input: SendTemplateInput): Promise<WhatsAppMessageSummary> {
+    return this.send({ kind: "agency" }, input);
+  }
+
+  /** Whether `input` could be sent as the agency, without sending: the resolved variables and any problem. Throws the same ApiErrors send() would for a missing / unapproved template or a foreign order. */
+  async describeAgencySend(input: SendTemplateInput): Promise<{ errors: string[]; fields: TemplateVariableField[]; templateName: string }> {
+    const { resolution, template } = await this.loadAndResolve({ kind: "agency" }, input, { requireProviderMatch: false });
+    return { errors: resolution.errors, fields: resolution.fields, templateName: template.name };
   }
 
   // Safe, manual test path for the AiSensy order-confirmation template - NOT wired into order
