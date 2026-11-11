@@ -20,6 +20,8 @@ export interface CustomersFilters {
   shipmentStatus?: ShipmentStatus;
   nbaAction?: NbaAction;
   nbaPriority?: NbaPriority;
+  aiAgent?: "ONLY" | "EXCLUDE";
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
   dateFrom?: string;
   dateTo?: string;
 }
@@ -71,6 +73,13 @@ const SHIPMENT_OPTIONS = (Object.keys(SHIPMENT_STATUS_LABELS) as ShipmentStatus[
   value,
   label: SHIPMENT_STATUS_LABELS[value],
 }));
+// One selector over the two API filters: the AI calling agency's customers, by intent, or none of them.
+const AI_AGENT_OPTIONS = [
+  { value: "ONLY", label: "AI Agent - any" },
+  { value: "INTERESTED", label: "AI Agent - interested" },
+  { value: "ALREADY_ORDERED", label: "AI Agent - already ordered" },
+  { value: "EXCLUDE", label: "Without AI Agent" },
+];
 const NBA_ACTION_OPTIONS = NBA_ACTION_ORDER.map((value) => ({ value, label: NBA_ACTION_LABELS[value] }));
 const NBA_PRIORITY_OPTIONS = NBA_PRIORITY_ORDER.map((value) => ({ value, label: NBA_PRIORITY_LABELS[value] }));
 
@@ -156,6 +165,18 @@ export function CustomersFiltersBar({
           value={filters.nbaAction}
           options={NBA_ACTION_OPTIONS}
           onChange={(value) => onFilterChange({ nbaAction: value as NbaAction | undefined })}
+        />
+        <FilterSelect
+          label="Filter by AI Agent"
+          allLabel="All (incl. AI Agent)"
+          value={filters.aiAgentIntent ?? filters.aiAgent}
+          options={AI_AGENT_OPTIONS}
+          onChange={(value) =>
+            onFilterChange({
+              aiAgent: value === "ONLY" || value === "EXCLUDE" ? value : undefined,
+              aiAgentIntent: value === "INTERESTED" || value === "ALREADY_ORDERED" ? value : undefined,
+            })
+          }
         />
         <FilterSelect
           label="Filter by action priority"

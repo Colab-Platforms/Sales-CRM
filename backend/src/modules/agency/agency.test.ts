@@ -201,7 +201,7 @@ describe("the request is the request fields: customerName, mobile and an optiona
 
   it("pure validation: names are trimmed and spaces collapsed; numbers are canonical", () => {
     const v = validateRequest({ customerName: "  Rahul   Sharma ", mobile: "+91 98765-43210" });
-    assert.deepEqual(v.value, { customerName: "Rahul Sharma", mobile: "+919876543210", intent: "ALREADY_ORDERED" });
+    assert.deepEqual(v.value, { customerName: "Rahul Sharma", mobile: "+919876543210", intent: "ALREADY_ORDERED", method: null });
     assert.equal(validateMobile("+14155552671").mobile, "+14155552671");
   });
 });
@@ -643,6 +643,55 @@ describe("intent: ALREADY_ORDERED (default) and INTERESTED", () => {
       assert.equal(acts(h).length, 0);
       assert.equal(validateRequest({ customerName: "A", mobile: MOBILE }).value?.intent, "ALREADY_ORDERED");
       assert.equal(validateRequest({ customerName: "A", mobile: MOBILE, intent: null }).value?.intent, "ALREADY_ORDERED");
+    } finally { await h.close(); }
+  });
+});
+
+describe("method: COD / PREPAID", () => {
+  const acts = (h: Harness) => [...h.mem.activities.values()];
+  it("validates method: COD, PREPAID, omitted and null are accepted; anything else is refused with a clear message", async () => {
+    for (const ok of [undefined, null, "COD", "PREPAID"]) assert.equal(validateRequest({ customerName: "A", mobile: MOBILE, ...(ok === undefined ? {} : { method: ok }) }).errors.length, 0, String(ok));
+    assert.equal(validateRequest({ customerName: "A", mobile: MOBILE }).value?.method, null, "omitted = not sent, never guessed");
+    const h = await start();
+    try {
+      for (const bad of ["cod", "UPI", "", 1, true]) {
+        const r = await h.post(goodBody({ method: bad }));
+        assert.equal(r.status, 400);
+        assert.match(r.json.error.details[0].message, /method must be one of COD, PREPAID/);
+      }
+      assert.equal(acts(h).length, 0);
+    } finally { await h.close(); }
+  });
+  it("ALREADY_ORDERED + COD (and no method) keep the existing flow: link created, message sent; method is stored in the activity", async () => {
+    const h = await start();
+    try {
+      const r = await h.post(goodBody({ intent: "ALREADY_ORDERED", method: "COD" }), { "idempotency-key": "method-cod-0001" });
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual([h.link.created.length, h.msg.sent.length, acts(h)[0]!.method], [1, 1, "COD"]);
+      const old = await h.post(goodBody({ customerName: "Other Person" }), { "idempotency-key": "method-none-0001" });
+      assert.equal(old.status, 200, old.text);
+      assert.equal(acts(h)[1]!.method, null);
+    } finally { await h.close(); }
+  });
+  it("ALREADY_ORDERED + PREPAID: recorded only - no order search, no COD payment link, no message", async () => {
+    const h = await start();
+    try {
+      const r = await h.post(goodBody({ intent: "ALREADY_ORDERED", method: "PREPAID" }), { "idempotency-key": "method-prepaid-0001" });
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual([r.json.status, r.json.intent, r.json.method], ["RECORDED", "ALREADY_ORDERED", "PREPAID"]);
+      assert.deepEqual([h.world.orderLookups, h.link.created.length, h.msg.sent.length], [0, 0, 0]);
+      assert.deepEqual([acts(h)[0]!.intent, acts(h)[0]!.method, acts(h)[0]!.result], ["ALREADY_ORDERED", "PREPAID", "PREPAID_RECORDED"]);
+      const again = await h.post(goodBody({ intent: "ALREADY_ORDERED", method: "PREPAID" }), { "idempotency-key": "method-prepaid-0001" });
+      assert.equal(again.json.duplicate, true);
+      const clash = await h.post(goodBody({ intent: "ALREADY_ORDERED", method: "COD" }), { "idempotency-key": "method-prepaid-0001" });
+      assert.equal(clash.json.error.code, "IDEMPOTENCY_KEY_REUSED");
+    } finally { await h.close(); }
+  });
+  it("INTERESTED accepts method omitted or null", async () => {
+    const h = await start();
+    try {
+      for (const [i, extra] of [{}, { method: null }].entries()) assert.equal((await h.post(goodBody({ intent: "INTERESTED", customerName: `P${i}`, ...extra }))).status, 200);
+      assert.equal(acts(h).every((a) => a.method === null), true);
     } finally { await h.close(); }
   });
 });

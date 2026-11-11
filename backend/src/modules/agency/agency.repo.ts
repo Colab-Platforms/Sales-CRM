@@ -105,17 +105,20 @@ export class PrismaAgencyRepo implements AgencyRepo {
   async recordAiAgentActivity(row: AiAgentActivity): Promise<void> {
     const sent = row.result === "PAYMENT_LINK_SENT";
     const title =
-      row.intent === "INTERESTED"
+      row.intent === "ALREADY_ORDERED" && row.method === "PREPAID"
+        ? "AI Agent: already ordered (prepaid) - recorded, no payment link sent"
+        : row.intent === "INTERESTED"
         ? row.leadId ? "AI Agent: customer interested (no payment link sent)" : "AI Agent: interested customer - no matching lead"
         : sent ? "AI Agent: payment link sent on WhatsApp" : `AI Agent: payment link request - ${row.result.replace(/_/g, " ").toLowerCase()}`;
     const data = {
       leadId: row.leadId,
       orderId: row.orderId,
       title,
-      description: `${row.customerName} (${row.normalizedMobile}) - ${row.intent} - ${row.result}`,
+      description: `${row.customerName} (${row.normalizedMobile}) - ${row.intent}${row.method ? ` / ${row.method}` : ""} - ${row.result}`,
       metadata: {
         aiAgent: true,
         intent: row.intent,
+        method: row.method,
         requestId: row.requestId,
         idempotencyKey: row.idempotencyKey,
         customerName: row.customerName,

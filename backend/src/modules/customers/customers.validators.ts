@@ -64,6 +64,8 @@ const listCustomersQuerySchema = z
     shipmentStatus: optional(z.enum(ShipmentStatus, { error: "Invalid shipment status" })),
     nbaAction: optional(z.enum(NBA_ACTIONS, { error: "Invalid next-best-action" })),
     nbaPriority: optional(z.enum(NBA_PRIORITIES, { error: "Invalid priority" })),
+    aiAgent: optional(z.enum(["ONLY", "EXCLUDE"], { error: "aiAgent must be ONLY or EXCLUDE" })),
+    aiAgentIntent: optional(z.enum(["ALREADY_ORDERED", "INTERESTED"], { error: "aiAgentIntent must be ALREADY_ORDERED or INTERESTED" })),
     dateFrom: optional(z.iso.datetime({ offset: true, error: "dateFrom must be an ISO date-time" }).transform((v) => new Date(v))),
     dateTo: optional(z.iso.datetime({ offset: true, error: "dateTo must be an ISO date-time" }).transform((v) => new Date(v))),
   })

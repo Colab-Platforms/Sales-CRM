@@ -66,6 +66,16 @@ export function CustomersTable({ items, isFetching }: CustomersTableProps) {
                 {customer.name}
               </Link>
               <div className="text-xs text-muted-foreground">{customer.leadNumber}</div>
+              {customer.aiAgent ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-400" title={customer.aiAgent.lastTitle ?? "AI Agent request"}>
+                    AI Agent{customer.aiAgent.lastMethod ? ` · ${customer.aiAgent.lastMethod}` : ""}
+                  </span>
+                  {customer.aiAgent.interested ? (
+                    <span className="rounded-full bg-fuchsia-500/10 px-2 py-0.5 text-xs font-medium text-fuchsia-700 dark:text-fuchsia-400">Interested {"\u2013"} AI Agent</span>
+                  ) : null}
+                </div>
+              ) : null}
             </TableCell>
             <TableCell className="text-muted-foreground">{customer.mobile ?? "—"}</TableCell>
             <TableCell>

@@ -28,6 +28,16 @@ export interface LeadImportBatchRef {
 
 export type AiAgentIntent = "ALREADY_ORDERED" | "INTERESTED";
 
+export interface AiAgentTag {
+  lastActivityAt: string;
+  lastResult: string | null;
+  lastTitle: string | null;
+  lastIntent: AiAgentIntent | null;
+  lastMethod: "COD" | "PREPAID" | null;
+  /** true when the agent has reported this customer as interested ("Interested - AI Agent"). */
+  interested: boolean;
+}
+
 export interface Lead {
   id: string;
   leadNumber: string;
@@ -50,7 +60,7 @@ export interface Lead {
   /** The lead's pending call back / follow up reminder - empty when none is scheduled. */
   tasks: LeadFollowUp[];
   /** The "AI Agent" tag: the latest request the AI calling agency made about this lead; null when it never did. Separate from owner / assignedManager (human telecallers). */
-  aiAgent: { lastActivityAt: string; lastResult: string | null; lastTitle: string | null; lastIntent: AiAgentIntent | null; /** true when the agent has reported this customer as interested ("Interested - AI Agent"). */ interested: boolean } | null;
+  aiAgent: AiAgentTag | null;
 }
 
 export interface LeadListPagination {
