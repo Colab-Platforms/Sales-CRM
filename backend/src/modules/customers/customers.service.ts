@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma.js";
+import { AI_AGENT_INCLUDE, aiAgentTag } from "../agency/agency.tag.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { ActivitySource, ActivityType, InterestedPeriodStatus, LeadWorkingStatus } from "../../../generated/prisma/enums.js";
@@ -112,6 +113,7 @@ const CUSTOMER_LIST_SELECT = {
   workingStatus: true,
   owner: { select: { id: true, name: true } },
   interestedPeriods: ACTIVE_INTERESTED_SELECT,
+  ...AI_AGENT_INCLUDE,
 } satisfies Prisma.LeadSelect;
 
 // mapOrderSummary only ever reads shipments[0] (the latest), so only that one row is fetched - a
@@ -371,7 +373,7 @@ class CustomersService {
     });
 
     let items = leads.map((lead) =>
-      mapCustomerListItem({ ...lead, hasActiveInterestedPeriod: lead.interestedPeriods.length > 0 }, lead.orders),
+      mapCustomerListItem({ ...lead, hasActiveInterestedPeriod: lead.interestedPeriods.length > 0, aiAgent: aiAgentTag(lead.activities, lead._count.activities) }, lead.orders),
     );
 
     if (filters.hasOrders !== undefined) items = items.filter((c) => (filters.hasOrders ? c.orderCount > 0 : c.orderCount === 0));

@@ -19,9 +19,14 @@ export interface PaymentLinkRequest {
   mobile: string;
   /** ALREADY_ORDERED: send the payment link of the customer's COD order. INTERESTED: only record that the customer is interested - no order lookup, no link, no message. */
   intent: AgencyIntent;
+  /** How the customer says they ordered (ALREADY_ORDERED). null = not sent (older integrations) - never guessed. Not applicable to INTERESTED. */
+  method: AgencyMethod | null;
 }
 
-const ACCEPTED_FIELDS = new Set(["customerName", "mobile", "intent"]);
+export const METHODS = ["COD", "PREPAID"] as const;
+export type AgencyMethod = (typeof METHODS)[number];
+
+const ACCEPTED_FIELDS = new Set(["customerName", "mobile", "intent", "method"]);
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
 export function validateMobile(raw: unknown): { mobile?: string; error?: string } {
@@ -44,7 +49,7 @@ export function validateRequest(body: unknown): { errors: FieldError[]; value?: 
   const b = body as Record<string, unknown>;
 
   // Anything else is refused, not ignored: an agency that still sends paymentLink / orderId must not believe it is being used.
-  for (const name of Object.keys(b)) if (!ACCEPTED_FIELDS.has(name)) errors.push({ field: name, message: `${name} is not accepted. Send only customerName, mobile and intent - the CRM finds the order, its amount and creates the payment link itself.` });
+  for (const name of Object.keys(b)) if (!ACCEPTED_FIELDS.has(name)) errors.push({ field: name, message: `${name} is not accepted. Send only customerName, mobile, intent and method - the CRM finds the order, its amount and creates the payment link itself.` });
 
   let customerName = "";
   if (typeof b.customerName !== "string" || !b.customerName.trim()) errors.push({ field: "customerName", message: "customerName is required" });
@@ -61,14 +66,21 @@ export function validateRequest(body: unknown): { errors: FieldError[]; value?: 
     else errors.push({ field: "intent", message: `intent must be one of ${INTENTS.join(", ")}` });
   }
 
+  let method: AgencyMethod | null = null;
+  if (b.method !== undefined && b.method !== null) {
+    if (typeof b.method === "string" && (METHODS as readonly string[]).includes(b.method)) method = b.method as AgencyMethod;
+    else errors.push({ field: "method", message: `method must be one of ${METHODS.join(", ")} (or omitted)` });
+  }
+
   if (errors.length > 0) return { errors };
-  return { errors, value: { customerName, mobile: mobile.mobile!, intent } };
+  return { errors, value: { customerName, mobile: mobile.mobile!, intent, method } };
 }
 
 /** Stable fingerprint of what a request asks for (used to recognise a repeat, and to refuse an idempotency key reused for a different request). */
 export function requestHash(v: PaymentLinkRequest): string {
   // ALREADY_ORDERED keeps the fingerprint it always had (so an in-flight legacy request still matches its repeat); INTERESTED is a different request.
-  const parts = v.intent === DEFAULT_INTENT ? [v.mobile, v.customerName] : [v.mobile, v.customerName, v.intent];
+  const parts: string[] = v.intent === DEFAULT_INTENT ? [v.mobile, v.customerName] : [v.mobile, v.customerName, v.intent];
+  if (v.method) parts.push(v.method);
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 

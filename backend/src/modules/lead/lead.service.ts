@@ -29,11 +29,11 @@ import {
   ImportBatchStatus,
   AssignmentType,
   ActivityType,
-  ActivitySource,
   TaskType,
   TaskStatus,
 } from "../../../generated/prisma/enums.js";
 import { Prisma } from "../../../generated/prisma/client.js";
+import { AI_AGENT_INCLUDE, aiAgentTag, aiAgentWhere } from "../agency/agency.tag.js";
 import type { User, Lead } from "../../../generated/prisma/client.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import type {
@@ -96,22 +96,10 @@ const leadListInclude = {
     orderBy: { createdAt: "desc" },
   },
   // The "AI Agent" tag: the latest request the external AI calling agency made about this lead (see agency.repo recordAiAgentActivity). Separate from owner / assignedManager, which are human telecallers.
-  activities: { where: { source: ActivitySource.AI_AGENT }, select: { createdAt: true, title: true, metadata: true }, orderBy: { createdAt: "desc" }, take: 1 },
-  // How many of those are "customer interested" notes: drives the separate "Interested - AI Agent" indicator.
-  _count: { select: { activities: { where: { source: ActivitySource.AI_AGENT, metadata: { path: ["intent"], equals: "INTERESTED" } } } } },
+  ...AI_AGENT_INCLUDE,
 } satisfies Prisma.LeadInclude;
 
-/** The AI Agent tag shown on a lead: null when the agent never contacted the CRM about it. */
-export function aiAgentTag(
-  activities: { createdAt: Date; title: string | null; metadata: Prisma.JsonValue | null }[],
-  interestedCount = 0,
-): { lastActivityAt: Date; lastResult: string | null; lastTitle: string | null; lastIntent: "ALREADY_ORDERED" | "INTERESTED" | null; interested: boolean } | null {
-  const latest = activities[0];
-  if (!latest) return null;
-  const meta = latest.metadata as { result?: unknown; intent?: unknown } | null;
-  const lastIntent = meta?.intent === "INTERESTED" || meta?.intent === "ALREADY_ORDERED" ? meta.intent : null;
-  return { lastActivityAt: latest.createdAt, lastResult: typeof meta?.result === "string" ? meta.result : null, lastTitle: latest.title, lastIntent, interested: interestedCount > 0 };
-}
+export { aiAgentTag };
 
 class LeadService {
   // Salespersons see their calls (status, duration) but can't hear the recording —
@@ -153,10 +141,7 @@ class LeadService {
     where.abandonments = { none: {} };
 
     // AI Agent filter: leads the AI calling agency made a request about (ONLY), or the leads it did not touch (EXCLUDE). Independent of the human assignment filters above and below.
-    const aiConditions: Prisma.LeadWhereInput[] = [];
-    if (query.aiAgent === "ONLY") aiConditions.push({ activities: { some: { source: ActivitySource.AI_AGENT } } });
-    else if (query.aiAgent === "EXCLUDE") aiConditions.push({ activities: { none: { source: ActivitySource.AI_AGENT } } });
-    if (query.aiAgentIntent) aiConditions.push({ activities: { some: { source: ActivitySource.AI_AGENT, metadata: { path: ["intent"], equals: query.aiAgentIntent } } } });
+    const aiConditions = aiAgentWhere(query.aiAgent, query.aiAgentIntent);
     if (aiConditions.length > 0) where.AND = aiConditions;
 
     if (query.assignment === "UNASSIGNED") {

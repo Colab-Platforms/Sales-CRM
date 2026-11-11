@@ -1,4 +1,5 @@
 import type { OrderSource, OrderStatus, PaymentMode, PaymentStatus, PaymentStatusFilter, ShipmentDetail, ShipmentStatus } from "./orders.types";
+import type { AiAgentTag } from "./lead.types";
 
 export type LeadWorkingStatus = "NEW" | "ASSIGNED" | "RINGING" | "BUSY" | "CALL_BACK" | "FOLLOW_UP" | "SWITCHED_OFF" | "DND" | "NOT_REACHABLE" | "INTERESTED" | "NOT_INTERESTED" | "CONVERTED" | "DEACTIVATED";
 export type LeadPriority = "LOW" | "MEDIUM" | "HIGH";
@@ -240,6 +241,8 @@ export interface CustomersListParams {
   // E6.8
   nbaAction?: NbaAction;
   nbaPriority?: NbaPriority;
+  aiAgent?: "ONLY" | "EXCLUDE";
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 export interface CustomerListItem {
@@ -260,6 +263,8 @@ export interface CustomerListItem {
   nbaAction: NbaAction;
   nbaPriority: NbaPriority;
   nbaReason: string;
+  /** The "AI Agent" / "Interested - AI Agent" tag; null when the AI calling agency never contacted the CRM about this customer. */
+  aiAgent: AiAgentTag | null;
 }
 
 export interface CustomerListResult {

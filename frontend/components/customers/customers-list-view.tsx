@@ -54,6 +54,8 @@ function parseState(params: URLSearchParams): ParsedState {
     shipmentStatus: oneOf<ShipmentStatus>("shipmentStatus", SHIPMENT_STATUS_VALUES),
     nbaAction: oneOf<NbaAction>("nbaAction", NBA_ACTION_ORDER),
     nbaPriority: oneOf<NbaPriority>("nbaPriority", NBA_PRIORITY_ORDER),
+    aiAgent: oneOf<"ONLY" | "EXCLUDE">("aiAgent", ["ONLY", "EXCLUDE"]),
+    aiAgentIntent: oneOf<"ALREADY_ORDERED" | "INTERESTED">("aiAgentIntent", ["ALREADY_ORDERED", "INTERESTED"]),
     dateFrom: date("dateFrom"),
     dateTo: date("dateTo"),
   };
@@ -119,6 +121,8 @@ export function CustomersListView() {
       state.shipmentStatus ||
       state.nbaAction ||
       state.nbaPriority ||
+      state.aiAgent ||
+      state.aiAgentIntent ||
       state.dateFrom ||
       state.dateTo,
   );
@@ -134,6 +138,8 @@ export function CustomersListView() {
     shipmentStatus: state.shipmentStatus,
     nbaAction: state.nbaAction,
     nbaPriority: state.nbaPriority,
+    aiAgent: state.aiAgent,
+    aiAgentIntent: state.aiAgentIntent,
     dateFrom: dayBoundary(state.dateFrom, "00:00:00"),
     dateTo: dayBoundary(state.dateTo, "23:59:59.999"),
   };

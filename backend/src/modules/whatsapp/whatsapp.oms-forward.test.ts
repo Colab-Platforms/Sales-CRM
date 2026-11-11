@@ -3,7 +3,8 @@ import { afterEach, describe, it, mock } from "node:test";
 
 import { prisma } from "@/lib/prisma.js";
 import { OmsForwardStatus } from "../../../generated/prisma/enums.js";
-import { forwardOne, isForwardingConfigured } from "./whatsapp.oms-forward.js";
+import { describeForwardError, describeTarget, forwardOne, isForwardingConfigured } from "./whatsapp.oms-forward.js";
+import { logger } from "@/utils/logger.js";
 
 // Unit tests only -- mocks both `fetch` (the OMS call) and `prisma.webhookEvent` (replaced
 // wholesale with a plain stub, since Prisma's generated client exposes model delegates as
@@ -174,5 +175,46 @@ describe("forwardOne", () => {
     assert.equal(result, "failed");
     assert.equal(fetchSpy.mock.callCount(), 0); // never even attempted the HTTP call
     assert.match(calls.update[0].data.omsForwardErrorMessage, /delivery digest/i);
+  });
+
+  it("a refused connection is logged and stored with the REAL reason (Node's cause), the target and a hint - not just 'fetch failed'; the secret is never included", async () => {
+    configureForwarding();
+    const calls = stubWebhookEvent({ row: { omsForwardAttempts: 2 } });
+    const refused = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8000"), { code: "ECONNREFUSED" }) });
+    mock.method(globalThis, "fetch", async () => { throw refused; });
+    const warn = mock.method(logger, "warn", () => undefined);
+
+    assert.equal(await forwardOne("evt-1"), "retry");
+
+    const stored: string = calls.update[0].data.omsForwardErrorMessage;
+    assert.match(stored, /ECONNREFUSED/);
+    assert.match(stored, /http:\/\/localhost:8000\/api\/v1\/internal\/whatsapp\/forwarded-event/);
+    assert.match(stored, /nothing is listening/);
+    const logged = String(warn.mock.calls[0]!.arguments[0]);
+    assert.match(logged, /whatsapp_oms_forward_failed: eventId=evt-1 attempt=2\/8 reason=fetch failed: ECONNREFUSED/);
+    assert.equal(logged.includes("test-shared-secret") || stored.includes("test-shared-secret"), false);
+  });
+
+  it("describeForwardError: DNS failure, IPv4+IPv6 AggregateError, timeout and non-Error values", () => {
+    const url = "https://oms.example.com/hook?token=SECRET#frag";
+    const dns = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error("getaddrinfo ENOTFOUND oms.example.com"), { code: "ENOTFOUND" }) });
+    assert.match(describeForwardError(dns, url), /ENOTFOUND.*DNS/);
+    const agg = Object.assign(new TypeError("fetch failed"), { cause: Object.assign(new Error(""), { code: "ECONNREFUSED", errors: [Object.assign(new Error("connect ECONNREFUSED ::1:8000"), { code: "ECONNREFUSED" }), Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:8000"), { code: "ECONNREFUSED" })] }) });
+    assert.match(describeForwardError(agg, "http://localhost:8000/x"), /ECONNREFUSED/);
+    assert.match(describeForwardError(Object.assign(new Error("aborted"), { name: "AbortError" }), url), /timeout/);
+    assert.match(describeForwardError("boom", url), /boom/);
+    const text = describeForwardError(dns, url);
+    assert.equal(text.includes("SECRET") || text.includes("frag") || text.includes("token"), false, "no query string or fragment in the logged target");
+    assert.equal(describeTarget("not a url"), "(invalid OMS_WHATSAPP_FORWARD_URL)");
+  });
+
+  it("a non-2xx answer logs the status, the attempt, the target and a short excerpt of the OMS's reason", async () => {
+    configureForwarding();
+    const calls = stubWebhookEvent({ row: { omsForwardAttempts: 1 } });
+    mock.method(globalThis, "fetch", async () => new Response('{"detail":"Invalid forward secret"}', { status: 401 }));
+    const warn = mock.method(logger, "warn", () => undefined);
+    assert.equal(await forwardOne("evt-1"), "retry");
+    assert.match(calls.update[0].data.omsForwardErrorMessage, /OMS responded 401.*Invalid forward secret/);
+    assert.match(String(warn.mock.calls[0]!.arguments[0]), /status=401 attempt=1\/8 target=http:\/\/localhost:8000.*Invalid forward secret/);
   });
 });

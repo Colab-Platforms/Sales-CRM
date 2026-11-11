@@ -127,7 +127,7 @@ describe("AI Agent activity (real storage)", () => {
     assert.ok(Date.now() - a.createdAt.getTime() < 60_000, "timestamp is the time of the request");
     assert.deepEqual(
       { ...(a.metadata as object) },
-      { aiAgent: true, intent: "ALREADY_ORDERED", requestId: r.json.requestId, idempotencyKey: `ai-${tag}-0001`, customerName: "Rahul Sharma", normalizedMobile: phone(1), result: "PAYMENT_LINK_SENT", httpStatus: 200, apiKey: `ai-${tag}`, callOutcome: null },
+      { aiAgent: true, intent: "ALREADY_ORDERED", method: null, requestId: r.json.requestId, idempotencyKey: `ai-${tag}-0001`, customerName: "Rahul Sharma", normalizedMobile: phone(1), result: "PAYMENT_LINK_SENT", httpStatus: 200, apiKey: `ai-${tag}`, callOutcome: null },
     );
   });
 
@@ -373,5 +373,80 @@ describe("intents: ALREADY_ORDERED and INTERESTED (real storage)", () => {
     const q = { page: 1, limit: 100, search: tag, aiAgentIntent: "INTERESTED" as const };
     assert.equal((await svc.listLeads(rep(), q)).data.some((x) => x.id === orphan), false);
     assert.equal((await svc.listLeads(admin, q)).data.some((x) => x.id === orphan), true);
+  });
+});
+
+describe("customer-stage leads (the Customers page): tag and filters", () => {
+  it("a CUSTOMER lead with an INTERESTED note is NOT on the Leads page (by design) but IS on the Customers page with both tags, and the AI Agent filters work there", async () => {
+    const l = await lead(40, { ownerId: salesId, name: `Cust${tag}` });
+    await prisma.lead.update({ where: { id: l }, data: { lifecycleStage: "CUSTOMER" } });
+    await order(l);
+    const plain = await lead(41, { ownerId: salesId, name: `Plain${tag}` });
+    await prisma.lead.update({ where: { id: plain }, data: { lifecycleStage: "CUSTOMER" } });
+    await order(plain);
+    const r = await post(body(40, { intent: "INTERESTED" }), { "idempotency-key": `ai-${tag}-0040` });
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+
+    const rep = { id: salesId, role: "SALESPERSON" as const, username: `tele-${tag}` };
+    // Leads page: customers are not listed there, with or without the AI Agent filter
+    const leads = new LeadService();
+    assert.equal((await leads.listLeads(admin, { page: 1, limit: 100, search: `Cust${tag}` })).data.some((x) => x.id === l), false);
+    assert.equal((await leads.listLeads(admin, { page: 1, limit: 100, search: `Cust${tag}`, aiAgentIntent: "INTERESTED" })).data.length, 0);
+
+    // Customers page
+    const svc = new CustomersService();
+    const base = { page: 1, pageSize: 100, search: tag };
+    const find = async (extra: object, user: { id: string; role: "ADMIN" | "SALESPERSON"; username: string } = admin) => (await svc.listCustomers(user, { ...base, ...extra } as never)).items;
+    const all = await find({});
+    const mine = all.find((c) => c.leadId === l)!;
+    assert.equal(mine.aiAgent?.interested, true);
+    assert.equal(mine.aiAgent?.lastIntent, "INTERESTED");
+    assert.equal(all.find((c) => c.leadId === plain)!.aiAgent, null);
+    const ids = async (extra: object, user: { id: string; role: "ADMIN" | "SALESPERSON"; username: string } = admin) => (await find(extra, user)).map((c) => c.leadId).filter((id) => id === l || id === plain);
+    assert.deepEqual(await ids({ aiAgentIntent: "INTERESTED" }), [l]);
+    assert.deepEqual(await ids({ aiAgentIntent: "ALREADY_ORDERED" }), []);
+    assert.deepEqual(await ids({ aiAgent: "ONLY" }), [l]);
+    assert.deepEqual(await ids({ aiAgent: "EXCLUDE" }), [plain]);
+    assert.deepEqual((await ids({})).sort(), [l, plain].sort(), "no filter: both, unchanged");
+    // the owning telecaller sees their own AI-tagged customer; permissions unchanged
+    assert.deepEqual((await ids({ aiAgentIntent: "INTERESTED" }, rep)), [l]);
+  });
+});
+
+describe("PREPAID and missing method (real storage)", () => {
+  it("ALREADY_ORDERED + PREPAID never looks up orders, creates a payment link, sends WhatsApp or creates a payment - even if the customer has an eligible COD order", async () => {
+    sent.length = 0; linkCalls.length = 0;
+    const l = await lead(50);
+    await order(l);
+    const orderRead = (prisma.order as any).findMany;
+    let orderQueries = 0;
+    (prisma.order as any).findMany = (...a: unknown[]) => { orderQueries++; return orderRead.apply(prisma.order, a); };
+    const payments = await prisma.payment.count({ where: { order: { leadId: l } } });
+    let r;
+    try { r = await post(body(50, { intent: "ALREADY_ORDERED", method: "PREPAID" }), { "idempotency-key": `ai-${tag}-0050` }); }
+    finally { (prisma.order as any).findMany = orderRead; }
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.deepEqual([r.json.status, r.json.method], ["RECORDED", "PREPAID"]);
+    assert.equal(orderQueries, 0, "no order lookup by the API");
+    assert.deepEqual([sent.length, linkCalls.length], [0, 0]);
+    assert.equal(await prisma.payment.count({ where: { order: { leadId: l } } }), payments);
+    assert.equal(await prisma.whatsAppMessage.count({ where: { leadId: l } }), 0);
+    const m = (await aiRows({ leadId: l }))[0]!.metadata as any;
+    assert.deepEqual([m.intent, m.method, m.result], ["ALREADY_ORDERED", "PREPAID", "PREPAID_RECORDED"]);
+  });
+
+  it("a request with NO method (legacy) never sends a COD link for a PREPAID order: it is NO_ELIGIBLE_ORDER; only a genuine COD order gets the link", async () => {
+    sent.length = 0; linkCalls.length = 0;
+    const p = await lead(51);
+    await prisma.order.update({ where: { id: (await order(p, {})).id }, data: { metadata: { paymentMode: "PREPAID" } } });
+    const r = await post(body(51), { "idempotency-key": `ai-${tag}-0051` });
+    assert.equal(r.status, 404);
+    assert.equal(r.json.error.code, "NO_ELIGIBLE_ORDER");
+    assert.deepEqual([sent.length, linkCalls.length], [0, 0]);
+    const c = await lead(52);
+    const cod = await order(c);
+    const ok = await post(body(52), { "idempotency-key": `ai-${tag}-0052` });
+    assert.equal(ok.status, 200, JSON.stringify(ok.json));
+    assert.deepEqual(linkCalls, [cod.id]);
   });
 });

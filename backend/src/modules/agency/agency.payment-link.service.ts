@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { ApiError } from "@/utils/apiError.js";
 import { logger } from "@/utils/logger.js";
-import { maskMobile, requestHash, validateRequest, type AgencyIntent, type FieldError, type PaymentLinkRequest } from "./agency.validators.js";
+import { maskMobile, requestHash, validateRequest, type AgencyIntent, type AgencyMethod, type FieldError, type PaymentLinkRequest } from "./agency.validators.js";
 
 export interface EligibleOrder {
   id: string;
@@ -82,6 +82,8 @@ export interface AiAgentActivity {
   idempotencyKey: string;
   /** ALREADY_ORDERED (payment link) or INTERESTED (only recorded). */
   intent: AgencyIntent;
+  /** COD / PREPAID as the agency reported it; null when not sent. */
+  method: AgencyMethod | null;
   /** The matched lead; null when the number belongs to no lead (the CRM never creates one for this API). */
   leadId: string | null;
   orderId: string | null;
@@ -189,14 +191,15 @@ export class AgencyPaymentLinkService {
       else return this.replay(existing, requestId);
     }
 
-    if (request.intent === "INTERESTED") return this.interested(activeId, key, request, usedKey, toMasked);
+    // PREPAID: the customer says they already PAID online, so a COD payment link would be wrong - record only (no order search, no link, no message). Needs a person if the CRM disagrees.
+    if (request.intent === "INTERESTED" || request.method === "PREPAID") return this.interested(activeId, key, request, usedKey, toMasked);
 
     try {
       const sent = await this.process(activeId, request);
       const body = { success: true, requestId: activeId, status: sent.status, duplicate: false, message: { id: sent.messageId, whatsappMessageId: sent.providerMessageId, template: sent.templateName, to: toMasked }, order: sent.order, payment: sent.payment };
       await this.repo.complete(activeId, { status: "SENT", httpStatus: 200, response: body, leadId: sent.leadId, orderId: sent.orderId, messageId: sent.messageId, providerMessageId: sent.providerMessageId, templateName: sent.templateName }, this.now());
       logger.info(`[agency] ${activeId} key="${key.name}" SENT to ${toMasked} template=${sent.templateName}`);
-      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId: sent.leadId, orderId: sent.orderId, customerName: request.customerName, normalizedMobile: request.mobile, result: "PAYMENT_LINK_SENT", httpStatus: 200, apiKeyName: key.name, intent: request.intent });
+      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId: sent.leadId, orderId: sent.orderId, customerName: request.customerName, normalizedMobile: request.mobile, result: "PAYMENT_LINK_SENT", httpStatus: 200, apiKeyName: key.name, intent: request.intent, method: request.method });
       return { httpStatus: 200, body };
     } catch (error) {
       const f = this.toFailure(error);
@@ -204,7 +207,7 @@ export class AgencyPaymentLinkService {
       await this.repo.complete(activeId, { status: "FAILED", httpStatus: f.httpStatus, response: body, errorCode: f.code, errorMessage: f.message.slice(0, 1000), ...("ids" in f ? (f as { ids: object }).ids : {}) }, this.now()).catch((e) => logger.error(`[agency] could not store the outcome of ${activeId}`, e instanceof Error ? e.message : e));
       logger.warn(`[agency] ${activeId} key="${key.name}" FAILED ${f.code} to ${toMasked}: ${f.message}`);
       const ids = (f as { ids?: { leadId?: string | null; orderId?: string | null } }).ids ?? {};
-      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId: ids.leadId ?? null, orderId: ids.orderId ?? null, customerName: request.customerName, normalizedMobile: request.mobile, result: f.code, httpStatus: f.httpStatus, apiKeyName: key.name, intent: request.intent });
+      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId: ids.leadId ?? null, orderId: ids.orderId ?? null, customerName: request.customerName, normalizedMobile: request.mobile, result: f.code, httpStatus: f.httpStatus, apiKeyName: key.name, intent: request.intent, method: request.method });
       return { httpStatus: f.httpStatus, body };
     }
   }
@@ -216,11 +219,12 @@ export class AgencyPaymentLinkService {
   private async interested(activeId: string, key: AgencyKeyRow, request: PaymentLinkRequest, usedKey: string, toMasked: string): Promise<AgencyResponse> {
     try {
       const leadId = (await this.repo.findLeadIdsByMobile(request.mobile))[0] ?? null;
-      const result = leadId ? "INTERESTED_RECORDED" : "INTERESTED_NO_LEAD";
-      const body = { success: true, requestId: activeId, status: "RECORDED", duplicate: false, intent: "INTERESTED", leadMatched: leadId !== null };
+      const prefix = request.intent === "INTERESTED" ? "INTERESTED" : "PREPAID";
+      const result = leadId ? `${prefix}_RECORDED` : `${prefix}_NO_LEAD`;
+      const body = { success: true, requestId: activeId, status: "RECORDED", duplicate: false, intent: request.intent, method: request.method, leadMatched: leadId !== null };
       await this.repo.complete(activeId, { status: "RECORDED", httpStatus: 200, response: body, leadId }, this.now());
       logger.info(`[agency] ${activeId} key="${key.name}" INTERESTED ${result} for ${toMasked}`);
-      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId, orderId: null, customerName: request.customerName, normalizedMobile: request.mobile, result, httpStatus: 200, apiKeyName: key.name, intent: "INTERESTED" });
+      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId, orderId: null, customerName: request.customerName, normalizedMobile: request.mobile, result, httpStatus: 200, apiKeyName: key.name, intent: request.intent, method: request.method });
       return { httpStatus: 200, body };
     } catch (error) {
       const f = this.toFailure(error);

@@ -461,7 +461,7 @@ export function LeadTable({
                           className="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-400"
                           title={`${lead.aiAgent.lastTitle ?? "AI Agent request"} - ${new Date(lead.aiAgent.lastActivityAt).toLocaleString()}`}
                         >
-                          AI Agent
+                          AI Agent{lead.aiAgent.lastMethod ? ` · ${lead.aiAgent.lastMethod}` : ""}
                         </span>
                       ) : null}
                       {lead.aiAgent?.interested ? (

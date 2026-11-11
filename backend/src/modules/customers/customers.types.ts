@@ -6,6 +6,7 @@ import type {
   PaymentStatus,
   ShipmentStatus,
 } from "../../../generated/prisma/enums.js";
+import type { AiAgentTag } from "../agency/agency.tag.js";
 import type { PaymentMode, PaymentStatusFilter, ShipmentDetail } from "../orders/orders.types.js";
 import type { NormalizedCustomerListItem } from "../shopify/shopify.customers.js";
 import type { CustomerSegment, SegmentMetrics } from "./segment.js";
@@ -196,6 +197,9 @@ export interface ListCustomersQuery {
   // E6.8
   nbaAction?: NbaAction;
   nbaPriority?: NbaPriority;
+  // The AI calling agency's activity: ONLY / EXCLUDE its customers, and/or one intent.
+  aiAgent?: "ONLY" | "EXCLUDE";
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 export interface CustomerListItem {
@@ -218,6 +222,8 @@ export interface CustomerListItem {
   nbaAction: NbaAction;
   nbaPriority: NbaPriority;
   nbaReason: string;
+  // The "AI Agent" / "Interested - AI Agent" tag; null when the agent never contacted the CRM about this customer.
+  aiAgent: AiAgentTag | null;
 }
 
 export interface CustomerListResult {

@@ -30,6 +30,38 @@ function config(): ForwardConfig {
   return { url: process.env.OMS_WHATSAPP_FORWARD_URL, secret: process.env.SALES_CRM_FORWARD_SECRET };
 }
 
+/** The destination as it is safe to log: scheme, host, port and path only - never credentials or a query string. */
+export function describeTarget(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return "(invalid OMS_WHATSAPP_FORWARD_URL)";
+  }
+}
+
+/**
+ * Why a forward attempt failed, in words. Node's fetch reports every network problem as the unhelpful "fetch failed" and puts the real reason (ECONNREFUSED, ENOTFOUND, ETIMEDOUT, a TLS error ...)
+ * in `error.cause`, sometimes one level deeper (AggregateError when both IPv6 and IPv4 are tried). This unwraps that, adds the target, and never includes the secret.
+ */
+export function describeForwardError(error: unknown, url: string): string {
+  const target = describeTarget(url);
+  if (!(error instanceof Error)) return `${String(error)} (target ${target})`;
+  if (error.name === "AbortError") return `no response from OMS within ${FORWARD_TIMEOUT_MS / 1000}s (timeout) (target ${target})`;
+  const reasons: string[] = [];
+  const walk = (e: unknown, depth: number) => {
+    if (!e || typeof e !== "object" || depth > 3) return;
+    const x = e as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown[] };
+    const text = [typeof x.code === "string" ? x.code : null, typeof x.message === "string" && x.message !== "fetch failed" ? x.message : null].filter(Boolean).join(": ");
+    if (text && !reasons.includes(text)) reasons.push(text);
+    if (Array.isArray(x.errors)) for (const inner of x.errors) walk(inner, depth + 1);
+    walk(x.cause, depth + 1);
+  };
+  walk(error.cause, 0);
+  const hint = reasons.some((r) => /ECONNREFUSED/.test(r)) ? " - nothing is listening there; is the OMS running and is OMS_WHATSAPP_FORWARD_URL right?" : reasons.some((r) => /ENOTFOUND|EAI_AGAIN/.test(r)) ? " - the host name does not resolve (DNS)" : "";
+  return `${error.message}${reasons.length ? `: ${reasons.join("; ")}` : ""} (target ${target})${hint}`;
+}
+
 /** Whether forwarding is configured at all -- both env vars must be set, mirroring
  *  whatsapp.meta.factory.ts's own "not configured -> fully off" convention. */
 export function isForwardingConfigured(): boolean {
@@ -151,17 +183,20 @@ export async function forwardOne(id: string): Promise<"forwarded" | "skipped" | 
     }
 
     if (!response.ok) {
-      await fail(id, `OMS responded ${response.status}`, event.omsForwardAttempts);
-      logger.warn(`whatsapp_oms_forward_failed: eventId=${id} status=${response.status}`);
+      // A short, single-line excerpt of what the OMS said (it usually explains a 401 / 422), never the request or the secret.
+      const excerpt = (await response.text().catch(() => "")).replace(/\s+/g, " ").trim().slice(0, 200);
+      const detail = `OMS responded ${response.status} (target ${describeTarget(url)})${excerpt ? `: ${excerpt}` : ""}`;
+      await fail(id, detail, event.omsForwardAttempts);
+      logger.warn(`whatsapp_oms_forward_failed: eventId=${id} status=${response.status} attempt=${event.omsForwardAttempts}/${MAX_ATTEMPTS} target=${describeTarget(url)}${excerpt ? ` body="${excerpt}"` : ""}`);
       return event.omsForwardAttempts >= MAX_ATTEMPTS ? "failed" : "retry";
     }
 
     await complete(id, new Date());
     return "forwarded";
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = describeForwardError(error, url);
     await fail(id, message, event.omsForwardAttempts);
-    logger.warn(`whatsapp_oms_forward_failed: eventId=${id} reason=${message}`);
+    logger.warn(`whatsapp_oms_forward_failed: eventId=${id} attempt=${event.omsForwardAttempts}/${MAX_ATTEMPTS} reason=${message}`);
     return event.omsForwardAttempts >= MAX_ATTEMPTS ? "failed" : "retry";
   }
 }

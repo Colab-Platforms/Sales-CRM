@@ -1,4 +1,5 @@
 import { LifecycleStage, type LeadWorkingStatus, type PaymentMethod, type PaymentStatus, type ShipmentStatus } from "../../../generated/prisma/enums.js";
+import { aiAgentWhere, type AiAgentTag } from "../agency/agency.tag.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { computePaymentBreakdown, derivePaymentMode, derivePaymentStatus, fullName } from "../orders/orders.filters.js";
 import type { ShipmentDetail } from "../orders/orders.types.js";
@@ -223,7 +224,7 @@ export function customerSearchWhere(search: string): Prisma.LeadWhereInput {
   return { OR: [...phoneClauses, { AND: words.map(wordClauses) }] };
 }
 
-export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId" | "dateFrom" | "dateTo" | "search">, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
+export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId" | "dateFrom" | "dateTo" | "search" | "aiAgent" | "aiAgentIntent">, leadScope: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
   const and: Prisma.LeadWhereInput[] = [];
 
   // Customers page: only leads that actually converted - lifecycleStage flips to CUSTOMER the
@@ -241,6 +242,7 @@ export function buildCustomerListWhere(query: Pick<ListCustomersQuery, "ownerId"
   if (query.ownerId) and.push({ ownerId: query.ownerId });
   if (query.dateFrom || query.dateTo) and.push({ createdAt: { gte: query.dateFrom, lte: query.dateTo } });
   if (query.search?.trim()) and.push(customerSearchWhere(query.search));
+  and.push(...aiAgentWhere(query.aiAgent, query.aiAgentIntent));
 
   return and.length > 0 ? { AND: and } : {};
 }
@@ -275,6 +277,7 @@ export interface CustomerListLeadInput {
   workingStatus: LeadWorkingStatus;
   owner: { id: string; name: string } | null;
   hasActiveInterestedPeriod: boolean;
+  aiAgent?: AiAgentTag | null;
 }
 
 // `orders` must already be sorted most-recent-first (the same convention as everywhere else in this
@@ -304,5 +307,6 @@ export function mapCustomerListItem(lead: CustomerListLeadInput, orders: OrderSu
     nbaAction: nba.action,
     nbaPriority: nba.priority,
     nbaReason: nba.reason,
+    aiAgent: lead.aiAgent ?? null,
   };
 }
