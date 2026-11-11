@@ -27,6 +27,7 @@ export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
   REFUND_EXECUTION_STARTED: "Refund execution started",
   REFUND_COMPLETED: "Refund completed",
   REFUND_EXECUTION_FAILED: "Refund execution failed",
+  AI_AGENT_PAYMENT_LINK_REQUEST: "AI Agent payment link request",
   PAYMENT_MISMATCH_DETECTED: "Payment mismatch detected",
   SHIPMENT_CREATED: "Shipment created",
   SHIPMENT_STATUS_CHANGED: "Shipment status changed",
@@ -113,6 +114,7 @@ export const ACTIVITY_TYPE_COLORS: Record<ActivityType, string> = {
   REFUND_EXECUTION_STARTED: "bg-amber-500/10 text-amber-700 dark:text-amber-400",
   REFUND_COMPLETED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
   REFUND_EXECUTION_FAILED: "bg-rose-500/10 text-rose-700 dark:text-rose-400",
+  AI_AGENT_PAYMENT_LINK_REQUEST: "bg-violet-500/10 text-violet-700 dark:text-violet-400",
   PAYMENT_MISMATCH_DETECTED: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
   SHIPMENT_CREATED: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
   SHIPMENT_STATUS_CHANGED: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
@@ -140,6 +142,7 @@ export const ACTIVITY_SOURCE_LABELS: Record<ActivitySource, string> = {
   SHOPIFY_WEBHOOK: "Shopify webhook",
   SYSTEM: "System",
   WHATSAPP_WEBHOOK: "WhatsApp webhook",
+  AI_AGENT: "AI Agent",
 };
 
-export const ACTIVITY_SOURCE_ORDER: ActivitySource[] = ["USER", "SHOPIFY_SYNC", "SHOPIFY_WEBHOOK", "WHATSAPP_WEBHOOK", "SYSTEM"];
+export const ACTIVITY_SOURCE_ORDER: ActivitySource[] = ["USER", "SHOPIFY_SYNC", "SHOPIFY_WEBHOOK", "WHATSAPP_WEBHOOK", "AI_AGENT", "SYSTEM"];

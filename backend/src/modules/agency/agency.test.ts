@@ -9,7 +9,7 @@ import { ApiError } from "@/utils/apiError.js";
 import { extractApiKey, generateApiKey, hashApiKey } from "./agency.keys.js";
 import { SlidingWindowLimiter } from "./agency.ratelimit.js";
 import { agencyJsonErrorHandler, createAgencyRouter } from "./agency.routes.js";
-import { classifySendError, type AgencyKeyRow, type AgencyMessaging, type AgencyRepo, type EligibleOrder, type PaymentLinkMaker, type StoredRequest } from "./agency.payment-link.service.js";
+import { classifySendError, type AgencyKeyRow, type AgencyMessaging, type AgencyRepo, type AiAgentActivity, type EligibleOrder, type PaymentLinkMaker, type StoredRequest } from "./agency.payment-link.service.js";
 import { maskMobile, validateMobile, validateRequest } from "./agency.validators.js";
 
 const MOBILE = "+919876543210";
@@ -18,10 +18,12 @@ const order = (n: number, amount = "449.00", over: Partial<EligibleOrder> = {}):
 
 type LogRow = { id: string; apiKeyId: string; idempotencyKey: string; requestHash: string; status: string; httpStatus: number | null; response: unknown; errorCode: string | null; leadId: string | null; orderId: string | null; providerMessageId: string | null; templateName: string | null; toMasked: string; createdAt: Date };
 
-interface World { keys: Map<string, AgencyKeyRow>; known: boolean; orders: EligibleOrder[]; consent: Record<string, "OPTED_IN" | "OPTED_OUT" | "UNKNOWN">; templates: boolean }
+interface World { keys: Map<string, AgencyKeyRow>; known: boolean; orders: EligibleOrder[]; consent: Record<string, "OPTED_IN" | "OPTED_OUT" | "UNKNOWN">; templates: boolean; activityFails?: boolean; orderLookups: number }
 
 function memoryRepo(world: World) {
   const rows: LogRow[] = [];
+  // Mirrors the real repo: one activity per request id (a retried request updates it, never adds a second).
+  const activities = new Map<string, AiAgentActivity>();
   const repo: AgencyRepo = {
     findKeyByHash: async (hash) => world.keys.get(hash) ?? null,
     touchKey: async () => undefined,
@@ -38,7 +40,7 @@ function memoryRepo(world: World) {
       return true;
     },
     findRecentSameRequest: async (apiKeyId, hash, since) => {
-      const row = [...rows].reverse().find((x) => x.apiKeyId === apiKeyId && x.requestHash === hash && (x.status === "SENT" || x.status === "RECEIVED") && x.createdAt >= since);
+      const row = [...rows].reverse().find((x) => x.apiKeyId === apiKeyId && x.requestHash === hash && (x.status === "SENT" || x.status === "RECORDED" || x.status === "RECEIVED") && x.createdAt >= since);
       return row ? toStored(row) : null;
     },
     complete: async (id, patch) => {
@@ -48,12 +50,17 @@ function memoryRepo(world: World) {
     logRejected: async (r) => {
       rows.push({ id: r.id, apiKeyId: r.apiKeyId, idempotencyKey: `rejected:${r.id}`, requestHash: "", status: "REJECTED", httpStatus: r.httpStatus, response: r.response, errorCode: r.errorCode, leadId: null, orderId: null, providerMessageId: null, templateName: null, toMasked: "-", createdAt: new Date() });
     },
-    findEligibleCodOrders: async () => ({ known: world.known, orders: world.orders }),
+    findLeadIdsByMobile: async () => (world.known ? ["lead-1"] : []),
+    findEligibleCodOrders: async () => (world.orderLookups++, { known: world.known, leadIds: world.known ? [...new Set(["lead-1", ...world.orders.map((o) => o.leadId)])] : [], orders: world.orders }),
+    recordAiAgentActivity: async (row) => {
+      if (world.activityFails) throw new Error("activity table unavailable");
+      activities.set(row.requestId, row);
+    },
     getConsent: async (leadId) => world.consent[leadId] ?? "UNKNOWN",
     countSentToLead: async (leadId) => rows.filter((x) => x.leadId === leadId && x.status === "SENT").length,
     approvedPaymentLinkTemplates: async () => (world.templates ? [{ id: "tpl-1", name: "payment_link_v1" }] : []),
   };
-  return { repo, rows };
+  return { repo, rows, activities };
 }
 const toStored = (r: LogRow): StoredRequest => ({ id: r.id, status: r.status, requestHash: r.requestHash, httpStatus: r.httpStatus, response: r.response, createdAt: r.createdAt });
 
@@ -110,7 +117,7 @@ interface Harness {
 async function start(opts: { rate?: number; orders?: EligibleOrder[]; known?: boolean; consent?: World["consent"]; templates?: boolean; env?: Record<string, string> } = {}): Promise<Harness> {
   const { key, hash } = generateApiKey();
   const keyRow: AgencyKeyRow = { id: "key-1", name: "Test Agency", isActive: true, revokedAt: null, rateLimitPerMinute: opts.rate ?? 100 };
-  const world: World = { keys: new Map([[hash, keyRow]]), known: opts.known ?? true, orders: opts.orders ?? [order(1)], consent: opts.consent ?? {}, templates: opts.templates ?? true };
+  const world: World = { keys: new Map([[hash, keyRow]]), known: opts.known ?? true, orders: opts.orders ?? [order(1)], consent: opts.consent ?? {}, templates: opts.templates ?? true, orderLookups: 0 };
   const mem = memoryRepo(world);
   const { messaging, state: msg } = fakeMessaging();
   const { links, state: link } = fakeLinks();
@@ -160,7 +167,7 @@ describe("exactly one eligible COD order: the CRM creates its payment link and s
   });
 });
 
-describe("the request is exactly two fields", () => {
+describe("the request is the request fields: customerName, mobile and an optional intent", () => {
   let h: Harness;
   before(async () => { h = await start(); });
   after(() => h.close());
@@ -194,7 +201,7 @@ describe("the request is exactly two fields", () => {
 
   it("pure validation: names are trimmed and spaces collapsed; numbers are canonical", () => {
     const v = validateRequest({ customerName: "  Rahul   Sharma ", mobile: "+91 98765-43210" });
-    assert.deepEqual(v.value, { customerName: "Rahul Sharma", mobile: "+919876543210" });
+    assert.deepEqual(v.value, { customerName: "Rahul Sharma", mobile: "+919876543210", intent: "ALREADY_ORDERED" });
     assert.equal(validateMobile("+14155552671").mobile, "+14155552671");
   });
 });
@@ -427,6 +434,216 @@ describe("duplicate requests, concurrency and limits (unchanged)", () => {
     assert.equal(limiter.take("k", 2).allowed, false);
     t = 1500;
     assert.equal(limiter.take("k", 2).allowed, true);
+  });
+});
+
+describe("AI Agent activity: one activity per valid authenticated request, never a call outcome", () => {
+  const only = (h: Harness) => [...h.mem.activities.values()];
+
+  it("a sent payment link records PAYMENT_LINK_SENT against the matched lead with name, normalized mobile, request id and idempotency key", async () => {
+    const h = await start();
+    try {
+      const r = await h.post(goodBody({ customerName: "  Rahul   Sharma " }), { "idempotency-key": "call-2001-attempt-1" });
+      assert.equal(r.status, 200, r.text);
+      const [a] = only(h);
+      assert.equal(only(h).length, 1);
+      assert.deepEqual(
+        { requestId: a!.requestId, key: a!.idempotencyKey, lead: a!.leadId, order: a!.orderId, name: a!.customerName, mobile: a!.normalizedMobile, result: a!.result, http: a!.httpStatus, apiKey: a!.apiKeyName },
+        { requestId: r.json.requestId, key: "call-2001-attempt-1", lead: "lead-1", order: "order-1", name: "Rahul Sharma", mobile: MOBILE, result: "PAYMENT_LINK_SENT", http: 200, apiKey: "Test Agency" },
+      );
+      assert.ok(a!.at instanceof Date);
+    } finally { await h.close(); }
+  });
+
+  it("NO_ELIGIBLE_ORDER is recorded against the existing lead (no new lead), with no order", async () => {
+    const h = await start({ orders: [] });
+    try {
+      const r = await h.post(goodBody(), { "idempotency-key": "call-2002-attempt-1" });
+      assert.equal(r.json.error.code, "NO_ELIGIBLE_ORDER");
+      const [a] = only(h);
+      assert.deepEqual([a!.result, a!.leadId, a!.orderId, a!.httpStatus], ["NO_ELIGIBLE_ORDER", "lead-1", null, 404]);
+      assert.equal(h.link.created.length + h.msg.sent.length, 0);
+    } finally { await h.close(); }
+  });
+
+  it("MULTIPLE_ELIGIBLE_ORDERS and an opted-out customer are recorded with their result", async () => {
+    const h = await start({ orders: [order(1), order(2)] });
+    try {
+      await h.post(goodBody(), { "idempotency-key": "call-2003-attempt-1" });
+      assert.equal(only(h)[0]!.result, "MULTIPLE_ELIGIBLE_ORDERS");
+      assert.equal(only(h)[0]!.leadId, "lead-1");
+    } finally { await h.close(); }
+    const o = await start({ consent: { "lead-1": "OPTED_OUT" } });
+    try {
+      await o.post(goodBody(), { "idempotency-key": "call-2004-attempt-1" });
+      assert.deepEqual([only(o)[0]!.result, only(o)[0]!.leadId, only(o)[0]!.orderId], ["CUSTOMER_OPTED_OUT", "lead-1", "order-1"]);
+    } finally { await o.close(); }
+  });
+
+  it("CUSTOMER_NOT_FOUND is recorded with no lead - the CRM never creates a lead for the agency", async () => {
+    const h = await start({ known: false, orders: [] });
+    try {
+      await h.post(goodBody(), { "idempotency-key": "call-2005-attempt-1" });
+      const [a] = only(h);
+      assert.deepEqual([a!.result, a!.leadId, a!.orderId, a!.normalizedMobile], ["CUSTOMER_NOT_FOUND", null, null, MOBILE]);
+    } finally { await h.close(); }
+  });
+
+  it("a repeated webhook (same Idempotency-Key) is answered from the first result and records NO second activity", async () => {
+    const h = await start();
+    try {
+      const first = await h.post(goodBody(), { "idempotency-key": "call-2006-attempt-1" });
+      const again = await h.post(goodBody(), { "idempotency-key": "call-2006-attempt-1" });
+      assert.equal(again.json.duplicate, true);
+      assert.equal(only(h).length, 1);
+      assert.equal(only(h)[0]!.requestId, first.json.requestId);
+      // The same request without a key inside the dedupe window is also one activity.
+      await h.post(goodBody({ customerName: "Another Person" }));
+      await h.post(goodBody({ customerName: "Another Person" }));
+      assert.equal(only(h).length, 2);
+    } finally { await h.close(); }
+  });
+
+  it("a failed request retried with the same key UPDATES its activity (one per request) to the new result", async () => {
+    const h = await start();
+    try {
+      h.link.mode = "gateway-down";
+      const first = await h.post(goodBody(), { "idempotency-key": "call-2007-attempt-1" });
+      assert.equal(first.json.error.code, "PAYMENT_LINK_FAILED");
+      assert.equal(only(h)[0]!.result, "PAYMENT_LINK_FAILED");
+      h.link.mode = "ok";
+      const retry = await h.post(goodBody(), { "idempotency-key": "call-2007-attempt-1" });
+      assert.equal(retry.status, 200, retry.text);
+      assert.equal(only(h).length, 1);
+      assert.equal(only(h)[0]!.result, "PAYMENT_LINK_SENT");
+    } finally { await h.close(); }
+  });
+
+  it("invalid payloads, wrong keys and rate-limited calls record nothing", async () => {
+    const h = await start();
+    try {
+      await h.post(goodBody({ orderId: "x" }));
+      await h.post({ customerName: "Rahul" });
+      await h.post(goodBody(), { "x-api-key": "avk_wrong" });
+      assert.equal(only(h).length, 0);
+    } finally { await h.close(); }
+  });
+
+  it("a failure to record the activity never changes the answer to the agency", async () => {
+    const h = await start();
+    try {
+      h.world.activityFails = true;
+      const r = await h.post(goodBody(), { "idempotency-key": "call-2008-attempt-1" });
+      assert.equal(r.status, 200, r.text);
+      assert.equal(r.json.status, "SENT");
+    } finally { await h.close(); }
+  });
+});
+
+describe("intent: ALREADY_ORDERED (default) and INTERESTED", () => {
+  const acts = (h: Harness) => [...h.mem.activities.values()];
+
+  it("a request WITHOUT intent behaves exactly as ALREADY_ORDERED (legacy integration): link created, message sent, activity intent ALREADY_ORDERED", async () => {
+    const h = await start();
+    try {
+      const r = await h.post(goodBody(), { "idempotency-key": "legacy-call-0001" });
+      assert.equal(r.status, 200, r.text);
+      assert.equal(r.json.status, "SENT");
+      assert.deepEqual(h.link.created, ["order-1"]);
+      assert.equal(h.msg.sent.length, 1);
+      assert.equal(acts(h)[0]!.intent, "ALREADY_ORDERED");
+      assert.equal(acts(h)[0]!.result, "PAYMENT_LINK_SENT");
+      // the explicit form is the same request: same idempotency key + same body (with intent) is a repeat, not a conflict
+      const same = await h.post(goodBody({ intent: "ALREADY_ORDERED" }), { "idempotency-key": "legacy-call-0001" });
+      assert.equal(same.json.duplicate, true);
+      assert.equal(h.msg.sent.length, 1);
+    } finally { await h.close(); }
+  });
+
+  it("ALREADY_ORDERED: eligible order -> link + message + activity; no eligible order -> NO_ELIGIBLE_ORDER recorded with intent ALREADY_ORDERED", async () => {
+    const h = await start();
+    try {
+      const ok = await h.post(goodBody({ intent: "ALREADY_ORDERED" }), { "idempotency-key": "ordered-0001" });
+      assert.equal(ok.status, 200, ok.text);
+      assert.deepEqual(h.link.created, ["order-1"]);
+      assert.equal(acts(h)[0]!.intent, "ALREADY_ORDERED");
+    } finally { await h.close(); }
+    const n = await start({ orders: [] });
+    try {
+      const r = await n.post(goodBody({ intent: "ALREADY_ORDERED" }), { "idempotency-key": "ordered-0002" });
+      assert.equal(r.json.error.code, "NO_ELIGIBLE_ORDER");
+      assert.deepEqual([acts(n)[0]!.intent, acts(n)[0]!.result], ["ALREADY_ORDERED", "NO_ELIGIBLE_ORDER"]);
+    } finally { await n.close(); }
+  });
+
+  it("INTERESTED with an existing lead: recorded against the lead; NO order lookup, NO payment link, NO WhatsApp message", async () => {
+    const h = await start();
+    try {
+      const r = await h.post(goodBody({ intent: "INTERESTED" }), { "idempotency-key": "interested-0001" });
+      assert.equal(r.status, 200, r.text);
+      assert.deepEqual({ success: r.json.success, status: r.json.status, intent: r.json.intent, leadMatched: r.json.leadMatched, duplicate: r.json.duplicate }, { success: true, status: "RECORDED", intent: "INTERESTED", leadMatched: true, duplicate: false });
+      assert.equal(h.world.orderLookups, 0, "no eligible-order search");
+      assert.deepEqual(h.link.created, [], "no payment link");
+      assert.deepEqual(h.msg.sent, [], "no WhatsApp message");
+      const [a] = acts(h);
+      assert.deepEqual([acts(h).length, a!.intent, a!.leadId, a!.orderId, a!.result], [1, "INTERESTED", "lead-1", null, "INTERESTED_RECORDED"]);
+      assert.equal(h.mem.rows[0]!.status, "RECORDED");
+    } finally { await h.close(); }
+  });
+
+  it("INTERESTED with an unknown mobile: still answered 200, recorded with NO lead (admin audit trail), nothing created or sent", async () => {
+    const h = await start({ known: false, orders: [] });
+    try {
+      const r = await h.post(goodBody({ intent: "INTERESTED" }), { "idempotency-key": "interested-0002" });
+      assert.equal(r.status, 200, r.text);
+      assert.equal(r.json.leadMatched, false);
+      const [a] = acts(h);
+      assert.deepEqual([a!.leadId, a!.intent, a!.result, a!.normalizedMobile], [null, "INTERESTED", "INTERESTED_NO_LEAD", MOBILE]);
+      assert.equal(h.link.created.length + h.msg.sent.length + h.world.orderLookups, 0);
+    } finally { await h.close(); }
+  });
+
+  it("INTERESTED works even when the customer has an eligible order, an opted-out record, or no approved template - none of that is consulted", async () => {
+    const h = await start({ consent: { "lead-1": "OPTED_OUT" }, templates: false });
+    try {
+      const r = await h.post(goodBody({ intent: "INTERESTED" }), { "idempotency-key": "interested-0003" });
+      assert.equal(r.status, 200, r.text);
+      assert.equal(h.world.orderLookups + h.link.created.length + h.msg.sent.length, 0);
+    } finally { await h.close(); }
+  });
+
+  it("INTERESTED duplicates: same Idempotency-Key = same answer, ONE activity; the same body without a key is deduped too; INTERESTED and ALREADY_ORDERED are different requests", async () => {
+    const h = await start();
+    try {
+      const first = await h.post(goodBody({ intent: "INTERESTED" }), { "idempotency-key": "interested-0004" });
+      const again = await h.post(goodBody({ intent: "INTERESTED" }), { "idempotency-key": "interested-0004" });
+      assert.equal(again.json.duplicate, true);
+      assert.equal(again.json.requestId, first.json.requestId);
+      assert.equal(acts(h).length, 1);
+      const noKey1 = await h.post(goodBody({ intent: "INTERESTED", customerName: "Someone Else" }));
+      const noKey2 = await h.post(goodBody({ intent: "INTERESTED", customerName: "Someone Else" }));
+      assert.equal(noKey2.json.duplicate, true);
+      assert.equal(noKey1.json.requestId, noKey2.json.requestId);
+      assert.equal(acts(h).length, 2);
+      const reuse = await h.post(goodBody({ intent: "ALREADY_ORDERED" }), { "idempotency-key": "interested-0004" });
+      assert.equal(reuse.status, 409);
+      assert.equal(reuse.json.error.code, "IDEMPOTENCY_KEY_REUSED", "same key, different intent = different request");
+    } finally { await h.close(); }
+  });
+
+  it("an unknown intent is refused (VALIDATION_FAILED) and nothing is recorded; null / missing means the default", async () => {
+    const h = await start();
+    try {
+      for (const bad of ["BUYING", "interested", "", 5, true]) {
+        const r = await h.post(goodBody({ intent: bad }));
+        assert.equal(r.status, 400, JSON.stringify(bad));
+        assert.equal(r.json.error.code, "VALIDATION_FAILED");
+        assert.equal(r.json.error.details[0].field, "intent");
+      }
+      assert.equal(acts(h).length, 0);
+      assert.equal(validateRequest({ customerName: "A", mobile: MOBILE }).value?.intent, "ALREADY_ORDERED");
+      assert.equal(validateRequest({ customerName: "A", mobile: MOBILE, intent: null }).value?.intent, "ALREADY_ORDERED");
+    } finally { await h.close(); }
   });
 });
 

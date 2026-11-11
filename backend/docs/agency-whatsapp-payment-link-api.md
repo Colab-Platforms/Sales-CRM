@@ -1,6 +1,6 @@
 # Avatar CRM – WhatsApp Payment Link API (for the AI calling agency)
 
-Use this API to have a payment link sent to a customer on WhatsApp, during or right after a call. **You send only the customer's name and mobile number.** The CRM finds the customer's COD order and its amount, creates the payment link itself, and sends it from Avatar's official WhatsApp Business number through the Meta WhatsApp Cloud API. You never handle payment links, order ids, amounts or any credentials.
+Use this API to have a payment link sent to a customer on WhatsApp, during or right after a call, or to tell Avatar that a customer is interested. **You send only the customer's name, mobile number and an `intent`.** The CRM finds the customer's COD order and its amount, creates the payment link itself, and sends it from Avatar's official WhatsApp Business number through the Meta WhatsApp Cloud API. You never handle payment links, order ids, amounts or any credentials.
 
 ## Endpoint
 
@@ -14,21 +14,28 @@ Use this API to have a payment link sent to a customer on WhatsApp, during or ri
 
 Your API key is given to you privately by Avatar. Keep it secret, send it only from your servers and only over HTTPS. If it leaks, tell us and we will revoke it immediately.
 
-## Request body – exactly two fields
+## Request body – three fields
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `customerName` | string | yes | 1–100 characters. Used in the message greeting. |
 | `mobile` | string | yes | **With country code**, e.g. `+919876543210`. Indian numbers must be `+91` followed by 10 digits starting 6–9. |
+| `intent` | string | no (for now) | `ALREADY_ORDERED` or `INTERESTED`. See below. **If you leave it out, the request is treated as `ALREADY_ORDERED`** (temporary default so existing integrations keep working). Please start sending it explicitly. |
+
+| `intent` | Use it when | What the CRM does |
+|---|---|---|
+| `ALREADY_ORDERED` | The customer says they already placed a COD order | Finds their COD order, creates its payment link and sends it on WhatsApp (everything described below). |
+| `INTERESTED` | The customer is interested but has not ordered | **Only records** that the customer is interested, against their record in the CRM. No order lookup, no payment link, no WhatsApp message. |
 
 ```json
 {
   "customerName": "Rahul Sharma",
-  "mobile": "+919876543210"
+  "mobile": "+919876543210",
+  "intent": "ALREADY_ORDERED"
 }
 ```
 
-Any other field (for example `paymentLink`, `orderId`, `customerConsent`, `templateParams`) is **rejected** with `VALIDATION_FAILED`, so nothing you send is silently ignored.
+Any other field (for example `paymentLink`, `orderId`, `customerConsent`, `templateParams`) and any other `intent` value are **rejected** with `VALIDATION_FAILED`, so nothing you send is silently ignored.
 
 ### Example
 
@@ -37,10 +44,20 @@ curl -X POST "https://sales-crm-3pan.onrender.com/api/agency/whatsapp/payment-li
   -H "Content-Type: application/json" \
   -H "X-API-Key: avk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   -H "Idempotency-Key: call-8841-attempt-1" \
-  -d '{ "customerName": "Rahul Sharma", "mobile": "+919876543210" }'
+  -d '{ "customerName": "Rahul Sharma", "mobile": "+919876543210", "intent": "ALREADY_ORDERED" }'
 ```
 
-## How the CRM decides what to send
+## `intent: "INTERESTED"` – record only
+
+Nothing is sent to the customer and no payment link is created. The CRM finds the customer by mobile number and records an "AI Agent – Interested" note on their record (their status, owner, assignment and call history are not changed). If the number is not in the CRM, the note is still recorded for Avatar's team and **no customer is created**.
+
+```json
+{ "success": true, "requestId": "6f1d3a52-…", "status": "RECORDED", "duplicate": false, "intent": "INTERESTED", "leadMatched": true }
+```
+
+`leadMatched: false` means the number is not in the CRM (still HTTP 200, still recorded). Repeating the request with the same `Idempotency-Key` returns the same answer with `"duplicate": true` and records nothing new. Errors are as in the table below (`VALIDATION_FAILED`, `UNAUTHORIZED`, `RATE_LIMITED`, `IDEMPOTENCY_KEY_REUSED`, …); the order, consent and WhatsApp errors do not apply.
+
+## How the CRM decides what to send (`ALREADY_ORDERED`)
 
 1. It looks up the customer by the mobile number.
 2. It looks for that customer's **eligible COD orders**: placed as cash-on-delivery, nothing paid yet, an amount still owed, status *Confirmed* or *Processing* (not cancelled, returned, refunded, shipped or delivered).
@@ -160,6 +177,7 @@ Errors that include `"retryable": true` are safe to retry. Always retry with the
 
 ## Behaviour to be aware of
 
+- Every valid request is also recorded as an **AI Agent activity** on the customer's record (intent, result, time, request id, idempotency key), shown as an "AI Agent" tag and in the timeline; `INTERESTED` adds the "Interested – AI Agent" tag. Leads can be filtered by AI Agent and by intent. This is only a record of the request: it never marks a call as connected or completed, and never changes the lead's status, owner or assignment. No migration is needed for the `intent` field (it is stored in the activity's metadata).
 - The CRM no longer records consent from the agency (it is not sent). Consent is whatever the CRM already holds.
 - An unknown mobile number no longer creates a customer record; it is answered `CUSTOMER_NOT_FOUND`.
 - A shipped COD order is not eligible (the courier would still collect cash). Converting a shipped parcel to prepaid is a manual decision.

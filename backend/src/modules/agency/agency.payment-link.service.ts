@@ -12,7 +12,7 @@
 import { randomUUID } from "node:crypto";
 import { ApiError } from "@/utils/apiError.js";
 import { logger } from "@/utils/logger.js";
-import { maskMobile, requestHash, validateRequest, type FieldError, type PaymentLinkRequest } from "./agency.validators.js";
+import { maskMobile, requestHash, validateRequest, type AgencyIntent, type FieldError, type PaymentLinkRequest } from "./agency.validators.js";
 
 export interface EligibleOrder {
   id: string;
@@ -60,15 +60,38 @@ export interface AgencyRepo {
   reclaimFailed(id: string): Promise<boolean>;
   /** A request of this key and fingerprint that was already sent / is still running, newer than `since`. */
   findRecentSameRequest(apiKeyId: string, hash: string, since: Date): Promise<StoredRequest | null>;
-  complete(id: string, patch: { status: "SENT" | "FAILED" | "REJECTED"; httpStatus: number; response: unknown; errorCode?: string | null; errorMessage?: string | null; leadId?: string | null; orderId?: string | null; messageId?: string | null; providerMessageId?: string | null; templateName?: string | null }, at: Date): Promise<void>;
+  complete(id: string, patch: { status: "SENT" | "RECORDED" | "FAILED" | "REJECTED"; httpStatus: number; response: unknown; errorCode?: string | null; errorMessage?: string | null; leadId?: string | null; orderId?: string | null; messageId?: string | null; providerMessageId?: string | null; templateName?: string | null }, at: Date): Promise<void>;
   /** Rows written for a request that was refused before it could be claimed (invalid body). */
   logRejected(row: { id: string; apiKeyId: string; customerName: string; response: unknown; errorCode: string; errorMessage: string; httpStatus: number; sourceIp: string | null }, at: Date): Promise<void>;
   /** The customer with this mobile number and their orders that can be paid online instead of on delivery (COD, still unpaid, not cancelled / returned / shipped). */
-  findEligibleCodOrders(mobile: string): Promise<{ known: boolean; orders: EligibleOrder[] }>;
+  findEligibleCodOrders(mobile: string): Promise<{ known: boolean; /** Every existing lead with this number, oldest first. */ leadIds: string[]; orders: EligibleOrder[] }>;
+  /** Every existing lead with this number, oldest first. No order lookup (used by the INTERESTED intent). */
+  findLeadIdsByMobile(mobile: string): Promise<string[]>;
+  /** One AI Agent activity per request (updated, never duplicated, when a failed request is retried). Never creates or changes a lead's call / contact state. */
+  recordAiAgentActivity(row: AiAgentActivity): Promise<void>;
   /** The customer's WhatsApp consent as the CRM holds it. */
   getConsent(leadId: string): Promise<"OPTED_IN" | "OPTED_OUT" | "UNKNOWN">;
   countSentToLead(leadId: string, since: Date): Promise<number>;
   approvedPaymentLinkTemplates(): Promise<TemplateCandidate[]>;
+}
+
+/** What the AI Agent did, as it appears in the lead's activity timeline and the audit trail. */
+export interface AiAgentActivity {
+  /** The AgencyMessageRequest id: the activity is keyed by it. */
+  requestId: string;
+  idempotencyKey: string;
+  /** ALREADY_ORDERED (payment link) or INTERESTED (only recorded). */
+  intent: AgencyIntent;
+  /** The matched lead; null when the number belongs to no lead (the CRM never creates one for this API). */
+  leadId: string | null;
+  orderId: string | null;
+  customerName: string;
+  normalizedMobile: string;
+  /** PAYMENT_LINK_SENT or the error code (CUSTOMER_NOT_FOUND, NO_ELIGIBLE_ORDER, MULTIPLE_ELIGIBLE_ORDERS, ...). */
+  result: string;
+  httpStatus: number;
+  apiKeyName: string;
+  at: Date;
 }
 
 export interface AgencyMessaging {
@@ -166,17 +189,43 @@ export class AgencyPaymentLinkService {
       else return this.replay(existing, requestId);
     }
 
+    if (request.intent === "INTERESTED") return this.interested(activeId, key, request, usedKey, toMasked);
+
     try {
       const sent = await this.process(activeId, request);
       const body = { success: true, requestId: activeId, status: sent.status, duplicate: false, message: { id: sent.messageId, whatsappMessageId: sent.providerMessageId, template: sent.templateName, to: toMasked }, order: sent.order, payment: sent.payment };
       await this.repo.complete(activeId, { status: "SENT", httpStatus: 200, response: body, leadId: sent.leadId, orderId: sent.orderId, messageId: sent.messageId, providerMessageId: sent.providerMessageId, templateName: sent.templateName }, this.now());
       logger.info(`[agency] ${activeId} key="${key.name}" SENT to ${toMasked} template=${sent.templateName}`);
+      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId: sent.leadId, orderId: sent.orderId, customerName: request.customerName, normalizedMobile: request.mobile, result: "PAYMENT_LINK_SENT", httpStatus: 200, apiKeyName: key.name, intent: request.intent });
       return { httpStatus: 200, body };
     } catch (error) {
       const f = this.toFailure(error);
       const body = failureBody(activeId, f);
       await this.repo.complete(activeId, { status: "FAILED", httpStatus: f.httpStatus, response: body, errorCode: f.code, errorMessage: f.message.slice(0, 1000), ...("ids" in f ? (f as { ids: object }).ids : {}) }, this.now()).catch((e) => logger.error(`[agency] could not store the outcome of ${activeId}`, e instanceof Error ? e.message : e));
       logger.warn(`[agency] ${activeId} key="${key.name}" FAILED ${f.code} to ${toMasked}: ${f.message}`);
+      const ids = (f as { ids?: { leadId?: string | null; orderId?: string | null } }).ids ?? {};
+      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId: ids.leadId ?? null, orderId: ids.orderId ?? null, customerName: request.customerName, normalizedMobile: request.mobile, result: f.code, httpStatus: f.httpStatus, apiKeyName: key.name, intent: request.intent });
+      return { httpStatus: f.httpStatus, body };
+    }
+  }
+
+  /**
+   * INTERESTED: the customer said they are interested. Nothing is looked up besides the lead, nothing is created and nothing is sent: no order search, no Cashfree link, no WhatsApp message. The request is only
+   * recorded (as an AI Agent activity on the matched lead, or - when the number belongs to no lead - with no lead, visible in the admin audit trail). The lead itself is never changed.
+   */
+  private async interested(activeId: string, key: AgencyKeyRow, request: PaymentLinkRequest, usedKey: string, toMasked: string): Promise<AgencyResponse> {
+    try {
+      const leadId = (await this.repo.findLeadIdsByMobile(request.mobile))[0] ?? null;
+      const result = leadId ? "INTERESTED_RECORDED" : "INTERESTED_NO_LEAD";
+      const body = { success: true, requestId: activeId, status: "RECORDED", duplicate: false, intent: "INTERESTED", leadMatched: leadId !== null };
+      await this.repo.complete(activeId, { status: "RECORDED", httpStatus: 200, response: body, leadId }, this.now());
+      logger.info(`[agency] ${activeId} key="${key.name}" INTERESTED ${result} for ${toMasked}`);
+      await this.recordActivity({ requestId: activeId, idempotencyKey: usedKey, leadId, orderId: null, customerName: request.customerName, normalizedMobile: request.mobile, result, httpStatus: 200, apiKeyName: key.name, intent: "INTERESTED" });
+      return { httpStatus: 200, body };
+    } catch (error) {
+      const f = this.toFailure(error);
+      const body = failureBody(activeId, f);
+      await this.repo.complete(activeId, { status: "FAILED", httpStatus: f.httpStatus, response: body, errorCode: f.code, errorMessage: f.message.slice(0, 1000) }, this.now()).catch((e) => logger.error(`[agency] could not store the outcome of ${activeId}`, e instanceof Error ? e.message : e));
       return { httpStatus: f.httpStatus, body };
     }
   }
@@ -185,9 +234,9 @@ export class AgencyPaymentLinkService {
     // 1. The customer and the ONE order this is about. Never guessed: none -> not found, several -> the candidates are returned and nothing is created.
     const found = await this.repo.findEligibleCodOrders(request.mobile);
     if (!found.known) throw new Failure(404, "CUSTOMER_NOT_FOUND", "No customer with this mobile number exists in the CRM, so no payment link was created.");
-    if (found.orders.length === 0) throw Object.assign(new Failure(404, "NO_ELIGIBLE_ORDER", "This customer has no COD order that can be paid online (it must be an unpaid COD order that is not cancelled, returned or already shipped). No payment link was created."), { ids: { orderId: null } });
+    if (found.orders.length === 0) throw Object.assign(new Failure(404, "NO_ELIGIBLE_ORDER", "This customer has no COD order that can be paid online (it must be an unpaid COD order that is not cancelled, returned or already shipped). No payment link was created."), { ids: { leadId: found.leadIds[0] ?? null, orderId: null } });
     if (found.orders.length > 1) {
-      throw Object.assign(new Failure(409, "MULTIPLE_ELIGIBLE_ORDERS", "This customer has more than one eligible COD order, so the CRM did not choose one and created no payment link. Resolve it with the CRM team.", { orders: found.orders.map((o) => ({ orderNumber: o.orderNumber, shopifyOrderNumber: o.shopifyOrderNumber, amount: o.amount })) }), { ids: { orderId: null } });
+      throw Object.assign(new Failure(409, "MULTIPLE_ELIGIBLE_ORDERS", "This customer has more than one eligible COD order, so the CRM did not choose one and created no payment link. Resolve it with the CRM team.", { orders: found.orders.map((o) => ({ orderNumber: o.orderNumber, shopifyOrderNumber: o.shopifyOrderNumber, amount: o.amount })) }), { ids: { leadId: found.leadIds[0] ?? null, orderId: null } });
     }
     const order = found.orders[0]!;
     const leadId = order.leadId;
@@ -240,6 +289,15 @@ export class AgencyPaymentLinkService {
       order: { orderNumber: order.orderNumber, shopifyOrderNumber: order.shopifyOrderNumber },
       payment: { amount: link.amount, currency: "INR", expiresAt: link.expiresAt ? link.expiresAt.toISOString() : null, reusedExistingLink: link.reused },
     };
+  }
+
+  /** Best effort: the activity is a record of the request, never a reason for the request itself to fail (or to be answered differently). */
+  private async recordActivity(row: Omit<AiAgentActivity, "at">): Promise<void> {
+    try {
+      await this.repo.recordAiAgentActivity({ ...row, at: this.now() });
+    } catch (error) {
+      logger.error(`[agency] could not record the AI Agent activity of ${row.requestId}`, error instanceof Error ? error.message : String(error));
+    }
   }
 
   /** What the CRM's payment-link service said, turned into a stable code. */

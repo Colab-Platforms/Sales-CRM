@@ -61,6 +61,8 @@ const listLeadsQuerySchema = z.object({
   salespersonId: z.string().guid().optional(),
   bucket: z.enum(["TODAY"]).optional(),
   search: z.string().max(255).optional(),
+  aiAgent: z.enum(["ONLY", "EXCLUDE"]).optional(),
+  aiAgentIntent: z.enum(["ALREADY_ORDERED", "INTERESTED"]).optional(),
 });
 
 const bulkAssignManagerSchema = z

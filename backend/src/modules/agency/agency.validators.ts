@@ -7,14 +7,21 @@ export interface FieldError {
   message: string;
 }
 
-/** The ONLY two things the agency sends. The order, its amount and the payment link are all found / created by the CRM. */
+export const INTENTS = ["ALREADY_ORDERED", "INTERESTED"] as const;
+export type AgencyIntent = (typeof INTENTS)[number];
+/** What a request without `intent` means. TEMPORARY, so the agency's existing integration keeps working until it sends `intent`. */
+export const DEFAULT_INTENT: AgencyIntent = "ALREADY_ORDERED";
+
+/** What the agency sends. The order, its amount and the payment link are all found / created by the CRM. */
 export interface PaymentLinkRequest {
   customerName: string;
   /** Canonical "+<country><number>". */
   mobile: string;
+  /** ALREADY_ORDERED: send the payment link of the customer's COD order. INTERESTED: only record that the customer is interested - no order lookup, no link, no message. */
+  intent: AgencyIntent;
 }
 
-const ACCEPTED_FIELDS = new Set(["customerName", "mobile"]);
+const ACCEPTED_FIELDS = new Set(["customerName", "mobile", "intent"]);
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
 export function validateMobile(raw: unknown): { mobile?: string; error?: string } {
@@ -37,7 +44,7 @@ export function validateRequest(body: unknown): { errors: FieldError[]; value?: 
   const b = body as Record<string, unknown>;
 
   // Anything else is refused, not ignored: an agency that still sends paymentLink / orderId must not believe it is being used.
-  for (const name of Object.keys(b)) if (!ACCEPTED_FIELDS.has(name)) errors.push({ field: name, message: `${name} is not accepted. Send only customerName and mobile - the CRM finds the order, its amount and creates the payment link itself.` });
+  for (const name of Object.keys(b)) if (!ACCEPTED_FIELDS.has(name)) errors.push({ field: name, message: `${name} is not accepted. Send only customerName, mobile and intent - the CRM finds the order, its amount and creates the payment link itself.` });
 
   let customerName = "";
   if (typeof b.customerName !== "string" || !b.customerName.trim()) errors.push({ field: "customerName", message: "customerName is required" });
@@ -48,13 +55,21 @@ export function validateRequest(body: unknown): { errors: FieldError[]; value?: 
   const mobile = validateMobile(b.mobile);
   if (mobile.error) errors.push({ field: "mobile", message: mobile.error });
 
+  let intent: AgencyIntent = DEFAULT_INTENT;
+  if (b.intent !== undefined && b.intent !== null) {
+    if (typeof b.intent === "string" && (INTENTS as readonly string[]).includes(b.intent)) intent = b.intent as AgencyIntent;
+    else errors.push({ field: "intent", message: `intent must be one of ${INTENTS.join(", ")}` });
+  }
+
   if (errors.length > 0) return { errors };
-  return { errors, value: { customerName, mobile: mobile.mobile! } };
+  return { errors, value: { customerName, mobile: mobile.mobile!, intent } };
 }
 
 /** Stable fingerprint of what a request asks for (used to recognise a repeat, and to refuse an idempotency key reused for a different request). */
 export function requestHash(v: PaymentLinkRequest): string {
-  return createHash("sha256").update(JSON.stringify([v.mobile, v.customerName])).digest("hex");
+  // ALREADY_ORDERED keeps the fingerprint it always had (so an in-flight legacy request still matches its repeat); INTERESTED is a different request.
+  const parts = v.intent === DEFAULT_INTENT ? [v.mobile, v.customerName] : [v.mobile, v.customerName, v.intent];
+  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
 export function maskMobile(mobile: string): string {

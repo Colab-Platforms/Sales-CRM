@@ -456,6 +456,19 @@ export function LeadTable({
                         <StatusBadge status={lead.workingStatus} />
                       )}
                       <LeadReminderChip lead={lead} />
+                      {lead.aiAgent ? (
+                        <span
+                          className="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-400"
+                          title={`${lead.aiAgent.lastTitle ?? "AI Agent request"} - ${new Date(lead.aiAgent.lastActivityAt).toLocaleString()}`}
+                        >
+                          AI Agent
+                        </span>
+                      ) : null}
+                      {lead.aiAgent?.interested ? (
+                        <span className="rounded-full bg-fuchsia-500/10 px-2 py-0.5 text-xs font-medium text-fuchsia-700 dark:text-fuchsia-400" title="The AI calling agent reported this customer as interested">
+                          Interested {"–"} AI Agent
+                        </span>
+                      ) : null}
                     </div>
                   </TableCell>
                   <TableCell className="text-muted-foreground">

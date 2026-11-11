@@ -24,6 +24,7 @@ import {
 } from "./customers.filters.js";
 import {
   buildAbandonmentEntries,
+  buildAiAgentEntries,
   buildAssignmentEntries,
   buildCallEntries,
   buildInterestedEntries,
@@ -168,6 +169,7 @@ const ACTIVITY_SELECT = {
   title: true,
   description: true,
   createdAt: true,
+  metadata: true,
   actor: { select: { id: true, name: true } },
 } satisfies Prisma.ActivitySelect;
 
@@ -412,7 +414,7 @@ class CustomersService {
         this.db.whatsAppMessage.findMany({ where: { leadId }, select: WHATSAPP_SELECT }),
       ]);
 
-    const entries = sortTimelineDesc([
+    const all = sortTimelineDesc([
       buildLeadCreatedEntry(lead),
       ...buildAssignmentEntries(assignments),
       ...buildCallEntries(calls),
@@ -422,7 +424,12 @@ class CustomersService {
       ...buildRecoveryEntries(recoveryActions),
       ...buildOrderEntries(orders, activities),
       ...buildWhatsAppEntries(whatsAppMessages),
+      ...buildAiAgentEntries(activities),
     ]);
+    // The AI Agent filter separates what the agent did from everything a telecaller / the system did.
+    const isAi = (e: { type: string }) => e.type === "AI_AGENT_PAYMENT_LINK" || e.type === "AI_AGENT_INTERESTED";
+    const intentType = query.aiAgentIntent === "INTERESTED" ? "AI_AGENT_INTERESTED" : query.aiAgentIntent === "ALREADY_ORDERED" ? "AI_AGENT_PAYMENT_LINK" : null;
+    const entries = intentType ? all.filter((e) => e.type === intentType) : query.aiAgent === "ONLY" ? all.filter(isAi) : query.aiAgent === "EXCLUDE" ? all.filter((e) => !isAi(e)) : all;
 
     const totalItems = entries.length;
     const start = (query.page - 1) * query.pageSize;

@@ -36,7 +36,7 @@ export function LeadFilters({
 }) {
   const [search, setSearch] = useState(value.search ?? "");
 
-  const hasFilters = Boolean(value.search || value.workingStatus || value.assignment || value.bucket);
+  const hasFilters = Boolean(value.search || value.workingStatus || value.assignment || value.bucket || value.aiAgent || value.aiAgentIntent);
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -116,6 +116,36 @@ export function LeadFilters({
           </NativeSelect>
         </div>
       ) : null}
+
+      <div className="w-full space-y-2 sm:w-48">
+        <Label htmlFor="lead-ai-agent-filter" className="text-xs text-muted-foreground">
+          AI Agent
+        </Label>
+        <NativeSelect
+          id="lead-ai-agent-filter"
+          value={value.aiAgent ?? ""}
+          onChange={(e) => onChange({ ...value, aiAgent: (e.target.value || undefined) as LeadFilterState["aiAgent"] })}
+        >
+          <option value="">All leads</option>
+          <option value="ONLY">AI Agent leads</option>
+          <option value="EXCLUDE">Without AI Agent</option>
+        </NativeSelect>
+      </div>
+
+      <div className="w-full space-y-2 sm:w-48">
+        <Label htmlFor="lead-ai-agent-intent-filter" className="text-xs text-muted-foreground">
+          AI Agent intent
+        </Label>
+        <NativeSelect
+          id="lead-ai-agent-intent-filter"
+          value={value.aiAgentIntent ?? ""}
+          onChange={(e) => onChange({ ...value, aiAgentIntent: (e.target.value || undefined) as LeadFilterState["aiAgentIntent"] })}
+        >
+          <option value="">All</option>
+          <option value="ALREADY_ORDERED">Already ordered</option>
+          <option value="INTERESTED">Interested</option>
+        </NativeSelect>
+      </div>
 
       {role === "SALESPERSON" ? (
         <Button

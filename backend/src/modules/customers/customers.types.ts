@@ -138,7 +138,10 @@ export type TimelineEventType =
   | "WHATSAPP_MESSAGE_RECEIVED"
   | "WHATSAPP_DELIVERED"
   | "WHATSAPP_READ"
-  | "WHATSAPP_FAILED";
+  | "WHATSAPP_FAILED"
+  // The external AI calling agency asked the CRM to send a payment link. A request, never a call outcome.
+  | "AI_AGENT_PAYMENT_LINK"
+  | "AI_AGENT_INTERESTED";
 
 export interface TimelineEntry {
   id: string;
@@ -169,6 +172,10 @@ export interface CustomerTimelineResult {
 export interface ListCustomerTimelineQuery {
   page: number;
   pageSize: number;
+  // ONLY: just the AI Agent's activity. EXCLUDE: everything except it (what the human telecallers and the system did).
+  aiAgent?: "ONLY" | "EXCLUDE";
+  // Only the AI Agent activity of this intent (implies the AI Agent activity only).
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 // ---- E6.7: customer list (GET /api/customers) ----
