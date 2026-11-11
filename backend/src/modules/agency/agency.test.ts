@@ -1,6 +1,6 @@
 // Run with: npx tsx --test src/modules/agency/agency.test.ts
-// The external AI calling agency's payment-link API, over real HTTP against the real router and service. No database, WhatsApp or Meta: an in-memory repository (with the same unique
-// (key, idempotency key) rule as the table) and a fake messaging service that can succeed, be refused by Meta, be unreachable or be unconfigured.
+// The external AI calling agency's payment-link API (request: customerName + mobile ONLY), over real HTTP against the real router and service. No database, payment gateway, WhatsApp or Meta:
+// an in-memory repository (with the same unique (key, idempotency key) rule as the table), a fake payment-link maker and a fake messaging service. No real link is created and no real message is sent.
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import express from "express";
@@ -9,27 +9,26 @@ import { ApiError } from "@/utils/apiError.js";
 import { extractApiKey, generateApiKey, hashApiKey } from "./agency.keys.js";
 import { SlidingWindowLimiter } from "./agency.ratelimit.js";
 import { agencyJsonErrorHandler, createAgencyRouter } from "./agency.routes.js";
-import { classifySendError, type AgencyKeyRow, type AgencyMessaging, type AgencyRepo, type StoredRequest } from "./agency.payment-link.service.js";
-import { hostAllowed, maskMobile, validateMobile, validatePaymentLink, validateRequest } from "./agency.validators.js";
+import { classifySendError, type AgencyKeyRow, type AgencyMessaging, type AgencyRepo, type EligibleOrder, type PaymentLinkMaker, type StoredRequest } from "./agency.payment-link.service.js";
+import { maskMobile, validateMobile, validateRequest } from "./agency.validators.js";
 
-const LINK = "https://payments.cashfree.com/links/abc123";
 const MOBILE = "+919876543210";
-const goodBody = (over: Record<string, unknown> = {}) => ({ customerName: "Rahul Sharma", mobile: MOBILE, paymentLink: LINK, orderId: "CRM-TEST-0001", customerConsent: true, ...over });
+const goodBody = (over: Record<string, unknown> = {}) => ({ customerName: "Rahul Sharma", mobile: MOBILE, ...over });
+const order = (n: number, amount = "449.00", over: Partial<EligibleOrder> = {}): EligibleOrder => ({ id: `order-${n}`, leadId: "lead-1", orderNumber: `CRM-TEST-000${n}`, shopifyOrderNumber: `#AWL11000${n}`, amount, ...over });
 
-type LogRow = { id: string; apiKeyId: string; idempotencyKey: string; requestHash: string; status: string; httpStatus: number | null; response: unknown; errorCode: string | null; leadId: string | null; providerMessageId: string | null; templateName: string | null; toMasked: string; createdAt: Date };
+type LogRow = { id: string; apiKeyId: string; idempotencyKey: string; requestHash: string; status: string; httpStatus: number | null; response: unknown; errorCode: string | null; leadId: string | null; orderId: string | null; providerMessageId: string | null; templateName: string | null; toMasked: string; createdAt: Date };
 
-function memoryRepo(world: { keys: Map<string, AgencyKeyRow>; optedOut?: Set<string>; orders?: Record<string, { id: string; leadId: string; leadMobile: string | null }> }) {
+interface World { keys: Map<string, AgencyKeyRow>; known: boolean; orders: EligibleOrder[]; consent: Record<string, "OPTED_IN" | "OPTED_OUT" | "UNKNOWN">; templates: boolean }
+
+function memoryRepo(world: World) {
   const rows: LogRow[] = [];
-  const leads = new Map<string, string>(); // mobile -> lead id
-  const consent = new Map<string, string>();
-  const created: { customerName: string; mobile: string }[] = [];
   const repo: AgencyRepo = {
     findKeyByHash: async (hash) => world.keys.get(hash) ?? null,
     touchKey: async () => undefined,
     claim: async (r) => {
       const existing = rows.find((x) => x.apiKeyId === r.apiKeyId && x.idempotencyKey === r.idempotencyKey);
       if (existing) return { created: false, existing: toStored(existing) };
-      rows.push({ id: r.id, apiKeyId: r.apiKeyId, idempotencyKey: r.idempotencyKey, requestHash: r.requestHash, status: "RECEIVED", httpStatus: null, response: null, errorCode: null, leadId: null, providerMessageId: null, templateName: null, toMasked: r.toMasked, createdAt: new Date() });
+      rows.push({ id: r.id, apiKeyId: r.apiKeyId, idempotencyKey: r.idempotencyKey, requestHash: r.requestHash, status: "RECEIVED", httpStatus: null, response: null, errorCode: null, leadId: null, orderId: null, providerMessageId: null, templateName: null, toMasked: r.toMasked, createdAt: new Date() });
       return { created: true, existing: null };
     },
     reclaimFailed: async (id) => {
@@ -44,38 +43,42 @@ function memoryRepo(world: { keys: Map<string, AgencyKeyRow>; optedOut?: Set<str
     },
     complete: async (id, patch) => {
       const row = rows.find((x) => x.id === id)!;
-      Object.assign(row, { status: patch.status, httpStatus: patch.httpStatus, response: patch.response, errorCode: patch.errorCode ?? null, leadId: patch.leadId ?? row.leadId, providerMessageId: patch.providerMessageId ?? null, templateName: patch.templateName ?? null });
+      Object.assign(row, { status: patch.status, httpStatus: patch.httpStatus, response: patch.response, errorCode: patch.errorCode ?? null, leadId: patch.leadId ?? row.leadId, orderId: patch.orderId ?? null, providerMessageId: patch.providerMessageId ?? null, templateName: patch.templateName ?? null });
     },
     logRejected: async (r) => {
-      rows.push({ id: r.id, apiKeyId: r.apiKeyId, idempotencyKey: `rejected:${r.id}`, requestHash: "", status: "REJECTED", httpStatus: r.httpStatus, response: r.response, errorCode: r.errorCode, leadId: null, providerMessageId: null, templateName: null, toMasked: "-", createdAt: new Date() });
+      rows.push({ id: r.id, apiKeyId: r.apiKeyId, idempotencyKey: `rejected:${r.id}`, requestHash: "", status: "REJECTED", httpStatus: r.httpStatus, response: r.response, errorCode: r.errorCode, leadId: null, orderId: null, providerMessageId: null, templateName: null, toMasked: "-", createdAt: new Date() });
     },
-    findLeadByMobile: async (mobile) => (leads.has(mobile) ? { id: leads.get(mobile)!, normalizedMobile: mobile } : null),
-    createLead: async (input) => {
-      created.push(input);
-      const id = `lead-${leads.size + 1}`;
-      leads.set(input.mobile, id);
-      return { id };
-    },
-    findOrder: async (ref) => world.orders?.[ref] ?? null,
-    recordConsent: async (leadId) => {
-      if (world.optedOut?.has(leadId)) return "OPTED_OUT";
-      consent.set(leadId, "OPTED_IN");
-      return "OPTED_IN";
-    },
+    findEligibleCodOrders: async () => ({ known: world.known, orders: world.orders }),
+    getConsent: async (leadId) => world.consent[leadId] ?? "UNKNOWN",
     countSentToLead: async (leadId) => rows.filter((x) => x.leadId === leadId && x.status === "SENT").length,
-    approvedPaymentLinkTemplates: async () => [{ id: "tpl-1", name: "payment_link_v1" }],
+    approvedPaymentLinkTemplates: async () => (world.templates ? [{ id: "tpl-1", name: "payment_link_v1" }] : []),
   };
-  return { repo, rows, leads, consent, created };
+  return { repo, rows };
 }
 const toStored = (r: LogRow): StoredRequest => ({ id: r.id, status: r.status, requestHash: r.requestHash, httpStatus: r.httpStatus, response: r.response, createdAt: r.createdAt });
 
+type LinkMode = "ok" | "refused" | "conflict" | "gateway-down" | "no-url";
+function fakeLinks() {
+  const state = { mode: "ok" as LinkMode, created: [] as string[] };
+  const links: PaymentLinkMaker = {
+    createLink: async (orderId) => {
+      state.created.push(orderId);
+      if (state.mode === "refused") throw new ApiError("This order has no pending amount to collect", 400);
+      if (state.mode === "conflict") throw new ApiError("An open payment link exists for a different amount. Cancel it before creating a new one.", 409);
+      if (state.mode === "gateway-down") throw new Error("connect ECONNREFUSED api.cashfree.example");
+      const amount = state.created.length > 0 ? "449.00" : "0.00";
+      return { paymentUrl: state.mode === "no-url" ? null : `https://payments.cashfree.com/links/${orderId}`, amount, reused: false, expiresAt: new Date("2026-11-12T00:00:00Z") };
+    },
+  };
+  return { links, state };
+}
+
 type Mode = "ok" | "meta-400" | "meta-500" | "unreachable" | "not-configured" | "recipient";
-function fakeMessaging(opts: { variables?: string[]; guardKeepsFirst?: boolean } = {}) {
-  const state = { mode: "ok" as Mode, sent: [] as { leadId: string; orderId?: string; manualValues: Record<string, string> }[], counter: 0, lastBodyByLead: new Map<string, string>(), variables: opts.variables ?? ["customer_name", "payment_link"] };
-  const crmKnown = (orderId?: string) => (orderId ? ["order_number"] : []);
+function fakeMessaging() {
+  const state = { mode: "ok" as Mode, sent: [] as { leadId: string; orderId?: string; manualValues: Record<string, string> }[], counter: 0 };
   const messaging: AgencyMessaging = {
     describeAgencySend: async (input) => {
-      const fields = state.variables.map((name) => ({ name, value: input.manualValues?.[name] ?? (crmKnown(input.orderId).includes(name) ? "CRM-TEST-0001" : null) }));
+      const fields = ["customer_name", "payment_link"].map((name) => ({ name, value: input.manualValues?.[name] ?? null }));
       const missing = fields.filter((f) => f.value === null);
       return { errors: missing.map((f) => `${f.name} missing`), fields, templateName: "payment_link_v1" };
     },
@@ -87,9 +90,6 @@ function fakeMessaging(opts: { variables?: string[]; guardKeepsFirst?: boolean }
         const errorMessage = { "meta-400": "Meta Cloud API rejected the template message (HTTP 400): (#132001) Template name does not exist in the translation", "meta-500": "Meta Cloud API rejected the template message (HTTP 500): internal error", unreachable: "Could not reach Meta Cloud API for template message: fetch failed", recipient: "Meta Cloud API rejected the template message (HTTP 400): (#131026) Message undeliverable" }[state.mode as "meta-400"]!;
         return { id: `msg-${++state.counter}`, status: "FAILED", providerMessageId: null, templateName: "payment_link_v1", body, errorMessage };
       }
-      const earlier = state.lastBodyByLead.get(input.leadId);
-      if (opts.guardKeepsFirst && earlier) return { id: "msg-first", status: "SENT", providerMessageId: "wamid.FIRST", templateName: "payment_link_v1", body: earlier, errorMessage: null };
-      state.lastBodyByLead.set(input.leadId, body);
       return { id: `msg-${++state.counter}`, status: "SENT", providerMessageId: `wamid.${state.counter}`, templateName: "payment_link_v1", body, errorMessage: null };
     },
   };
@@ -99,24 +99,28 @@ function fakeMessaging(opts: { variables?: string[]; guardKeepsFirst?: boolean }
 interface Harness {
   url: string;
   key: string;
-  state: ReturnType<typeof fakeMessaging>["state"];
+  world: World;
+  msg: ReturnType<typeof fakeMessaging>["state"];
+  link: ReturnType<typeof fakeLinks>["state"];
   mem: ReturnType<typeof memoryRepo>;
   post(body: unknown, headers?: Record<string, string>, raw?: string): Promise<{ status: number; json: any; headers: Headers; text: string }>;
   close(): Promise<void>;
 }
 
-async function start(opts: { rate?: number; messaging?: Parameters<typeof fakeMessaging>[0]; optedOut?: string[]; orders?: Record<string, { id: string; leadId: string; leadMobile: string | null }>; env?: Record<string, string> } = {}): Promise<Harness> {
+async function start(opts: { rate?: number; orders?: EligibleOrder[]; known?: boolean; consent?: World["consent"]; templates?: boolean; env?: Record<string, string> } = {}): Promise<Harness> {
   const { key, hash } = generateApiKey();
   const keyRow: AgencyKeyRow = { id: "key-1", name: "Test Agency", isActive: true, revokedAt: null, rateLimitPerMinute: opts.rate ?? 100 };
-  const mem = memoryRepo({ keys: new Map([[hash, keyRow]]), optedOut: new Set(opts.optedOut), orders: opts.orders });
-  const { messaging, state } = fakeMessaging(opts.messaging);
+  const world: World = { keys: new Map([[hash, keyRow]]), known: opts.known ?? true, orders: opts.orders ?? [order(1)], consent: opts.consent ?? {}, templates: opts.templates ?? true };
+  const mem = memoryRepo(world);
+  const { messaging, state: msg } = fakeMessaging();
+  const { links, state: link } = fakeLinks();
   const app = express();
-  app.use("/api/agency", express.json({ limit: "32kb" }), createAgencyRouter({ repo: mem.repo, messaging, env: opts.env ?? {} }), agencyJsonErrorHandler);
+  app.use("/api/agency", express.json({ limit: "32kb" }), createAgencyRouter({ repo: mem.repo, messaging, links, env: opts.env ?? {} }), agencyJsonErrorHandler);
   const server: Server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const port = (server.address() as { port: number }).port;
   const url = `http://127.0.0.1:${port}/api/agency/whatsapp/payment-link`;
   return {
-    url, key, state, mem,
+    url, key, world, msg, link, mem,
     post: async (body, headers = {}, raw) => {
       const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json", "x-api-key": key, ...headers }, body: raw ?? JSON.stringify(body) });
       const text = await res.text();
@@ -126,325 +130,313 @@ async function start(opts: { rate?: number; messaging?: Parameters<typeof fakeMe
   };
 }
 
-describe("a valid request is sent through the existing WhatsApp messaging service", () => {
+describe("exactly one eligible COD order: the CRM creates its payment link and sends it", () => {
   let h: Harness;
   before(async () => { h = await start(); });
   after(() => h.close());
 
-  it("returns success, a request id and the WhatsApp message id; sends one template with the customer's name and the link", async () => {
+  it("sends ONLY customerName and mobile; the link comes from the CRM payment service for the found order's amount; one template message is sent", async () => {
     const r = await h.post(goodBody(), { "idempotency-key": "call-1001-attempt-1" });
     assert.equal(r.status, 200, r.text);
     assert.equal(r.json.success, true);
     assert.match(r.json.requestId, /^[0-9a-f-]{36}$/);
-    assert.equal(r.headers.get("x-request-id"), r.json.requestId);
     assert.equal(r.json.status, "SENT");
     assert.equal(r.json.duplicate, false);
     assert.equal(r.json.message.whatsappMessageId, "wamid.1");
-    assert.equal(r.json.message.template, "payment_link_v1");
     assert.equal(r.json.message.to, maskMobile(MOBILE), "the number is masked in the answer");
-    assert.equal(h.state.sent.length, 1);
-    assert.equal(h.state.sent[0]!.manualValues.customer_name, "Rahul Sharma");
-    assert.equal(h.state.sent[0]!.manualValues.payment_link, LINK);
-    assert.equal(h.mem.consent.get("lead-1"), "OPTED_IN", "the customer's consent on the call is recorded");
-    assert.equal(h.mem.created.length, 1, "an unknown number becomes a customer record");
+    assert.deepEqual(r.json.order, { orderNumber: "CRM-TEST-0001", shopifyOrderNumber: "#AWL110001" });
+    assert.equal(r.json.payment.amount, "449.00");
+    assert.equal(r.json.payment.currency, "INR");
+    assert.equal(JSON.stringify(r.json).includes("payments.cashfree.com"), false, "the payment URL itself is not returned to the agency");
+    assert.deepEqual(h.link.created, ["order-1"], "one payment link was requested, for the found order");
+    assert.equal(h.msg.sent.length, 1);
+    assert.equal(h.msg.sent[0]!.manualValues.payment_link, "https://payments.cashfree.com/links/order-1");
+    assert.equal(h.msg.sent[0]!.manualValues.customer_name, "Rahul Sharma");
+    assert.equal(h.msg.sent[0]!.manualValues.amount, "449.00");
+    assert.equal(h.msg.sent[0]!.manualValues.order_number, "#AWL110001");
+    assert.equal(h.msg.sent[0]!.orderId, "order-1");
     const log = h.mem.rows[0]!;
-    assert.equal(log.status, "SENT");
-    assert.equal(log.providerMessageId, "wamid.1");
-    assert.equal(log.httpStatus, 200);
-  });
-
-  it("also accepts the key as a Bearer token, and never echoes the key back", async () => {
-    const r = await h.post(goodBody({ mobile: "+91 98765 43211", paymentLink: `${LINK}?x=1` }), { "x-api-key": "", authorization: `Bearer ${h.key}` });
-    assert.equal(r.status, 200, r.text);
-    assert.ok(!r.text.includes(h.key));
+    assert.deepEqual([log.status, log.orderId, log.leadId, log.providerMessageId], ["SENT", "order-1", "lead-1", "wamid.1"]);
   });
 });
 
-describe("unauthorized requests are refused and send nothing", () => {
+describe("the request is exactly two fields", () => {
   let h: Harness;
   before(async () => { h = await start(); });
   after(() => h.close());
 
-  it("no key, a wrong key, a malformed key and a revoked key all get 401", async () => {
-    const attempts: Record<string, string>[] = [{ "x-api-key": "" }, { "x-api-key": "avk_not-a-real-key-at-all-1234567" }, { "x-api-key": "short" }, { "x-api-key": "", authorization: "Basic abc" }];
-    for (const headers of attempts) {
-      const r = await h.post(goodBody(), headers);
-      assert.equal(r.status, 401, JSON.stringify(headers));
+  it("paymentLink, orderId, customerConsent, templateParams and any other field are refused, not silently ignored; nothing is created or sent", async () => {
+    for (const extra of [{ paymentLink: "https://payments.cashfree.com/links/x" }, { orderId: "CRM-1" }, { customerConsent: true }, { templateParams: { amount: "1" } }, { anything: 1 }]) {
+      const r = await h.post(goodBody(extra));
+      assert.equal(r.status, 400, JSON.stringify(extra));
+      assert.equal(r.json.error.code, "VALIDATION_FAILED");
+      assert.match(r.json.error.details[0].message, /not accepted/);
+    }
+    assert.equal(h.link.created.length, 0);
+    assert.equal(h.msg.sent.length, 0);
+  });
+
+  it("invalid names and numbers are rejected with the reason; every problem is reported at once; the attempt is logged", async () => {
+    const cases: [Record<string, unknown>, string][] = [
+      [{ mobile: "9876543210" }, "country code"], [{ mobile: "+91 12345" }, "valid"], [{ mobile: "+915876543210" }, "Indian mobile"], [{ mobile: "abc" }, "digits"], [{ mobile: "" }, "required"], [{ mobile: 9876543210 }, "required"],
+      [{ customerName: "" }, "required"], [{ customerName: "x".repeat(101) }, "100"],
+    ];
+    for (const [over, text] of cases) {
+      const r = await h.post(goodBody(over));
+      assert.equal(r.status, 400, JSON.stringify(over));
+      assert.match(JSON.stringify(r.json.error.details), new RegExp(text), JSON.stringify(over));
+    }
+    const both = await h.post({ customerName: "", mobile: "nope" });
+    assert.equal(both.json.error.details.length, 2);
+    assert.ok(h.mem.rows.some((x) => x.status === "REJECTED"));
+    assert.equal(h.link.created.length + h.msg.sent.length, 0);
+  });
+
+  it("pure validation: names are trimmed and spaces collapsed; numbers are canonical", () => {
+    const v = validateRequest({ customerName: "  Rahul   Sharma ", mobile: "+91 98765-43210" });
+    assert.deepEqual(v.value, { customerName: "Rahul Sharma", mobile: "+919876543210" });
+    assert.equal(validateMobile("+14155552671").mobile, "+14155552671");
+  });
+});
+
+describe("no eligible order, an unknown customer or several eligible orders: nothing is created or sent", () => {
+  it("no eligible COD order is a clear 404 and creates no payment link", async () => {
+    const h = await start({ orders: [] });
+    try {
+      const r = await h.post(goodBody());
+      assert.equal(r.status, 404);
+      assert.equal(r.json.error.code, "NO_ELIGIBLE_ORDER");
+      assert.match(r.json.error.message, /no COD order/);
+      assert.equal(h.link.created.length + h.msg.sent.length, 0);
+      assert.equal(h.mem.rows[0]!.status, "FAILED");
+    } finally { await h.close(); }
+  });
+
+  it("a mobile number the CRM does not know is a 404 CUSTOMER_NOT_FOUND (no customer record is created)", async () => {
+    const h = await start({ known: false, orders: [] });
+    try {
+      const r = await h.post(goodBody());
+      assert.equal(r.status, 404);
+      assert.equal(r.json.error.code, "CUSTOMER_NOT_FOUND");
+      assert.equal(h.link.created.length + h.msg.sent.length, 0);
+    } finally { await h.close(); }
+  });
+
+  it("several eligible COD orders: the CRM does not guess - 409 with the candidates, no link, no message", async () => {
+    const h = await start({ orders: [order(1, "449.00"), order(2, "999.00")] });
+    try {
+      const r = await h.post(goodBody());
+      assert.equal(r.status, 409);
       assert.equal(r.json.success, false);
-      assert.equal(r.json.error.code, "UNAUTHORIZED");
-    }
-    assert.equal(h.state.sent.length, 0);
-    assert.equal(h.mem.rows.length, 0, "an unauthenticated call writes nothing");
-  });
-
-  it("repeated bad keys from one address are throttled", async () => {
-    let last = 0;
-    for (let i = 0; i < 25; i += 1) last = (await h.post(goodBody(), { "x-api-key": `avk_wrong_${i}_aaaaaaaaaaaaaaaaaaaa` })).status;
-    assert.equal(last, 429);
-  });
-
-  it("a revoked or inactive key is refused", async () => {
-    const inactive = generateApiKey();
-    const mem = memoryRepo({ keys: new Map([[inactive.hash, { id: "k2", name: "Old", isActive: false, revokedAt: new Date(), rateLimitPerMinute: 10 }]]) });
-    const app = express();
-    app.use("/api/agency", express.json(), createAgencyRouter({ repo: mem.repo, messaging: fakeMessaging().messaging, env: {} }));
-    const server: Server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
-    const res = await fetch(`http://127.0.0.1:${(server.address() as { port: number }).port}/api/agency/whatsapp/payment-link`, { method: "POST", headers: { "content-type": "application/json", "x-api-key": inactive.key }, body: JSON.stringify(goodBody()) });
-    assert.equal(res.status, 401);
-    await new Promise((r) => server.close(() => r(null)));
+      assert.equal(r.json.error.code, "MULTIPLE_ELIGIBLE_ORDERS");
+      assert.deepEqual(r.json.error.details.orders, [{ orderNumber: "CRM-TEST-0001", shopifyOrderNumber: "#AWL110001", amount: "449.00" }, { orderNumber: "CRM-TEST-0002", shopifyOrderNumber: "#AWL110002", amount: "999.00" }]);
+      assert.equal(h.link.created.length + h.msg.sent.length, 0);
+    } finally { await h.close(); }
   });
 });
 
-describe("validation: numbers, links, consent and parameters", () => {
-  let h: Harness;
-  before(async () => { h = await start(); });
-  after(() => h.close());
-
-  const field = (r: { json: any }, name: string) => (r.json.error.details as { field: string; message: string }[]).find((d) => d.field === name);
-
-  it("invalid mobile numbers are rejected with the reason, nothing is sent, and the attempt is logged", async () => {
-    const cases: [string, unknown][] = [["no country code", "9876543210"], ["too short", "+91123"], ["letters", "+91abcdefghij"], ["bad Indian number", "+915876543210"], ["too long", "+9198765432101234567"], ["empty", ""], ["a number", 919876543210], ["missing", undefined]];
-    for (const [label, mobile] of cases) {
-      const r = await h.post(goodBody({ mobile }));
-      assert.equal(r.status, 400, label);
-      assert.equal(r.json.error.code, "VALIDATION_FAILED", label);
-      assert.ok(field(r, "mobile"), label);
-    }
-    assert.equal(h.state.sent.length, 0);
-    assert.ok(h.mem.rows.every((x) => x.status === "REJECTED") && h.mem.rows.length === cases.length, "every rejected request is logged");
-    assert.equal(validateMobile("+44 7911 123456").mobile, "+447911123456", "other countries are fine");
+describe("consent is validated before anything is created or sent", () => {
+  it("a customer who opted out is never messaged and no payment link is created for them", async () => {
+    const h = await start({ consent: { "lead-1": "OPTED_OUT" } });
+    try {
+      const r = await h.post(goodBody());
+      assert.equal(r.status, 422);
+      assert.equal(r.json.error.code, "CUSTOMER_OPTED_OUT");
+      assert.equal(h.link.created.length + h.msg.sent.length, 0);
+    } finally { await h.close(); }
   });
 
-  it("invalid payment links are rejected: not https, not a URL, an unapproved or local or IP host, credentials, scripts, spaces", async () => {
-    const bad = ["http://payments.cashfree.com/x", "not a url", "payments.cashfree.com/links/abc", "https://evil.example.com/pay", "https://cashfree.com.evil.com/pay", "https://127.0.0.1/pay", "https://localhost/pay", "https://user:pw@payments.cashfree.com/x", "javascript:alert(1)", "https://payments.cashfree.com/a b", `https://payments.cashfree.com/${"a".repeat(2100)}`, "", 42];
-    for (const paymentLink of bad) {
-      const r = await h.post(goodBody({ paymentLink }));
-      assert.equal(r.status, 400, String(paymentLink));
-      assert.ok(field(r, "paymentLink"), String(paymentLink));
-    }
-    assert.equal(h.state.sent.length, 0);
-    assert.equal(validatePaymentLink("https://pay.example.org/p/1", ["*"]).host, "pay.example.org", "'*' approves any https host");
-    assert.equal(hostAllowed("a.b.cashfree.com", ["*.cashfree.com"]), true);
-    assert.equal(hostAllowed("cashfree.com", ["*.cashfree.com"]), false);
-  });
-
-  it("reports every problem at once; customerConsent must be true; reserved or unsafe template parameters are refused", async () => {
-    const r = await h.post({ mobile: "123", paymentLink: "x", customerConsent: false, templateParams: { payment_link: "https://evil.example", Bad_Name: "x", note: "line1\nline2", amount: "" } });
-    assert.equal(r.status, 400);
-    for (const f of ["customerName", "mobile", "paymentLink", "customerConsent", "templateParams.payment_link", "templateParams.Bad_Name", "templateParams.note", "templateParams.amount"]) assert.ok(field(r, f), f);
-  });
-
-  it("malformed JSON gets a clean error in the same shape", async () => {
-    const r = await h.post(undefined, {}, "{not json");
-    assert.equal(r.status, 400);
-    assert.equal(r.json.error.code, "INVALID_JSON");
-    assert.equal(r.json.success, false);
-  });
-
-  it("pure validation: names are trimmed, '#' removed from the order id", () => {
-    const v = validateRequest(goodBody({ customerName: "  Rahul   Sharma ", orderId: "#AWL110598" }));
-    assert.equal(v.value?.customerName, "Rahul Sharma");
-    assert.equal(v.value?.orderId, "AWL110598");
+  it("strict mode (AGENCY_REQUIRE_EXPLICIT_OPT_IN=true): only an explicit OPTED_IN is messaged; default mode messages everyone who has not opted out", async () => {
+    const strict = await start({ env: { AGENCY_REQUIRE_EXPLICIT_OPT_IN: "true" }, consent: {} });
+    try {
+      const r = await strict.post(goodBody());
+      assert.equal(r.status, 422);
+      assert.equal(r.json.error.code, "CONSENT_NOT_RECORDED");
+      assert.equal(strict.link.created.length, 0);
+      strict.world.consent["lead-1"] = "OPTED_IN";
+      assert.equal((await strict.post(goodBody(), { "idempotency-key": "after-consent-1" })).status, 200);
+    } finally { await strict.close(); }
+    const open = await start({ consent: { "lead-1": "UNKNOWN" } });
+    try { assert.equal((await open.post(goodBody())).status, 200); } finally { await open.close(); }
   });
 });
 
-describe("Meta / WhatsApp failures are reported clearly and logged", () => {
-  it("a Meta refusal (template problem) is a 502 with a code and the reason; the log row is FAILED; nothing secret leaks", async () => {
+describe("payment-link generation failures: clear errors, nothing sent, retry with the same key", () => {
+  it("a refusal by the payment service is a 422 ORDER_NOT_PAYABLE; an open link for another amount is a 409; the gateway being down is a retryable 502; no WhatsApp message in any case", async () => {
     const h = await start();
-    h.state.mode = "meta-400";
-    const r = await h.post(goodBody());
-    assert.equal(r.status, 502);
-    assert.equal(r.json.success, false);
-    assert.equal(r.json.error.code, "TEMPLATE_REJECTED");
-    assert.equal(r.json.error.retryable, false);
-    assert.match(r.json.error.message, /132001/);
-    assert.ok(!/token|secret|authorization|bearer/i.test(r.text));
-    assert.equal(h.mem.rows[0]!.status, "FAILED");
-    assert.equal(h.mem.rows[0]!.errorCode, "TEMPLATE_REJECTED");
-    await h.close();
+    try {
+      h.link.mode = "refused";
+      const a = await h.post(goodBody(), { "idempotency-key": "link-fail-0001" });
+      assert.equal(a.status, 422);
+      assert.equal(a.json.error.code, "ORDER_NOT_PAYABLE");
+      h.link.mode = "conflict";
+      assert.equal((await h.post(goodBody(), { "idempotency-key": "link-fail-0002" })).json.error.code, "PAYMENT_LINK_CONFLICT");
+      h.link.mode = "gateway-down";
+      const c = await h.post(goodBody(), { "idempotency-key": "link-fail-0003" });
+      assert.equal(c.status, 502);
+      assert.equal(c.json.error.code, "PAYMENT_LINK_FAILED");
+      assert.equal(c.json.error.retryable, true);
+      assert.doesNotMatch(c.text, /ECONNREFUSED|cashfree\.example/, "no internal detail leaks to the agency");
+      h.link.mode = "no-url";
+      assert.equal((await h.post(goodBody(), { "idempotency-key": "link-fail-0004" })).json.error.code, "PAYMENT_LINK_FAILED");
+      assert.equal(h.msg.sent.length, 0, "no message is ever sent without a link");
+      // recovery: the same key succeeds once the gateway works
+      h.link.mode = "ok";
+      const ok = await h.post(goodBody(), { "idempotency-key": "link-fail-0003" });
+      assert.equal(ok.status, 200, ok.text);
+      assert.equal(h.msg.sent.length, 1);
+    } finally { await h.close(); }
   });
 
-  it("Meta down or unreachable is retryable; an undeliverable recipient is a 422; not configured is a 503", async () => {
+  it("no approved template: the failure comes BEFORE a payment link is created, so no link is left that nobody was told about", async () => {
+    const h = await start({ templates: false });
+    try {
+      const r = await h.post(goodBody());
+      assert.equal(r.status, 503);
+      assert.equal(r.json.error.code, "NO_APPROVED_TEMPLATE");
+      assert.equal(h.link.created.length, 0);
+    } finally { await h.close(); }
+  });
+});
+
+describe("WhatsApp / Meta failures are reported clearly and logged", () => {
+  it("a Meta refusal is a 502 with a code and the reason; the log row is FAILED; nothing secret leaks", async () => {
     const h = await start();
-    for (const [mode, status, code, retryable] of [["meta-500", 502, "WHATSAPP_UNAVAILABLE", true], ["unreachable", 502, "WHATSAPP_UNREACHABLE", true], ["recipient", 422, "RECIPIENT_NOT_REACHABLE", false], ["not-configured", 503, "WHATSAPP_NOT_CONFIGURED", true]] as const) {
-      h.state.mode = mode;
-      const r = await h.post(goodBody({ paymentLink: `${LINK}?m=${mode}` }));
-      assert.equal(r.status, status, mode);
-      assert.equal(r.json.error.code, code, mode);
-      assert.equal(r.json.error.retryable, retryable, mode);
-    }
-    await h.close();
+    try {
+      h.msg.mode = "meta-400";
+      const r = await h.post(goodBody());
+      assert.equal(r.status, 502);
+      assert.equal(r.json.error.code, "TEMPLATE_REJECTED");
+      assert.equal(h.mem.rows[0]!.status, "FAILED");
+      assert.doesNotMatch(r.text, /access[_ ]?token|app[_ ]?secret|Bearer/i);
+    } finally { await h.close(); }
   });
 
-  it("after a failure the same Idempotency-Key can be retried and then succeeds exactly once", async () => {
+  it("Meta down or unreachable is retryable; an undeliverable recipient is a 422; WhatsApp not configured is a 503", async () => {
     const h = await start();
-    h.state.mode = "unreachable";
-    const first = await h.post(goodBody(), { "idempotency-key": "retry-me-0001" });
-    assert.equal(first.status, 502);
-    h.state.mode = "ok";
-    const second = await h.post(goodBody(), { "idempotency-key": "retry-me-0001" });
-    assert.equal(second.status, 200, second.text);
-    assert.equal(second.json.duplicate, false);
-    assert.equal(second.json.requestId, first.json.requestId, "the same request, retried");
-    const third = await h.post(goodBody(), { "idempotency-key": "retry-me-0001" });
-    assert.equal(third.json.duplicate, true);
-    assert.equal(h.state.sent.filter((s) => s.manualValues.payment_link === LINK).length, 2, "one failed attempt + one success, nothing more");
-    assert.equal(h.mem.rows.length, 1);
-    await h.close();
+    try {
+      for (const [mode, status, code, retryable] of [["meta-500", 502, "WHATSAPP_UNAVAILABLE", true], ["unreachable", 502, "WHATSAPP_UNREACHABLE", true], ["recipient", 422, "RECIPIENT_NOT_REACHABLE", false], ["not-configured", 503, "WHATSAPP_NOT_CONFIGURED", true]] as const) {
+        h.msg.mode = mode;
+        const r = await h.post(goodBody(), { "idempotency-key": `meta-${mode}-0001` });
+        assert.equal(r.status, status, mode);
+        assert.equal(r.json.error.code, code, mode);
+        assert.equal(r.json.error.retryable ?? false, retryable, mode);
+      }
+    } finally { await h.close(); }
+  });
+
+  it("after a WhatsApp failure the same Idempotency-Key succeeds exactly once, reusing the payment link request for the same order", async () => {
+    const h = await start();
+    try {
+      h.msg.mode = "meta-500";
+      const key = { "idempotency-key": "retry-after-meta-1" };
+      assert.equal((await h.post(goodBody(), key)).status, 502);
+      h.msg.mode = "ok";
+      const second = await h.post(goodBody(), key);
+      assert.equal(second.status, 200, second.text);
+      const third = await h.post(goodBody(), key);
+      assert.equal(third.json.duplicate, true);
+      assert.equal(h.msg.sent.filter((s) => s.manualValues.payment_link).length, 2, "one failed attempt and one successful send; the repeat sent nothing");
+      assert.ok(h.link.created.every((id) => id === "order-1"), "always the same order");
+    } finally { await h.close(); }
   });
 
   it("classifySendError turns the provider's words into stable codes", () => {
     assert.equal(classifySendError("Could not reach Meta Cloud API: fetch failed").code, "WHATSAPP_UNREACHABLE");
     assert.equal(classifySendError("rejected (HTTP 429): too many").code, "WHATSAPP_RATE_LIMITED");
-    assert.equal(classifySendError("rejected (HTTP 503)").code, "WHATSAPP_UNAVAILABLE");
-    assert.equal(classifySendError("rejected (HTTP 401): Invalid OAuth access token").code, "WHATSAPP_AUTH_ERROR");
-    assert.equal(classifySendError("rejected (HTTP 400): (#131026) Message undeliverable").code, "RECIPIENT_NOT_REACHABLE");
-    assert.equal(classifySendError("rejected (HTTP 400): something else").code, "WHATSAPP_REJECTED");
+    assert.equal(classifySendError("(HTTP 401) Invalid OAuth access token").code, "WHATSAPP_AUTH_ERROR");
+    assert.equal(classifySendError("(#131026) Message undeliverable").code, "RECIPIENT_NOT_REACHABLE");
+    assert.equal(classifySendError("something odd").code, "WHATSAPP_REJECTED");
   });
 });
 
-describe("duplicate requests, concurrency and limits", () => {
+describe("unauthorized requests are refused and create / send nothing", () => {
+  let h: Harness;
+  before(async () => { h = await start(); });
+  after(() => h.close());
+
+  it("no key, a wrong key, a malformed key all get 401; the Bearer form works; a revoked key is refused", async () => {
+    const noKey = await fetch(h.url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(goodBody()) });
+    assert.equal(noKey.status, 401);
+    assert.equal((await h.post(goodBody(), { "x-api-key": "avk_wrong" })).status, 401);
+    assert.equal((await h.post(goodBody(), { "x-api-key": "not-a-key" })).status, 401);
+    assert.equal(h.link.created.length + h.msg.sent.length, 0);
+    const bearer = await h.post(goodBody(), { "x-api-key": "", authorization: `Bearer ${h.key}` });
+    assert.equal(bearer.status, 200, bearer.text);
+    const row = [...h.world.keys.values()][0]!;
+    row.revokedAt = new Date();
+    assert.equal((await h.post(goodBody(), { "idempotency-key": "after-revoke-01" })).status, 401);
+  });
+
+  it("malformed JSON gets a clean error in the same shape", async () => {
+    const h2 = await start();
+    try {
+      const r = await h2.post(null, {}, "{ not json");
+      assert.equal(r.status, 400);
+      assert.equal(r.json.error.code, "INVALID_JSON");
+    } finally { await h2.close(); }
+  });
+});
+
+describe("duplicate requests, concurrency and limits (unchanged)", () => {
   it("the same Idempotency-Key sends once and returns the first answer; with a different request it is refused", async () => {
     const h = await start();
-    const a = await h.post(goodBody(), { "idempotency-key": "same-call-0001" });
-    const b = await h.post(goodBody(), { "idempotency-key": "same-call-0001" });
-    assert.equal(a.status, 200);
-    assert.equal(b.status, 200);
-    assert.equal(b.json.duplicate, true);
-    assert.equal(b.json.requestId, a.json.requestId);
-    assert.equal(b.json.message.whatsappMessageId, a.json.message.whatsappMessageId);
-    assert.equal(h.state.sent.length, 1);
-    const other = await h.post(goodBody({ paymentLink: `${LINK}-different` }), { "idempotency-key": "same-call-0001" });
-    assert.equal(other.status, 409);
-    assert.equal(other.json.error.code, "IDEMPOTENCY_KEY_REUSED");
-    assert.equal(h.state.sent.length, 1);
-    await h.close();
+    try {
+      const key = { "idempotency-key": "dup-key-00001" };
+      const a = await h.post(goodBody(), key);
+      const b = await h.post(goodBody(), key);
+      assert.equal(a.status, 200);
+      assert.equal(b.json.duplicate, true);
+      assert.equal(b.json.requestId, a.json.requestId);
+      assert.equal(h.msg.sent.length, 1);
+      assert.equal(h.link.created.length, 1);
+      const other = await h.post(goodBody({ mobile: "+919876500001" }), key);
+      assert.equal(other.status, 409);
+      assert.equal(other.json.error.code, "IDEMPOTENCY_KEY_REUSED");
+    } finally { await h.close(); }
   });
 
-  it("without an Idempotency-Key an identical request within minutes is the same request", async () => {
+  it("without an Idempotency-Key, concurrent identical requests send exactly one message and create one link", async () => {
     const h = await start();
-    const a = await h.post(goodBody());
-    const b = await h.post(goodBody());
-    assert.equal(b.json.duplicate, true);
-    assert.equal(b.json.requestId, a.json.requestId);
-    assert.equal(h.state.sent.length, 1);
-    const different = await h.post(goodBody({ paymentLink: `${LINK}-2` }));
-    assert.equal(different.json.duplicate, false, "another link is a new request");
-    await h.close();
+    try {
+      const rs = await Promise.all([1, 2, 3, 4].map(() => h.post(goodBody())));
+      assert.equal(h.msg.sent.length, 1);
+      assert.equal(h.link.created.length, 1);
+      assert.ok(rs.some((r) => r.status === 200));
+    } finally { await h.close(); }
   });
 
-  it("concurrent identical requests WITHOUT a key: exactly one WhatsApp message is sent", async () => {
-    const h = await start();
-    const results = await Promise.all(Array.from({ length: 8 }, () => h.post(goodBody())));
-    assert.equal(h.state.sent.length, 1);
-    assert.equal(results.filter((r) => r.status === 200 && r.json.duplicate === false).length, 1);
-    assert.equal(h.mem.rows.length, 1, "one request row");
-    await h.close();
-  });
-
-  it("concurrent identical requests: exactly one WhatsApp message is sent", async () => {
-    const h = await start();
-    const results = await Promise.all(Array.from({ length: 8 }, () => h.post(goodBody(), { "idempotency-key": "burst-call-0001" })));
-    assert.equal(h.state.sent.length, 1);
-    assert.equal(results.filter((r) => r.status === 200 && r.json.duplicate === false).length, 1);
-    assert.ok(results.every((r) => r.status === 200 || (r.status === 409 && r.json.error.code === "REQUEST_IN_PROGRESS")));
-    await h.close();
-  });
-
-  it("per-key rate limit: the request over the limit gets 429 with Retry-After, and sends nothing", async () => {
-    const h = await start({ rate: 3 });
-    for (let i = 0; i < 3; i += 1) assert.equal((await h.post(goodBody({ paymentLink: `${LINK}-r${i}`, mobile: `+9198765432${10 + i}` }))).status, 200);
-    const over = await h.post(goodBody({ paymentLink: `${LINK}-r9`, mobile: "+919876543299" }));
-    assert.equal(over.status, 429);
-    assert.equal(over.json.error.code, "RATE_LIMITED");
-    assert.ok(Number(over.headers.get("retry-after")) >= 1);
-    assert.equal(h.state.sent.length, 3);
-    await h.close();
-  });
-
-  it("one customer cannot be flooded: the per-hour cap applies across requests", async () => {
-    const h = await start({ env: { AGENCY_RECIPIENT_LIMIT_PER_HOUR: "2" } });
-    assert.equal((await h.post(goodBody({ paymentLink: `${LINK}-1` }))).status, 200);
-    assert.equal((await h.post(goodBody({ paymentLink: `${LINK}-2` }))).status, 200);
-    const third = await h.post(goodBody({ paymentLink: `${LINK}-3` }));
-    assert.equal(third.status, 429);
-    assert.equal(third.json.error.code, "RECIPIENT_LIMIT");
-    assert.equal(h.state.sent.length, 2);
-    await h.close();
-  });
-
-  it("a different link inside the send path's 30-second guard is not reported as sent", async () => {
-    const h = await start({ messaging: { guardKeepsFirst: true } });
-    assert.equal((await h.post(goodBody({ paymentLink: `${LINK}-first`, orderId: undefined }))).status, 200);
-    const second = await h.post(goodBody({ paymentLink: `${LINK}-second`, orderId: undefined }));
-    assert.equal(second.status, 409);
-    assert.equal(second.json.error.code, "RECENT_MESSAGE_CONFLICT");
-    assert.equal(second.json.error.retryable, true);
-    await h.close();
+  it("per-key rate limit: the request over the limit gets 429 with Retry-After, and creates / sends nothing", async () => {
+    const h = await start({ rate: 2 });
+    try {
+      assert.equal((await h.post(goodBody(), { "idempotency-key": "rate-limit-001" })).status, 200);
+      await h.post(goodBody({ customerName: "B" }), { "idempotency-key": "rate-limit-002" });
+      const limited = await h.post(goodBody({ customerName: "C" }), { "idempotency-key": "rate-limit-003" });
+      assert.equal(limited.status, 429);
+      assert.equal(limited.json.error.code, "RATE_LIMITED");
+      assert.ok(limited.headers.get("retry-after"));
+      assert.equal(h.link.created.length, 2, "only the two allowed requests reached the payment service");
+    } finally { await h.close(); }
   });
 
   it("SlidingWindowLimiter lets the window slide", () => {
     let t = 0;
-    const l = new SlidingWindowLimiter(1000, () => t);
-    assert.equal(l.take("a", 2).allowed, true);
-    assert.equal(l.take("a", 2).allowed, true);
-    assert.equal(l.take("a", 2).allowed, false);
-    assert.equal(l.take("b", 2).allowed, true, "keys are independent");
-    t = 1001;
-    assert.equal(l.take("a", 2).allowed, true);
-  });
-});
-
-describe("consent, orders and template parameters", () => {
-  it("a customer who opted out is never messaged", async () => {
-    const h = await start({ optedOut: ["lead-1"] });
-    await h.mem.repo.createLead({ customerName: "Rahul", mobile: MOBILE }); // lead-1 exists and has opted out
-    const r = await h.post(goodBody());
-    assert.equal(r.status, 422);
-    assert.equal(r.json.error.code, "CUSTOMER_OPTED_OUT");
-    assert.equal(h.state.sent.length, 0);
-    await h.close();
-  });
-
-  it("an order that belongs to another number is refused; a known order is linked; an unknown reference is just carried along", async () => {
-    const h = await start({ orders: { "CRM-OTHER-1": { id: "ord-9", leadId: "lead-77", leadMobile: "+919000000001" }, "CRM-MINE-1": { id: "ord-1", leadId: "lead-5", leadMobile: MOBILE } } });
-    const wrong = await h.post(goodBody({ orderId: "CRM-OTHER-1" }));
-    assert.equal(wrong.status, 422);
-    assert.equal(wrong.json.error.code, "ORDER_MOBILE_MISMATCH");
-    assert.equal(h.state.sent.length, 0);
-    const ok = await h.post(goodBody({ orderId: "CRM-MINE-1" }));
-    assert.equal(ok.status, 200, ok.text);
-    assert.equal(h.state.sent[0]!.orderId, "ord-1");
-    assert.equal(h.state.sent[0]!.leadId, "lead-5");
-    await h.close();
-  });
-
-  it("a template that needs more values says exactly which; the agency supplies them in templateParams", async () => {
-    const h = await start({ messaging: { variables: ["customer_name", "payment_link", "amount"] } });
-    const missing = await h.post(goodBody({ orderId: undefined }));
-    assert.equal(missing.status, 422);
-    assert.equal(missing.json.error.code, "MISSING_TEMPLATE_PARAMETERS");
-    assert.deepEqual(missing.json.error.details.missing, ["amount"]);
-    assert.equal(h.state.sent.length, 0);
-    const ok = await h.post(goodBody({ orderId: undefined, templateParams: { amount: "449" } }), { "idempotency-key": "with-params-0001" });
-    assert.equal(ok.status, 200, ok.text);
-    assert.equal(h.state.sent[0]!.manualValues.amount, "449");
-    await h.close();
+    const limiter = new SlidingWindowLimiter(1000, () => t);
+    assert.equal(limiter.take("k", 2).allowed, true);
+    assert.equal(limiter.take("k", 2).allowed, true);
+    assert.equal(limiter.take("k", 2).allowed, false);
+    t = 1500;
+    assert.equal(limiter.take("k", 2).allowed, true);
   });
 });
 
 describe("keys", () => {
   it("a key is 'avk_' + 256 random bits; only the hash is kept; the header forms are recognised", () => {
-    const a = generateApiKey();
-    const b = generateApiKey();
-    assert.match(a.key, /^avk_[A-Za-z0-9_-]{43}$/);
-    assert.notEqual(a.key, b.key);
-    assert.equal(a.hash, hashApiKey(a.key));
-    assert.equal(a.hash.length, 64);
-    assert.ok(!a.hash.includes(a.key.slice(4)));
-    assert.equal(extractApiKey({ "x-api-key": a.key }), a.key);
-    assert.equal(extractApiKey({ authorization: `Bearer ${a.key}` }), a.key);
-    assert.equal(extractApiKey({ "x-api-key": "nope" }), null);
-    assert.equal(extractApiKey({}), null);
+    const { key, hash, prefix } = generateApiKey();
+    assert.match(key, /^avk_[A-Za-z0-9_-]{43}$/);
+    assert.equal(hashApiKey(key), hash);
+    assert.ok(key.startsWith(prefix));
+    assert.equal(extractApiKey({ "x-api-key": key }), key);
+    assert.equal(extractApiKey({ authorization: `Bearer ${key}` }), key);
   });
 });

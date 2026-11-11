@@ -63,6 +63,7 @@ export function fakeDb(base: typeof ORDER = ORDER) {
     shipment: {
       create: async ({ data }: { data: Row }) => { shipments.push({ ...data }); return data; },
       findFirst: async ({ where }: { where: Record<string, unknown> }) => { const s = shipments.find((x) => match(x, where)); return s ? withOrder(s) : null; },
+      findMany: async ({ where, take }: { where: Record<string, unknown>; take?: number }) => shipments.filter((x) => x.externalSource === where.externalSource && Object.entries(where).every(([k, v]) => k === "externalSource" || x[k] === v)).slice(0, take ?? 1000).map(withOrder),
       findUnique: async ({ where }: { where: { id: string } }) => { const s = shipments.find((x) => x.id === where.id); return s ? withOrder(s) : null; },
       findUniqueOrThrow: async ({ where }: { where: { id: string } }) => withOrder(shipments.find((x) => x.id === where.id)!),
       update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => { Object.assign(shipments.find((x) => x.id === where.id)!, data); },

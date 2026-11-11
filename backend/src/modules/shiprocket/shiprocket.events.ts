@@ -18,6 +18,8 @@ export interface ShiprocketEvent {
   awb: string | null;
   currentStatus: string | null;
   srOrderId: string | null;
+  /** Shiprocket's shipment id, when the delivery carries it. */
+  shipmentId: string | null;
   channelOrderId: string | null;
   courierName: string | null;
   etd: Date | null;
@@ -49,6 +51,7 @@ export function parseShiprocketEvent(payload: unknown): ShiprocketEvent | null {
     awb: asString(body.awb) ?? asString(body.awb_code),
     currentStatus: asString(body.current_status) ?? asString(body.shipment_status),
     srOrderId: asString(body.sr_order_id),
+    shipmentId: asString(body.shipment_id),
     channelOrderId: asString(body.order_id),
     courierName: asString(body.courier_name),
     etd: parseEtd(body.etd),

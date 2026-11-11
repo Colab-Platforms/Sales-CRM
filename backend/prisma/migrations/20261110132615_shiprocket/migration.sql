@@ -1,0 +1,2 @@
+-- RenameIndex
+ALTER INDEX "webhook_events_oms_forward_status_oms_forward_next_attempt_idx" RENAME TO "webhook_events_oms_forward_status_oms_forward_next_attempt__idx";

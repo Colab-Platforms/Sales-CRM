@@ -1,4 +1,7 @@
-// The external AI calling agency asks the CRM to send a payment link to a customer on WhatsApp.
+// The external AI calling agency asks the CRM to send a payment link to a customer on WhatsApp. It sends ONLY customerName and mobile. The CRM finds the customer by mobile number, finds their ONE
+// eligible COD order (and its amount), creates the payment link with the existing Cashfree payment-link service, and sends it with the existing approved template.
+//  - No eligible COD order  -> 404, nothing created.   - More than one -> 409 with the candidates, nothing created (the CRM never guesses which order).
+//  - A customer who opted out is never messaged (and no link is created for them).
 //
 // This is NOT a second WhatsApp integration: the message goes out through WhatsAppMessagingService.sendTemplateAsAgency - the same send() every other customer message uses, over the
 // Meta Cloud API credentials saved in Settings -> WhatsApp Config. What is added here is only what an outside caller needs around it: request validation, idempotency, the customer's
@@ -10,6 +13,21 @@ import { randomUUID } from "node:crypto";
 import { ApiError } from "@/utils/apiError.js";
 import { logger } from "@/utils/logger.js";
 import { maskMobile, requestHash, validateRequest, type FieldError, type PaymentLinkRequest } from "./agency.validators.js";
+
+export interface EligibleOrder {
+  id: string;
+  leadId: string;
+  orderNumber: string;
+  /** The Shopify order name (e.g. AWL110598) when the order is linked to Shopify. */
+  shopifyOrderNumber: string | null;
+  /** What is still to be paid, as a decimal string (e.g. "449.00"). */
+  amount: string;
+}
+
+export interface PaymentLinkMaker {
+  /** The existing CRM payment-link service (Cashfree): creates - or reuses the open - link for the order's outstanding amount. Throws ApiError. */
+  createLink(orderId: string): Promise<{ paymentUrl: string | null; amount: string; reused: boolean; expiresAt: Date | null }>;
+}
 
 export interface AgencyKeyRow {
   id: string;
@@ -45,12 +63,10 @@ export interface AgencyRepo {
   complete(id: string, patch: { status: "SENT" | "FAILED" | "REJECTED"; httpStatus: number; response: unknown; errorCode?: string | null; errorMessage?: string | null; leadId?: string | null; orderId?: string | null; messageId?: string | null; providerMessageId?: string | null; templateName?: string | null }, at: Date): Promise<void>;
   /** Rows written for a request that was refused before it could be claimed (invalid body). */
   logRejected(row: { id: string; apiKeyId: string; customerName: string; response: unknown; errorCode: string; errorMessage: string; httpStatus: number; sourceIp: string | null }, at: Date): Promise<void>;
-  findLeadByMobile(mobile: string): Promise<{ id: string; normalizedMobile: string | null } | null>;
-  createLead(input: { customerName: string; mobile: string }): Promise<{ id: string }>;
-  /** The order a reference points to (CRM order number, Shopify name such as AWL110598, or id) with the customer it belongs to. */
-  findOrder(ref: string): Promise<{ id: string; leadId: string; leadMobile: string | null } | null>;
-  /** OPTED_OUT stays OPTED_OUT. Otherwise the customer is recorded as opted in via the agency (their consent on the call). Returns the status that applies. */
-  recordConsent(leadId: string, at: Date): Promise<"OPTED_IN" | "OPTED_OUT">;
+  /** The customer with this mobile number and their orders that can be paid online instead of on delivery (COD, still unpaid, not cancelled / returned / shipped). */
+  findEligibleCodOrders(mobile: string): Promise<{ known: boolean; orders: EligibleOrder[] }>;
+  /** The customer's WhatsApp consent as the CRM holds it. */
+  getConsent(leadId: string): Promise<"OPTED_IN" | "OPTED_OUT" | "UNKNOWN">;
   countSentToLead(leadId: string, since: Date): Promise<number>;
   approvedPaymentLinkTemplates(): Promise<TemplateCandidate[]>;
 }
@@ -65,11 +81,12 @@ export interface AgencyOptions {
   perRecipientPerHour: number;
   /** Without an Idempotency-Key, an identical request inside this window is treated as the same request. */
   autoDedupeWindowMs: number;
-  allowedHosts: string[];
   preferredTemplate: string | null;
+  /** true: only a customer the CRM has an explicit OPTED_IN record for is messaged. false (default): everyone except OPTED_OUT - the message is about the customer's own existing order. */
+  requireExplicitOptIn: boolean;
 }
 
-export const DEFAULT_OPTIONS: AgencyOptions = { perRecipientPerHour: 3, autoDedupeWindowMs: 10 * 60_000, allowedHosts: [], preferredTemplate: null };
+export const DEFAULT_OPTIONS: AgencyOptions = { perRecipientPerHour: 3, autoDedupeWindowMs: 10 * 60_000, preferredTemplate: null, requireExplicitOptIn: false };
 
 export interface AgencyResponse {
   httpStatus: number;
@@ -107,6 +124,7 @@ export class AgencyPaymentLinkService {
   constructor(
     private readonly repo: AgencyRepo,
     private readonly messaging: AgencyMessaging,
+    private readonly links: PaymentLinkMaker,
     private readonly options: AgencyOptions = DEFAULT_OPTIONS,
     private readonly now: () => Date = () => new Date(),
   ) {}
@@ -120,12 +138,11 @@ export class AgencyPaymentLinkService {
       return this.reject(requestId, key, input.body, input.sourceIp, 400, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key must be 8 to 128 characters: letters, digits and . _ : -");
     }
 
-    const checked = validateRequest(input.body, this.options.allowedHosts.length > 0 ? this.options.allowedHosts : undefined);
+    const checked = validateRequest(input.body);
     if (!checked.value) return this.reject(requestId, key, input.body, input.sourceIp, 400, "VALIDATION_FAILED", "The request is not valid", checked.errors);
     const request = checked.value;
     const hash = requestHash(request);
     const toMasked = maskMobile(request.mobile);
-    const linkHost = checked.linkHost ?? "";
 
     // Duplicate protection. With an Idempotency-Key: the same key + same request returns the first answer, the same key + a different request is refused. Without one: an identical request from this
     // key inside a few minutes is the same request.
@@ -138,7 +155,7 @@ export class AgencyPaymentLinkService {
       usedKey = `auto:${hash}:${Math.floor(this.now().getTime() / this.options.autoDedupeWindowMs)}`;
     }
 
-    const claim = await this.repo.claim({ id: requestId, apiKeyId: key.id, idempotencyKey: usedKey, requestHash: hash, customerName: request.customerName, toMasked, linkHost, orderRef: request.orderId, sourceIp: input.sourceIp });
+    const claim = await this.repo.claim({ id: requestId, apiKeyId: key.id, idempotencyKey: usedKey, requestHash: hash, customerName: request.customerName, toMasked, linkHost: "-", orderRef: null, sourceIp: input.sourceIp });
     let activeId = requestId;
     if (!claim.created) {
       const existing = claim.existing!;
@@ -151,7 +168,7 @@ export class AgencyPaymentLinkService {
 
     try {
       const sent = await this.process(activeId, request);
-      const body = { success: true, requestId: activeId, status: sent.status, duplicate: false, message: { id: sent.messageId, whatsappMessageId: sent.providerMessageId, template: sent.templateName, to: toMasked } };
+      const body = { success: true, requestId: activeId, status: sent.status, duplicate: false, message: { id: sent.messageId, whatsappMessageId: sent.providerMessageId, template: sent.templateName, to: toMasked }, order: sent.order, payment: sent.payment };
       await this.repo.complete(activeId, { status: "SENT", httpStatus: 200, response: body, leadId: sent.leadId, orderId: sent.orderId, messageId: sent.messageId, providerMessageId: sent.providerMessageId, templateName: sent.templateName }, this.now());
       logger.info(`[agency] ${activeId} key="${key.name}" SENT to ${toMasked} template=${sent.templateName}`);
       return { httpStatus: 200, body };
@@ -164,29 +181,45 @@ export class AgencyPaymentLinkService {
     }
   }
 
-  private async process(requestId: string, request: PaymentLinkRequest): Promise<{ status: string; messageId: string; providerMessageId: string | null; templateName: string | null; leadId: string; orderId: string | null }> {
-    // The order, when one was named and exists in the CRM: it must be this customer's. An id the CRM does not know is only the agency's own reference.
-    const order = request.orderId ? await this.repo.findOrder(request.orderId) : null;
-    if (order && order.leadMobile && order.leadMobile !== request.mobile) throw new Failure(422, "ORDER_MOBILE_MISMATCH", "This orderId belongs to a different mobile number, so nothing was sent.");
+  private async process(requestId: string, request: PaymentLinkRequest): Promise<{ status: string; messageId: string; providerMessageId: string | null; templateName: string | null; leadId: string; orderId: string | null; order: Record<string, unknown>; payment: Record<string, unknown> }> {
+    // 1. The customer and the ONE order this is about. Never guessed: none -> not found, several -> the candidates are returned and nothing is created.
+    const found = await this.repo.findEligibleCodOrders(request.mobile);
+    if (!found.known) throw new Failure(404, "CUSTOMER_NOT_FOUND", "No customer with this mobile number exists in the CRM, so no payment link was created.");
+    if (found.orders.length === 0) throw Object.assign(new Failure(404, "NO_ELIGIBLE_ORDER", "This customer has no COD order that can be paid online (it must be an unpaid COD order that is not cancelled, returned or already shipped). No payment link was created."), { ids: { orderId: null } });
+    if (found.orders.length > 1) {
+      throw Object.assign(new Failure(409, "MULTIPLE_ELIGIBLE_ORDERS", "This customer has more than one eligible COD order, so the CRM did not choose one and created no payment link. Resolve it with the CRM team.", { orders: found.orders.map((o) => ({ orderNumber: o.orderNumber, shopifyOrderNumber: o.shopifyOrderNumber, amount: o.amount })) }), { ids: { orderId: null } });
+    }
+    const order = found.orders[0]!;
+    const leadId = order.leadId;
+    const ids = { leadId, orderId: order.id };
 
-    const lead = order ? { id: order.leadId } : (await this.repo.findLeadByMobile(request.mobile)) ?? (await this.repo.createLead({ customerName: request.customerName, mobile: request.mobile }));
+    // 2. Consent, before anything is created or sent: an opted-out customer is never messaged; in strict mode only an explicit opt-in is.
+    const consent = await this.repo.getConsent(leadId);
+    if (consent === "OPTED_OUT") throw Object.assign(new Failure(422, "CUSTOMER_OPTED_OUT", "This customer has opted out of WhatsApp messages, so nothing was created or sent."), { ids });
+    if (this.options.requireExplicitOptIn && consent !== "OPTED_IN") throw Object.assign(new Failure(422, "CONSENT_NOT_RECORDED", "The CRM has no recorded WhatsApp consent for this customer, so nothing was created or sent."), { ids });
 
-    // Consent: a customer who opted out is never messaged; otherwise the agency's attestation (customerConsent: true) is recorded as the opt-in.
-    if ((await this.repo.recordConsent(lead.id, this.now())) === "OPTED_OUT") throw new Failure(422, "CUSTOMER_OPTED_OUT", "This customer has opted out of WhatsApp messages, so nothing was sent.");
+    const sentLastHour = await this.repo.countSentToLead(leadId, new Date(this.now().getTime() - 3_600_000));
+    if (sentLastHour >= this.options.perRecipientPerHour) throw Object.assign(new Failure(429, "RECIPIENT_LIMIT", `This customer has already been sent ${sentLastHour} payment-link messages in the last hour. Try again later.`, undefined, true), { ids });
 
-    const sentLastHour = await this.repo.countSentToLead(lead.id, new Date(this.now().getTime() - 3_600_000));
-    if (sentLastHour >= this.options.perRecipientPerHour) throw new Failure(429, "RECIPIENT_LIMIT", `This customer has already been sent ${sentLastHour} payment-link messages in the last hour. Try again later.`, undefined, true);
+    // 3. A template must exist BEFORE a link is created, so a missing template never leaves a link nobody was told about.
+    if ((await this.repo.approvedPaymentLinkTemplates()).length === 0) throw Object.assign(new Failure(503, "NO_APPROVED_TEMPLATE", "No approved WhatsApp template containing {{payment_link}} is set up in the CRM. The CRM team must create and get one approved by Meta.", undefined, true), { ids });
 
-    const manualValues: Record<string, string> = { ...request.templateParams, customer_name: request.customerName, payment_link: request.paymentLink };
-    if (request.orderId && !order && !manualValues.order_number) manualValues.order_number = request.orderId;
+    // 4. The payment link, from the existing CRM payment-link service (repeating this reuses the same open link for the same amount).
+    let link;
+    try {
+      link = await this.links.createLink(order.id);
+    } catch (error) {
+      throw Object.assign(this.linkFailure(error), { ids });
+    }
+    if (!link.paymentUrl) throw Object.assign(new Failure(502, "PAYMENT_LINK_FAILED", "The payment gateway did not return a payment link. Nothing was sent; retry with the same Idempotency-Key.", undefined, true), { ids });
+    const paymentUrl = link.paymentUrl;
 
-    const picked = await this.pickTemplate(lead.id, order?.id, manualValues);
-    const send = { leadId: lead.id, templateId: picked.id, ...(order ? { orderId: order.id } : {}), manualValues };
-    const ids = { leadId: lead.id, orderId: order?.id ?? null };
-
+    // 5. The message, through the existing approved template.
+    const manualValues: Record<string, string> = { customer_name: request.customerName, payment_link: paymentUrl, order_number: order.shopifyOrderNumber ?? order.orderNumber, amount: link.amount };
+    const picked = await this.pickTemplate(leadId, order.id, manualValues).catch((e: unknown) => { throw Object.assign(e as Error, { ids }); });
     let message;
     try {
-      message = await this.messaging.sendTemplateAsAgency(send);
+      message = await this.messaging.sendTemplateAsAgency({ leadId, templateId: picked.id, orderId: order.id, manualValues });
     } catch (error) {
       if (error instanceof ApiError && error.statusCode === 503) throw Object.assign(new Failure(503, "WHATSAPP_NOT_CONFIGURED", "WhatsApp is not configured on the CRM side. The CRM team has been notified by this failure; try again later.", undefined, true), { ids });
       if (error instanceof ApiError) throw Object.assign(new Failure(422, "SEND_REFUSED", error.message), { ids });
@@ -197,12 +230,27 @@ export class AgencyPaymentLinkService {
       throw Object.assign(new Failure(c.httpStatus, c.code, message.errorMessage ?? "WhatsApp rejected the message", undefined, c.retryable), { ids: { ...ids, messageId: message.id, providerMessageId: message.providerMessageId, templateName: message.templateName } });
     }
     // The send path suppresses an identical template send to the same customer inside 30 seconds and hands back the earlier message. That is fine when it carried THIS link (the same request
-    // repeated); when it carried another link, this request was not sent and must not be reported as sent.
-    if (!message.body || !message.body.includes(request.paymentLink)) {
+    // repeated); when it carried something else, this request was not sent and must not be reported as sent.
+    if (!message.body || !message.body.includes(paymentUrl)) {
       throw Object.assign(new Failure(409, "RECENT_MESSAGE_CONFLICT", "A different message was sent to this customer a few seconds ago, so this one was not sent. Retry in a minute.", undefined, true), { ids });
     }
     void requestId;
-    return { status: message.status, messageId: message.id, providerMessageId: message.providerMessageId, templateName: message.templateName ?? picked.name, leadId: lead.id, orderId: order?.id ?? null };
+    return {
+      status: message.status, messageId: message.id, providerMessageId: message.providerMessageId, templateName: message.templateName ?? picked.name, leadId, orderId: order.id,
+      order: { orderNumber: order.orderNumber, shopifyOrderNumber: order.shopifyOrderNumber },
+      payment: { amount: link.amount, currency: "INR", expiresAt: link.expiresAt ? link.expiresAt.toISOString() : null, reusedExistingLink: link.reused },
+    };
+  }
+
+  /** What the CRM's payment-link service said, turned into a stable code. */
+  private linkFailure(error: unknown): Failure {
+    if (error instanceof ApiError) {
+      if (error.statusCode === 409) return new Failure(409, "PAYMENT_LINK_CONFLICT", error.message);
+      if (error.statusCode >= 400 && error.statusCode < 500) return new Failure(422, "ORDER_NOT_PAYABLE", error.message);
+      return new Failure(502, "PAYMENT_LINK_FAILED", error.message, undefined, true);
+    }
+    logger.error("[agency] payment link creation failed", error instanceof Error ? error.message : String(error));
+    return new Failure(502, "PAYMENT_LINK_FAILED", "The payment link could not be created. Nothing was sent; retry with the same Idempotency-Key.", undefined, true);
   }
 
   /** The approved Meta template to use: the configured one first, then the others; the first whose variables can ALL be filled from this request. */
@@ -222,7 +270,7 @@ export class AgencyPaymentLinkService {
         if (!(error instanceof ApiError)) throw error;
       }
     }
-    throw new Failure(422, "MISSING_TEMPLATE_PARAMETERS", `The WhatsApp template needs values this request did not provide${bestMissing && bestMissing.length ? `: ${bestMissing.join(", ")}` : ""}. Send them in templateParams.`, { missing: bestMissing ?? [] });
+    throw new Failure(422, "MISSING_TEMPLATE_PARAMETERS", `The WhatsApp template needs values this request could not fill${bestMissing && bestMissing.length ? `: ${bestMissing.join(", ")}` : ""}. The CRM team must adjust the template.`, { missing: bestMissing ?? [] });
   }
 
   private toFailure(error: unknown): Failure & { ids?: object } {
