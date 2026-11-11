@@ -3,14 +3,16 @@ import { Router, type NextFunction, type Request, type Response } from "express"
 import { logger } from "@/utils/logger.js";
 import { extractApiKey, hashApiKey } from "./agency.keys.js";
 import { SlidingWindowLimiter } from "./agency.ratelimit.js";
-import { AgencyPaymentLinkService, DEFAULT_OPTIONS, type AgencyKeyRow, type AgencyMessaging, type AgencyOptions, type AgencyRepo } from "./agency.payment-link.service.js";
-import { defaultAllowedHosts } from "./agency.validators.js";
+import { AgencyPaymentLinkService, DEFAULT_OPTIONS, type AgencyKeyRow, type AgencyMessaging, type AgencyOptions, type AgencyRepo, type PaymentLinkMaker } from "./agency.payment-link.service.js";
+import { CashfreeLinkMaker } from "./agency.cashfree-links.js";
 import { PrismaAgencyRepo } from "./agency.repo.js";
 import WhatsAppMessagingService from "../whatsapp/whatsapp.messaging.service.js";
 
 export interface AgencyRouteDeps {
   repo: AgencyRepo;
   messaging: AgencyMessaging;
+  /** Creates the payment link of an order: the CRM's own Cashfree payment-link service in production. */
+  links: PaymentLinkMaker;
   options?: Partial<AgencyOptions>;
   env?: Record<string, string | undefined>;
   now?: () => Date;
@@ -31,11 +33,11 @@ export function createAgencyRouter(deps: AgencyRouteDeps): Router {
   const options: AgencyOptions = {
     ...DEFAULT_OPTIONS,
     perRecipientPerHour: envNumber(env.AGENCY_RECIPIENT_LIMIT_PER_HOUR, DEFAULT_OPTIONS.perRecipientPerHour),
-    allowedHosts: defaultAllowedHosts(env),
+    requireExplicitOptIn: env.AGENCY_REQUIRE_EXPLICIT_OPT_IN === "true",
     preferredTemplate: env.AGENCY_PAYMENT_LINK_TEMPLATE?.trim() || null,
     ...deps.options,
   };
-  const service = new AgencyPaymentLinkService(deps.repo, deps.messaging, options, deps.now);
+  const service = new AgencyPaymentLinkService(deps.repo, deps.messaging, deps.links, options, deps.now);
   const perKey = new SlidingWindowLimiter(60_000);
   const badAuth = new SlidingWindowLimiter(60_000);
   const ceiling = envNumber(env.AGENCY_RATE_LIMIT_PER_MINUTE, 0);
@@ -108,5 +110,5 @@ export function agencyJsonErrorHandler(err: unknown, _req: Request, res: Respons
 
 /** The real thing: Prisma storage and the existing WhatsApp messaging service (Meta credentials come from Settings -> WhatsApp Config, never from here). */
 export function createAgencyRoutes(): Router {
-  return createAgencyRouter({ repo: new PrismaAgencyRepo(), messaging: new WhatsAppMessagingService() });
+  return createAgencyRouter({ repo: new PrismaAgencyRepo(), messaging: new WhatsAppMessagingService(), links: new CashfreeLinkMaker() });
 }

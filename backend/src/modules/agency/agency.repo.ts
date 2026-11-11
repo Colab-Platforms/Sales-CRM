@@ -1,14 +1,12 @@
 // Prisma implementation of the agency API's storage: keys (hash only), the request log, and the few CRM lookups it needs (customer by number, order by reference, consent, approved templates).
 import { prisma } from "@/lib/prisma.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import { generateLeadNumber } from "@/utils/leadNumber.js";
 import type { AgencyRepo, StoredRequest } from "./agency.payment-link.service.js";
 
 type Db = typeof prisma | Prisma.TransactionClient;
 
 const toStored = (r: { id: string; status: string; requestHash: string; httpStatus: number | null; response: Prisma.JsonValue | null; createdAt: Date }): StoredRequest => ({ id: r.id, status: r.status, requestHash: r.requestHash, httpStatus: r.httpStatus, response: r.response, createdAt: r.createdAt });
 const STORED_SELECT = { id: true, status: true, requestHash: true, httpStatus: true, response: true, createdAt: true } as const;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class PrismaAgencyRepo implements AgencyRepo {
   constructor(private readonly db: Db = prisma) {}
@@ -67,38 +65,35 @@ export class PrismaAgencyRepo implements AgencyRepo {
     });
   }
 
-  findLeadByMobile(mobile: string) {
-    return this.db.lead.findFirst({ where: { normalizedMobile: mobile }, orderBy: { createdAt: "asc" }, select: { id: true, normalizedMobile: true } });
-  }
-
-  async createLead(input: { customerName: string; mobile: string }) {
-    const [first, ...rest] = input.customerName.split(" ");
-    return this.db.lead.create({
-      data: { leadNumber: generateLeadNumber(), firstName: (first ?? input.customerName).slice(0, 100), lastName: rest.length ? rest.join(" ").slice(0, 100) : null, mobile: input.mobile, normalizedMobile: input.mobile, requirement: "Created by the AI calling agency payment-link request" },
-      select: { id: true },
-    });
-  }
-
-  async findOrder(ref: string) {
-    const clean = ref.replace(/^#/, "");
-    const row = await this.db.order.findFirst({
-      where: { OR: [{ orderNumber: clean }, { externalNumber: clean }, { externalNumber: `#${clean}` }, ...(UUID.test(clean) ? [{ id: clean }] : [])] },
+  /**
+   * The customer's orders that can be paid online instead of on delivery: COD (the order was placed as COD, or carries a COD payment), nothing paid yet, an amount still owed, and not cancelled / returned /
+   * refunded / draft / already on its way to the customer (a shipped COD parcel is collected by the courier). A mobile number can belong to more than one lead record; all of them are searched.
+   */
+  async findEligibleCodOrders(mobile: string) {
+    const leads = await this.db.lead.findMany({ where: { normalizedMobile: mobile }, select: { id: true } });
+    if (leads.length === 0) return { known: false, orders: [] };
+    const rows = await this.db.order.findMany({
+      where: { leadId: { in: leads.map((l) => l.id) }, status: { in: ["CONFIRMED", "PROCESSING"] } },
       orderBy: { createdAt: "desc" },
-      select: { id: true, leadId: true, lead: { select: { normalizedMobile: true } } },
+      take: 50,
+      select: { id: true, leadId: true, orderNumber: true, externalNumber: true, totalAmount: true, metadata: true, payments: { select: { status: true, method: true, amount: true, refundedAmount: true } } },
     });
-    return row ? { id: row.id, leadId: row.leadId, leadMobile: row.lead.normalizedMobile } : null;
+    const cents = (v: { toString(): string } | null) => Math.round(Number((v ?? 0).toString()) * 100);
+    const orders = rows.flatMap((o) => {
+      const mode = (o.metadata as { paymentMode?: unknown } | null)?.paymentMode;
+      const isCod = mode === "COD" || (mode !== "PREPAID" && o.payments.some((p) => p.method === "COD"));
+      if (!isCod) return [];
+      if (o.payments.some((p) => p.status === "SUCCESS")) return []; // something is already paid: not a plain COD order any more
+      const owed = cents(o.totalAmount);
+      if (owed <= 0) return [];
+      return [{ id: o.id, leadId: o.leadId, orderNumber: o.orderNumber, shopifyOrderNumber: o.externalNumber, amount: (owed / 100).toFixed(2) }];
+    });
+    return { known: true, orders };
   }
 
-  async recordConsent(leadId: string, at: Date): Promise<"OPTED_IN" | "OPTED_OUT"> {
-    const existing = await this.db.communicationPreference.findUnique({ where: { leadId_channel: { leadId, channel: "WHATSAPP" } }, select: { status: true } });
-    if (existing?.status === "OPTED_OUT") return "OPTED_OUT";
-    if (existing?.status === "OPTED_IN") return "OPTED_IN";
-    await this.db.communicationPreference.upsert({
-      where: { leadId_channel: { leadId, channel: "WHATSAPP" } },
-      create: { leadId, channel: "WHATSAPP", status: "OPTED_IN", source: "AI_CALLING_AGENCY", consentAt: at },
-      update: { status: "OPTED_IN", source: "AI_CALLING_AGENCY", consentAt: at },
-    });
-    return "OPTED_IN";
+  async getConsent(leadId: string): Promise<"OPTED_IN" | "OPTED_OUT" | "UNKNOWN"> {
+    const row = await this.db.communicationPreference.findUnique({ where: { leadId_channel: { leadId, channel: "WHATSAPP" } }, select: { status: true } });
+    return row?.status === "OPTED_IN" || row?.status === "OPTED_OUT" ? row.status : "UNKNOWN";
   }
 
   countSentToLead(leadId: string, since: Date) {

@@ -177,7 +177,7 @@ describe("reconciliation of existing Shiprocket orders", () => {
       const deliver = async (id: string, payload: Record<string, unknown>) => { await store.record({ eventType: "tracking", externalEventId: id, payload }); return processShiprocketEvent(id, { store, runner }); };
 
       assert.equal(await deliver("t1", { order_id: o.orderNumber, awb: "AWB-100", current_status: "IN TRANSIT" }), "processed");
-      assert.equal(await deliver("t2", { order_id: o.shopifyBare, current_status: "OUT FOR DELIVERY" }), "processed");
+      assert.equal(await deliver("t2", { order_id: o.shopifyBare, sr_order_id: s.providerOrderId, current_status: "OUT FOR DELIVERY" }), "processed");
       assert.equal(await deliver("t3", { awb: "AWB-100", current_status: "DELIVERED" }), "processed");
       const ships = await tx.shipment.findMany({ where: { orderId: o.id }, select: { id: true, status: true, trackingNumber: true, channelOrderId: true } });
       assert.equal(ships.length, 1);

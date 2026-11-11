@@ -61,7 +61,7 @@ describe("CRM-created COD order with Shopify sync OFF -> Shiprocket", () => {
     const { store } = memoryStore();
     let n = 0;
     const deliver = async (status: string) => {
-      const rec = await store.record({ eventType: "tracking", externalEventId: `evt-${++n}`, payload: { awb: "AWB-TEST-123", current_status: status, order_id: req.order_id, sr_order_id: 555, courier_name: "Test Courier" }, ignored: false } as never);
+      const rec = await store.record({ eventType: "tracking", externalEventId: `evt-${++n}`, payload: { awb: "AWB-TEST-123", current_status: status, order_id: req.order_id, sr_order_id: "SR-ORD-555", courier_name: "Test Courier" }, ignored: false } as never);
       return processShiprocketEvent(rec.id, { store, runner: runner as never, now: () => new Date("2026-11-04T09:00:00Z") });
     };
     assert.equal(await deliver("In Transit"), "processed");
