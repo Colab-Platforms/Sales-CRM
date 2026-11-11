@@ -14,7 +14,9 @@ const PAGE_SIZE = 15;
 
 export function CustomerTimeline({ leadId, bare = false }: { leadId: string; bare?: boolean }) {
   const [page, setPage] = useState(1);
-  const { data, isLoading, isFetching, error } = useCustomerTimeline(leadId, { page, pageSize: PAGE_SIZE });
+  const [show, setShow] = useState<"" | "ONLY" | "EXCLUDE" | "ALREADY_ORDERED" | "INTERESTED">("");
+  const filter = show === "ONLY" || show === "EXCLUDE" ? { aiAgent: show } : show ? { aiAgentIntent: show } : {};
+  const { data, isLoading, isFetching, error } = useCustomerTimeline(leadId, { page, pageSize: PAGE_SIZE, ...filter });
 
   if (isLoading) {
     const skeletonContent = (
@@ -50,6 +52,26 @@ export function CustomerTimeline({ leadId, bare = false }: { leadId: string; bar
 
   const timelineContent = (
     <div className={isFetching ? "opacity-60 transition-opacity" : "transition-opacity"}>
+      <div className="flex items-center gap-2 pb-3">
+        <label htmlFor="timeline-ai-agent-filter" className="text-xs text-muted-foreground">
+          Show
+        </label>
+        <select
+          id="timeline-ai-agent-filter"
+          className="rounded-md border bg-background px-2 py-1 text-xs"
+          value={show}
+          onChange={(e) => {
+            setShow(e.target.value as typeof show);
+            setPage(1);
+          }}
+        >
+          <option value="">All activity</option>
+          <option value="ONLY">AI Agent only</option>
+          <option value="ALREADY_ORDERED">AI Agent: already ordered</option>
+          <option value="INTERESTED">AI Agent: interested</option>
+          <option value="EXCLUDE">Telecaller &amp; system (no AI Agent)</option>
+        </select>
+      </div>
       {data.entries.length === 0 ? (
         <p className="text-sm text-muted-foreground">No activity has been recorded for this customer yet.</p>
       ) : (

@@ -402,6 +402,9 @@ enum ActivityType {
   REFUND_COMPLETED
   REFUND_EXECUTION_FAILED
 
+  // The external AI calling agency asked the CRM to send a payment link (one row per valid authenticated request; metadata.result is the outcome). Never a call outcome.
+  AI_AGENT_PAYMENT_LINK_REQUEST
+
   @@map("activity_type")
 }
 
@@ -422,6 +425,8 @@ enum ActivitySource {
   // covers AiSensy's Direct-API relay of the same envelope shape) so the two integrations are never
   // conflated in the audit trail while both exist side by side.
   WHATSAPP_CLOUD_WEBHOOK
+  // The external AI calling agency (authenticated by its agency API key) - distinct from USER, so it is never shown as a human telecaller.
+  AI_AGENT
 
   @@map("activity_source")
 }

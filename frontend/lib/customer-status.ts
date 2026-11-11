@@ -58,4 +58,6 @@ export const TIMELINE_EVENT_LABELS: Record<TimelineEventType, string> = {
   ABANDONMENT: "Abandonment",
   ABANDONMENT_RECOVERED: "Abandonment recovered",
   RECOVERY_ACTION: "Recovery action",
+  AI_AGENT_PAYMENT_LINK: "AI Agent – Already ordered",
+  AI_AGENT_INTERESTED: "AI Agent – Interested",
 };

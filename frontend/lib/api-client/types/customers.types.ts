@@ -186,7 +186,9 @@ export type TimelineEventType =
   | "SHIPMENT_RETURNED"
   | "ABANDONMENT"
   | "ABANDONMENT_RECOVERED"
-  | "RECOVERY_ACTION";
+  | "RECOVERY_ACTION"
+  | "AI_AGENT_PAYMENT_LINK"
+  | "AI_AGENT_INTERESTED";
 
 export interface TimelineEntry {
   id: string;
@@ -215,6 +217,10 @@ export interface CustomerTimelineResult {
 export interface CustomerTimelineParams {
   page: number;
   pageSize: number;
+  /** ONLY: just the AI Agent's activity. EXCLUDE: everything except it (telecaller / system activity). */
+  aiAgent?: "ONLY" | "EXCLUDE";
+  /** Only the AI Agent activity of this intent. */
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 // ---- E6.7: customer list (GET /api/customers) ----

@@ -40,6 +40,10 @@ export interface ListLeadsQuery {
   salespersonId?: string;
   bucket?: "TODAY";
   search?: string;
+  // ONLY: leads the AI calling agency made a payment-link request about. EXCLUDE: leads it did not.
+  aiAgent?: "ONLY" | "EXCLUDE";
+  // Leads with an AI Agent request of this intent (implies AI Agent leads).
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 export interface BulkAssignManagerBody {

@@ -1,7 +1,9 @@
 // Prisma implementation of the agency API's storage: keys (hash only), the request log, and the few CRM lookups it needs (customer by number, order by reference, consent, approved templates).
 import { prisma } from "@/lib/prisma.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
-import type { AgencyRepo, StoredRequest } from "./agency.payment-link.service.js";
+import type { AgencyRepo, AiAgentActivity, StoredRequest } from "./agency.payment-link.service.js";
+
+const AI_AGENT_REFERENCE = "AgencyMessageRequest";
 
 type Db = typeof prisma | Prisma.TransactionClient;
 
@@ -36,7 +38,7 @@ export class PrismaAgencyRepo implements AgencyRepo {
   }
 
   async findRecentSameRequest(apiKeyId: string, hash: string, since: Date) {
-    const row = await this.db.agencyMessageRequest.findFirst({ where: { apiKeyId, requestHash: hash, status: { in: ["SENT", "RECEIVED"] }, createdAt: { gte: since } }, orderBy: { createdAt: "desc" }, select: STORED_SELECT });
+    const row = await this.db.agencyMessageRequest.findFirst({ where: { apiKeyId, requestHash: hash, status: { in: ["SENT", "RECORDED", "RECEIVED"] }, createdAt: { gte: since } }, orderBy: { createdAt: "desc" }, select: STORED_SELECT });
     return row ? toStored(row) : null;
   }
 
@@ -70,8 +72,8 @@ export class PrismaAgencyRepo implements AgencyRepo {
    * refunded / draft / already on its way to the customer (a shipped COD parcel is collected by the courier). A mobile number can belong to more than one lead record; all of them are searched.
    */
   async findEligibleCodOrders(mobile: string) {
-    const leads = await this.db.lead.findMany({ where: { normalizedMobile: mobile }, select: { id: true } });
-    if (leads.length === 0) return { known: false, orders: [] };
+    const leads = await this.db.lead.findMany({ where: { normalizedMobile: mobile }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true } });
+    if (leads.length === 0) return { known: false, leadIds: [], orders: [] };
     const rows = await this.db.order.findMany({
       where: { leadId: { in: leads.map((l) => l.id) }, status: { in: ["CONFIRMED", "PROCESSING"] } },
       orderBy: { createdAt: "desc" },
@@ -88,7 +90,46 @@ export class PrismaAgencyRepo implements AgencyRepo {
       if (owed <= 0) return [];
       return [{ id: o.id, leadId: o.leadId, orderNumber: o.orderNumber, shopifyOrderNumber: o.externalNumber, amount: (owed / 100).toFixed(2) }];
     });
-    return { known: true, orders };
+    return { known: true, leadIds: leads.map((l) => l.id), orders };
+  }
+
+  async findLeadIdsByMobile(mobile: string): Promise<string[]> {
+    const leads = await this.db.lead.findMany({ where: { normalizedMobile: mobile }, orderBy: [{ createdAt: "asc" }, { id: "asc" }], select: { id: true } });
+    return leads.map((l) => l.id);
+  }
+
+  /**
+   * One AI Agent activity per request, keyed by the request id: a failed request retried with the same Idempotency-Key updates its row instead of adding a second one. Only an Activity row is written - the lead
+   * itself (status, owner, assignment, last contacted, calls) is never touched, so a request is never mistaken for a call or for a telecaller's work.
+   */
+  async recordAiAgentActivity(row: AiAgentActivity): Promise<void> {
+    const sent = row.result === "PAYMENT_LINK_SENT";
+    const title =
+      row.intent === "INTERESTED"
+        ? row.leadId ? "AI Agent: customer interested (no payment link sent)" : "AI Agent: interested customer - no matching lead"
+        : sent ? "AI Agent: payment link sent on WhatsApp" : `AI Agent: payment link request - ${row.result.replace(/_/g, " ").toLowerCase()}`;
+    const data = {
+      leadId: row.leadId,
+      orderId: row.orderId,
+      title,
+      description: `${row.customerName} (${row.normalizedMobile}) - ${row.intent} - ${row.result}`,
+      metadata: {
+        aiAgent: true,
+        intent: row.intent,
+        requestId: row.requestId,
+        idempotencyKey: row.idempotencyKey,
+        customerName: row.customerName,
+        normalizedMobile: row.normalizedMobile,
+        result: row.result,
+        httpStatus: row.httpStatus,
+        apiKey: row.apiKeyName,
+        // The request reached the CRM; this is NOT a call outcome. Only outcomes the agency itself supplies may ever be recorded as one.
+        callOutcome: null,
+      } satisfies Prisma.InputJsonObject,
+    };
+    const existing = await this.db.activity.findFirst({ where: { type: "AI_AGENT_PAYMENT_LINK_REQUEST", referenceType: AI_AGENT_REFERENCE, referenceId: row.requestId }, select: { id: true } });
+    if (existing) await this.db.activity.update({ where: { id: existing.id }, data });
+    else await this.db.activity.create({ data: { ...data, type: "AI_AGENT_PAYMENT_LINK_REQUEST", source: "AI_AGENT", actorId: null, actorRole: null, referenceType: AI_AGENT_REFERENCE, referenceId: row.requestId, createdAt: row.at } });
   }
 
   async getConsent(leadId: string): Promise<"OPTED_IN" | "OPTED_OUT" | "UNKNOWN"> {

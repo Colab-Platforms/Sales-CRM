@@ -37,6 +37,8 @@ const listTimelineQuerySchema = z.object({
     .min(1, "pageSize must be between 1 and 100")
     .max(100, "pageSize must be between 1 and 100")
     .default(20),
+  aiAgent: z.enum(["ONLY", "EXCLUDE"], { error: "aiAgent must be ONLY or EXCLUDE" }).optional(),
+  aiAgentIntent: z.enum(["ALREADY_ORDERED", "INTERESTED"], { error: "aiAgentIntent must be ALREADY_ORDERED or INTERESTED" }).optional(),
 });
 
 export const validateCustomerIdParams = (params: unknown) =>

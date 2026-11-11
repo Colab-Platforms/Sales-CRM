@@ -26,6 +26,8 @@ export interface LeadImportBatchRef {
   uploadedBy: { id: string; name: string; role: string };
 }
 
+export type AiAgentIntent = "ALREADY_ORDERED" | "INTERESTED";
+
 export interface Lead {
   id: string;
   leadNumber: string;
@@ -47,6 +49,8 @@ export interface Lead {
   calls: Call[];
   /** The lead's pending call back / follow up reminder - empty when none is scheduled. */
   tasks: LeadFollowUp[];
+  /** The "AI Agent" tag: the latest request the AI calling agency made about this lead; null when it never did. Separate from owner / assignedManager (human telecallers). */
+  aiAgent: { lastActivityAt: string; lastResult: string | null; lastTitle: string | null; lastIntent: AiAgentIntent | null; /** true when the agent has reported this customer as interested ("Interested - AI Agent"). */ interested: boolean } | null;
 }
 
 export interface LeadListPagination {
@@ -71,6 +75,10 @@ export interface LeadListParams {
   salespersonId?: string;
   bucket?: "TODAY";
   search?: string;
+  /** ONLY: leads the AI calling agency made a request about. EXCLUDE: leads it did not. */
+  aiAgent?: "ONLY" | "EXCLUDE";
+  /** Leads with an AI Agent request of this intent (implies AI Agent leads). */
+  aiAgentIntent?: AiAgentIntent;
 }
 
 export type BucketKind = "LEAD" | "ABANDONED";

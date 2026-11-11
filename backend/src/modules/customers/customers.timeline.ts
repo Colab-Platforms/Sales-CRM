@@ -35,6 +35,8 @@ export interface ActivityRow {
   description: string | null;
   createdAt: Date;
   actor: { id: string; name: string } | null;
+  // Only read for AI Agent rows (metadata.intent).
+  metadata?: unknown;
 }
 
 export function buildLeadCreatedEntry(lead: { id: string; createdAt: Date }): TimelineEntry {
@@ -386,6 +388,14 @@ export interface WhatsAppMessageRow {
   // E7.3: who actually clicked "Send" - null is never invented for a real send, only genuinely
   // absent (there is none for an inbound message, which is why the field is optional here).
   sentBy?: { id: string; name: string } | null;
+}
+
+// The AI calling agency's requests. The title/description are written when the request is recorded (name, number and outcome), so this only places them on the timeline. The actor stays empty:
+// an AI Agent activity is never shown as a human telecaller's.
+export function buildAiAgentEntries(activities: ActivityRow[]): TimelineEntry[] {
+  return activities
+    .filter((a) => a.type === ActivityType.AI_AGENT_PAYMENT_LINK_REQUEST)
+    .map((a) => ({ id: `ai-agent:${a.id}`, type: ((a.metadata as { intent?: unknown } | null)?.intent === "INTERESTED" ? "AI_AGENT_INTERESTED" : "AI_AGENT_PAYMENT_LINK") as TimelineEntry["type"], title: a.title ?? "AI Agent: payment link request", description: a.description, occurredAt: a.createdAt, actor: null, order: null, source: "ACTIVITY" as const }));
 }
 
 export function buildWhatsAppEntries(messages: WhatsAppMessageRow[]): TimelineEntry[] {
