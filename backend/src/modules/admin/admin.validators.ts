@@ -8,6 +8,7 @@ import type {
   UpdateManagerBody,
   UpdateSalespersonBody,
   CreateHrBody,
+  CreateAdminBody,
   CreateRecruiterBody,
   UpdateRecruiterBody,
   CreateGroupBody,
@@ -29,6 +30,17 @@ const createHrSchema = z.object({
   password: z.string().min(6, "Password must be at least 6 characters"),
   phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
 });
+
+// Strict: a "role" (or any other) field in the body is rejected, so the role can only ever be set server-side.
+const createAdminSchema = z
+  .object({
+    name: z.string().trim().min(2, "Name must be at least 2 characters").max(150, "Name is too long"),
+    username: usernameSchema,
+    email: z.string().trim().toLowerCase().email("Enter a valid email address").max(255, "Email is too long"),
+    password: z.string().min(6, "Password must be at least 6 characters"),
+    phone: z.string().trim().min(7, "Enter a valid phone number").max(20, "Phone number is too long"),
+  })
+  .strict();
 
 const updateRecruiterSchema = z
   .object({
@@ -114,6 +126,8 @@ export const validateUpdateSalespersonSchema = (body: unknown) =>
   validateSchema<UpdateSalespersonBody>(updateSalespersonSchema, body);
 
 export const validateCreateHrSchema = (body: unknown) => validateSchema<CreateHrBody>(createHrSchema, body);
+
+export const validateCreateAdminSchema = (body: unknown) => validateSchema<CreateAdminBody>(createAdminSchema, body);
 
 export const validateCreateRecruiterSchema = (body: unknown) =>
   validateSchema<CreateRecruiterBody>(createHrSchema, body);
