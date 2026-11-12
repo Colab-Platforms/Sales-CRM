@@ -26,13 +26,16 @@ export interface AbandonmentFilterState {
   valueMax?: number;
   detectedFrom?: string;
   detectedTo?: string;
+  /** The AI calling agency: ONLY / EXCLUDE its leads, and/or one intent. */
+  aiAgent?: "ONLY" | "EXCLUDE";
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 export const LAST_ACTION_LABELS: Record<LastActionFilter, string> = { ...RECOVERY_ACTION_TYPE_LABELS, NONE: "No action yet" };
 
 /** True when any filter (search box included) narrows the list. */
 export function hasAnyFilter(f: AbandonmentFilterState): boolean {
-  return Boolean(f.search || f.workingStatus || (f.items && f.items.length > 0) || f.lead || f.contact || f.assignee || f.lastAction || f.valueMin !== undefined || f.valueMax !== undefined || f.detectedFrom || f.detectedTo);
+  return Boolean(f.search || f.workingStatus || (f.items && f.items.length > 0) || f.lead || f.contact || f.assignee || f.lastAction || f.valueMin !== undefined || f.valueMax !== undefined || f.detectedFrom || f.detectedTo || f.aiAgent || f.aiAgentIntent);
 }
 
 /**

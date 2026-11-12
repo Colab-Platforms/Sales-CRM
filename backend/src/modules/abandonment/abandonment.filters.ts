@@ -6,6 +6,7 @@ import { dayBounds, todayString } from "../attendance/attendance.calc.js";
 import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
 import { bucketToday } from "@/lib/leadBucket.js";
 import { abandonmentItemsWhere, readSnapshotItems } from "./abandonment.items.js";
+import { aiAgentTag, aiAgentWhere } from "../agency/agency.tag.js";
 import type { AbandonmentCallItem, CallAttemptBreakdown, AbandonmentDateRange, AbandonmentListItem, AbandonmentSummary, CartSnapshot, ListAbandonmentsQuery } from "./abandonment.types.js";
 
 // Where-building, row-mapping and summary logic for the abandoned-leads queue. Kept separate from
@@ -130,6 +131,9 @@ export function buildAbandonmentListWhere(query: ListAbandonmentsQuery, leadScop
   if (query.salespersonId) and.push({ lead: { ownerId: query.salespersonId } });
   if (query.bucket === "TODAY") and.push({ lead: { bucketDate: bucketToday(now), bucketDoneAt: null } });
   if (query.items && query.items.length > 0) and.push(abandonmentItemsWhere(query.items));
+  // AI Agent filters (shared with the Leads and Customers lists): they combine with every filter above.
+  const ai = aiAgentWhere(query.aiAgent, query.aiAgentIntent);
+  if (ai.length > 0) and.push({ lead: { AND: ai } });
   // Column filters. Each term is "contains", case-insensitive, and every filter ANDs with all the others.
   if (query.lead) and.push(abandonmentTermsWhere(query.lead, (contains) => [{ lead: { firstName: contains } }, { lead: { lastName: contains } }, { lead: { leadNumber: contains } }]));
   if (query.contact) and.push(abandonmentTermsWhere(query.contact, (contains) => [{ lead: { mobile: contains } }, { lead: { email: contains } }]));
@@ -184,7 +188,8 @@ export interface AbandonmentListRow {
     assignedManager: { id: string; name: string } | null;
     owner: { id: string; name: string } | null;
     calls: AbandonmentCallItem[];
-    _count?: { calls: number };
+    _count?: { calls: number; activities?: number };
+    activities?: { createdAt: Date; title: string | null; metadata: Prisma.JsonValue | null }[];
     tasks: { id: string; type: string; scheduledAt: Date | null }[];
   };
   source: { id: string; name: string } | null;
@@ -240,6 +245,7 @@ export function mapAbandonmentListRow(row: AbandonmentListRow, summary: string |
       calls: row.lead.calls,
       callAttempts: row.lead._count?.calls ?? row.lead.calls.filter((c) => c.direction === "OUTBOUND").length,
       tasks: row.lead.tasks,
+      aiAgent: aiAgentTag(row.lead.activities ?? [], row.lead._count?.activities ?? 0),
     },
     source: row.source,
     latestRecoveryAction: latest ? { type: latest.type, status: latest.status, createdAt: latest.createdAt } : null,

@@ -19,6 +19,7 @@ import { buildPlan, PlanConflictError } from "./abandonment.assign-plan.js";
 import { fullName } from "../orders/orders.filters.js";
 import { abandonmentDerivedWhere, buildAbandonmentListWhere, buildAbandonmentSummary, mapAbandonmentListRow, classifyCallStatus, scopedAbandonmentWhere, type AbandonmentListRow, abandonmentLeadScope, canAccessRecordings } from "./abandonment.filters.js";
 import { loadCustomerContext } from "./abandonment.customer-context.js";
+import { AI_AGENT_INCLUDE } from "../agency/agency.tag.js";
 import { defaultLiveHistoryClient, type LiveHistoryClientFactory } from "./abandonment.shopify-history.js";
 import type {
   CallAttemptBreakdown,
@@ -57,7 +58,9 @@ const LIST_SELECT = {
       assignedManager: { select: { id: true, name: true } },
       owner: { select: { id: true, name: true } },
       // Call attempts: how many outbound calls were placed to this lead (the Call table, one row per placed call). One aggregate per page of rows - never a query per lead.
-      _count: { select: { calls: { where: { direction: CallDirection.OUTBOUND } } } },
+      _count: { select: { calls: { where: { direction: CallDirection.OUTBOUND } }, ...AI_AGENT_INCLUDE._count.select } },
+      // The "AI Agent" tag (shared with the Leads / Customers lists).
+      activities: AI_AGENT_INCLUDE.activities,
       // Same shape lead.service.ts's leadListInclude.tasks/calls use, so the abandoned-leads queue and
       // lead detail page can reuse the exact same calling/history components leads already have.
       tasks: {

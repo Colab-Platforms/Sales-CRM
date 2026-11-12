@@ -91,6 +91,28 @@ export function AbandonmentFilters({
         </NativeSelect>
       </div>
 
+      <div className="w-full space-y-2 sm:w-44">
+        <Label htmlFor="abandonment-ai-agent-filter" className="text-xs text-muted-foreground">
+          AI Agent
+        </Label>
+        <NativeSelect id="abandonment-ai-agent-filter" value={value.aiAgent ?? ""} onChange={(e) => onChange({ ...value, aiAgent: (e.target.value || undefined) as AbandonmentFilterState["aiAgent"] })}>
+          <option value="">All leads</option>
+          <option value="ONLY">AI Agent leads</option>
+          <option value="EXCLUDE">Without AI Agent</option>
+        </NativeSelect>
+      </div>
+
+      <div className="w-full space-y-2 sm:w-44">
+        <Label htmlFor="abandonment-ai-agent-intent-filter" className="text-xs text-muted-foreground">
+          AI Agent intent
+        </Label>
+        <NativeSelect id="abandonment-ai-agent-intent-filter" value={value.aiAgentIntent ?? ""} onChange={(e) => onChange({ ...value, aiAgentIntent: (e.target.value || undefined) as AbandonmentFilterState["aiAgentIntent"] })}>
+          <option value="">All</option>
+          <option value="ALREADY_ORDERED">Already ordered</option>
+          <option value="INTERESTED">Interested</option>
+        </NativeSelect>
+      </div>
+
       {value.items && value.items.length > 0 ? (
         <div className="flex w-full flex-wrap items-center gap-1.5" aria-label="Selected products">
           <span className="text-xs text-muted-foreground">Items:</span>

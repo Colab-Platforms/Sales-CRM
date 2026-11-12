@@ -1,6 +1,7 @@
 import type { AbandonmentStatus, AbandonmentType, CallDirection, CallStatus, LeadWorkingStatus, RecoveryActionStatus, RecoveryActionType } from "../../../generated/prisma/enums.js";
 import type { CustomerContext } from "./abandonment.customer-context.js";
 import type { Pagination } from "../orders/orders.types.js";
+import type { AiAgentTag } from "../agency/agency.tag.js";
 
 // Abandoned-checkout queue ("/dashboard/abandoned-leads"). Reads the Abandonment/RecoveryAction tables
 // E6's Customer 360 timeline already renders (customers.timeline.ts) - this is the first module that
@@ -39,6 +40,9 @@ export interface ListAbandonmentsQuery {
   /** Cart value range (inclusive), in the cart's own currency. */
   valueMin?: number;
   valueMax?: number;
+  /** The AI calling agency: ONLY / EXCLUDE leads it contacted the CRM about, and/or one intent (same meaning as on the Leads and Customers lists). */
+  aiAgent?: "ONLY" | "EXCLUDE";
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 // Structured cart detail written by the ingesting processor (e.g. shiprocket.abandonment.processor.ts)
@@ -118,6 +122,8 @@ export interface AbandonmentListItem {
     /** This lead's pending call back / follow up reminder, if any - same shape leadListInclude.tasks
      *  gives the Leads page, so the call-outcome form here can pre-fill/replace it identically. */
     tasks: { id: string; type: string; scheduledAt: Date | null }[];
+    /** The "AI Agent" tag (intent / method / interested); null when the agency never contacted the CRM about this lead. */
+    aiAgent: AiAgentTag | null;
   };
   source: { id: string; name: string } | null;
   latestRecoveryAction: { type: RecoveryActionType; status: RecoveryActionStatus; createdAt: Date } | null;

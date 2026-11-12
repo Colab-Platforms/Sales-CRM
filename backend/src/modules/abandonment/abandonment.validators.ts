@@ -52,6 +52,8 @@ const listQuerySchema = z
     salespersonId: optional(z.uuid()),
     workingStatus: optional(z.enum(LeadWorkingStatus, { error: "Invalid lead status" })),
     bucket: optional(z.enum(["TODAY"], { error: "bucket must be TODAY" })),
+    aiAgent: optional(z.enum(["ONLY", "EXCLUDE"], { error: "aiAgent must be ONLY or EXCLUDE" })),
+    aiAgentIntent: optional(z.enum(["ALREADY_ORDERED", "INTERESTED"], { error: "aiAgentIntent must be ALREADY_ORDERED or INTERESTED" })),
     lead: optional(z.string().trim().max(100, "lead filter must be 100 characters or fewer")),
     contact: optional(z.string().trim().max(100, "contact filter must be 100 characters or fewer")),
     assignee: optional(z.string().trim().max(100, "assignee filter must be 100 characters or fewer")),
