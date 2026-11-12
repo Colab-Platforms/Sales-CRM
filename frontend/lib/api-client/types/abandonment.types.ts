@@ -3,6 +3,7 @@ import type { OrderStatus, PaymentMode, PaymentStatus, ShipmentStatus } from "./
 import type { LeadWorkingStatus } from "./dashboard.types";
 import type { Call } from "./calling.types";
 import type { LeadFollowUp } from "./tasks.types";
+import type { AiAgentTag } from "./lead.types";
 
 // The abandoned-leads queue ("/dashboard/abandoned-leads"), fed by Shiprocket Checkout's "Abandon
 // Cart" webhook. Mirrors shiprocket.types.ts's shape (list item + summary + pagination) since it is
@@ -41,6 +42,9 @@ export interface ListAbandonmentsParams {
   lastAction?: "CALL" | "CALLBACK" | "CONTINUE_ORDER" | "NONE";
   valueMin?: number;
   valueMax?: number;
+  /** The AI calling agency: ONLY / EXCLUDE its leads, and/or one intent. */
+  aiAgent?: "ONLY" | "EXCLUDE";
+  aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
 export interface AbandonmentSummary {
@@ -94,6 +98,8 @@ export interface AbandonmentListItem {
     /** successful (answered) / failed (no answer, busy, unreachable, provider failure) / ringing (still in progress); they add up to callAttempts. */
     callBreakdown?: { successful: number; failed: number; ringing: number };
     tasks: LeadFollowUp[];
+    /** The "AI Agent" tag (intent / method / interested); null when the agency never contacted the CRM about this lead. */
+    aiAgent: AiAgentTag | null;
   };
   source: { id: string; name: string } | null;
   latestRecoveryAction: { type: RecoveryActionType; status: RecoveryActionStatus; createdAt: string } | null;

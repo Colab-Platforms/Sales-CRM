@@ -188,6 +188,21 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
               <TableCell className="w-[180px] min-w-[150px]">
                 <div className="font-semibold text-foreground">{item.lead.name}</div>
                 <div className="text-xs font-mono text-muted-foreground">{item.lead.leadNumber}</div>
+                {item.lead.aiAgent ? (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span
+                      className="rounded-full bg-violet-500/10 px-2 py-0.5 text-xs font-medium text-violet-700 dark:text-violet-400"
+                      title={`${item.lead.aiAgent.lastTitle ?? "AI Agent request"} - ${new Date(item.lead.aiAgent.lastActivityAt).toLocaleString()}`}
+                    >
+                      AI Agent
+                      {item.lead.aiAgent.lastIntent ? ` \u00b7 ${item.lead.aiAgent.lastIntent === "INTERESTED" ? "Interested" : "Already ordered"}` : ""}
+                      {item.lead.aiAgent.lastMethod ? ` \u00b7 ${item.lead.aiAgent.lastMethod}` : ""}
+                    </span>
+                    {item.lead.aiAgent.interested ? (
+                      <span className="rounded-full bg-fuchsia-500/10 px-2 py-0.5 text-xs font-medium text-fuchsia-700 dark:text-fuchsia-400">Interested {"\u2013"} AI Agent</span>
+                    ) : null}
+                  </div>
+                ) : null}
               </TableCell>
 
               <TableCell className="w-[180px] min-w-[160px]" onClick={(e) => e.stopPropagation()}>
