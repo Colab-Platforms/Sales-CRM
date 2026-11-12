@@ -67,6 +67,24 @@ export interface CreateHrPayload {
   phone: string;
 }
 
+export interface AdminUser {
+  id: string;
+  name: string;
+  username: string;
+  email: string | null;
+  phone: string | null;
+  role: "ADMIN";
+  status: string;
+}
+
+export interface CreateAdminPayload {
+  name: string;
+  username: string;
+  email: string;
+  password: string;
+  phone: string;
+}
+
 export interface GroupMemberUser {
   id: string;
   name: string;

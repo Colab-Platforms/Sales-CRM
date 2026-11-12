@@ -13,6 +13,8 @@ import type {
   CreateRecruiterPayload,
   UpdateRecruiterPayload,
   CreateHrPayload,
+  AdminUser,
+  CreateAdminPayload,
   Group,
   CreateGroupPayload,
   UpdateGroupPayload,
@@ -93,6 +95,16 @@ export const adminApi = {
 
   async createHr(payload: CreateHrPayload): Promise<HrUser> {
     const res = await apiClient.post<ApiEnvelope<HrUser>>("/admin/hr", payload);
+    return res.data.data;
+  },
+
+  async listAdmins(): Promise<AdminUser[]> {
+    const res = await apiClient.get<ApiEnvelope<AdminUser[]>>("/admin/admins");
+    return res.data.data;
+  },
+
+  async createAdmin(payload: CreateAdminPayload): Promise<AdminUser> {
+    const res = await apiClient.post<ApiEnvelope<AdminUser>>("/admin/admins", payload);
     return res.data.data;
   },
 

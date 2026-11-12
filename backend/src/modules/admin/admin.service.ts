@@ -9,6 +9,7 @@ import type {
   UpdateManagerBody,
   UpdateSalespersonBody,
   CreateHrBody,
+  CreateAdminBody,
   CreateRecruiterBody,
   UpdateRecruiterBody,
   CreateGroupBody,
@@ -244,6 +245,45 @@ class AdminService {
     });
 
     return toPublicUser(hr);
+  }
+
+  // Role is fixed to ADMIN here (never taken from input). Duplicate username/email/mobile are rejected up front; the unique indexes catch a race.
+  async createAdmin(creatorId: string, data: CreateAdminBody) {
+    const clash = await prisma.user.findFirst({
+      where: { OR: [{ username: data.username }, { email: data.email }, { phone: data.phone }] },
+      select: { username: true, email: true, phone: true },
+    });
+    if (clash) {
+      if (clash.username === data.username) throw new ApiError("Username already in use", STATUS_CODES.CONFLICT);
+      if (clash.email === data.email) throw new ApiError("Email already in use", STATUS_CODES.CONFLICT);
+      throw new ApiError("Mobile number already in use", STATUS_CODES.CONFLICT);
+    }
+
+    const passwordHash = await hashPassword(data.password);
+
+    try {
+      const admin = await prisma.user.create({
+        data: {
+          name: data.name,
+          username: data.username,
+          email: data.email,
+          phone: data.phone,
+          passwordHash,
+          role: Role.ADMIN,
+          status: UserStatus.ACTIVE,
+          createdById: creatorId,
+        },
+      });
+      return { ...toPublicUser(admin), email: admin.email };
+    } catch (error) {
+      if (uniqueViolation(error)) throw new ApiError("Username or email already in use", STATUS_CODES.CONFLICT);
+      throw error;
+    }
+  }
+
+  async listAdmins() {
+    const admins = await prisma.user.findMany({ where: { role: Role.ADMIN }, orderBy: { createdAt: "desc" } });
+    return admins.map((a) => ({ ...toPublicUser(a), email: a.email }));
   }
 
   async listHr() {

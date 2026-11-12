@@ -10,6 +10,7 @@ import {
   validateUpdateManagerSchema,
   validateUpdateSalespersonSchema,
   validateCreateHrSchema,
+  validateCreateAdminSchema,
   validateCreateRecruiterSchema,
   validateUpdateRecruiterSchema,
   validateCreateGroupSchema,
@@ -156,6 +157,29 @@ export const createHr = async (req: AuthRequest, res: Response): Promise<void> =
 
     const result = await adminService.createHr(value);
     sendResponse(res, true, result, "HR user created successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const createAdmin = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateCreateAdminSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const result = await adminService.createAdmin(req.user!.id, value);
+    sendResponse(res, true, result, "Admin created successfully.", STATUS_CODES.CREATED);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const listAdmins = async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const result = await adminService.listAdmins();
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

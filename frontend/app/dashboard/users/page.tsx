@@ -4,8 +4,9 @@ import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { KeyRound, UserPlus, Users } from "lucide-react";
-import { adminSalespersonsQueryOptions, hrQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
+import { adminsQueryOptions, adminSalespersonsQueryOptions, hrQueryOptions, managersQueryOptions } from "@/lib/api-client/queries/admin.queries";
 import {
+  useCreateAdminMutation,
   useCreateHrMutation,
   useCreateManagerMutation,
   useCreateSalespersonMutation,
@@ -34,7 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import type { HrUser, ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
+import type { AdminUser, HrUser, ManagerUser, SalespersonUser } from "@/lib/api-client/types/admin.types";
 
 interface AccountFieldErrors {
   name?: string;
@@ -295,6 +296,168 @@ function CreateHrModalContent({ onDone }: { onDone: () => void }) {
         </DialogFooter>
       </form>
     </DialogContent>
+  );
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function CreateAdminModalContent({ onDone }: { onDone: () => void }) {
+  const createAdmin = useCreateAdminMutation();
+  const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<AccountFieldErrors & { email?: string; phone?: string }>({});
+
+  function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    const errors: AccountFieldErrors & { email?: string; phone?: string } = validateAccountFields(
+      { name, username, password },
+      { requireReportingManager: false },
+    );
+    if (!EMAIL_PATTERN.test(email.trim())) errors.email = "Enter a valid email address.";
+    if (phone.trim().length < 7) errors.phone = "Enter a valid phone number.";
+    setFieldErrors(errors);
+    if (Object.keys(errors).length > 0) return;
+
+    createAdmin.mutate(
+      { name: name.trim(), username: username.trim(), email: email.trim(), password, phone: phone.trim() },
+      {
+        onSuccess: () => {
+          toast.success("Admin added successfully.");
+          onDone();
+        },
+      },
+    );
+  }
+
+  const clear = (key: "name" | "username" | "email" | "password" | "phone") =>
+    setFieldErrors((prev) => ({ ...prev, [key]: undefined }));
+
+  return (
+    <DialogContent className="sm:max-w-[460px]">
+      <DialogHeader>
+        <DialogTitle>Add Admin</DialogTitle>
+        <DialogDescription>
+          Create an admin account. Admins have full access to manage users, teams and settings. Share the username and
+          password with them so they can sign in.
+        </DialogDescription>
+      </DialogHeader>
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="space-y-1.5">
+          <Label htmlFor="create-admin-name">Full Name</Label>
+          <Input
+            id="create-admin-name"
+            placeholder="e.g. Asha Rao"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              clear("name");
+            }}
+            required
+            autoFocus
+          />
+          {fieldErrors.name ? <p className="text-xs text-destructive">{fieldErrors.name}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-admin-username">Username (used to log in)</Label>
+          <Input
+            id="create-admin-username"
+            type="text"
+            placeholder="asha.rao_avatar"
+            value={username}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              clear("username");
+            }}
+            required
+          />
+          {fieldErrors.username ? <p className="text-xs text-destructive">{fieldErrors.username}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-admin-email">Email</Label>
+          <Input
+            id="create-admin-email"
+            type="email"
+            placeholder="asha@example.com"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              clear("email");
+            }}
+            required
+          />
+          {fieldErrors.email ? <p className="text-xs text-destructive">{fieldErrors.email}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-admin-phone">Mobile Number</Label>
+          <Input
+            id="create-admin-phone"
+            type="tel"
+            required
+            placeholder="+91 98765 43210"
+            value={phone}
+            onChange={(e) => {
+              setPhone(e.target.value);
+              clear("phone");
+            }}
+          />
+          {fieldErrors.phone ? <p className="text-xs text-destructive">{fieldErrors.phone}</p> : null}
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="create-admin-password">Password</Label>
+          <PasswordInput
+            id="create-admin-password"
+            placeholder="Enter a secure password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              clear("password");
+            }}
+            required
+            autoComplete="new-password"
+          />
+          {fieldErrors.password ? <p className="text-xs text-destructive">{fieldErrors.password}</p> : null}
+        </div>
+
+        {createAdmin.error ? (
+          <div className="sketch-outline border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            {getErrorMessage(createAdmin.error, "Failed to create admin.")}
+          </div>
+        ) : null}
+
+        <DialogFooter className="gap-2 pt-2">
+          <Button type="button" variant="outline" onClick={onDone} disabled={createAdmin.isPending}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={createAdmin.isPending}>
+            {createAdmin.isPending ? "Adding Admin..." : "Add Admin"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  );
+}
+
+function AdminRow({ admin }: { admin: AdminUser }) {
+  const isActive = admin.status === "ACTIVE";
+
+  return (
+    <TableRow>
+      <TableCell className="pl-5 font-semibold">{admin.name}</TableCell>
+      <TableCell className="text-muted-foreground">{admin.username}</TableCell>
+      <TableCell>{admin.email ?? "—"}</TableCell>
+      <TableCell>{admin.phone ?? "—"}</TableCell>
+      <TableCell className="pr-5">
+        <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -993,6 +1156,8 @@ export default function UsersPage() {
   const [isAddOpen, setIsAddOpen] = useState(false);
   const [isAddSalespersonOpen, setIsAddSalespersonOpen] = useState(false);
   const [isAddHrOpen, setIsAddHrOpen] = useState(false);
+  const [isAddAdminOpen, setIsAddAdminOpen] = useState(false);
+  const { data: admins, isPending: isAdminsPending, error: adminsError } = useQuery(adminsQueryOptions());
 
   return (
     <div className="space-y-6">
@@ -1009,6 +1174,10 @@ export default function UsersPage() {
               <UserPlus />
               Add HR
             </Button>
+            <Button variant="outline" onClick={() => setIsAddAdminOpen(true)}>
+              <UserPlus />
+              Add Admin
+            </Button>
             <Button onClick={() => setIsAddOpen(true)}>
               <UserPlus />
               Add Manager
@@ -1016,6 +1185,11 @@ export default function UsersPage() {
           </>
         }
       />
+
+      {/* Add Admin Dialog */}
+      <Dialog open={isAddAdminOpen} onOpenChange={setIsAddAdminOpen}>
+        {isAddAdminOpen ? <CreateAdminModalContent onDone={() => setIsAddAdminOpen(false)} /> : null}
+      </Dialog>
 
       {/* Add Manager Dialog */}
       <Dialog open={isAddOpen} onOpenChange={setIsAddOpen}>
@@ -1089,6 +1263,41 @@ export default function UsersPage() {
                   managers?.map((manager) => <ManagerRow key={manager.id} manager={manager} />)
                 )}
               </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Admins Table Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle>All Admins</CardTitle>
+          <CardDescription>
+            {admins ? `${admins.length} admin${admins.length === 1 ? "" : "s"} listed` : "Loading admins..."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="px-0">
+          {isAdminsPending ? (
+            <div className="space-y-3 px-5">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-10 w-full" />
+            </div>
+          ) : adminsError ? (
+            <div className="sketch-outline mx-5 border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
+              {getErrorMessage(adminsError, "Failed to load admins.")}
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="pl-5">Name</TableHead>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Phone</TableHead>
+                  <TableHead className="pr-5">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>{admins?.map((admin) => <AdminRow key={admin.id} admin={admin} />)}</TableBody>
             </Table>
           )}
         </CardContent>

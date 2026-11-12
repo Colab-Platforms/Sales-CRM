@@ -14,6 +14,8 @@ import type {
   CreateRecruiterPayload,
   UpdateRecruiterPayload,
   CreateHrPayload,
+  AdminUser,
+  CreateAdminPayload,
   Group,
   CreateGroupPayload,
   UpdateGroupPayload,
@@ -95,6 +97,17 @@ export function useCreateHrMutation() {
     mutationFn: (payload) => adminApi.createHr(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminKeys.hr() });
+    },
+  });
+}
+
+export function useCreateAdminMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation<AdminUser, unknown, CreateAdminPayload>({
+    mutationFn: (payload) => adminApi.createAdmin(payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminKeys.admins() });
     },
   });
 }
