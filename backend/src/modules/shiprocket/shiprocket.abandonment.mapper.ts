@@ -91,6 +91,10 @@ export interface ParsedAbandonment {
   billingAddress: ParsedAddress | null;
   /** The platform that sent the cart (Fastrr reports source_name). */
   sourceName: string | null;
+  /** The customer's complete shipping address exactly as the source wrote it (the Fastrr recovery feed). Optional: live webhooks carry address parts only. */
+  shippingAddressText?: string | null;
+  /** Fastrr order id of a cart that was completed (recovery feed only). */
+  fastrrOrderId?: string | null;
 }
 
 function pick(body: Record<string, unknown>, keys: string[]): unknown {

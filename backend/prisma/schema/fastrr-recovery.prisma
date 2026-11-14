@@ -1,0 +1,46 @@
+// History of the Fastrr abandoned-cart RECOVERY imports (Admin / Manager). One row per confirmed import run: the date range, who ran it, the counts, and a bounded list of
+// per-cart failures. It stores cart ids and reasons only - never a customer's name, phone, email or address. Nothing in the abandoned-leads tables depends on it.
+model FastrrRecoveryRun {
+  id String @id @default(uuid()) @db.Uuid
+
+  // No FK by design (same as RecordingExportJob): the history survives a deleted user.
+  createdById String @map("created_by_id") @db.Uuid
+
+  // Inclusive calendar days as sent to Fastrr (YYYY-MM-DD).
+  fromDay String @map("from_day") @db.VarChar(10)
+  toDay   String @map("to_day") @db.VarChar(10)
+
+  // Carts Fastrr marks as completed orders are skipped unless the user chose to include them.
+  includeConverted Boolean @default(false) @map("include_converted")
+
+  // The run this one retries (null for a first run).
+  retryOfId String? @map("retry_of_id") @db.Uuid
+
+  // RUNNING | COMPLETED | PARTIAL (some carts failed) | FAILED (nothing could be imported)
+  status String @default("RUNNING") @map("status") @db.VarChar(20)
+
+  // What the preview this run was confirmed from found.
+  fetched    Int @default(0) @map("fetched")
+  existing   Int @default(0) @map("existing")
+  missing    Int @default(0) @map("missing")
+  duplicates Int @default(0) @map("duplicates")
+  invalid    Int @default(0) @map("invalid")
+  converted  Int @default(0) @map("converted")
+
+  // What the import did with the carts it set out to import.
+  imported        Int @default(0) @map("imported")
+  merged          Int @default(0) @map("merged")
+  skippedExisting Int @default(0) @map("skipped_existing")
+  failed          Int @default(0) @map("failed")
+
+  // [{ cartId, reason }] - capped, no personal data.
+  errors Json? @map("errors")
+
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  updatedAt  DateTime  @default(now()) @updatedAt @map("updated_at")
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("fastrr_recovery_runs")
+}

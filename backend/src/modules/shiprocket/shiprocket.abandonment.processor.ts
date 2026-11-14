@@ -80,6 +80,9 @@ export function buildCartSnapshot(event: ParsedAbandonment, previous?: unknown):
     totals: event.totals.total || event.totals.shipping || event.totals.discount ? event.totals : before.totals ?? event.totals,
     shippingAddress: event.shippingAddress ?? before.shippingAddress ?? null,
     billingAddress: event.billingAddress ?? before.billingAddress ?? null,
+    // The original complete address text, only when the source supplied one (recovery feed) - webhook snapshots are unchanged.
+    ...(event.shippingAddressText || before.shippingAddressText ? { shippingAddressText: event.shippingAddressText ?? before.shippingAddressText } : {}),
+    ...(event.fastrrOrderId || before.fastrrOrderId ? { fastrrOrderId: event.fastrrOrderId ?? before.fastrrOrderId } : {}),
     customer: { firstName: event.firstName, lastName: event.lastName, phone: event.phone, email: event.email },
     capturedAt: (event.abandonedAt ?? new Date()).toISOString(),
     sourceName: event.sourceName ?? (before.sourceName as string | null | undefined) ?? null,
@@ -140,6 +143,8 @@ export interface SaveAbandonmentOptions {
   activitySource?: ActivitySource;
   createdTitle?: string;
   updatedTitle?: string;
+  /** true = only ever move lead.lastActivityAt FORWARD (a recovered, older cart). Default false. */
+  keepNewerLastActivity?: boolean;
 }
 
 /** The SAVE step: resolves (or creates) the lead, then creates or refreshes the one open CHECKOUT abandonment for the cart. Shared by the webhook processor and the CSV import. */
@@ -223,7 +228,9 @@ export async function saveAbandonment(tx: Db, event: ParsedAbandonment, now: Dat
     },
   });
 
-  await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
+  // A recovery of an OLD cart must never move the lead's "last activity" backwards (it may have been called or ordered since); a live delivery keeps the original behaviour.
+  if (options.keepNewerLastActivity) await tx.lead.updateMany({ where: { id: lead.id, OR: [{ lastActivityAt: null }, { lastActivityAt: { lt: detectedAt } }] }, data: { lastActivityAt: detectedAt } });
+  else await tx.lead.update({ where: { id: lead.id }, data: { lastActivityAt: detectedAt } });
   return { leadId: lead.id, created: !canonical };
 }
 

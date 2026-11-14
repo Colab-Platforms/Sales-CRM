@@ -18,6 +18,7 @@
     "catalog-fill": "tsx src/scripts/catalog-fill.ts",
     "catalog-correct": "tsx src/scripts/catalog-correct.ts",
     "shopify:sync": "tsx src/scripts/shopify-sync.ts",
+    "fastrr:probe": "tsx src/scripts/fastrr-probe.ts",
     "shiprocket:sync": "tsx src/scripts/shiprocket-sync.ts",
     "shiprocket:reconcile": "tsx src/scripts/shiprocket-reconcile.ts",
     "shiprocket:duplicate-report": "tsx src/scripts/shiprocket-duplicate-report.ts",

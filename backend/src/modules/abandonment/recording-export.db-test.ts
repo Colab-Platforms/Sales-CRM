@@ -317,7 +317,7 @@ describe("Excel export of abandoned-lead records (real DB)", () => {
         const wb = await readSheet(run.created.id, run.status.sizeBytes);
         const sheet = wb.getWorksheet("Abandoned leads")!;
         assert.equal(sheet.rowCount, leads + 1, "header + one row per lead, none lost at page boundaries (1000 rows per database page)");
-        assert.deepEqual((sheet.getRow(1).values as string[]).slice(1), ["Lead ID", "Customer name", "Contact number", "Email", "Items", "Order value", "Currency", "Detected (IST)", "Lead status", "Call attempts", "Answered calls", "Assigned salesperson", "Assigned manager", "Recording available", "Recordings", "Checkout reference", "Customer orders", "Latest order"]);
+        assert.deepEqual((sheet.getRow(1).values as string[]).slice(1), ["Lead ID", "Customer name", "Contact number", "Email", "Address Line 1", "Address Line 2", "Landmark", "City", "State", "Pincode", "Country", "Full Shipping Address", "Items", "Order value", "Currency", "Detected (IST)", "Lead status", "Call attempts", "Answered calls", "Assigned salesperson", "Assigned manager", "Recording available", "Recordings", "Checkout reference", "Customer orders", "Latest order"]);
         const ids = new Set<string>();
         sheet.eachRow((row, n) => {
           if (n > 1) ids.add(String(row.getCell(1).value));
@@ -325,9 +325,10 @@ describe("Excel export of abandoned-lead records (real DB)", () => {
         assert.equal(ids.size, leads, "every lead exactly once");
         const sample = sheet.getRow(2).values as unknown[];
         assert.match(String(sample[1]), /^EXP-/);
-        assert.equal(sample[6], 499);
-        assert.equal(sample[7], "INR");
-        assert.equal(sample[10], 2, "two outbound calls per lead");
+        // columns 1-4 are lead / name / phone / email, 5-12 the eight address columns (blank for these seeded carts), then the original columns
+        assert.equal(sample[14], 499);
+        assert.equal(sample[15], "INR");
+        assert.equal(sample[18], 2, "two outbound calls per lead");
         assert.ok(wb.getWorksheet("Summary"));
         note(`Excel ${String(leads).padStart(5)} rows: ${(run.ms / 1000).toFixed(1)}s (${Math.round(leads / (run.ms / 1000))} rows/s), peak RSS +${run.peakMb} MB, ${(run.status.sizeBytes / 1024).toFixed(0)} KB`);
         assert.ok(run.peakMb < 600);
@@ -345,8 +346,8 @@ describe("Excel export of abandoned-lead records (real DB)", () => {
       assert.equal(filtered.status.total, 2, "the list filter is applied");
       const sheet = (await readSheet(filtered.created.id, filtered.status.sizeBytes)).getWorksheet("Abandoned leads")!;
       assert.equal(sheet.rowCount, 3);
-      assert.equal(sheet.getRow(2).getCell(14).value, "Yes", "recording available");
-      assert.equal(sheet.getRow(2).getCell(15).value, 3);
+      assert.equal(sheet.getRow(2).getCell(22).value, "Yes", "recording available");
+      assert.equal(sheet.getRow(2).getCell(23).value, 3);
       assert.ok(filtered.status.sizeBytes < 200 * 1024, "no audio inside the workbook");
       await assert.rejects(() => serviceFor([]).create(user(w, "admin") as never, { kind: "EXCEL", from: w.from, to: w.to, filters: { workingStatus: "NOT_A_STATUS" } }), { statusCode: 400 });
       const none = "2000-01-01";
