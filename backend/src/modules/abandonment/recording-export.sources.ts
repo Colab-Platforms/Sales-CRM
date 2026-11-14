@@ -10,6 +10,7 @@ import AbandonmentService from "./abandonment.service.js";
 import { recordingRangeBounds, unavailableReason, recordingExtension, recordingFileName, type AbandonmentRecordingsService, type RecordingRange } from "./abandonment.recordings.js";
 import { validateListAbandonmentsQuery } from "./abandonment.validators.js";
 import { uniqueName } from "./recording-export.core.js";
+import { addressColumnsFromSnapshot } from "../../lib/addressColumns.js";
 import type { ExcelRow, ExcelSource } from "./recording-export.excel.js";
 
 type Db = typeof PrismaSingleton;
@@ -169,11 +170,20 @@ export class PrismaExcelSource implements ExcelSource {
       const cart = itemsText(r.cartSnapshot);
       const s = stats.get(r.lead.id) ?? { attempts: 0, ok: 0, recs: 0 };
       const o = orderInfo.get(r.lead.id);
+      const address = addressColumnsFromSnapshot(r.cartSnapshot);
       return {
         leadNumber: r.lead.leadNumber,
         customerName: [r.lead.firstName, r.lead.lastName].filter(Boolean).join(" "),
         mobile: r.lead.mobile,
         email: r.lead.email,
+        addressLine1: address.line1,
+        addressLine2: address.line2,
+        landmark: address.landmark,
+        city: address.city,
+        state: address.state,
+        pincode: address.pincode,
+        country: address.country,
+        fullShippingAddress: address.full,
         items: cart.text,
         orderValue: cart.value,
         currency: cart.currency,

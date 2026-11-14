@@ -26,6 +26,7 @@ import { parseAbandonedLeadsUrl } from "@/lib/abandoned-leads-href";
 import { assignableTelecallersQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { X } from "lucide-react";
 import { IngestionHealthPanel } from "@/components/abandonment/ingestion-health";
+import { FastrrRecoveryPanel } from "@/components/abandonment/fastrr-recovery-panel";
 import { BucketSummary } from "@/components/leads/bucket-summary";
 import { ImportAbandonedLeadsDialog } from "@/components/abandonment/import-abandoned-leads-dialog";
 import { LeadExcelPanel } from "@/components/abandonment/lead-excel-panel";
@@ -319,6 +320,7 @@ export function AbandonedLeadsView() {
       {isManager ? <RedistributeAbsentCard /> : null}
 
       {isStaff ? <IngestionHealthPanel canReconcile={isAdmin} /> : null}
+      {isAdmin || isManager ? <FastrrRecoveryPanel /> : null}
 
       {isManager ? (
         <BucketSummary

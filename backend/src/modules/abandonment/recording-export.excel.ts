@@ -12,6 +12,14 @@ export interface ExcelRow {
   customerName: string;
   mobile: string | null;
   email: string | null;
+  addressLine1: string;
+  addressLine2: string;
+  landmark: string;
+  city: string;
+  state: string;
+  pincode: string;
+  country: string;
+  fullShippingAddress: string;
   items: string;
   orderValue: number | null;
   currency: string | null;
@@ -39,6 +47,14 @@ export const EXCEL_COLUMNS: { header: string; key: keyof ExcelRow; width: number
   { header: "Customer name", key: "customerName", width: 24 },
   { header: "Contact number", key: "mobile", width: 16 },
   { header: "Email", key: "email", width: 28 },
+  { header: "Address Line 1", key: "addressLine1", width: 30 },
+  { header: "Address Line 2", key: "addressLine2", width: 24 },
+  { header: "Landmark", key: "landmark", width: 20 },
+  { header: "City", key: "city", width: 16 },
+  { header: "State", key: "state", width: 16 },
+  { header: "Pincode", key: "pincode", width: 10 },
+  { header: "Country", key: "country", width: 12 },
+  { header: "Full Shipping Address", key: "fullShippingAddress", width: 50 },
   { header: "Items", key: "items", width: 44 },
   { header: "Order value", key: "orderValue", width: 14 },
   { header: "Currency", key: "currency", width: 10 },
