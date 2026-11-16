@@ -20,6 +20,8 @@
     "shopify:sync": "tsx src/scripts/shopify-sync.ts",
     "fastrr:probe": "tsx src/scripts/fastrr-probe.ts",
     "shiprocket:sync": "tsx src/scripts/shiprocket-sync.ts",
+    "order:verify-payment": "tsx src/scripts/verify-order-payment.ts",
+    "shiprocket:payment-mismatch": "tsx src/scripts/shiprocket-payment-mismatch.ts",
     "shiprocket:reconcile": "tsx src/scripts/shiprocket-reconcile.ts",
     "shiprocket:duplicate-report": "tsx src/scripts/shiprocket-duplicate-report.ts",
     "shiprocket:duplicates": "tsx src/scripts/shiprocket-duplicates.ts",
