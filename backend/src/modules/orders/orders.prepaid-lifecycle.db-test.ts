@@ -46,10 +46,12 @@ function fakeShopify(opts: { failCreate?: { times: number }; total?: number; rej
   const client = {
     query: async (doc: string, vars: any) => {
       if (/customers\(/.test(doc) || /query.*customers/i.test(doc)) return { customers: { pageInfo: { hasNextPage: false, hasPreviousPage: false }, nodes: [] } };
+      if (/orderCreate/.test(doc) && (vars.order as any)?.transactions?.length && (opts.rejectManualPayment || markRefusals > 0)) return { orderCreate: { order: null, userErrors: [{ field: null, message: "Payment provider is not configured on shop." }] } }; // a shop that cannot record payments refuses the transaction too
       if (/orderCreate/.test(doc)) {
         calls.create += 1;
         if (failures > 0) { failures -= 1; return { orderCreate: { order: null, userErrors: [{ field: null, message: "Shopify is unavailable" }] } }; }
         sent = vars.order;
+        paid = sent.financialStatus === "PAID" && Array.isArray(sent.transactions) && sent.transactions.length > 0; // Shopify records the payment when the order is created with its transaction
         id = String(Math.floor(1e8 + Math.random() * 9e8));
         return { orderCreate: { order: { id: `gid://shopify/Order/${id}`, name: `#T${id}` }, userErrors: [] } };
       }
@@ -139,8 +141,9 @@ describe("prepaid lifecycle: payment request first, order after verified payment
       assert.equal(s.status, "CONFIRMED");
       assert.ok(s.externalId, "linked to the Shopify order");
       assert.deepEqual(s.payments.map((p) => p.status), ["SUCCESS"]);
-      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [1, 1, true], JSON.stringify((s.metadata as any).shopifyPaymentSync ?? (s.metadata as any).shopifySync));
-      assert.equal(w.shop.sent.financialStatus, "PENDING", "created unpaid and marked paid only because the CRM holds a verified payment");
+      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [1, 0, true], JSON.stringify((s.metadata as any).shopifyPaymentSync ?? (s.metadata as any).shopifySync));
+      assert.equal(w.shop.sent.financialStatus, "PAID", "the CRM already holds the verified payment, so Shopify receives the order PAID with its payment transaction (Shiprocket reads it at creation)");
+      assert.deepEqual(w.shop.sent.transactions.map((t: any) => [t.kind, t.status, t.gateway, t.amountSet.shopMoney.amount]), [["SALE", "SUCCESS", "Cashfree", "1298.00"]]);
       assert.ok(w.shop.sent.shippingAddress && w.shop.sent.customer, "the complete CRM data travelled");
       const meta = s.metadata as any;
       assert.equal(meta.shopifyPaymentSync.status, "synced");
@@ -158,7 +161,7 @@ describe("prepaid lifecycle: payment request first, order after verified payment
       await w.deliver(ev);
       await w.deliver(linkEvent(linkId, "1298.00"));
       await Promise.all([w.deliver(linkEvent(linkId, "1298.00")), w.deliver(linkEvent(linkId, "1298.00"))]);
-      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid], [1, 1]);
+      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid], [1, 0]);
       assert.equal(await tx.order.count({ where: { id: r.order.id } }), 1);
       assert.equal(await tx.payment.count({ where: { orderId: r.order.id, status: "SUCCESS" } }), 1);
     });
@@ -337,14 +340,14 @@ describe("prepaid lifecycle: an already-paid order whose confirmation never ran 
       assert.equal(s.status, "CONFIRMED");
       assert.ok(s.externalId, "linked to the Shopify order");
       assert.deepEqual(s.payments.map((p) => p.status), ["SUCCESS"]);
-      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [1, 1, true]);
+      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [1, 0, true]);
       assert.equal((await tx.order.findUniqueOrThrow({ where: { id: orderId }, select: { placedAt: true } })).placedAt?.getTime(), before.placedAt?.getTime(), "placedAt is NOT reset to the repair time");
       assert.equal(await confirmedEvents(w, orderId), 1);
 
       await w.cfSvc.refreshPaymentLink(w.userRep, paymentId);
       assert.equal(await w.deliver(linkEvent(linkId, "1298.00")), "processed");
       await w.cfSvc.reconcileOpenPayment(paymentId);
-      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid], [1, 1], "no second Shopify order, no second mark-as-paid");
+      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid], [1, 0], "no second Shopify order, no second mark-as-paid");
       assert.equal(await confirmedEvents(w, orderId), 1, "no second audit event");
       assert.equal(await tx.payment.count({ where: { orderId } }), 1);
       assert.equal(await tx.order.count({ where: { leadId: w.lead.id } }), 1);
@@ -357,7 +360,7 @@ describe("prepaid lifecycle: an already-paid order whose confirmation never ran 
       const { orderId, linkId } = await paidButStuck(w);
       assert.equal(await w.deliver(linkEvent(linkId, "1298.00")), "processed");
       const s = await w.state(orderId);
-      assert.deepEqual([s.status, !!s.externalId, w.shop.calls.create, w.shop.calls.markPaid], ["CONFIRMED", true, 1, 1]);
+      assert.deepEqual([s.status, !!s.externalId, w.shop.calls.create, w.shop.calls.markPaid], ["CONFIRMED", true, 1, 0]);
     });
   });
 
@@ -368,7 +371,7 @@ describe("prepaid lifecycle: an already-paid order whose confirmation never ran 
       const pass = await createCashfreeReconciler({ runner, reconcile: (id) => w.cfSvc.reconcileOpenPayment(id) }).tick();
       assert.ok(pass && pass.checked >= 1 && pass.errors === 0, JSON.stringify(pass));
       const s = await w.state(orderId);
-      assert.deepEqual([s.status, !!s.externalId, w.shop.calls.create, w.shop.calls.markPaid], ["CONFIRMED", true, 1, 1]);
+      assert.deepEqual([s.status, !!s.externalId, w.shop.calls.create, w.shop.calls.markPaid], ["CONFIRMED", true, 1, 0]);
       const again = await createCashfreeReconciler({ runner, reconcile: (id) => w.cfSvc.reconcileOpenPayment(id) }).tick();
       assert.equal(again?.checked, 0, "once confirmed it is no longer picked up");
     });
@@ -381,7 +384,7 @@ describe("prepaid lifecycle: an already-paid order whose confirmation never ran 
       await Promise.all([w.deliver(linkEvent(linkId, "1298.00")), w.cfSvc.refreshPaymentLink(w.userRep, paymentId), w.cfSvc.reconcileOpenPayment(paymentId), w.deliver(linkEvent(linkId, "1298.00", "PAID", uid()))]);
       const s = await w.state(orderId);
       // The harness runs on ONE connection, so advisory locks cannot serialize the racers here (in production the order/sync locks do, and Shopify rejects a repeat mark-as-paid harmlessly): the invariants are one order, one confirmation, paid.
-      assert.deepEqual([s.status, w.shop.calls.create, w.shop.calls.markPaid >= 1, w.shop.paid, await confirmedEvents(w, orderId), await tx.payment.count({ where: { orderId } })], ["CONFIRMED", 1, true, true, 1, 1]);
+      assert.deepEqual([s.status, w.shop.calls.create, w.shop.calls.markPaid === 0, w.shop.paid, await confirmedEvents(w, orderId), await tx.payment.count({ where: { orderId } })], ["CONFIRMED", 1, true, true, 1, 1]);
     });
   });
 
@@ -441,7 +444,7 @@ describe("prepaid lifecycle: an already-paid order whose confirmation never ran 
       assert.equal(retry.status, "created");
       const done = await w.state(orderId);
       assert.ok(done.externalId);
-      assert.deepEqual([w.shop.paid, w.shop.calls.markPaid, await tx.payment.count({ where: { orderId } })], [true, 1, 1]);
+      assert.deepEqual([w.shop.paid, w.shop.calls.markPaid, await tx.payment.count({ where: { orderId } })], [true, 0, 1]);
       await w.cfSvc.refreshPaymentLink(w.userRep, paymentId);
       assert.equal((await w.svc.pushOrderToShopify(admin, orderId)).status, "already_linked");
       assert.equal(w.shop.calls.create, 3, "two failed attempts (Shopify down) + one successful creation, never a fourth");
@@ -686,7 +689,7 @@ describe("create order with 'payment already received' (prepaid, externally coll
       const w = await world(tx, runner);
       const r = await w.create("PAYMENT_LINK", paidInput({ paymentReference: "UTR 4455667788" }));
       assert.deepEqual([r.order.status, r.order.paymentStatus, r.paymentLink, r.shopify.status, r.whatsapp.sent], ["CONFIRMED", "SUCCESS", null, "created", false]);
-      assert.deepEqual([w.cf.calls.create, w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [0, 1, 1, true], "no Cashfree link; Shopify order created once and actually paid");
+      assert.deepEqual([w.cf.calls.create, w.shop.calls.create, w.shop.calls.markPaid, w.shop.paid], [0, 1, 0, true], "no Cashfree link; Shopify order created once and actually paid");
       assert.deepEqual([r.manualPayment?.verification, r.manualPayment?.reference, r.manualPayment?.shopifyPayment], ["MANUAL_EXTERNAL", "UTR 4455667788", "synced"]);
       const rows = await externalRows(tx, r.order.id);
       assert.equal(rows.length, 1, "exactly one payment row");
@@ -757,7 +760,7 @@ describe("create order with 'payment already received' (prepaid, externally coll
       const b = await w.create("PAYMENT_LINK", extra);
       const [c, d] = await Promise.all([w.create("PAYMENT_LINK", extra), w.create("PAYMENT_LINK", extra)]);
       assert.ok([b, c, d].every((x) => x.order.id === a.order.id));
-      assert.deepEqual([await tx.order.count({ where: { leadId: w.lead.id } }), (await externalRows(tx, a.order.id)).length, w.shop.calls.create, w.shop.calls.markPaid, b.manualPayment?.reference], [1, 1, 1, 1, "UTR 9"]);
+      assert.deepEqual([await tx.order.count({ where: { leadId: w.lead.id } }), (await externalRows(tx, a.order.id)).length, w.shop.calls.create, w.shop.calls.markPaid, b.manualPayment?.reference], [1, 1, 1, 0, "UTR 9"]);
       assert.equal(await tx.activity.count({ where: { orderId: a.order.id, title: { contains: "manually marked as paid" } } }), 1);
     });
   });
@@ -775,7 +778,7 @@ describe("create order with 'payment already received' (prepaid, externally coll
       assert.deepEqual([retry.shopify.status, !!w.shop.shopifyId, w.shop.paid, await tx.order.count({ where: { leadId: w.lead.id } }), (await externalRows(tx, first.order.id)).length], ["created", true, true, 1, 1]);
       const again = await w.create("PAYMENT_LINK", extra);
       assert.equal(again.shopify.status === "created" || again.shopify.status === "already_linked", true);
-      assert.equal(w.shop.calls.markPaid, 1, "paid once");
+      assert.equal(w.shop.calls.markPaid, 0, "paid once - recorded at creation, never a second payment");
     });
   });
 
@@ -791,7 +794,7 @@ describe("create order with 'payment already received' (prepaid, externally coll
       assert.equal(pass?.checked, 0);
       const after = await externalRows(tx, r.order.id);
       assert.deepEqual([after.length, after[0]!.status, after[0]!.provider, after[0]!.transactionReference, (await w.state(r.order.id)).status], [1, "SUCCESS", "MANUAL", "UTR 7", "CONFIRMED"]);
-      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, await tx.order.count({ where: { leadId: w.lead.id } })], [1, 1, 1]);
+      assert.deepEqual([w.shop.calls.create, w.shop.calls.markPaid, await tx.order.count({ where: { leadId: w.lead.id } })], [1, 0, 1]);
     });
   });
 

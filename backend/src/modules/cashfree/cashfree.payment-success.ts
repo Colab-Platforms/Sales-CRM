@@ -122,6 +122,21 @@ export async function syncShopifyPayment(tx: Db, orderId: string, ctx: SyncCtx):
     }
   }
 
+  // An order created PAID with its payment transaction (a prepaid order whose payment was already verified at creation) has nothing left to settle: Shopify shows the full CRM total received and nothing
+  // outstanding. Record it as synced without a second payment call. Read-only check; anything that is not exactly that falls through to the normal path unchanged.
+  if (!upgrade && !crmDiscount && asRecord(meta.shopifyPaidAtCreation).amount !== undefined) {
+    try {
+      const live = await readShopifyOrderTotals(client, order.externalId);
+      if (!live.cancelled && live.total === toCents(order.totalAmount.toString()) && live.outstanding === 0 && live.received === live.total) {
+        await tx.order.update({ where: { id: orderId }, data: { metadata: { ...meta, shopifyPaymentSync: { status: "synced", syncedAt: now.toISOString(), financialStatus: live.status, performed: "already_paid_at_creation" } } as Prisma.InputJsonValue } });
+        await tx.activity.create({ data: { ...base, type: ActivityType.PAYMENT_STATUS_CHANGED, title: `Shopify payment synced (order ${order.orderNumber})`, description: "Shopify order was created already paid", metadata: { provider: "SHOPIFY", event: "SHOPIFY_PAYMENT_SYNCED", financialStatus: live.status, performed: "already_paid_at_creation" } } });
+        return { status: "synced" };
+      }
+    } catch {
+      // unreadable: keep the normal path
+    }
+  }
+
   try {
     const result = upgrade
       ? await reconcilePrepaidUpgrade(client, order.externalId, { originalAmount: upgrade.originalAmount, discountAmount: upgrade.discountAmount, prepaidAmount: upgrade.prepaidAmount, currency: upgrade.currency, upgradeReference: order.orderNumber })

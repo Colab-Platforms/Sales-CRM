@@ -92,6 +92,8 @@ export interface ShopifyOrderCreateInput {
   /** COD (not yet collected) -> PENDING; already-collected prepaid -> PAID. Never invented beyond
    *  Shopify's own two relevant values for a freshly created order. */
   financialStatus: "PENDING" | "PAID";
+  /** The verified payment sent WITH a paid-at-creation order (kind SALE, status SUCCESS) so Shopify shows it paid from the first moment. Never set for an unpaid or unverified order. */
+  transactions?: { gateway: string; amount: string }[];
   note?: string;
   shippingAddress?: ShopifyOrderCreateAddress;
   billingAddress?: ShopifyOrderCreateAddress;
@@ -162,6 +164,7 @@ export async function createShopifyOrder(client: ShopifyClient, input: ShopifyOr
     phone: input.phone,
     currency: input.currency,
     financialStatus: input.financialStatus,
+    ...(input.transactions && input.transactions.length > 0 ? { transactions: input.transactions.map((t) => ({ kind: "SALE", status: "SUCCESS", gateway: t.gateway, amountSet: { shopMoney: { amount: t.amount, currencyCode: input.currency } } })) } : {}),
     note: input.note,
     ...(input.sourceIdentifier ? { sourceIdentifier: input.sourceIdentifier } : {}),
     ...(input.shippingAddress ? { shippingAddress: input.shippingAddress } : {}),

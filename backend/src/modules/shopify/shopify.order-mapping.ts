@@ -62,6 +62,8 @@ export interface CrmOrderForShopify {
   paymentSucceeded: boolean;
   /** A prepaid order: the Shopify order is created UNPAID and then marked paid by the verified-payment step (mark-as-paid records the Cashfree payment), never created as paid. */
   settleAfterCreate?: boolean;
+  /** The provider of the verified payment (CASHFREE, MANUAL ...), used only to label the payment transaction sent with a paid-at-creation order. */
+  paymentProvider?: string | null;
   /** true when the order came from the AI order conversation. */
   fromAiConversation: boolean;
   lead: { firstName: string; lastName: string | null; leadNumber: string; email: string | null; normalizedMobile: string | null; mobile: string | null };
@@ -136,7 +138,10 @@ export interface BuiltPayload {
  * The complete orderCreate input for a CRM order. `figuresMirror` = the CRM's own totals add up (see OrdersService), which is the only case where the discount and shipping lines are sent.
  * `customer` is the already-resolved Shopify customer decision (see resolveShopifyCustomer) - null when no safe association exists.
  */
-export function buildShopifyOrderPayload(order: CrmOrderForShopify, opts: { figuresMirror: boolean; customer: ShopifyOrderCreateInput["customer"] | null; customerNote?: string }): BuiltPayload {
+export function buildShopifyOrderPayload(order: CrmOrderForShopify, opts: { figuresMirror: boolean; customer: ShopifyOrderCreateInput["customer"] | null; customerNote?: string; figuresAddUp?: boolean }): BuiltPayload {
+  // A PREPAID order whose payment the CRM has ALREADY verified, and whose CRM figures match what is sent to Shopify, is created PAID together with the payment transaction. Shiprocket reads the order the
+  // moment Shopify creates it and fixes COD / prepaid from that state; an order created unpaid and settled seconds later is imported as COD and never corrected.
+  const paidAtCreation = Boolean(order.paymentSucceeded && order.settleAfterCreate && opts.figuresAddUp);
   const report: MappingReport = { fields: {} };
   const { shipping, extras } = mapAddress(order, report);
   const source = orderSourceLabel(order);
@@ -193,7 +198,8 @@ export function buildShopifyOrderPayload(order: CrmOrderForShopify, opts: { figu
     email: email || undefined,
     phone: phone || undefined,
     currency: order.currency,
-    financialStatus: order.paymentSucceeded && !order.settleAfterCreate ? "PAID" : "PENDING",
+    financialStatus: order.paymentSucceeded && (!order.settleAfterCreate || paidAtCreation) ? "PAID" : "PENDING",
+    ...(paidAtCreation ? { transactions: [{ gateway: String(order.paymentProvider ?? "").toUpperCase() === "CASHFREE" ? "Cashfree" : "manual", amount: Number(order.totalAmount).toFixed(2) }] } : {}),
     note,
     tags,
     metafields,

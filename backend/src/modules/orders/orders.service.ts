@@ -270,7 +270,7 @@ const SHOPIFY_PUSH_SELECT = {
         variant: { select: { externalId: true, externalSource: true } },
       },
     },
-    payments: { select: { method: true, status: true }, orderBy: { createdAt: "asc" }, take: 1 },
+    payments: { select: { method: true, status: true, provider: true }, orderBy: { createdAt: "asc" }, take: 1 },
 } as const satisfies Prisma.OrderSelect;
 type PushOrder = Prisma.OrderGetPayload<{ select: typeof SHOPIFY_PUSH_SELECT }>;
 
@@ -301,6 +301,7 @@ async function prepareShopifyPayload(order: PushOrder, client: ShopifyClient) {
       shippingPincode: order.shippingPincode,
       metadata: (order.metadata as Record<string, unknown> | null) ?? null,
       paymentMethod: order.payments[0]?.method ?? null,
+      paymentProvider: order.payments[0]?.provider ?? null,
       paymentSucceeded: order.payments[0]?.status === "SUCCESS",
       settleAfterCreate: ((order.metadata as Record<string, unknown> | null)?.paymentMode) === "PREPAID",
       fromAiConversation: Boolean(order.conversation),
@@ -319,7 +320,7 @@ async function prepareShopifyPayload(order: PushOrder, client: ShopifyClient) {
         weightGrams: item.weightGrams?.toString() ?? null,
       })),
     };
-    const built = buildShopifyOrderPayload(crmForShopify, { figuresMirror: Boolean(extras), customer: customerDecision.customer, customerNote: customerDecision.note });
+    const built = buildShopifyOrderPayload(crmForShopify, { figuresMirror: Boolean(extras), figuresAddUp: crmFiguresAddUp, customer: customerDecision.customer, customerNote: customerDecision.note });
     return { built, customerDecision, extras, crmFiguresAddUp, cents };
 }
 
@@ -1267,6 +1268,19 @@ class OrdersService {
       let mirrored = crmFiguresAddUp;
       const sentOmitted: string[] = Object.entries(built.report.fields).filter(([, f]) => f.outcome === "omitted").map(([k, f]) => `${k}: ${f.reason}`);
       let verifiedSync: ShopifySyncRecord | null = null;
+      // A prepaid order is created PAID with its payment transaction. If Shopify REFUSES that (e.g. the shop has no payment provider configured), nothing was created: retry ONCE exactly as before this
+      // feature - created unpaid, settled afterwards by the verified-payment step - so a refused transaction can never block an order. Anything else is handled by the existing paths below.
+      const createWithPaymentFallback = async () => {
+        try {
+          return await createShopifyOrder(client, input);
+        } catch (error) {
+          if (!isShopifyRejection(error) || !input.transactions || input.transactions.length === 0 || !/payment|transaction|gateway|provider/i.test(error instanceof Error ? error.message : "")) throw error;
+          input.transactions = undefined;
+          input.financialStatus = "PENDING";
+          sentOmitted.push("payment transaction (Shopify refused it) - the order was created unpaid and is settled by the verified-payment step");
+          return await createShopifyOrder(client, input);
+        }
+      };
       // A fallback that dropped information the CRM HAS (customer / discount) or a customer that could not be attached is never a complete sync.
       let degraded: string[] = customerDecision.customer ? [] : (/^the lead has no (phone|e-mail)/.test(customerDecision.note) ? [] : [`customer not associated: ${customerDecision.note}`]);
       const earlier = (order.metadata as Record<string, unknown> | null)?.shopifyCreateUncertain === true;
@@ -1277,7 +1291,7 @@ class OrdersService {
         mirrored = false; // what that attempt sent is not known here, so the payment sync keeps its safe reconciliation
       } else {
         try {
-          result = await createShopifyOrder(client, input);
+          result = await createWithPaymentFallback();
         } catch (error) {
           if (!isShopifyRejection(error)) throw error;
           // Shopify REFUSED the request (nothing was created). STAGED fallback: only the customer association is optional - a phone/e-mail that belongs to another Shopify customer, or a new customer Shopify will not
@@ -1305,7 +1319,7 @@ class OrdersService {
           degraded.push("customer: Shopify refused the association");
           input.customer = undefined;
           try {
-            result = await createShopifyOrder(client, input);
+            result = await createWithPaymentFallback();
           } catch (second) {
             if (!isShopifyRejection(second)) throw second;
             if (!extras) throw second;
@@ -1348,7 +1362,7 @@ class OrdersService {
       }
       // Remember what Shopify was given: mirrored = the Shopify order total equals the CRM total (see above). The payment sync relies on it; absent/false (older orders, a refused request) keeps the safe path.
       const fresh = await this.db.order.findUnique({ where: { id: orderId }, select: { metadata: true } });
-      await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifyTotals: { mirrored, total: order.totalAmount.toString(), at: new Date().toISOString() }, ...(verifiedSync ? { shopifySync: verifiedSync } : {}) } as unknown as Prisma.InputJsonValue } });
+      await this.db.order.update({ where: { id: orderId }, data: { metadata: { ...((fresh?.metadata as Record<string, unknown> | null) ?? {}), shopifyTotals: { mirrored, total: order.totalAmount.toString(), at: new Date().toISOString() }, ...(input.financialStatus === "PAID" && (input.transactions?.length ?? 0) > 0 ? { shopifyPaidAtCreation: { at: new Date().toISOString(), amount: order.totalAmount.toString() } } : {}), ...(verifiedSync ? { shopifySync: verifiedSync } : {}) } as unknown as Prisma.InputJsonValue } });
       return { status: "created", shopifyOrderId: result.shopifyOrderId, shopifyOrderName: result.shopifyOrderName, ...(verifiedSync ? { sync: verifiedSync } : {}) };
     } catch (error) {
       if (error instanceof ShopifyOrderCreateError) return { status: "failed", reason: error.message };
