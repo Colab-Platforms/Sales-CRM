@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@/lib/prisma.js";
-import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
+import { getCustomerDetailScope, getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
@@ -424,7 +424,7 @@ class WhatsAppMessagingService {
    * customers. Template approval, the Meta-only provider rule and variable validation still apply afterwards, unchanged.
    */
   private async loadLeadForUser(user: AuthUser, leadId: string) {
-    const scoped = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, await getLeadScope(user, this.db)), select: LEAD_SELECT });
+    const scoped = await this.db.lead.findFirst({ where: scopedLeadWhere(leadId, await getCustomerDetailScope(user, this.db)), select: LEAD_SELECT });
     if (scoped || !canViewAllWhatsAppConversations(user.role)) return scoped;
     return this.db.lead.findFirst({ where: { id: leadId, workingStatus: { not: "DEACTIVATED" }, whatsAppMessages: { some: {} } }, select: LEAD_SELECT });
   }
