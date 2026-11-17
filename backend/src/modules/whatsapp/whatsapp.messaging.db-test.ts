@@ -108,6 +108,21 @@ describe("previewing a template message", () => {
     });
   }
 
+  it("a MANAGER can preview for a lead assigned directly to them (no group, no telecaller owner yet); another manager and a telecaller still cannot", async () => {
+    await inRollback(async (tx) => {
+      const manager = await tx.user.create({ data: { name: "Mgr", username: `m-${uid()}`, role: Role.MANAGER } });
+      const other = await tx.user.create({ data: { name: "Other", username: `o-${uid()}`, role: Role.MANAGER } });
+      const rep = await tx.user.create({ data: { name: "Rep", username: `r-${uid()}`, role: Role.SALESPERSON } });
+      const lead = await makeLead(tx, { assignedManagerId: manager.id });
+      const template = await makeTemplate(tx, { body: "Hi {{customer_name}}", variables: ["customer_name"] });
+      const svc = new WhatsAppMessagingService(tx, () => null, async () => fakeProvider());
+      const ok = await svc.previewTemplate(as(manager, Role.MANAGER), { leadId: lead.id, templateId: template.id });
+      assert.equal(ok.resolvedBody, "Hi Mahadev Babar");
+      await assert.rejects(() => svc.previewTemplate(as(other, Role.MANAGER), { leadId: lead.id, templateId: template.id }), (e: any) => e.statusCode === 404);
+      await assert.rejects(() => svc.previewTemplate(as(rep, Role.SALESPERSON), { leadId: lead.id, templateId: template.id }), (e: any) => e.statusCode === 404);
+    });
+  });
+
   it("404s for a customer outside the caller's scope", async () => {
     await inRollback(async (tx) => {
       const rep1 = await tx.user.create({ data: { name: "Rep1", username: `r1-${uid()}`, role: Role.SALESPERSON } });
