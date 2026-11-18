@@ -64,7 +64,7 @@ function fakeWhatsApp() {
   };
 }
 
-const baseConfig = { enabled: true, recipients: [{ name: "Owner", phone: A }, { name: "Ops", phone: B }], sendTime: "18:15", timezone: IST, reportFor: "TODAY" as "TODAY" | "YESTERDAY" | "DATE" | "LAST7DAYS", dataDate: undefined as string | undefined, templateName: "daily_team_report", languageCode: "en", options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [] as string[], sendText: true, sendExcel: true };
+const baseConfig = { enabled: true, recipients: [{ name: "Owner", phone: A }, { name: "Ops", phone: B }], sendTime: "18:15", timezone: IST, reportFor: "TODAY" as "TODAY" | "YESTERDAY" | "DATE" | "LAST7DAYS", dataDate: undefined as string | undefined, templateName: "daily_team_report", languageCode: "en", options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [] as string[], sendText: true, sendExcel: true, replyTriggersDetail: true };
 
 /** A scheduled run at 18:15 IST on 23 Oct with BOTH recipients' windows closed: the template goes out, the detailed text and the Excel are held back as FAILED. */
 async function held(tx: Prisma.TransactionClient, over: { sources?: ReportSources; sendExcel?: boolean; config?: Record<string, unknown>; start?: string } = {}) {
@@ -219,7 +219,7 @@ describe("reply releases the held report", () => {
       const clock = { now: new Date(T_1815) };
       const svc = new ReportAutomationService(tx, { now: () => clock.now, sources: okSources, send: wa.send, sendDocument: wa.sendDocument, sendDetail: wa.sendDetail, windowOpen: wa.windowOpen });
       const actor = { id: admin.id, username: admin.username, role: Role.ADMIN };
-      await svc.saveConfig(actor, { enabled: true, recipients: [{ name: "Owner", phone: A }], sendTime: "18:15", timezone: IST, reportFor: "TODAY", templateName: "daily_team_report", languageCode: "en", options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [], sendText: false, sendExcel: true });
+      await svc.saveConfig(actor, { enabled: true, recipients: [{ name: "Owner", phone: A }], sendTime: "18:15", timezone: IST, reportFor: "TODAY", templateName: "daily_team_report", languageCode: "en", options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [], sendText: false, sendExcel: true, replyTriggersDetail: true });
       await svc.runDue();
       wa.closed.delete(A);
       const o = await svc.sendPendingOnReply(A);
@@ -548,6 +548,117 @@ describe("WAITING_FOR_REPLY - the durable waiting state", () => {
       await w.svc.sendPendingOnReply(A);
       const b = await rowOf(tx, w.run.id, B);
       assert.deepEqual([b.txtStatus, b.docStatus], ["WAITING_FOR_REPLY", "WAITING_FOR_REPLY"]);
+    });
+  });
+});
+
+describe("ONE reply releases the detailed report and Excel for EVERY recipient, for the summary's own date", () => {
+  it("A replies (B has written in before, so B's window is open): BOTH get the detailed text and the Excel, exactly once; a later reply by B sends nothing new", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      open(w, A, B);
+      const o = await w.svc.sendPendingOnReply(A);
+      assert.equal(o.handled, true);
+      assert.equal(o.recipientsReleased, 2);
+      for (const who of [A, B]) {
+        assert.equal(w.wa.texts.filter((t) => t.recipient === who).length, 1, `${who} gets the detailed text`);
+        assert.equal(w.wa.files.filter((f) => f.recipient === who).length, 1, `${who} gets the Excel`);
+        assert.equal((await rowOf(tx, w.run.id, who)).docStatus, "SENT");
+      }
+      assert.equal(w.wa.files[0]!.filename, "AyushWellness_Daily_Report_2026-10-23.xlsx");
+      const again = await w.svc.sendPendingOnReply(B); // the other recipient replies too
+      assert.equal(again.handled, false);
+      assert.equal(w.wa.texts.length, 2);
+      assert.equal(w.wa.files.length, 2);
+      assert.equal((await tx.reportDelivery.findUniqueOrThrow({ where: { id: w.run.id } })).status, "SENT");
+    });
+  });
+
+  it("a recipient whose own 24-hour window is closed is NOT failed and uses no attempt: WhatsApp cannot take a free-form message, so the report is held for them and goes out when they write in", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      open(w, A); // only A replied
+      const o = await w.svc.sendPendingOnReply(A);
+      assert.equal(o.recipientsReleased, 1);
+      const b = await rowOf(tx, w.run.id, B);
+      assert.deepEqual([b.txtStatus, b.docStatus, b.txtAttempts, b.docAttempts], ["WAITING_FOR_REPLY", "WAITING_FOR_REPLY", 1, 1], "attempts are only the original scheduled attempt");
+      open(w, B);
+      const late = await w.svc.sendPendingOnReply(B);
+      assert.equal(late.handled, true);
+      assert.equal(w.wa.texts.filter((t) => t.recipient === B).length, 1);
+      assert.equal(w.wa.texts.filter((t) => t.recipient === A).length, 1, "A is not sent a second copy");
+    });
+  });
+
+  it("the reply's quoted message id picks the run: replying to YESTERDAY's summary releases yesterday's date even though a newer report is also held", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      const first = await rowOf(tx, w.run.id, A);
+      assert.ok(first.providerMessageId, "the summary's WhatsApp message id is stored");
+      // the next day's occurrence also runs and is held
+      w.clock.now = new Date("2026-10-24T12:45:00Z");
+      await w.svc.runDue();
+      await tx.reportDelivery.updateMany({ where: { kind: "SCHEDULED", id: { not: w.run.id } }, data: { createdAt: w.clock.now } });
+      open(w, A, B);
+      const quoted = await w.svc.sendPendingOnReply(A, first.providerMessageId);
+      assert.equal(quoted.reportDate, "2026-10-23", "the quoted summary's own date");
+      assert.equal(w.wa.files.every((f) => f.filename === "AyushWellness_Daily_Report_2026-10-23.xlsx"), true);
+      assert.equal(w.wa.files.length, 2, "both recipients");
+      // typing without quoting anything falls back to the newest held report (the 24th)
+      const plain = await w.svc.sendPendingOnReply(A);
+      assert.equal(plain.reportDate, "2026-10-24");
+    });
+  });
+
+  it("quoting another person's message id cannot release or pick a report: it is ignored for the sender and the normal fallback applies", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      const bRow = await rowOf(tx, w.run.id, B);
+      open(w, STRANGER);
+      const o = await w.svc.sendPendingOnReply(STRANGER, bRow.providerMessageId);
+      assert.deepEqual([o.handled, w.wa.texts.length, w.wa.files.length], [false, 0, 0]);
+    });
+  });
+
+  it("with 'reply-triggered detailed report' switched OFF a reply releases nothing; switching it back ON releases it", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      open(w, A, B);
+      await tx.reportAutomation.updateMany({ where: { ownerId: w.admin.id }, data: { replyTriggersDetail: false } });
+      const off = await w.svc.sendPendingOnReply(A);
+      assert.equal(off.handled, false);
+      assert.match(off.reason, /turned off/);
+      assert.equal(w.wa.texts.length + w.wa.files.length, 0);
+      await tx.reportAutomation.updateMany({ where: { ownerId: w.admin.id }, data: { replyTriggersDetail: true } });
+      assert.equal((await w.svc.sendPendingOnReply(A)).handled, true);
+      assert.equal(w.wa.files.length, 2);
+    });
+  });
+
+  it("two replies from DIFFERENT recipients at the same instant send each part to each recipient exactly once", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      open(w, A, B);
+      await Promise.all([w.svc.sendPendingOnReply(A), w.svc.sendPendingOnReply(B)]);
+      assert.equal(w.wa.texts.length, 2);
+      assert.equal(w.wa.files.length, 2);
+    });
+  });
+
+  it("a definite provider failure for ONE recipient does not stop the others, and is retried by the next reply / the page's Retry", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      open(w, A, B);
+      w.wa.modes.doc[B] = "refuse";
+      await w.svc.sendPendingOnReply(A);
+      assert.equal(w.wa.files.filter((f) => f.recipient === A).length, 1);
+      const b = await rowOf(tx, w.run.id, B);
+      assert.equal(b.docStatus, "FAILED");
+      assert.equal(b.txtStatus, "SENT", "B's detailed text was still delivered");
+      w.wa.modes.doc[B] = "ok";
+      const retried = await w.svc.retryRecipient(w.actor as never, b.id, "DOCUMENT");
+      assert.equal(retried.document.status, "SENT");
+      assert.equal(w.wa.files.filter((f) => f.recipient === B).length, 1);
     });
   });
 });

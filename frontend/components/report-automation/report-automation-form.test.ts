@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { normalizeRecipient, validateForm, validateRecipients, STATUS_LABEL, REPORT_MODE_LABEL } from "./report-automation-form";
 import { NAV_BY_ROLE } from "../app-sidebar";
 
-const ok = { enabled: true, recipients: [{ name: "Owner", phone: "+91 98765 43210" }, { phone: "+14155550123" }], sendTime: "21:00", timezone: "Asia/Kolkata", reportFor: "TODAY" as const, dataDate: null as string | null, templateName: "daily_team_report", languageCode: "en_GB", options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [], sendText: true, sendExcel: true };
+const ok = { enabled: true, recipients: [{ name: "Owner", phone: "+91 98765 43210" }, { phone: "+14155550123" }], sendTime: "21:00", timezone: "Asia/Kolkata", reportFor: "TODAY" as const, dataDate: null as string | null, templateName: "daily_team_report", languageCode: "en_GB", options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [], sendText: true, sendExcel: true, replyTriggersDetail: true };
 
 describe("report automation form", () => {
   it("accepts a complete configuration and normalises the number the way the server does", () => {
@@ -139,5 +139,37 @@ describe("cancel messages", () => {
     assert.match(f, /^Not cancelled: This report has already started/);
     assert.doesNotMatch(f, /^Cancelled/);
     assert.match(cancelFailureText(new Error("Network Error")), /Network Error/);
+  });
+});
+
+import { configToInput, isDirty } from "./report-automation-form";
+import type { ReportAutomationConfig } from "@/lib/api-client/types/report-automation.types";
+
+const savedConfig = (over: Partial<ReportAutomationConfig> = {}): ReportAutomationConfig => ({
+  id: "cfg", enabled: true, recipients: [{ id: "r1", name: "Owner", phone: "+919876543210", enabled: true }, { id: "r2", name: "Ops", phone: "+919811122233", enabled: false }],
+  sendTime: "09:00", timezone: "Asia/Kolkata", reportFor: "YESTERDAY", dataDate: null, templateName: "daily_team_report", languageCode: "en",
+  options: { teamSummary: true, calls: true, leads: true, sales: true, followUps: true }, includedUserIds: [], sendText: true, sendExcel: true, replyTriggersDetail: true, updatedAt: null, ...over,
+});
+
+describe("form <-> saved settings", () => {
+  it("an untouched form is not dirty, and editing the time, a recipient's switch or the reply toggle is", () => {
+    const c = savedConfig();
+    const f = configToInput(c);
+    assert.equal(isDirty(f, c), false);
+    assert.equal(isDirty({ ...f, sendTime: "10:00" }, c), true);
+    assert.equal(isDirty({ ...f, replyTriggersDetail: false }, c), true);
+    assert.equal(isDirty({ ...f, recipients: f.recipients.map((r) => ({ ...r, enabled: true })) }, c), true);
+  });
+  it("a legacy fixed-date report is shown as Previous day (never keeps reporting one old date) and counts as an unsaved change", () => {
+    const c = savedConfig({ reportFor: "DATE", dataDate: "2026-11-01" });
+    const f = configToInput(c);
+    assert.equal(f.reportFor, "YESTERDAY");
+    assert.equal(f.dataDate, null);
+    assert.equal(isDirty(f, c), true);
+  });
+  it("turning the automation on needs at least one ENABLED recipient", () => {
+    assert.match(validateRecipients([{ phone: "+919876543210", enabled: false }], true).list ?? "", /Enable at least one recipient/);
+    assert.equal(validateRecipients([{ phone: "+919876543210", enabled: false }], false).list, undefined);
+    assert.equal(validateRecipients([{ phone: "+919876543210", enabled: true }], true).list, undefined);
   });
 });

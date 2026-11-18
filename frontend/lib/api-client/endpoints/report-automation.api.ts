@@ -1,6 +1,6 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportAutomationStatus, ReportDelivery, ReportDeliveryPage, ReportPreview, ReportRecipientResult, ReportScheduled } from "../types/report-automation.types";
+import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportAutomationStatus, ReportDelivery, ReportDeliveryPage, ReportPreview, ReportRecipientResult, ReportScheduled, ReportTracking } from "../types/report-automation.types";
 
 /** One APPROVED template as Meta reports it, for the Add Template picker. */
 export interface ApprovedMetaTemplate {
@@ -44,6 +44,10 @@ export const reportAutomationApi = {
   async scheduled(): Promise<ReportScheduled> {
     return (await apiClient.get<ApiEnvelope<ReportScheduled>>("/report-automation/scheduled")).data.data;
   },
+  /** Live delivery + reply status of one run (default: the latest). Polled by the page. */
+  async tracking(runId?: string): Promise<ReportTracking> {
+    return (await apiClient.get<ApiEnvelope<ReportTracking>>("/report-automation/tracking", { params: runId ? { runId } : {} })).data.data;
+  },
   async status(): Promise<ReportAutomationStatus> {
     return (await apiClient.get<ApiEnvelope<ReportAutomationStatus>>("/report-automation/status")).data.data;
   },
@@ -59,7 +63,8 @@ export const reportAutomationApi = {
   async addTemplate(name: string, language: string): Promise<{ alreadyAdded: boolean; name: string; language: string }> {
     return (await apiClient.post<ApiEnvelope<{ alreadyAdded: boolean; name: string; language: string }>>("/report-automation/templates/add", { name, language }, { timeout: APPROVED_LIST_TIMEOUT_MS })).data.data;
   },
-  async deliveries(page = 1, pageSize = 20): Promise<ReportDeliveryPage> {
-    return (await apiClient.get<ApiEnvelope<ReportDeliveryPage>>("/report-automation/deliveries", { params: { page, pageSize } })).data.data;
+  /** One entry per report RUN (recipients nested), newest first. `status` and `date` (YYYY-MM-DD: data date or send day) filter on the server. */
+  async deliveries(page = 1, pageSize = 20, filters: { status?: "SENT" | "FAILED" | "PENDING" | "CANCELLED"; date?: string } = {}): Promise<ReportDeliveryPage> {
+    return (await apiClient.get<ApiEnvelope<ReportDeliveryPage>>("/report-automation/deliveries", { params: { page, pageSize, ...(filters.status ? { status: filters.status } : {}), ...(filters.date ? { date: filters.date } : {}) } })).data.data;
   },
 };

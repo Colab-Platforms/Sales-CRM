@@ -100,6 +100,7 @@ const mapRecipient = (r: RecipientResult) => ({
   sentAt: r.sentAt,
   deliveredAt: r.deliveredAt,
   readAt: r.readAt,
+  repliedAt: r.repliedAt,
   // only a DEFINITE failure can be retried; an accepted or unknown-outcome message is never re-sent
   canRetry: r.status === "FAILED",
   detail: {
@@ -139,14 +140,15 @@ export const mapRun = (d: RunRow) => ({
   recipients: [...d.recipientResults].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "") || a.phone.localeCompare(b.phone)).map(mapRecipient),
 });
 
-const defaultsFor = () => ({ enabled: false, recipients: [] as { id: string; name: string | null; phone: string }[], sendTime: "21:00", timezone: "Asia/Kolkata", reportFor: "TODAY" as "TODAY" | "YESTERDAY" | "DATE" | "LAST7DAYS", dataDate: null as string | null, templateName: null as string | null, languageCode: "en", options: normalizeOptions({}), includedUserIds: [] as string[], sendText: true, sendExcel: true });
+// Defaults for a not-yet-configured automation: 09:00 IST, reporting the previous calendar day (T-1), reply-triggered detail and Excel ON.
+const defaultsFor = () => ({ enabled: false, recipients: [] as { id: string; name: string | null; phone: string; enabled: boolean }[], sendTime: "09:00", timezone: "Asia/Kolkata", reportFor: "YESTERDAY" as "TODAY" | "YESTERDAY" | "DATE" | "LAST7DAYS", dataDate: null as string | null, templateName: null as string | null, languageCode: "en", options: normalizeOptions({}), includedUserIds: [] as string[], sendText: true, sendExcel: true, replyTriggersDetail: true });
 
 const mapConfig = (a: AutomationRow | null) =>
   a
     ? {
         id: a.id,
         enabled: a.enabled,
-        recipients: [...a.recipients].sort((x, y) => x.position - y.position || x.createdAt.getTime() - y.createdAt.getTime()).map((r) => ({ id: r.id, name: r.name, phone: r.phone })),
+        recipients: [...a.recipients].sort((x, y) => x.position - y.position || x.createdAt.getTime() - y.createdAt.getTime()).map((r) => ({ id: r.id, name: r.name, phone: r.phone, enabled: r.enabled })),
         sendTime: a.sendTime,
         timezone: a.timezone,
         reportFor: a.reportFor as "TODAY" | "YESTERDAY" | "DATE" | "LAST7DAYS",
@@ -157,6 +159,7 @@ const mapConfig = (a: AutomationRow | null) =>
         includedUserIds: asIds(a.includedUserIds),
         sendText: a.sendText,
         sendExcel: a.sendExcel,
+        replyTriggersDetail: a.replyTriggersDetail,
         updatedAt: a.updatedAt,
       }
     : { id: null, ...defaultsFor(), updatedAt: null };
@@ -169,6 +172,8 @@ export interface ReplyOutcome {
   reportDate?: string;
   /** What this reply released, and how each part ended. */
   parts?: { detail?: string; excel?: string };
+  /** How many recipients (the replier included) had a part released by this reply. */
+  recipientsReleased?: number;
 }
 
 class ReportAutomationService {
@@ -203,7 +208,7 @@ class ReportAutomationService {
     const data = {
       enabled: input.enabled,
       // kept equal to the first recipient so anything still reading the old single-number column sees the same number
-      recipient: recipients[0]?.phone ?? null,
+      recipient: (recipients.find((r) => r.enabled !== false) ?? recipients[0])?.phone ?? null,
       sendTime: input.sendTime,
       timezone: input.timezone,
       reportFor: input.reportFor,
@@ -213,6 +218,7 @@ class ReportAutomationService {
       options: input.options as unknown as Prisma.InputJsonValue,
       sendText: input.sendText,
       sendExcel: input.sendExcel,
+      replyTriggersDetail: input.replyTriggersDetail ?? true,
       includedUserIds: [...new Set(input.includedUserIds)] as unknown as Prisma.InputJsonValue,
     };
     // `updatedAt` = when these settings took effect. An occurrence at or after it is scheduled by them; one before it (they were saved after that time today) is not, so saving at 19:00 with a
@@ -224,8 +230,8 @@ class ReportAutomationService {
     for (const [position, r] of recipients.entries()) {
       await this.db.reportRecipient.upsert({
         where: { automationId_phone: { automationId: row.id, phone: r.phone } },
-        create: { automationId: row.id, phone: r.phone, name: r.name || null, position },
-        update: { name: r.name || null, position },
+        create: { automationId: row.id, phone: r.phone, name: r.name || null, position, enabled: r.enabled ?? true },
+        update: { name: r.name || null, position, enabled: r.enabled ?? true },
       });
     }
     return mapConfig(await this.loadAutomation(user.id));
@@ -245,11 +251,20 @@ class ReportAutomationService {
     return { reportDate, reportFrom: period.from, periodLabel: periodLabel(period), timezone: config.timezone, offsetMinutes: data.offsetMinutes, options: config.options, text: detail.text, whatsappText: notification.text, truncated: detail.truncated, data };
   }
 
-  async history(user: AuthUser, page: number, pageSize: number) {
+  /** One entry per report RUN (its recipients are nested inside it), newest first. `status` filters on the run's summary status (FAILED also covers an unknown outcome, PENDING also covers "sending"); `date` matches
+   *  the report's data date or the day it was sent, in the automation's timezone. */
+  async history(user: AuthUser, page: number, pageSize: number, filters: { status?: "SENT" | "FAILED" | "PENDING" | "CANCELLED"; date?: string } = {}) {
     this.assertAllowed(user);
-    const automation = await this.db.reportAutomation.findUnique({ where: { ownerId: user.id }, select: { id: true } });
+    const automation = await this.db.reportAutomation.findUnique({ where: { ownerId: user.id }, select: { id: true, timezone: true } });
     if (!automation) return { items: [], pagination: { page, pageSize, totalItems: 0, totalPages: 1 } };
-    const where = { automationId: automation.id, deletedAt: null };
+    const statuses = { SENT: ["SENT"], FAILED: ["FAILED", "UNCERTAIN"], PENDING: ["PENDING", "SENDING"], CANCELLED: ["CANCELLED"] } as const;
+    const sentThatDay = filters.date ? (() => { const start = localInstant(filters.date, 0, automation.timezone); return { gte: start, lt: localInstant(shiftDate(filters.date, 1), 0, automation.timezone) }; })() : null;
+    const where: Prisma.ReportDeliveryWhereInput = {
+      automationId: automation.id,
+      deletedAt: null,
+      ...(filters.status ? { status: { in: [...statuses[filters.status]] } } : {}),
+      ...(filters.date && sentThatDay ? { OR: [{ reportDate: filters.date }, { scheduledFor: sentThatDay }] } : {}),
+    };
     const [rows, total] = await Promise.all([
       this.db.reportDelivery.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize, include: { recipientResults: true } }),
       this.db.reportDelivery.count({ where }),
@@ -296,7 +311,7 @@ class ReportAutomationService {
     const a = await this.loadAutomation(user.id);
     if (!a) return { timezone: "Asia/Kolkata", enabled: false, recurring: null, oneTimeSupported: false, cancelSupported: true, upcoming: [], cancelledUpcoming: [], recent: [], reason: "Automatic sending has not been set up yet." };
     const keys = new Set((await this.db.reportDelivery.findMany({ where: { automationId: a.id, kind: "SCHEDULED", dedupeKey: { not: null } }, select: { dedupeKey: true }, orderBy: { createdAt: "desc" }, take: 200 })).map((d) => d.dedupeKey));
-    const list = [...a.recipients].sort((x, y) => x.position - y.position);
+    const list = [...a.recipients].filter((r) => r.enabled).sort((x, y) => x.position - y.position);
     const complete = list.length > 0 && !(a.sendText && !a.templateName);
     const occurrences = complete ? upcomingOccurrences(a, now, (date) => keys.has(occurrenceKey(a, date)), 3) : [];
     const upcoming = occurrences.flatMap((o) =>
@@ -344,7 +359,7 @@ class ReportAutomationService {
     if (existing) throw new ApiError(existing.status === "CANCELLED" ? "This scheduled report is already cancelled." : "This report has already started (or finished), so it cannot be cancelled safely.", STATUS_CODES.CONFLICT);
     const o = upcomingOccurrences(a, now, () => false, 14).find((x) => x.scheduledDate === occurrenceDate);
     if (!o) throw new ApiError("That is not an upcoming scheduled report (it may have passed, or the automation is off).", STATUS_CODES.BAD_REQUEST);
-    const list = [...a.recipients].sort((x, y) => x.position - y.position);
+    const list = [...a.recipients].filter((r) => r.enabled).sort((x, y) => x.position - y.position);
     const created = await this.db.reportDelivery.createMany({ data: [{ automationId: a.id, kind: "SCHEDULED", reportDate: o.dataTo, reportRangeStart: o.dataFrom === o.dataTo ? null : o.dataFrom, dedupeKey, recipient: list[0]?.phone ?? "", status: "CANCELLED", scheduledFor: o.scheduledAt, cancelledAt: now, cancelledById: user.id }], skipDuplicates: true });
     if (created.count !== 1) throw new ApiError("This report has already started (or was just cancelled), so it was not changed.", STATUS_CODES.CONFLICT);
     const run = await this.db.reportDelivery.findUniqueOrThrow({ where: { dedupeKey } });
@@ -377,7 +392,7 @@ class ReportAutomationService {
     const a = await this.loadAutomation(user.id);
     if (!a) throw new ApiError("Save the automation settings first.", STATUS_CODES.BAD_REQUEST);
     if (enabled) {
-      if (a.recipients.length === 0) throw new ApiError("Add at least one recipient before turning the automation on.", STATUS_CODES.BAD_REQUEST);
+      if (!a.recipients.some((r) => r.enabled)) throw new ApiError("Add or enable at least one recipient before turning the automation on.", STATUS_CODES.BAD_REQUEST);
       if (a.sendText && !a.templateName) throw new ApiError(`Select the "${REPORT_TEMPLATE_NAME}" template before turning the automation on.`, STATUS_CODES.BAD_REQUEST);
     }
     await this.db.reportAutomation.update({ where: { id: a.id }, data: { enabled, updatedAt: this.now() } });
@@ -398,6 +413,7 @@ class ReportAutomationService {
     if (!a) return { at: null, dueNow: false, reason: "Automatic sending has not been set up yet." };
     if (!a.enabled) return { at: null, dueNow: false, reason: "Automatic sending is turned OFF - nothing will be sent on a schedule until you turn it on and save." };
     if (a.recipients.length === 0) return { at: null, dueNow: false, reason: "No recipients are saved." };
+    if (!a.recipients.some((r) => r.enabled)) return { at: null, dueNow: false, reason: "Every recipient is disabled." };
     if (!a.sendText && !a.sendExcel) return { at: null, dueNow: false, reason: "Neither the text message nor the Excel file is switched on." };
     if (a.sendText && !a.templateName) return { at: null, dueNow: false, reason: `No template is saved: select "${REPORT_TEMPLATE_NAME}".` };
     // The next occurrence of the SAVED time in the SAVED timezone: yesterday's, today's or tomorrow's local date, whichever is the first that is still to come or is due and not yet run.
@@ -422,7 +438,7 @@ class ReportAutomationService {
   async sendTest(user: AuthUser, recipientIds?: string[]) {
     this.assertAllowed(user);
     const automation = await this.loadAutomation(user.id);
-    const chosen = (automation?.recipients ?? []).filter((r) => !recipientIds || recipientIds.includes(r.id));
+    const chosen = (automation?.recipients ?? []).filter((r) => (recipientIds ? recipientIds.includes(r.id) : r.enabled));
     if (!automation || chosen.length === 0) throw new ApiError("Save at least one recipient and the report template before sending a test", STATUS_CODES.BAD_REQUEST);
     if (automation.sendText && !automation.templateName) throw new ApiError("Save at least one recipient and the report template before sending a test", STATUS_CODES.BAD_REQUEST);
     if (!automation.sendText && !automation.sendExcel) throw new ApiError("Turn on the text message, the Excel file, or both", STATUS_CODES.BAD_REQUEST);
@@ -479,57 +495,126 @@ class ReportAutomationService {
    * Anyone else gets nothing (no reply, no hint that a report exists). Idempotent: a part is claimed with a compare-and-set (FAILED / PENDING -> SENDING), so a second message, a duplicate webhook or two parallel
    * calls cannot send it twice; a part already SENT, SKIPPED, SENDING or UNCERTAIN is never sent again. A definite provider refusal leaves the part FAILED, so the next reply (or the page's Retry) tries again.
    */
-  async sendPendingOnReply(phone: string): Promise<ReplyOutcome> {
+  async sendPendingOnReply(phone: string, replyToProviderMessageId?: string | null, inbound?: { id?: string | null; at?: Date }): Promise<ReplyOutcome> {
     const contact = normalizeMobile(phone);
     if (!contact) return { handled: false, reason: "not a valid phone number" };
     const now = this.now();
+    // The reply is recorded for live tracking FIRST and independently of whether a report is released (switch off, nothing held, window closed): it is a fact about the inbound message.
+    await this.recordReply(phone, replyToProviderMessageId, inbound).catch((error) => logger.error("Report reply could not be recorded for live tracking", error instanceof Error ? (error.message.split("\n")[0] ?? "unknown error") : "unknown error"));
     await this.recoverStaleParts(contact);
-    const rows = await this.db.reportDeliveryRecipient.findMany({
-      where: {
-        delivery: { kind: "SCHEDULED", status: { not: "CANCELLED" }, deletedAt: null, createdAt: { gte: new Date(now.getTime() - REPLY_LOOKBACK_MS) } },
-        status: { notIn: ["PENDING", "SENDING"] }, // the notification step of that run is finished (the scheduled run owns it until then)
-        OR: [{ txtStatus: { in: ["WAITING_FOR_REPLY", "FAILED", "PENDING"] } }, { docStatus: { in: ["WAITING_FOR_REPLY", "FAILED", "PENDING"] } }],
-      },
-      include: { delivery: { include: { automation: { include: { recipients: true } } } } },
-    });
-    const mine = rows
-      .filter((r) => normalizeMobile(r.phone) === contact)
-      .filter((r) => r.delivery.automation.enabled && r.delivery.automation.recipients.some((x) => normalizeMobile(x.phone) === contact))
-      .sort((a, b) => b.delivery.createdAt.getTime() - a.delivery.createdAt.getTime());
-    const row = mine[0];
-    if (!row) return { handled: false, reason: "no held-back report for this number" };
-    const automation = row.delivery.automation;
+    const since = new Date(now.getTime() - REPLY_LOOKBACK_MS);
+    const runWhere = { kind: "SCHEDULED" as const, status: { not: "CANCELLED" as const }, deletedAt: null, createdAt: { gte: since } };
+    const heldParts = ["WAITING_FOR_REPLY", "FAILED", "PENDING"] as const;
+
+    // 1. WHICH summary is this a reply to? A reply that quotes one of our report messages (Meta's context.id = that message's id) names its run and therefore its exact report date. A message that quotes nothing
+    //    (the person just typed "Yes") falls back to the most recent report still held back for this number. The sender must be on the automation's CURRENT recipient list either way.
+    let deliveryId: string | null = null;
+    if (replyToProviderMessageId) {
+      const quoted = await this.db.reportDeliveryRecipient.findFirst({
+        where: { delivery: runWhere, OR: [{ providerMessageId: replyToProviderMessageId }, { txtProviderMessageId: replyToProviderMessageId }, { docProviderMessageId: replyToProviderMessageId }] },
+        select: { deliveryId: true, phone: true },
+      });
+      // the quoted message must have been sent TO this number: a recipient cannot release a report by quoting someone else's message id
+      if (quoted && normalizeMobile(quoted.phone) === contact) deliveryId = quoted.deliveryId;
+    }
+    if (!deliveryId) {
+      const rows = await this.db.reportDeliveryRecipient.findMany({
+        where: { delivery: runWhere, status: { notIn: ["PENDING", "SENDING"] }, OR: [{ txtStatus: { in: [...heldParts] } }, { docStatus: { in: [...heldParts] } }] },
+        select: { phone: true, deliveryId: true, delivery: { select: { createdAt: true } } },
+      });
+      const mine = rows.filter((r) => normalizeMobile(r.phone) === contact).sort((a, b) => b.delivery.createdAt.getTime() - a.delivery.createdAt.getTime());
+      deliveryId = mine[0]?.deliveryId ?? null;
+    }
+    if (!deliveryId) return { handled: false, reason: "no held-back report for this number" };
+
+    const run = await this.db.reportDelivery.findUniqueOrThrow({ where: { id: deliveryId }, include: { automation: { include: { recipients: true } }, recipientResults: true } });
+    const automation = run.automation;
+    if (!automation.enabled || !automation.recipients.some((x) => x.enabled && normalizeMobile(x.phone) === contact)) return { handled: false, reason: "this number is not a recipient of an enabled report automation", runId: run.id };
+    if (!automation.replyTriggersDetail) return { handled: false, reason: "reply-triggered detailed reports are turned off", runId: run.id };
     const owner = await this.db.user.findUnique({ where: { id: automation.ownerId }, select: { id: true, role: true, status: true } });
     if (!owner || owner.status !== UserStatus.ACTIVE || (owner.role !== Role.ADMIN && owner.role !== Role.MANAGER)) {
       return { handled: false, reason: "the automation's owner is no longer an active Admin or Manager" };
     }
 
+    // 2. ONE reply releases the run for EVERY recipient on its list (the replier's own copy and everyone else's). Each part is claimed with a compare-and-set, so a second reply, a duplicate webhook or a
+    //    parallel call can never send a part twice. A recipient whose own 24-hour window is closed cannot be sent a free-form message by WhatsApp: that part is left held (not failed, no attempt used) and
+    //    goes out when THEY write in, exactly as before.
     const claimable = (status: string, attempts: number) => (status === "WAITING_FOR_REPLY" || status === "FAILED" || status === "PENDING") && attempts < MANUAL_RETRY_MAX_ATTEMPTS;
-    let detail = false;
-    let excel = false;
-    if (claimable(row.txtStatus, row.txtAttempts)) {
-      detail = (await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: row.txtStatus, txtAttempts: row.txtAttempts }, data: { txtStatus: "SENDING", txtAttempts: { increment: 1 }, txtError: null } })).count === 1;
+    const windowOpenFor = async (p: string) => (this.deps.windowOpen ?? ((x: string, n: Date) => customerWindowOpen(this.db, x, n)))(p, this.now());
+    const txtIds: string[] = [];
+    const docIds: string[] = [];
+    let replier: { id: string; txt: boolean; doc: boolean } | null = null;
+    for (const row of run.recipientResults) {
+      if (row.status === "PENDING" || row.status === "SENDING") continue; // the scheduled run still owns this recipient's first step
+      const isReplier = normalizeMobile(row.phone) === contact;
+      if (!isReplier && !(await windowOpenFor(row.phone))) continue;
+      let txt = false;
+      let doc = false;
+      if (claimable(row.txtStatus, row.txtAttempts)) txt = (await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: row.txtStatus, txtAttempts: row.txtAttempts }, data: { txtStatus: "SENDING", txtAttempts: { increment: 1 }, txtError: null } })).count === 1;
+      if (claimable(row.docStatus, row.docAttempts)) doc = (await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: row.docStatus, docAttempts: row.docAttempts }, data: { docStatus: "SENDING", docAttempts: { increment: 1 }, docError: null } })).count === 1;
+      if (txt) txtIds.push(row.id);
+      if (doc) docIds.push(row.id);
+      if (isReplier) replier = { id: row.id, txt, doc };
     }
-    if (claimable(row.docStatus, row.docAttempts)) {
-      excel = (await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: row.docStatus, docAttempts: row.docAttempts }, data: { docStatus: "SENDING", docAttempts: { increment: 1 }, docError: null } })).count === 1;
-    }
-    if (!detail && !excel) return { handled: false, reason: "nothing left to send (already sent, being sent, or retried the maximum number of times)", runId: row.deliveryId };
+    if (txtIds.length === 0 && docIds.length === 0) return { handled: false, reason: "nothing left to send (already sent, being sent, or retried the maximum number of times)", runId: run.id, reportDate: run.reportDate };
 
-    const period = { from: row.delivery.reportRangeStart ?? row.delivery.reportDate, to: row.delivery.reportDate };
+    const period = { from: run.reportRangeStart ?? run.reportDate, to: run.reportDate };
+    const viewer = { id: owner.id, role: owner.role };
     try {
-      await this.deliver([], automation, { id: owner.id, role: owner.role }, row.deliveryId, period, false, [row.id], { txt: detail, doc: excel });
+      if (txtIds.length > 0) await this.deliver([], automation, viewer, run.id, period, false, txtIds, { txt: true, doc: false });
+      if (docIds.length > 0) await this.deliver([], automation, viewer, run.id, period, false, docIds, { txt: false, doc: true });
     } catch (error) {
       // An unexpected failure after the parts were claimed: they must not stay "sending" forever. They may or may not have reached the provider, so they are UNCERTAIN (never resent automatically).
-      // Conditional on THIS claim (status SENDING and the attempt number this call set), so a part that finished, or one another worker has since claimed, is left exactly as it is.
+      // Conditional on status SENDING, so a part that finished, or one another worker has since claimed, is left exactly as it is.
       const why = "The send was interrupted by an unexpected error before its outcome was recorded. It may have been delivered, so it was not sent again automatically.";
-      if (detail) await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, txtStatus: "SENDING", txtAttempts: row.txtAttempts + 1 }, data: { txtStatus: "UNCERTAIN", txtError: why, txtLastAttemptAt: this.now() } }).catch(() => undefined);
-      if (excel) await this.db.reportDeliveryRecipient.updateMany({ where: { id: row.id, docStatus: "SENDING", docAttempts: row.docAttempts + 1 }, data: { docStatus: "UNCERTAIN", docError: why, docLastAttemptAt: this.now() } }).catch(() => undefined);
-      await recomputeRunStatus(this.db, row.deliveryId).catch(() => undefined);
-      logger.error(`Report reply: delivery for run ${row.deliveryId} failed after its parts were claimed; they were marked uncertain`, error instanceof Error ? error.message.split(String.fromCharCode(10))[0] : "unknown error");
+      if (txtIds.length > 0) await this.db.reportDeliveryRecipient.updateMany({ where: { id: { in: txtIds }, txtStatus: "SENDING" }, data: { txtStatus: "UNCERTAIN", txtError: why, txtLastAttemptAt: this.now() } }).catch(() => undefined);
+      if (docIds.length > 0) await this.db.reportDeliveryRecipient.updateMany({ where: { id: { in: docIds }, docStatus: "SENDING" }, data: { docStatus: "UNCERTAIN", docError: why, docLastAttemptAt: this.now() } }).catch(() => undefined);
+      await recomputeRunStatus(this.db, run.id).catch(() => undefined);
+      logger.error(`Report reply: delivery for run ${run.id} failed after its parts were claimed; they were marked uncertain`, error instanceof Error ? error.message.split(String.fromCharCode(10))[0] : "unknown error");
       throw error;
     }
-    const after = await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id: row.id } });
-    return { handled: true, reason: "sent on the recipient's reply", runId: row.deliveryId, reportDate: row.delivery.reportDate, parts: { ...(detail ? { detail: after.txtStatus } : {}), ...(excel ? { excel: after.docStatus } : {}) } };
+    const mine = replier as { id: string; txt: boolean; doc: boolean } | null;
+    const after = mine ? await this.db.reportDeliveryRecipient.findUniqueOrThrow({ where: { id: mine.id } }) : null;
+    return { handled: true, reason: "sent on the recipient's reply", runId: run.id, reportDate: run.reportDate, recipientsReleased: new Set([...txtIds, ...docIds]).size, parts: after && mine ? { ...(mine.txt ? { detail: after.txtStatus } : {}), ...(mine.doc ? { excel: after.docStatus } : {}) } : {} };
+  }
+
+  /**
+   * LIVE TRACKING: an inbound WhatsApp message from a report recipient. Marks THAT recipient as Replied on the run it answers - once (the first reply is kept), from a real inbound message only.
+   * A message that quotes one of our report messages (Meta context.id) answers that message's run - but only if that message was sent TO this number. A message that quotes nothing is a reply to the
+   * most recent report this number was actually sent within the look-back. A message that quotes some OTHER message (an ordinary customer chat) is not a report reply. Idempotent: a repeated webhook
+   * or a second message changes nothing (the update only applies while replied_at is empty).
+   */
+  async recordReply(phone: string, replyToProviderMessageId?: string | null, inbound?: { id?: string | null; at?: Date }): Promise<{ recorded: boolean; runId?: string }> {
+    const contact = normalizeMobile(phone);
+    if (!contact) return { recorded: false };
+    const since = new Date(this.now().getTime() - REPLY_LOOKBACK_MS);
+    const delivery = { status: { not: "CANCELLED" as const }, deletedAt: null, createdAt: { gte: since } };
+    let target: { id: string; deliveryId: string; updatedAt: Date } | null = null;
+    if (replyToProviderMessageId) {
+      const quoted = await this.db.reportDeliveryRecipient.findFirst({ where: { delivery, OR: [{ providerMessageId: replyToProviderMessageId }, { txtProviderMessageId: replyToProviderMessageId }, { docProviderMessageId: replyToProviderMessageId }] }, select: { id: true, deliveryId: true, phone: true, updatedAt: true } });
+      if (!quoted || normalizeMobile(quoted.phone) !== contact) return { recorded: false };
+      target = quoted;
+    } else {
+      const rows = await this.db.reportDeliveryRecipient.findMany({ where: { delivery, OR: [{ sentAt: { not: null } }, { txtSentAt: { not: null } }, { docSentAt: { not: null } }] }, select: { id: true, deliveryId: true, phone: true, updatedAt: true, delivery: { select: { createdAt: true } } } });
+      target = rows.filter((r) => normalizeMobile(r.phone) === contact).sort((a, b) => b.delivery.createdAt.getTime() - a.delivery.createdAt.getTime())[0] ?? null;
+    }
+    // updated_at is deliberately NOT advanced: it is the clock the crash-recovery logic uses to decide a "sending" part is stale, and a reply must not make an interrupted send look fresh.
+    if (!target) return { recorded: false };
+    const done = await this.db.reportDeliveryRecipient.updateMany({ where: { id: target.id, repliedAt: null }, data: { repliedAt: inbound?.at ?? this.now(), replyMessageId: inbound?.id ?? null, updatedAt: target.updatedAt } });
+    return { recorded: done.count === 1, runId: target.deliveryId };
+  }
+
+  /** The live delivery picture for ONE report run (default: the latest) plus the runs that can be selected. Read-only; every number comes from the stored provider callbacks and inbound messages. */
+  async tracking(user: AuthUser, runId?: string) {
+    this.assertAllowed(user);
+    const automation = await this.db.reportAutomation.findUnique({ where: { ownerId: user.id }, select: { id: true } });
+    if (!automation) return { runs: [], run: null };
+    const base = { automationId: automation.id, deletedAt: null, status: { not: "CANCELLED" as const } };
+    const runs = await this.db.reportDelivery.findMany({ where: base, orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 30, select: { id: true, kind: true, reportDate: true, reportRangeStart: true, scheduledFor: true, createdAt: true } });
+    const wanted = runId ?? runs[0]?.id;
+    const full = wanted ? await this.db.reportDelivery.findFirst({ where: { ...base, id: wanted }, include: { recipientResults: true } }) : null;
+    if (runId && !full) throw new ApiError("Report run not found", STATUS_CODES.NOT_FOUND);
+    return { runs: runs.map((r) => ({ id: r.id, kind: r.kind, reportDate: r.reportDate, reportFrom: r.reportRangeStart ?? r.reportDate, scheduledFor: r.scheduledFor ?? r.createdAt })), run: full ? mapRun(full) : null };
   }
 
   /**
@@ -615,7 +700,7 @@ class ReportAutomationService {
 
   /** An occurrence that nobody was running for (and is too old to send) becomes a visible Missed run - once - instead of silently vanishing or being sent hours late. */
   private async recordMissed(automation: AutomationRow, occurrenceDate: string, period: ReportPeriod, at: Date): Promise<void> {
-    const list = [...automation.recipients].sort((a, b) => a.position - b.position);
+    const list = [...automation.recipients].filter((r) => r.enabled).sort((a, b) => a.position - b.position);
     if (list.length === 0 || (!automation.sendText && !automation.sendExcel)) return;
     const dedupeKey = occurrenceKey(automation, occurrenceDate);
     if (await this.db.reportDelivery.findUnique({ where: { dedupeKey }, select: { id: true } })) return;
@@ -630,7 +715,7 @@ class ReportAutomationService {
 
   private async processOccurrence(automation: AutomationRow, occurrenceDate: string, period: ReportPeriod): Promise<boolean> {
     const now = this.now();
-    const list = [...automation.recipients].sort((a, b) => a.position - b.position);
+    const list = [...automation.recipients].filter((r) => r.enabled).sort((a, b) => a.position - b.position);
     if (list.length === 0) return false;
     if (!automation.sendText && !automation.sendExcel) return false;
     const dedupeKey = occurrenceKey(automation, occurrenceDate);

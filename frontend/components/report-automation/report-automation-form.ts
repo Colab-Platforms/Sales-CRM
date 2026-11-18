@@ -1,4 +1,4 @@
-import type { ReportAutomationConfigInput, ReportRecipientStatus } from "@/lib/api-client/types/report-automation.types";
+import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportRecipientStatus } from "@/lib/api-client/types/report-automation.types";
 
 // Client-side mirror of the server's validation (the server is the authority): the same recipient, time and metric rules, so a mistake is shown before saving.
 export const normalizeRecipient = (value: string): string => value.trim().replace(/[\s\-().]/g, "");
@@ -7,6 +7,7 @@ export const MAX_RECIPIENTS = 10;
 /** The only template the report uses: Utility, one named body variable {{report_text}}, created and approved in the Meta console, then synced into the CRM. */
 export const REPORT_TEMPLATE_NAME = "daily_team_report";
 
+// The page offers YESTERDAY (recommended), TODAY and LAST7DAYS for the recurring report; DATE exists only for old saved settings.
 export const REPORT_MODE_LABEL: Record<string, string> = {
   TODAY: "Today (the day it is sent)",
   YESTERDAY: "Yesterday (the day before it is sent)",
@@ -17,7 +18,7 @@ export const REPORT_MODE_LABEL: Record<string, string> = {
 export const TIMEZONES = ["Asia/Kolkata", "Asia/Dubai", "Asia/Singapore", "Europe/London", "America/New_York", "UTC"];
 
 /** Problems with the recipient list, keyed by row index (and "list" for list-wide ones). */
-export function validateRecipients(rows: { name?: string; phone: string }[], enabled: boolean): Record<string, string> {
+export function validateRecipients(rows: { name?: string; phone: string; enabled?: boolean }[], enabled: boolean): Record<string, string> {
   const errors: Record<string, string> = {};
   const seen = new Set<string>();
   rows.forEach((row, i) => {
@@ -32,7 +33,38 @@ export function validateRecipients(rows: { name?: string; phone: string }[], ena
   });
   if (rows.length > MAX_RECIPIENTS) errors.list = `At most ${MAX_RECIPIENTS} recipients`;
   if (enabled && rows.length === 0) errors.list = "At least one recipient is required to enable the automation";
+  else if (enabled && !rows.some((r) => r.enabled !== false)) errors.list = "Enable at least one recipient to turn the automation on";
   return errors;
+}
+
+type Row = { name?: string | null; phone: string; enabled?: boolean };
+const normRows = (rs: Row[]) => rs.map((r) => [(r.name ?? "").trim(), normalizeRecipient(r.phone), r.enabled !== false]);
+
+/** The saved settings as the form edits them. A legacy fixed-date report is shown as "Previous day": a recurring report must never keep reporting one old, manually chosen date. */
+export function configToInput(c: ReportAutomationConfig): ReportAutomationConfigInput {
+  const legacyDate = c.reportFor === "DATE";
+  return {
+    enabled: c.enabled,
+    recipients: c.recipients.map((r) => ({ name: r.name ?? "", phone: r.phone, enabled: r.enabled })),
+    sendTime: c.sendTime,
+    timezone: c.timezone,
+    reportFor: legacyDate ? "YESTERDAY" : c.reportFor,
+    dataDate: legacyDate ? null : c.dataDate,
+    templateName: c.templateName ?? "",
+    languageCode: c.languageCode,
+    options: c.options,
+    includedUserIds: c.includedUserIds,
+    sendText: c.sendText,
+    sendExcel: c.sendExcel,
+    replyTriggersDetail: c.replyTriggersDetail,
+  };
+}
+
+/** Are the form's values different from what is saved? Compared against the saved settings as stored (a legacy fixed date therefore counts as a pending change). */
+export function isDirty(form: ReportAutomationConfigInput, c: ReportAutomationConfig): boolean {
+  const saved = { enabled: c.enabled, recipients: normRows(c.recipients), sendTime: c.sendTime, timezone: c.timezone, reportFor: c.reportFor, dataDate: c.dataDate, templateName: c.templateName ?? "", languageCode: c.languageCode, options: c.options, includedUserIds: c.includedUserIds, sendText: c.sendText, sendExcel: c.sendExcel, replyTriggersDetail: c.replyTriggersDetail };
+  const now = { enabled: form.enabled, recipients: normRows(form.recipients), sendTime: form.sendTime, timezone: form.timezone, reportFor: form.reportFor, dataDate: form.dataDate, templateName: form.templateName, languageCode: form.languageCode, options: form.options, includedUserIds: form.includedUserIds, sendText: form.sendText, sendExcel: form.sendExcel, replyTriggersDetail: form.replyTriggersDetail };
+  return JSON.stringify(now) !== JSON.stringify(saved);
 }
 
 /** One message per problem; empty = ready to save. A disabled draft may be incomplete. */

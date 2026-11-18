@@ -54,6 +54,10 @@ model ReportAutomation {
   sendText  Boolean @default(true) @map("send_text")
   sendExcel Boolean @default(true) @map("send_excel")
 
+  // Reply-triggered detailed report (migration 20261118000000): when ON, ANY configured recipient replying to the summary message releases the detailed report + Excel for that summary's date to every recipient.
+  // When OFF, a reply releases nothing (the parts stay held and can still be sent with the page's Retry).
+  replyTriggersDetail Boolean @default(true) @map("reply_triggers_detail")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -140,6 +144,8 @@ model ReportRecipient {
   // E.164, e.g. +919876543210
   phone    String  @map("phone") @db.VarChar(20)
   position Int     @default(0) @map("position")
+  // A disabled recipient stays on the list (name and number kept) but is skipped by scheduled sends and cannot release a report by replying. (migration 20261118120000)
+  enabled  Boolean @default(true) @map("enabled")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -171,6 +177,11 @@ model ReportDeliveryRecipient {
   sentAt        DateTime? @map("sent_at")
   deliveredAt   DateTime? @map("delivered_at")
   readAt        DateTime? @map("read_at")
+
+  // When this recipient first wrote back to the report (an inbound WhatsApp message from their number, quoting one of the report messages or sent after it). Set once, only from a real inbound message.
+  // Independent of delivery: a recipient can read the report without ever replying. (migration 20261118180000)
+  repliedAt      DateTime? @map("replied_at")
+  replyMessageId String?   @map("reply_message_id") @db.VarChar(255)
 
   // The Excel DOCUMENT is a separate WhatsApp message with its own result (status above is the TEXT template message).
   // The DETAILED TEXT is a third message: the formatted multi-line report as a free-form WhatsApp text (allowed only inside the 24-hour customer-service window). `status` above is the short template NOTIFICATION.

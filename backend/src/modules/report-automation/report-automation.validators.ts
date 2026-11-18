@@ -15,7 +15,7 @@ export const MAX_RECIPIENTS = 10;
 /** E.164, and an Indian (+91) number must have exactly 10 digits after the country code, starting 6-9. A number one digit short (+91932614025) is valid E.164 but can never match the sender Meta reports (919321614025), so its reply window would stay closed forever. */
 export const isValidRecipient = (v: string): boolean => E164.test(v) && (!v.startsWith("+91") || /^\+91[6-9]\d{9}$/.test(v));
 const phoneSchema = z.string().trim().max(40).transform(normalizeRecipient).refine(isValidRecipient, { error: "Each recipient must be a WhatsApp number with country code, e.g. +919876543210 (an Indian +91 number has exactly 10 digits after +91)" });
-const recipientSchema = z.object({ name: z.string().trim().max(100, { error: "A recipient name can be at most 100 characters" }).optional(), phone: phoneSchema });
+const recipientSchema = z.object({ name: z.string().trim().max(100, { error: "A recipient name can be at most 100 characters" }).optional(), phone: phoneSchema, enabled: z.boolean().optional() });
 
 // The pre-multi-recipient form sent one "recipient" string; it is still accepted and means a list of one.
 const withLegacyRecipient = (body: unknown): unknown => {
@@ -43,8 +43,9 @@ const configObject = z
     includedUserIds: z.array(z.uuid({ error: "Invalid telecaller id" })).max(200).default([]),
     sendText: z.boolean().default(true),
     sendExcel: z.boolean().default(true),
+    replyTriggersDetail: z.boolean().default(true),
   })
-  .refine((c) => !c.enabled || c.recipients.length > 0, { path: ["recipients"], error: "At least one recipient is required to enable the automation" })
+  .refine((c) => !c.enabled || c.recipients.some((r) => r.enabled !== false), { path: ["recipients"], error: "At least one recipient must be enabled to turn the automation on" })
   .refine((c) => !c.enabled || !c.sendText || Boolean(c.templateName), { path: ["templateName"], error: `The approved template "${REPORT_TEMPLATE_NAME}" is required to enable the text message` })
   .refine((c) => !c.templateName || isReportTemplateName(c.templateName), { path: ["templateName"], error: `The report uses the dedicated template "${REPORT_TEMPLATE_NAME}" (or its renamed copy) only` })
   .refine((c) => c.reportFor !== "DATE" || Boolean(c.dataDate), { path: ["dataDate"], error: "Select the date the report should cover" })
@@ -53,7 +54,7 @@ const configSchema = z.preprocess(withLegacyRecipient, configObject);
 
 export interface ConfigInput {
   enabled: boolean;
-  recipients: { name?: string; phone: string }[];
+  recipients: { name?: string; phone: string; enabled?: boolean }[];
   sendTime: string;
   timezone: string;
   reportFor: "TODAY" | "YESTERDAY" | "DATE" | "LAST7DAYS";
@@ -64,6 +65,8 @@ export interface ConfigInput {
   includedUserIds: string[];
   sendText: boolean;
   sendExcel: boolean;
+  /** Omitted = ON (the default). */
+  replyTriggersDetail?: boolean;
 }
 
 export const validateConfigInput = (body: unknown) => validateSchema<ConfigInput>(configSchema, body);
@@ -76,10 +79,12 @@ export const validateTestSendBody = (body: unknown) => validateSchema<{ confirm:
 
 export const validateRetryBody = (body: unknown) => validateSchema<{ part: "TEXT" | "DETAIL" | "DOCUMENT" }>(z.object({ part: z.enum(["TEXT", "DETAIL", "DOCUMENT"]).default("TEXT") }), body ?? {});
 
+export const validateTrackingQuery = (query: unknown) => validateSchema<{ runId?: string }>(z.object({ runId: z.uuid({ error: "Invalid run id" }).optional() }), query);
+
 export const validateIdParam = (params: unknown) => validateSchema<{ id: string }>(z.object({ id: z.uuid({ error: "Invalid id" }) }), params);
 
-const pageSchema = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20) });
-export const validateHistoryQuery = (query: unknown) => validateSchema<{ page: number; pageSize: number }>(pageSchema, query);
+const pageSchema = z.object({ page: z.coerce.number().int().min(1).default(1), pageSize: z.coerce.number().int().min(1).max(100).default(20), status: z.enum(["SENT", "FAILED", "PENDING", "CANCELLED"]).optional(), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { error: "date must be YYYY-MM-DD" }).optional() });
+export const validateHistoryQuery = (query: unknown) => validateSchema<{ page: number; pageSize: number; status?: "SENT" | "FAILED" | "PENDING" | "CANCELLED"; date?: string }>(pageSchema, query);
 
 export const validateCancelBody = (body: unknown) => validateSchema<{ occurrenceDate: string }>(z.object({ occurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { error: "occurrenceDate must be YYYY-MM-DD" }) }), body);
 export const validateEnabledBody = (body: unknown) => validateSchema<{ enabled: boolean }>(z.object({ enabled: z.boolean({ error: "enabled must be true or false" }) }), body);
