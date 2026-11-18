@@ -13,6 +13,8 @@ export interface ReportRecipient {
   id: string;
   name: string | null;
   phone: string;
+  /** A disabled recipient stays on the list but is skipped by scheduled sends. */
+  enabled: boolean;
 }
 
 export interface ReportAutomationConfig {
@@ -31,12 +33,14 @@ export interface ReportAutomationConfig {
   includedUserIds: string[];
   sendText: boolean;
   sendExcel: boolean;
+  /** When ON, any one recipient replying to the summary message releases the detailed report and Excel to every recipient. */
+  replyTriggersDetail: boolean;
   updatedAt: string | null;
 }
 
 export interface ReportAutomationConfigInput {
   enabled: boolean;
-  recipients: { name?: string; phone: string }[];
+  recipients: { name?: string; phone: string; enabled?: boolean }[];
   sendTime: string;
   timezone: string;
   reportFor: ReportMode;
@@ -47,6 +51,8 @@ export interface ReportAutomationConfigInput {
   includedUserIds: string[];
   sendText: boolean;
   sendExcel: boolean;
+  /** When ON, any one recipient replying to the summary message releases the detailed report and Excel to every recipient. */
+  replyTriggersDetail: boolean;
 }
 
 export interface ReportPersonRow {
@@ -111,6 +117,8 @@ export interface ReportRecipientResult {
   sentAt: string | null;
   deliveredAt: string | null;
   readAt: string | null;
+  /** When this recipient first wrote back to the report (a real inbound WhatsApp message), or null. Independent of delivery. */
+  repliedAt: string | null;
   canRetry: boolean;
   /** The formatted multi-line report as a free-form text message - a separate message with its own status. */
   detail: ReportMessagePart;
@@ -190,4 +198,10 @@ export interface ReportScheduled {
   cancelledUpcoming: { runId: string; scheduledAt: string; timezone: string; dataFrom: string; dataTo: string; cancelledAt: string | null; cancelledBy: string | null }[];
   recent: ScheduledRow[];
   reason: string | null;
+}
+
+/** Live tracking of one report run: the selectable runs (newest first) and the chosen run with every recipient's stored delivery and reply state. */
+export interface ReportTracking {
+  runs: { id: string; kind: "SCHEDULED" | "TEST"; reportDate: string; reportFrom: string; scheduledFor: string }[];
+  run: ReportDelivery | null;
 }

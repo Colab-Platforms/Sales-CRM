@@ -4,7 +4,7 @@ import type { AuthRequest } from "@/middlewares/auth.js";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import ReportAutomationService from "./report-automation.service.js";
-import { validateCancelBody, validateConfigInput, validateEnabledBody, validateHistoryQuery, validateIdParam, validatePreviewQuery, validateRetryBody, validateTestSendBody } from "./report-automation.validators.js";
+import { validateCancelBody, validateConfigInput, validateEnabledBody, validateHistoryQuery, validateIdParam, validatePreviewQuery, validateRetryBody, validateTestSendBody, validateTrackingQuery } from "./report-automation.validators.js";
 
 import WhatsAppTemplateService from "../whatsapp/whatsapp.template.service.js";
 import { addPickerTemplate, listPickerTemplates } from "./report-automation.template-picker.js";
@@ -58,7 +58,18 @@ export const listDeliveries = async (req: AuthRequest, res: Response): Promise<v
   try {
     const { error, value } = validateHistoryQuery(req.query);
     if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
-    sendResponse(res, true, await service.history(req.user!, value.page, value.pageSize), "OK", STATUS_CODES.OK);
+    sendResponse(res, true, await service.history(req.user!, value.page, value.pageSize, { status: value.status, date: value.date }), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
+/** Live delivery tracking for one report run (default: the latest), polled by the page. Read-only. */
+export const getTracking = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateTrackingQuery(req.query);
+    if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await service.tracking(req.user!, value.runId), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     fail(res, error);
   }

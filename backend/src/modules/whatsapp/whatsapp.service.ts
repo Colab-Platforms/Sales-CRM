@@ -104,9 +104,9 @@ class WhatsAppService {
     // Injectable so tests download media from a fake - never the real Graph API.
     private readonly getMediaSource: (db: DbClient) => Promise<{ fetchMedia(mediaId: string): Promise<FetchedMedia> } | null> = getMetaWhatsAppProvider,
     // A recipient of the Daily Team Report writing in releases the report that was held back for the closed 24-hour window. Injectable so tests never send anything.
-    private readonly reportReply: (phone: string) => Promise<{ handled: boolean; reason: string; runId?: string; reportDate?: string }> = async (phone) => {
+    private readonly reportReply: (phone: string, replyToProviderMessageId?: string | null, inbound?: { id?: string | null; at?: Date }) => Promise<{ handled: boolean; reason: string; runId?: string; reportDate?: string; recipientsReleased?: number }> = async (phone, replyToProviderMessageId, inbound) => {
       const { default: ReportAutomationService } = await import("../report-automation/report-automation.service.js");
-      return new ReportAutomationService(this.db).sendPendingOnReply(phone);
+      return new ReportAutomationService(this.db).sendPendingOnReply(phone, replyToProviderMessageId, inbound);
     },
   ) {
     this.leadService = new LeadService();
@@ -563,7 +563,7 @@ class WhatsAppService {
 
     // A normal text message from the Meta number: if the sender is a Daily Team Report recipient with a held-back report, send it now (see ReportAutomationService.sendPendingOnReply).
     // Runs after the message is committed (so the 24-hour window is open), AFTER the duplicate check above (a repeated webhook delivery never reaches this line), and never blocks or fails the webhook.
-    if (provider === "META" && message.messageType === "TEXT") this.releaseHeldReport(message.from);
+    if (provider === "META" && message.messageType === "TEXT") this.releaseHeldReport(message.from, message.replyToProviderMessageId ?? null, { id: message.providerMessageId, at: message.timestamp });
 
     if (!result.leadId || !result.conversation) return;
     if (result.conversation.mode === "AI") {
@@ -578,12 +578,12 @@ class WhatsAppService {
     }
   }
 
-  private releaseHeldReport(from: string): void {
+  private releaseHeldReport(from: string, replyToProviderMessageId: string | null, inbound: { id: string; at: Date }): void {
     const masked = from.length > 4 ? `${"*".repeat(from.length - 4)}${from.slice(-4)}` : "****";
     const work: Promise<void> = new Promise<void>((resolve) => setImmediate(resolve))
-      .then(() => this.reportReply(from))
+      .then(() => this.reportReply(from, replyToProviderMessageId, inbound))
       .then((o) => {
-        if (o.handled) logger.info(`Daily Team Report released on reply: run ${o.runId} for ${o.reportDate} to ${masked}`);
+        if (o.handled) logger.info(`Daily Team Report released on reply from ${masked}: run ${o.runId} for ${o.reportDate} to ${o.recipientsReleased ?? 1} recipient(s)`);
       })
       .catch((error) => logger.error(`Daily Team Report reply handling failed for ${masked}`, error instanceof Error ? error.message : String(error)))
       .finally(() => void pendingBackgroundWork.delete(work));
