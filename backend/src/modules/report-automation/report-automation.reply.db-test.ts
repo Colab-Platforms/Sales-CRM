@@ -662,3 +662,25 @@ describe("ONE reply releases the detailed report and Excel for EVERY recipient, 
     });
   });
 });
+
+describe("a recipient who was disabled or removed after the run gets nothing from someone else's reply", () => {
+  it("A replies; B (window open, but disabled since the run) and a removed recipient are not sent the detailed report or Excel, and their parts stay held", async () => {
+    await inRollback(async (tx) => {
+      const w = await held(tx);
+      open(w, A, B);
+      await w.svc.saveConfig(w.actor, { ...w.config, recipients: [{ name: "Owner", phone: A }, { name: "Ops", phone: B, enabled: false }] });
+      const o = await w.svc.sendPendingOnReply(A);
+      assert.equal(o.handled, true);
+      assert.equal(o.recipientsReleased, 1);
+      assert.equal(w.wa.texts.filter((t) => t.recipient === A).length, 1);
+      assert.equal(w.wa.files.filter((f) => f.recipient === A).length, 1);
+      assert.equal(w.wa.texts.filter((t) => t.recipient === B).length + w.wa.files.filter((f) => f.recipient === B).length, 0, "the disabled recipient is sent nothing");
+      const b = await rowOf(tx, w.run.id, B);
+      assert.deepEqual([b.txtStatus, b.docStatus], ["WAITING_FOR_REPLY", "WAITING_FOR_REPLY"]);
+      // removed entirely: same
+      await w.svc.saveConfig(w.actor, { ...w.config, recipients: [{ name: "Owner", phone: A }] });
+      await w.svc.sendPendingOnReply(A);
+      assert.equal(w.wa.texts.filter((t) => t.recipient === B).length, 0);
+    });
+  });
+});

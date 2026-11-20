@@ -43,6 +43,8 @@ export function summarize(orders: LiveOrder[]) {
     totalValue: rupees(cents("VALUE")),
     cod: count("COD"),
     prepaid: count("PREPAID"),
+    // Orders with no payment method at all (e.g. a zero-value / free order): neither COD nor prepaid, so cod + prepaid + otherPayment = totalOrders always reconciles.
+    otherPayment: orders.filter((o) => o.paymentMode === null).length,
     paid: count("PAID"),
     pendingPayment: count("PENDING"),
     cancelled: count("CANCELLED"),

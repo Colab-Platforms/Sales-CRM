@@ -9,11 +9,12 @@ import type { Prisma } from "../../../generated/prisma/client.js";
 import { buildReportData, fitDetailText, localInstant, periodLabel, resolvePeriod, shiftDate, type ReportPeriod, liveSources, localParts, normalizeOptions, parseSendTime, toTemplateParam, type ReportSources } from "./report-automation.report.js";
 import { buildReportXlsx, reportFilename } from "./report-automation.xlsx.js";
 import { classifyReportTemplates, createWhatsAppReportDetailSender, createWhatsAppReportDocumentSender, createWhatsAppReportSender, REPORT_TEMPLATE_NAME, ReportSendRejected, WINDOW_CLOSED_REASON, type ReportDetailSender, type ReportDocumentSender, type ReportSender } from "./report-automation.sender.js";
-import { buildStructuredValues, type StructuredValues, type TemplateMetricsLoader } from "./report-automation.template-metrics.js";
+import { buildStructuredValues, type StructuredNeed, type StructuredValues, type TemplateMetricsLoader } from "./report-automation.template-metrics.js";
 import { loadTemplateMetrics } from "./report-automation.template-metrics.load.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { computeServiceWindow } from "../whatsapp/whatsapp.freetext.service.js";
 import { recomputeRunStatus } from "./report-automation.run.js";
+import { selectedTemplateStatus, summaryTemplateStatus } from "./report-automation.summary-template.js";
 import { derivePhase, formatsOf, PHASE_LABEL, upcomingOccurrences, type RunPhase } from "./report-automation.schedule.js";
 import type { ConfigInput } from "./report-automation.validators.js";
 
@@ -276,11 +277,13 @@ class ReportAutomationService {
   async status(user: AuthUser) {
     this.assertAllowed(user);
     const now = this.now();
-    const [state, templates, metaConfigs] = await Promise.all([
+    const [state, templates, metaConfigs, saved] = await Promise.all([
       this.db.reportSchedulerState.findUnique({ where: { id: 1 } }),
       this.db.whatsAppTemplate.findMany({ where: {}, select: { name: true, provider: true, language: true, variables: true, status: true }, orderBy: [{ name: "asc" }] }),
       this.db.whatsAppConfig.count({ where: { isActive: true } }),
+      this.db.reportAutomation.findUnique({ where: { ownerId: user.id }, select: { templateName: true, languageCode: true } }),
     ]);
+    const selection = { name: saved?.templateName ?? null, language: saved?.languageCode ?? null };
     // Report-template candidates: the daily_team_report family, or any template carrying {{report_text}}. Usable ones go in the dropdown; the others are listed WITH the exact reason, never hidden.
     const { usable, unusable } = classifyReportTemplates(templates);
     const ageMs = state?.lastTickAt ? now.getTime() - state.lastTickAt.getTime() : null;
@@ -297,6 +300,9 @@ class ReportAutomationService {
       nextRun: await this.nextRun(user.id, now),
       lastScheduled: await this.lastScheduled(user.id),
       requiredTemplate: REPORT_TEMPLATE_NAME,
+      // The Shopify Orders Summary template (aayushwellness_daily_team_report_3): its {{1}}..{{5}} mapping and whether Meta has made it available; and what the template the automation uses TODAY sends.
+      summaryTemplate: summaryTemplateStatus(templates, selection),
+      selectedTemplate: selectedTemplateStatus(templates, selection),
     };
   }
 
@@ -544,8 +550,11 @@ class ReportAutomationService {
     const txtIds: string[] = [];
     const docIds: string[] = [];
     let replier: { id: string; txt: boolean; doc: boolean } | null = null;
+    // Only recipients who are enabled NOW receive anything from a reply: a recipient the admin has since disabled or removed still has a row from this earlier run, but must not get the report.
+    const enabledNow = new Set(automation.recipients.filter((x) => x.enabled).map((x) => normalizeMobile(x.phone)));
     for (const row of run.recipientResults) {
       if (row.status === "PENDING" || row.status === "SENDING") continue; // the scheduled run still owns this recipient's first step
+      if (!enabledNow.has(normalizeMobile(row.phone))) continue;
       const isReplier = normalizeMobile(row.phone) === contact;
       if (!isReplier && !(await windowOpenFor(row.phone))) continue;
       let txt = false;
@@ -758,6 +767,61 @@ class ReportAutomationService {
     return didWork;
   }
 
+  /** The template figures of a run: the stored snapshot if one exists, otherwise read live now and (when complete) frozen. Concurrent creators are decided by the unique delivery_id; the loser reads the winner's row. */
+  private async snapshotValues(runId: string, who: { id: string; role: Role }, p: ReportPeriod, automation: DeliverAutomation, need: StructuredNeed = { legacy: true }): Promise<StructuredValues> {
+    // Saving history must NEVER stop a report: any snapshot read / write problem is logged and the message is sent from the live figures exactly as it was before snapshots existed (an unhandled error here
+    // would reach the sender as "no answer from the provider" and mark the message UNCERTAIN, which is never retried automatically).
+    try {
+      const existing = await this.db.reportSnapshot.findUnique({ where: { deliveryId: runId } });
+      if (existing) return existing.values as unknown as StructuredValues;
+    } catch (error) {
+      logger.error(`Report snapshot for run ${runId} could not be read; using live figures`, error instanceof Error ? (error.message.split("\n")[0] ?? "unknown error") : "unknown error");
+    }
+    const metrics = await (this.deps.templateMetrics ?? loadTemplateMetrics)(who, { from: p.from, to: p.to });
+    const values = buildStructuredValues(periodLabel({ from: p.from, to: p.to }), metrics);
+    // Frozen only once EVERY section the template actually sends was read (the Shopify summary needs the Shopify set; the original shape needs website + abandoned). Otherwise it is sent as N/A where unreadable but not frozen.
+    const complete = (need.shopify ? Boolean(metrics.shopify) : true) && (need.legacy ? Boolean(metrics.website && metrics.abandoned) : true);
+    if (!complete) return values;
+    try {
+      await this.db.reportSnapshot.createMany({
+        data: [{ deliveryId: runId, reportDate: p.to, reportRangeStart: p.from === p.to ? null : p.from, timezone: automation.timezone, templateName: automation.templateName ?? null, generatedAt: this.now(), values: values as unknown as Prisma.InputJsonValue, figures: { website: metrics.website, abandoned: metrics.abandoned, shopify: metrics.shopify ?? null } as unknown as Prisma.InputJsonValue }],
+        skipDuplicates: true,
+      });
+      const stored = await this.db.reportSnapshot.findUnique({ where: { deliveryId: runId } });
+      return (stored?.values as unknown as StructuredValues | undefined) ?? values;
+    } catch (error) {
+      logger.error(`Report snapshot for run ${runId} could not be saved; the message is still sent from the live figures`, error instanceof Error ? (error.message.split("\n")[0] ?? "unknown error") : "unknown error");
+      return values;
+    }
+  }
+
+  /** Snapshot history, newest first: the frozen figures of each run next to that run's CURRENT delivery state (provider message ids and WhatsApp status per recipient; these move as WhatsApp reports, the figures never do). */
+  async snapshots(user: AuthUser, page: number, pageSize: number) {
+    this.assertAllowed(user);
+    const automation = await this.db.reportAutomation.findUnique({ where: { ownerId: user.id }, select: { id: true } });
+    if (!automation) return { items: [], pagination: { page, pageSize, totalItems: 0, totalPages: 1 } };
+    const where = { delivery: { automationId: automation.id, deletedAt: null } };
+    const [rows, total] = await Promise.all([
+      this.db.reportSnapshot.findMany({ where, orderBy: [{ generatedAt: "desc" }, { id: "desc" }], skip: (page - 1) * pageSize, take: pageSize, include: { delivery: { include: { recipientResults: true } } } }),
+      this.db.reportSnapshot.count({ where }),
+    ]);
+    const items = rows.map((s) => ({
+      id: s.id,
+      runId: s.deliveryId,
+      kind: s.delivery.kind,
+      reportDate: s.reportDate,
+      reportFrom: s.reportRangeStart ?? s.reportDate,
+      timezone: s.timezone,
+      templateName: s.templateName,
+      generatedAt: s.generatedAt,
+      values: s.values as Record<string, string>,
+      figures: s.figures as { website: Record<string, number>; abandoned: Record<string, number> },
+      runStatus: s.delivery.status,
+      deliveries: [...s.delivery.recipientResults].sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "") || a.phone.localeCompare(b.phone)).map((r) => ({ name: r.name, phone: maskPhone(r.phone), status: r.status, providerMessageId: r.providerMessageId, sentAt: r.sentAt, deliveredAt: r.deliveredAt, readAt: r.readAt, error: r.error })),
+    }));
+    return { items, pagination: { page, pageSize, totalItems: total, totalPages: Math.max(1, Math.ceil(total / pageSize)) } };
+  }
+
   /** Build the report ONCE, then send each recipient up to THREE separate WhatsApp messages and record every outcome per recipient and per part:
    *   1. NOTIFICATION - the approved template (`status`): a short headline in {{report_text}};
    *   2. DETAIL - the formatted multi-line report as a free-form text (`txt*`);
@@ -776,8 +840,10 @@ class ReportAutomationService {
 
     // The structured template's figures (read once per delivery, and only if a send actually needs them): the dashboards' own numbers for this report's dates, labelled with the report date in its timezone.
     let structuredCache: Promise<StructuredValues> | null = null;
-    const structuredFor = (who: { id: string; role: Role }, p: ReportPeriod) => (): Promise<StructuredValues> => {
-      structuredCache ??= (this.deps.templateMetrics ?? loadTemplateMetrics)(who, { from: p.from, to: p.to }).then((m) => buildStructuredValues(periodLabel({ from: p.from, to: p.to }), m));
+    // POINT-IN-TIME SNAPSHOT: the first time a run needs these figures they are read live and frozen in report_snapshots (unique per run, immutable). Every later use for the SAME run - an automatic or manual
+    // retry, a reply - sends the stored figures, never a fresh read, so a message can never disagree with its own history. A run whose sections could not both be read is not frozen (a retry may read again).
+    const structuredFor = (who: { id: string; role: Role }, p: ReportPeriod) => (need?: StructuredNeed): Promise<StructuredValues> => {
+      structuredCache ??= this.snapshotValues(runId, who, p, automation, need);
       return structuredCache;
     };
     const windows = new Map<string, boolean>();

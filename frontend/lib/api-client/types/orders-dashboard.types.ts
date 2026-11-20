@@ -55,6 +55,8 @@ export interface OrdersDashboardSummary {
   totalValue: number;
   cod: number;
   prepaid: number;
+  /** Website orders with no payment method (e.g. zero-value): cod + prepaid + otherPayment = totalOrders. Absent on the database-backed sections. */
+  otherPayment?: number;
   paid: number;
   pendingPayment: number;
   cancelled: number;

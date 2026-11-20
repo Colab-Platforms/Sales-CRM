@@ -30,6 +30,6 @@ describe("website dashboard summary: the revenue / collected cards always have a
     assert.equal(s.totalValue, (69_900 + 77_800 + 100_000 + 20_000) / 100);
   });
   it("an empty selection is a valid all-zero summary", () => {
-    assert.deepEqual(summarize([]), { totalOrders: 0, totalValue: 0, cod: 0, prepaid: 0, paid: 0, pendingPayment: 0, cancelled: 0, cancelledValue: 0, fulfilled: 0, codRevenue: 0, prepaidRevenue: 0, collected: 0 });
+    assert.deepEqual(summarize([]), { totalOrders: 0, totalValue: 0, cod: 0, prepaid: 0, otherPayment: 0, paid: 0, pendingPayment: 0, cancelled: 0, cancelledValue: 0, fulfilled: 0, codRevenue: 0, prepaidRevenue: 0, collected: 0 });
   });
 });

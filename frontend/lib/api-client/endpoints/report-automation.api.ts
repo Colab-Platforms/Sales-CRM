@@ -1,6 +1,6 @@
 import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
-import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportAutomationStatus, ReportDelivery, ReportDeliveryPage, ReportPreview, ReportRecipientResult, ReportScheduled, ReportTracking } from "../types/report-automation.types";
+import type { ReportAutomationConfig, ReportAutomationConfigInput, ReportAutomationStatus, ReportDelivery, ReportDeliveryPage, ReportPreview, ReportRecipientResult, ReportScheduled, ReportSnapshotPage, ReportTracking } from "../types/report-automation.types";
 
 /** One APPROVED template as Meta reports it, for the Add Template picker. */
 export interface ApprovedMetaTemplate {
@@ -47,6 +47,10 @@ export const reportAutomationApi = {
   /** Live delivery + reply status of one run (default: the latest). Polled by the page. */
   async tracking(runId?: string): Promise<ReportTracking> {
     return (await apiClient.get<ApiEnvelope<ReportTracking>>("/report-automation/tracking", { params: runId ? { runId } : {} })).data.data;
+  },
+  /** Frozen figures of previously generated reports (newest first) with each run's delivery state. */
+  async snapshots(page = 1, pageSize = 10): Promise<ReportSnapshotPage> {
+    return (await apiClient.get<ApiEnvelope<ReportSnapshotPage>>("/report-automation/snapshots", { params: { page, pageSize } })).data.data;
   },
   async status(): Promise<ReportAutomationStatus> {
     return (await apiClient.get<ApiEnvelope<ReportAutomationStatus>>("/report-automation/status")).data.data;

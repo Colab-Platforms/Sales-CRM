@@ -22,6 +22,8 @@ const liveBlock = (f: LiveFetch) => ({
   source: "SHOPIFY_LIVE" as const,
   fetchedAt: f.fetchedAt,
   shopifyOrders: f.shopifyOrders,
+  /** Total of every Shopify order of the range (website + telecaller-created, cancelled included), in rupees. */
+  shopifyRevenue: Math.round(f.shopifyRevenueCents) / 100,
   shopifyCount: f.shopifyCount,
   websiteOrders: f.orders.length,
   telecallerExcluded: f.telecallerExcluded,

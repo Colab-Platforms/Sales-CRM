@@ -147,6 +147,32 @@ export interface ReportAutomationStatus {
   /** The most recent SCHEDULED run (never a manual test), or null if none has happened. */
   lastScheduled: ReportDelivery | null;
   requiredTemplate: string;
+  /** The Shopify Orders Summary template (aayushwellness_daily_team_report_3): its {{1}}..{{5}} mapping and whether Meta has made it available. Read-only status. */
+  summaryTemplate: SummaryTemplateStatus;
+  /** The template the saved automation uses today: can it be sent right now, and what does it send? null = none saved. */
+  selectedTemplate: SelectedTemplateStatus | null;
+}
+
+export type SummaryTemplateState = "NOT_ADDED" | "NOT_APPROVED" | "VARIABLES_MISMATCH" | "READY";
+export interface SummaryTemplateStatus {
+  name: string;
+  state: SummaryTemplateState;
+  /** Meta's status as synced (APPROVED / PENDING / REJECTED / DISABLED / DRAFT); null when it is not in the CRM. */
+  status: string | null;
+  language: string | null;
+  provider: string | null;
+  reason: string;
+  /** Is it the template the saved automation currently uses? */
+  selected: boolean;
+  mapping: { position: number; variable: string; meaning: string }[];
+}
+export type SummaryKind = "SHOPIFY_SUMMARY" | "WEBSITE_ABANDONED" | "REPORT_TEXT" | "UNKNOWN";
+export interface SelectedTemplateStatus {
+  name: string;
+  language: string | null;
+  usable: boolean;
+  reason: string | null;
+  sends: SummaryKind;
 }
 
 export interface ReportDeliveryPage {
@@ -200,8 +226,60 @@ export interface ReportScheduled {
   reason: string | null;
 }
 
+/** The exact figures one report run sent in its initial message, frozen at generation time (never changes), with that run's CURRENT delivery state. */
+export interface ReportSnapshot {
+  id: string;
+  runId: string;
+  kind: "SCHEDULED" | "TEST";
+  reportDate: string;
+  reportFrom: string;
+  timezone: string;
+  templateName: string | null;
+  generatedAt: string;
+  /** The template values exactly as sent. */
+  values: Record<string, string>;
+  figures: {
+    /** The complete Shopify order set (website + telecaller-created), for snapshots taken with the Shopify Orders Summary template. Absent on older snapshots. */
+    shopify?: { totalOrders: number; websiteOrders: number; telecallerOrders: number; totalRevenue: number } | null;
+    website: { totalOrders: number; totalRevenue: number; codOrders: number; prepaidOrders: number; otherOrders?: number } | null;
+    abandoned: { totalLeads: number; ordersConverted: number; revenue: number; codOrders: number; prepaidOrders: number } | null;
+  };
+  runStatus: string;
+  deliveries: { name: string | null; phone: string; status: ReportRecipientStatus; providerMessageId: string | null; sentAt: string | null; deliveredAt: string | null; readAt: string | null; error: string | null }[];
+}
+export interface ReportSnapshotPage {
+  items: ReportSnapshot[];
+  pagination: { page: number; pageSize: number; totalItems: number; totalPages: number };
+}
+
 /** Live tracking of one report run: the selectable runs (newest first) and the chosen run with every recipient's stored delivery and reply state. */
 export interface ReportTracking {
   runs: { id: string; kind: "SCHEDULED" | "TEST"; reportDate: string; reportFrom: string; scheduledFor: string }[];
   run: ReportDelivery | null;
+}
+
+/** The exact figures one report run sent in its initial message, frozen at generation time (never changes), with that run's CURRENT delivery state. */
+export interface ReportSnapshot {
+  id: string;
+  runId: string;
+  kind: "SCHEDULED" | "TEST";
+  reportDate: string;
+  reportFrom: string;
+  timezone: string;
+  templateName: string | null;
+  generatedAt: string;
+  /** The template values exactly as sent. */
+  values: Record<string, string>;
+  figures: {
+    /** The complete Shopify order set (website + telecaller-created), for snapshots taken with the Shopify Orders Summary template. Absent on older snapshots. */
+    shopify?: { totalOrders: number; websiteOrders: number; telecallerOrders: number; totalRevenue: number } | null;
+    website: { totalOrders: number; totalRevenue: number; codOrders: number; prepaidOrders: number; otherOrders?: number } | null;
+    abandoned: { totalLeads: number; ordersConverted: number; revenue: number; codOrders: number; prepaidOrders: number } | null;
+  };
+  runStatus: string;
+  deliveries: { name: string | null; phone: string; status: ReportRecipientStatus; providerMessageId: string | null; sentAt: string | null; deliveredAt: string | null; readAt: string | null; error: string | null }[];
+}
+export interface ReportSnapshotPage {
+  items: ReportSnapshot[];
+  pagination: { page: number; pageSize: number; totalItems: number; totalPages: number };
 }

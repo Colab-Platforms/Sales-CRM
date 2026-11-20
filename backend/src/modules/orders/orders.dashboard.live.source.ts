@@ -48,8 +48,10 @@ export interface LiveFetch {
   orders: LiveOrder[];
   /** Telecaller-created orders found in the same Shopify range and left out. */
   telecallerExcluded: number;
-  /** Every order Shopify returned for the range (website + telecaller). */
+  /** Every order Shopify returned for the range (website + telecaller). Always website.length + telecallerExcluded. */
   shopifyOrders: number;
+  /** The summed order totals of EVERY order Shopify returned for the range (website + telecaller-created, cancelled and voided included), in whole cents. Only INR orders are added; a warning names any other currency. */
+  shopifyRevenueCents: number;
   /** Shopify's own count for the range (null when it could not be asked). */
   shopifyCount: number | null;
   pages: number;
@@ -212,7 +214,13 @@ export class LiveWebsiteOrders {
     const foreign = new Set(website.filter((o) => o.currency !== PRIMARY_CURRENCY).map((o) => o.currency));
     if (foreign.size > 0) warnings.push(`Some orders are not in ${PRIMARY_CURRENCY} (${[...foreign].join(", ")}); their amounts are left out of the value totals.`);
 
-    return { orders: website, telecallerExcluded: telecaller, shopifyOrders: items.length, shopifyCount, pages, fetchedAt: this.now(), warnings };
+    // The complete Shopify set (telecaller-created orders included): whole cents, INR only - never floating point.
+    const allInr = items.filter((i) => (i.currency ?? PRIMARY_CURRENCY) === PRIMARY_CURRENCY);
+    const shopifyRevenueCents = allInr.reduce((sum, i) => sum + toCents(i.totalAmount), 0);
+    const foreignAll = new Set(items.filter((i) => (i.currency ?? PRIMARY_CURRENCY) !== PRIMARY_CURRENCY).map((i) => i.currency));
+    if (foreignAll.size > 0 && foreign.size === 0) warnings.push(`Some Shopify orders are not in ${PRIMARY_CURRENCY} (${[...foreignAll].join(", ")}); their amounts are left out of the total Shopify revenue.`);
+
+    return { orders: website, telecallerExcluded: telecaller, shopifyOrders: items.length, shopifyRevenueCents, shopifyCount, pages, fetchedAt: this.now(), warnings };
   }
 
   /** READ-ONLY lookup: which of these Shopify order ids are CRM orders created by someone other than the storefront (telecaller / API). */

@@ -22,7 +22,10 @@ import { RecipientManager } from "./report-recipients";
 import { ReportHistory } from "./report-history";
 import { ReportLiveTracking } from "./report-live-tracking";
 import { ReportPreviewPanel } from "./report-preview-panel";
+import { ReportSnapshotsPanel } from "./report-snapshots-panel";
 import { ReportTemplatePicker } from "./report-template-picker";
+import { ReportSummaryTemplateCard } from "./report-summary-template-card";
+import { selectedTemplateWarning } from "./report-summary-template";
 
 const keys = { config: ["report-automation", "config"] as const, status: ["report-automation", "status"] as const };
 
@@ -170,6 +173,8 @@ export function ReportAutomationView() {
     if (!status.data.scheduler.running) health.push(status.data.scheduler.lastTickAt ? `The scheduler has not checked in since ${formatInZone(status.data.scheduler.lastTickAt, savedTz)}. The server may be asleep; reports are only sent while it runs.` : "The scheduler has never run on this server.");
     if (!status.data.whatsapp.metaConfigured && !status.data.whatsapp.envProviderConfigured) health.push("No WhatsApp provider is configured, so nothing can be sent.");
     if (templates.length === 0) health.push(`No usable report template yet: ${status.data.requiredTemplate} must be approved in Meta and synced.`);
+    const selectedWarning = selectedTemplateWarning(status.data.selectedTemplate);
+    if (selectedWarning) health.push(selectedWarning);
     if (status.data.scheduler.lastError) health.push(`Last scheduler error: ${status.data.scheduler.lastError}`);
   }
 
@@ -281,6 +286,16 @@ export function ReportAutomationView() {
             </div>
           </div>
           {c.reportFor === "DATE" ? <p className="text-xs text-amber-600" data-testid="legacy-date-note">A fixed report date was saved earlier. A daily report should follow the send date, so it is shown here as Previous day - click Save settings to apply that.</p> : null}
+
+          <ReportSummaryTemplateCard
+            status={status.data?.summaryTemplate}
+            selected={status.data?.selectedTemplate}
+            form={form}
+            isAdmin={role === "ADMIN"}
+            onUse={(name, language) => setDraft({ ...form, templateName: name, languageCode: language })}
+            onSync={() => sync.mutate()}
+            syncing={sync.isPending}
+          />
 
           <div className="space-y-1.5">
             <Label htmlFor="ra-template">WhatsApp template</Label>
@@ -394,6 +409,8 @@ export function ReportAutomationView() {
       </Card>
 
       <ReportPreviewPanel preview={preview} onOpenChange={setPreviewOpen} date={date} onDateChange={setDate} timezone={savedTz} nextCovers={nextSaved && c.enabled ? rangeText(nextSaved.data, true) : null} />
+
+      <ReportSnapshotsPanel />
 
       {picking && role === "ADMIN" ? <ReportTemplatePicker onClose={() => setPicking(false)} /> : null}
     </div>

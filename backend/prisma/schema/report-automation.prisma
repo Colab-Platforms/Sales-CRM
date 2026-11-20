@@ -106,6 +106,7 @@ model ReportDelivery {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   recipientResults ReportDeliveryRecipient[]
+  snapshot         ReportSnapshot?
 
   @@index([automationId, createdAt])
   @@index([status, nextAttemptAt])
@@ -228,4 +229,30 @@ model ReportSchedulerState {
   updatedAt   DateTime  @updatedAt @map("updated_at")
 
   @@map("report_scheduler_state")
+}
+
+// The EXACT figures one report run sent in its initial WhatsApp message, frozen when the run first built them (migration 20261119000000). A snapshot is written once per run (unique delivery_id) and never
+// changes: a database trigger rejects every UPDATE, so later orders, cancellations, payment updates or checkout conversions cannot alter history. Delivery status and provider message ids stay on the run's
+// recipient rows (they legitimately change as WhatsApp reports delivery); the history view joins them.
+model ReportSnapshot {
+  id String @id @default(uuid()) @db.Uuid
+
+  deliveryId String         @unique @map("delivery_id") @db.Uuid
+  delivery   ReportDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  // The report's data day(s), YYYY-MM-DD in `timezone` (range start only for a multi-day report)
+  reportDate       String  @map("report_date") @db.VarChar(10)
+  reportRangeStart String? @map("report_range_start") @db.VarChar(10)
+  timezone         String  @map("timezone") @db.VarChar(64)
+  templateName     String? @map("template_name") @db.VarChar(150)
+
+  generatedAt DateTime @map("generated_at")
+  // The template values exactly as sent ({ report_date, web_total_orders, ... }) and the numbers behind them ({ website, abandoned })
+  values  Json @map("values")
+  figures Json @map("figures")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([reportDate])
+  @@map("report_snapshots")
 }
