@@ -64,6 +64,17 @@ export const listDeliveries = async (req: AuthRequest, res: Response): Promise<v
   }
 };
 
+/** Frozen figures of previously generated reports, with each run's current delivery state. Read-only. */
+export const listSnapshots = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateHistoryQuery(req.query);
+    if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    sendResponse(res, true, await service.snapshots(req.user!, value.page, value.pageSize), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    fail(res, error);
+  }
+};
+
 /** Live delivery tracking for one report run (default: the latest), polled by the page. Read-only. */
 export const getTracking = async (req: AuthRequest, res: Response): Promise<void> => {
   try {

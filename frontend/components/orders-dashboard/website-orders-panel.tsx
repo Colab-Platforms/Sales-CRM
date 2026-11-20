@@ -114,6 +114,11 @@ export function WebsiteOrdersPanel({ range }: { range: RangeState }) {
             ))
           : null}
       </div>
+      {r && (r.summary.otherPayment ?? 0) > 0 ? (
+        <p className="text-xs text-muted-foreground" data-testid="other-payment-note">
+          Other payment: {r.summary.otherPayment} order{r.summary.otherPayment === 1 ? "" : "s"} with no payment method (for example a zero-value order) - neither COD nor prepaid. COD {r.summary.cod} + Prepaid {r.summary.prepaid} + Other {r.summary.otherPayment} = Total {r.summary.totalOrders}.
+        </p>
+      ) : null}
 
       {own.metric ? (
         <div ref={detailsRef} className="scroll-mt-4" data-testid="order-details">

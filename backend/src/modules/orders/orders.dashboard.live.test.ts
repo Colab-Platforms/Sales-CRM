@@ -218,7 +218,7 @@ describe("live website orders - figures", () => {
       node({ id: 4, total: "300.00", financial: "PAID", gateways: ["Cashfree"], fulfillment: "FULFILLED" }), // prepaid, paid, fulfilled (shipped)
     ]);
     const s = summarize(orders);
-    assert.deepEqual(s, { totalOrders: 4, totalValue: 1999, cod: 2, prepaid: 2, paid: 2, pendingPayment: 2, cancelled: 1, cancelledValue: 500, fulfilled: 1, codRevenue: 699, prepaidRevenue: 1300, collected: 1300 });
+    assert.deepEqual(s, { totalOrders: 4, totalValue: 1999, cod: 2, prepaid: 2, otherPayment: 0, paid: 2, pendingPayment: 2, cancelled: 1, cancelledValue: 500, fulfilled: 1, codRevenue: 699, prepaidRevenue: 1300, collected: 1300 });
   });
 
   it("money is added in whole cents: ten orders of 0.10 + 0.20 never drift, totals are Shopify's order total (tax/shipping/discount already inside it)", async () => {
@@ -340,5 +340,84 @@ describe("live website dashboard service", () => {
     const file = await service.exportXlsx(admin, { range: "yesterday" });
     assert.ok(file.rows >= 1 && file.buffer.length > 0);
     assert.deepEqual(database.writes, []);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------- the complete Shopify set (Shopify Orders Summary)
+// A day shaped like 19 Nov 2026: 204 Shopify orders = 120 website + 84 telecaller-created, totalling exactly 1,27,581.05.
+//   website  : 119 x 575.00 + 1 x 575.05                       = 69,000.05  (120 orders)
+//   telecaller: 80 x 700.00 + 2 x 650.00 (cancelled) + 2 x 640.50 = 58,581.00  (84 orders, all tagged "Order Created by")
+describe("the complete Shopify order set (website + telecaller-created)", () => {
+  const day19 = () => {
+    const website = Array.from({ length: 120 }, (_, i) => node({ id: 5000 + i, total: i === 0 ? "575.05" : "575.00", financial: i < 115 ? "PAID" : "PENDING", gateways: i < 115 ? ["Cashfree"] : ["Cash on Delivery (COD)"] }));
+    const tele = [
+      ...Array.from({ length: 80 }, (_, i) => node({ id: 6000 + i, total: "700.00", tags: ["Order Created by Yash"], financial: "PAID", gateways: ["Cashfree"] })),
+      ...Array.from({ length: 2 }, (_, i) => node({ id: 6100 + i, total: "650.00", tags: ["Order Created by Priti"], cancelledAt: "2026-10-25T06:00:00Z" })),
+      ...Array.from({ length: 2 }, (_, i) => node({ id: 6200 + i, total: "640.50", tags: ["Order Created by Aryan"] })),
+    ];
+    return [...website, ...tele];
+  };
+
+  it("204 orders = 120 website + 84 telecaller-created, and the revenue is the sum of ALL 204 (1,27,581.05) - telecaller orders are NOT excluded", async () => {
+    const { source } = make(day19());
+    const r = await source.fetch(range);
+    assert.equal(r.shopifyOrders, 204);
+    assert.equal(r.orders.length, 120);
+    assert.equal(r.telecallerExcluded, 84);
+    assert.equal(r.shopifyOrders, r.orders.length + r.telecallerExcluded, "the three always reconcile");
+    assert.equal(r.shopifyRevenueCents, 12_758_105);
+  });
+
+  it("the website figures are untouched by the new total (120 orders, 69,000.05)", async () => {
+    const { source } = make(day19());
+    const s = summarize((await source.fetch(range)).orders);
+    assert.deepEqual([s.totalOrders, s.totalValue, s.cod, s.prepaid, s.otherPayment], [120, 69000.05, 5, 115, 0]);
+  });
+
+  it("cancelled telecaller orders stay in the Shopify total (204 and their 1,300 are counted), as specified", async () => {
+    const { source } = make(day19());
+    const r = await source.fetch(range);
+    const withoutCancelled = r.shopifyRevenueCents - 2 * 65_000;
+    assert.equal(withoutCancelled, 12_628_105, "126,281.05 if cancelled orders were excluded - they are not");
+    assert.equal(r.shopifyOrders, 204);
+  });
+
+  it("a telecaller order the CRM holds (no tag) counts as telecaller-created and is still in the total", async () => {
+    const { source } = make([node({ id: 1, total: "100.00" }), node({ id: 2, total: "200.00" }), node({ id: 3, total: "300.00", tags: ["Order Created by Asha"] })], {}, { crm: ["2"] });
+    const r = await source.fetch(range);
+    assert.deepEqual([r.shopifyOrders, r.orders.length, r.telecallerExcluded, r.shopifyRevenueCents], [3, 1, 2, 60_000]);
+  });
+
+  it("the overview's live block carries the total in rupees to the paisa, with the website count and the telecaller count", async () => {
+    const m = make(day19());
+    const service = new LiveWebsiteDashboardService(m.source, () => NOW);
+    const r = await service.overview(admin, { range: "yesterday" }, 1, 25);
+    assert.deepEqual([r.live.shopifyOrders, r.live.websiteOrders, r.live.telecallerExcluded, r.live.shopifyRevenue], [204, 120, 84, 127581.05]);
+    assert.equal(r.summary.totalOrders, 120, "the Website dashboard card still shows 120");
+  });
+
+  it("revenue is added in whole cents: no floating-point drift across 204 orders", async () => {
+    const { source } = make(Array.from({ length: 204 }, (_, i) => node({ id: 9000 + i, total: "0.10" })));
+    assert.equal((await source.fetch(range)).shopifyRevenueCents, 2040);
+  });
+
+  it("an order in another currency is left out of the total with a warning, never added as rupees", async () => {
+    const { source } = make([node({ id: 1, total: "500.00" }), node({ id: 2, total: "10.00", currency: "USD", tags: ["Order Created by Asha"] })]);
+    const r = await source.fetch(range);
+    assert.equal(r.shopifyOrders, 2);
+    assert.equal(r.shopifyRevenueCents, 50_000);
+    assert.ok(r.warnings.some((w) => /USD/.test(w)));
+  });
+
+  it("an empty day is a real zero", async () => {
+    const { source } = make([]);
+    const r = await source.fetch(range);
+    assert.deepEqual([r.shopifyOrders, r.orders.length, r.telecallerExcluded, r.shopifyRevenueCents], [0, 0, 0, 0]);
+  });
+
+  it("orders outside the IST day are not in the total (18:29:59Z is in, 18:30:00Z is the next day)", async () => {
+    const { source } = make([node({ id: 1, total: "100.00", createdAt: "2026-10-25T18:29:59Z" }), node({ id: 2, total: "900.00", createdAt: "2026-10-25T18:30:00Z" })]);
+    const r = await source.fetch(range);
+    assert.deepEqual([r.shopifyOrders, r.shopifyRevenueCents], [1, 10_000]);
   });
 });

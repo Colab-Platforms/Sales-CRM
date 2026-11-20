@@ -4,7 +4,7 @@ import { getWhatsAppProvider } from "../whatsapp/whatsapp.factory.js";
 import { getMetaWhatsAppProvider } from "../whatsapp/whatsapp.meta.factory.js";
 import { WhatsAppSendError } from "../whatsapp/whatsapp.provider.js";
 import { XLSX_MIME } from "./report-automation.xlsx.js";
-import { isStructuredVariableSet, MAX_PARAMETER_NAME_LENGTH, overlongParameterNames, structuredKeyOf, STRUCTURED_TEMPLATE_VARIABLES, type StructuredValues } from "./report-automation.template-metrics.js";
+import { isShopifySummarySet, isStructuredVariableSet, MAX_PARAMETER_NAME_LENGTH, overlongParameterNames, SHOPIFY_SUMMARY_VARIABLES, structuredKeyOf, STRUCTURED_TEMPLATE_VARIABLES, type StructuredNeed, type StructuredValues } from "./report-automation.template-metrics.js";
 
 // Sends the report through the CRM's EXISTING WhatsApp providers (Meta Cloud API from Settings -> WhatsApp Config, or the env-configured AiSensy / Gupshup) - no new provider, no new credentials.
 // A report goes to a number that is usually not a customer and has not messaged the business, so WhatsApp only allows a business-initiated message as an APPROVED TEMPLATE. The automation therefore
@@ -35,9 +35,10 @@ export function evaluateReportTemplate(t: { name: string; status: string; variab
   const tooLong = overlongParameterNames(variableNames(list));
   if (tooLong.length > 0) return { ok: false, reason: overlongMessage(tooLong) };
   if (isStructuredVariableSet(variableNames(list))) return { ok: true }; // the ten-variable "AyushWellness CRM - {{report_date}}" notification
+  if (isShopifySummarySet(variableNames(list))) return { ok: true }; // the five-variable "Shopify Orders Summary" notification (aayushwellness_daily_team_report_3)
   const first = list[0] as unknown;
   const name = typeof first === "string" ? first : first && typeof first === "object" && typeof (first as { name?: unknown }).name === "string" ? (first as { name: string }).name : null;
-  if (list.length !== 1 || !name) return { ok: false, reason: `It has ${list.length} variables; the report needs exactly one, {{${REPORT_TEMPLATE_VARIABLE}}}, or the ten structured ones (${STRUCTURED_TEMPLATE_VARIABLES.join(", ")})` };
+  if (list.length !== 1 || !name) return { ok: false, reason: `It has ${list.length} variables; the report needs exactly one, {{${REPORT_TEMPLATE_VARIABLE}}}, , the ten structured ones (${STRUCTURED_TEMPLATE_VARIABLES.join(", ")}) or the five Shopify summary ones (${SHOPIFY_SUMMARY_VARIABLES.join(", ")})` };
   if (name !== REPORT_TEMPLATE_VARIABLE && name !== "1") return { ok: false, reason: `Its variable is {{${name}}}; the report needs {{${REPORT_TEMPLATE_VARIABLE}}}` };
   return { ok: true };
 }
@@ -56,7 +57,7 @@ interface StoredTemplate { name: string; provider: string; language: string; sta
  */
 export function classifyReportTemplates(templates: StoredTemplate[]) {
   const carries = (v: unknown, n: string) => variableNames(v).includes(n);
-  const candidates = templates.filter((t) => isReportTemplateName(t.name) || carries(t.variables, REPORT_TEMPLATE_VARIABLE) || isStructuredVariableSet(variableNames(t.variables)));
+  const candidates = templates.filter((t) => isReportTemplateName(t.name) || carries(t.variables, REPORT_TEMPLATE_VARIABLE) || isStructuredVariableSet(variableNames(t.variables)) || isShopifySummarySet(variableNames(t.variables)));
   const key = (t: StoredTemplate) => `${t.provider}:${t.name}:${t.language}`;
   const usable = candidates.filter((t) => isReportTemplateName(t.name) && evaluateReportTemplate(t).ok);
   const usableKeys = new Set(usable.map(key));
@@ -75,7 +76,7 @@ export interface ReportSendInput {
   languageCode: string;
   text: string;
   /** The ten structured figures, read only if the approved template declares them (see planTemplateParams). A template with the single {{report_text}} variable never calls this. */
-  structured?: () => Promise<StructuredValues>;
+  structured?: (need?: StructuredNeed) => Promise<StructuredValues>;
 }
 
 export interface ReportSendResult {
@@ -100,17 +101,23 @@ export function variableNames(variables: unknown): string[] {
  *   - the ten structured variables of the approved "AyushWellness CRM - {{report_date}}" template (STRUCTURED_TEMPLATE_VARIABLES): one value per name, looked up BY NAME so the order Meta stored cannot misplace one.
  * Any other shape is refused with the reason, so a mismatched template never sends a wrong message.
  */
-export async function planTemplateParams(template: { name: string; variables: unknown }, text: string, structured?: () => Promise<StructuredValues>): Promise<{ params: string[]; paramNames: string[] }> {
+export async function planTemplateParams(template: { name: string; variables: unknown }, text: string, structured?: (need?: StructuredNeed) => Promise<StructuredValues>): Promise<{ params: string[]; paramNames: string[] }> {
   const names = variableNames(template.variables);
   const tooLong = overlongParameterNames(names);
   if (tooLong.length > 0) throw new ReportSendRejected(`The template "${template.name}": ${overlongMessage(tooLong)} Nothing was sent.`);
+  // The five-variable "Shopify Orders Summary" (aayushwellness_daily_team_report_3): report date + the complete Shopify order set. Looked up BY NAME, so the order Meta stored cannot misplace a figure.
+  if (isShopifySummarySet(names)) {
+    if (!structured) throw new ReportSendRejected(`The template "${template.name}" needs the Shopify order figures, which were not provided. Nothing was sent.`);
+    const values = await structured({ shopify: true });
+    return { params: names.map((n) => values[n as keyof StructuredValues]), paramNames: names };
+  }
   if (isStructuredVariableSet(names)) {
     if (!structured) throw new ReportSendRejected(`The template "${template.name}" needs the website and abandoned-checkout figures, which were not provided. Nothing was sent.`);
-    const values = await structured();
+    const values = await structured({ legacy: true });
     return { params: names.map((n) => values[structuredKeyOf(n)!]), paramNames: names }; // each of Meta's own variable names gets the figure it stands for
   }
   if (names.length !== 1) {
-    throw new ReportSendRejected(`The template "${template.name}" has ${names.length} variables; the report needs either exactly one, {{${REPORT_TEMPLATE_VARIABLE}}}, or the ten structured ones (${STRUCTURED_TEMPLATE_VARIABLES.join(", ")}).`);
+    throw new ReportSendRejected(`The template "${template.name}" has ${names.length} variables; the report needs either exactly one, {{${REPORT_TEMPLATE_VARIABLE}}}, the ten structured ones (${STRUCTURED_TEMPLATE_VARIABLES.join(", ")}) or the five Shopify summary ones (${SHOPIFY_SUMMARY_VARIABLES.join(", ")}).`);
   }
   if (names[0] !== REPORT_TEMPLATE_VARIABLE && !/^1$/.test(names[0]!)) {
     throw new ReportSendRejected(`The template "${template.name}" has the variable "${names[0]}" but the report needs {{${REPORT_TEMPLATE_VARIABLE}}}. Recreate it with that variable name, get it approved and sync templates.`);
@@ -133,11 +140,15 @@ export function createWhatsAppReportSender(db: DbClient = prisma): ReportSender 
     candidates.sort((a, b) => Number(b.provider === "META") - Number(a.provider === "META"));
     const template = candidates.find((t) => t.language === input.languageCode) ?? (new Set(candidates.map((t) => t.language)).size === 1 ? candidates[0] : undefined);
     if (!template) {
-      throw new ReportSendRejected(
-        candidates.length > 1
-          ? `The template "${input.templateName}" is approved in several languages (${candidates.map((t) => t.language).join(", ")}) but not in "${input.languageCode}". Re-select the template in the settings and save.`
-          : `No APPROVED WhatsApp template named "${input.templateName}" exists in the CRM. Create it under WhatsApp templates (body with one variable for the report) and wait for approval.`,
-      );
+      if (candidates.length > 1) {
+        throw new ReportSendRejected(`The template "${input.templateName}" is approved in several languages (${candidates.map((t) => t.language).join(", ")}) but not in "${input.languageCode}". Re-select the template in the settings and save.`);
+      }
+      // Say exactly where the template stands: not in the CRM at all, or in the CRM with a Meta status that is not APPROVED (pending review, rejected, disabled, draft).
+      const known = await db.whatsAppTemplate.findMany({ where: { name: input.templateName }, select: { status: true } });
+      const where = known.length > 0
+        ? `It is in the CRM with status ${[...new Set(known.map((t) => t.status))].join(" / ")}: it cannot be sent until Meta approves it and Sync templates has been pressed.`
+        : "It is not in the CRM yet: submit it in Meta, wait for approval, then press Sync templates (or use Add template).";
+      throw new ReportSendRejected(`No APPROVED WhatsApp template named "${input.templateName}" exists in the CRM. ${where} Nothing was sent.`);
     }
     // Named variables (every template this CRM syncs from Meta is parameter_format "named"); a positional "1" is accepted for providers that only know positions.
     const plan = await planTemplateParams(template, input.text, input.structured);

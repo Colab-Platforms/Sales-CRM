@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { buildStructuredValues, isStructuredVariableSet, STRUCTURED_TEMPLATE_VARIABLES, UNAVAILABLE } from "./report-automation.template-metrics.js";
-import { evaluateReportTemplate, planTemplateParams, ReportSendRejected } from "./report-automation.sender.js";
+import { buildStructuredValues, isShopifySummarySet, isStructuredVariableSet, SHOPIFY_SUMMARY_VARIABLES, STRUCTURED_TEMPLATE_VARIABLES, UNAVAILABLE, type StructuredNeed } from "./report-automation.template-metrics.js";
+import { classifyReportTemplates, evaluateReportTemplate, planTemplateParams, ReportSendRejected } from "./report-automation.sender.js";
 import { periodLabel } from "./report-automation.report.js";
 
 const full = {
@@ -17,11 +17,17 @@ describe("structured notification template - the figures", () => {
       web_total_revenue: "1,33,033",
       web_cod_orders: "12",
       web_prepaid_orders: "7",
+      web_other_orders: "N/A", // this fixture has no otherOrders figure: never a made-up zero
       aband_total_leads: "274",
       aband_orders_conv: "29",
       aband_revenue: "48,001",
       aband_cod_orders: "20",
       aband_prepaid_orders: "9",
+      // the Shopify Orders Summary figures: this fixture has no Shopify section, so they are N/A (never a made-up zero)
+      total_shopify_orders: "N/A",
+      website_orders: "N/A",
+      telecaller_orders: "N/A",
+      total_revenue: "N/A",
     });
   });
 
@@ -70,5 +76,105 @@ describe("structured notification template - which template shape is accepted", 
       assert.equal(evaluateReportTemplate({ ...t, status: "APPROVED" }).ok, false);
     }
     await assert.rejects(() => planTemplateParams(shuffled, "x"), /figures, which were not provided/);
+  });
+});
+
+describe("optional web_other_orders (Other Payment Orders)", () => {
+  const eleven = { name: "aayushwellness_daily_team_report_2", variables: [...STRUCTURED_TEMPLATE_VARIABLES, "web_other_orders"] };
+  it("the ten (as already approved) and the ten plus web_other_orders are both accepted; any other extra is not", () => {
+    assert.equal(isStructuredVariableSet(STRUCTURED_TEMPLATE_VARIABLES), true);
+    assert.equal(isStructuredVariableSet(eleven.variables), true);
+    assert.equal(isStructuredVariableSet([...eleven.variables].reverse()), true, "any order");
+    assert.equal(isStructuredVariableSet([...eleven.variables, "extra"]), false);
+    assert.equal(isStructuredVariableSet([...STRUCTURED_TEMPLATE_VARIABLES.slice(1), "web_other_orders"]), false, "ten variables that miss a required figure");
+  });
+  it("a real zero is 0, the count is the dashboard's other-payment figure, and the eleven are matched BY NAME", async () => {
+    const withOther = { ...full, website: { ...full.website, otherOrders: 0 } };
+    assert.equal(buildStructuredValues("26 Oct 2026", withOther).web_other_orders, "0");
+    const v = buildStructuredValues("18 Nov 2026", { ...full, website: { ...full.website, otherOrders: 1 } });
+    const plan = await planTemplateParams(eleven, "x", async () => v);
+    assert.equal(plan.params[plan.paramNames.indexOf("web_other_orders")], "1");
+    assert.equal(plan.params.length, 11);
+    assert.equal(evaluateReportTemplate({ ...eleven, status: "APPROVED" }).ok, true);
+  });
+  it("the name fits Meta's 20-character limit", () => assert.ok("web_other_orders".length <= 20));
+});
+
+// ---------------------------------------------------------------------------------------------- "Shopify Orders Summary" (aayushwellness_daily_team_report_3)
+describe("Shopify Orders Summary template: 204 / 120 / 84 / 1,27,581.05", () => {
+  const shopify = { totalOrders: 204, websiteOrders: 120, telecallerOrders: 84, totalRevenue: 127581.05 };
+  const metrics = { website: { totalOrders: 120, totalRevenue: 69000.05, codOrders: 5, prepaidOrders: 115, otherOrders: 0 }, abandoned: null, shopify };
+  // the five variables as Meta stores them for the approved template, in body order ({{1}} .. {{5}})
+  const stored = [...SHOPIFY_SUMMARY_VARIABLES];
+  const tpl = { name: "aayushwellness_daily_team_report_3", variables: stored };
+
+  it("maps {{1}}..{{5}}: report date, total Shopify orders, website orders, telecaller-created orders, total revenue (with paise, Indian grouping, no rupee sign)", () => {
+    const v = buildStructuredValues("19 Nov 2026", metrics);
+    assert.deepEqual(SHOPIFY_SUMMARY_VARIABLES.map((n) => v[n]), ["19 Nov 2026", "204", "120", "84", "1,27,581.05"]);
+  });
+
+  it("total = website + telecaller-created, and the figures are the same ones the dashboard shows (website 120)", () => {
+    const v = buildStructuredValues("19 Nov 2026", metrics);
+    assert.equal(Number(v.total_shopify_orders), Number(v.website_orders) + Number(v.telecaller_orders));
+    assert.equal(v.website_orders, String(metrics.website.totalOrders));
+  });
+
+  it("revenue keeps two decimals even for a whole amount, and a real zero is 0 / 0.00 - never N/A", () => {
+    assert.equal(buildStructuredValues("d", { ...metrics, shopify: { ...shopify, totalRevenue: 50000 } }).total_revenue, "50,000.00");
+    const zero = buildStructuredValues("d", { ...metrics, shopify: { totalOrders: 0, websiteOrders: 0, telecallerOrders: 0, totalRevenue: 0 } });
+    assert.deepEqual([zero.total_shopify_orders, zero.website_orders, zero.telecaller_orders, zero.total_revenue], ["0", "0", "0", "0.00"]);
+  });
+
+  it("an unreadable Shopify section is N/A in all four figures - never a made-up zero", () => {
+    const v = buildStructuredValues("d", { ...metrics, shopify: null });
+    assert.deepEqual([v.total_shopify_orders, v.website_orders, v.telecaller_orders, v.total_revenue], [UNAVAILABLE, UNAVAILABLE, UNAVAILABLE, UNAVAILABLE]);
+    assert.equal(buildStructuredValues("d", { website: null, abandoned: null }).total_revenue, UNAVAILABLE, "metrics built before this section existed");
+  });
+
+  it("the variable names fit Meta's 20 characters and are exactly five, distinct from the old ten", () => {
+    assert.equal(SHOPIFY_SUMMARY_VARIABLES.length, 5);
+    for (const n of SHOPIFY_SUMMARY_VARIABLES) assert.ok(n.length <= 20, `${n} (${n.length})`);
+    assert.equal(SHOPIFY_SUMMARY_VARIABLES.filter((n) => (STRUCTURED_TEMPLATE_VARIABLES as readonly string[]).includes(n)).length, 1, "only report_date is shared");
+  });
+
+  it("the template shape is accepted in any stored order; extra, missing or mixed variables are not; the old shapes are untouched", () => {
+    assert.equal(isShopifySummarySet(stored), true);
+    assert.equal(isShopifySummarySet([...stored].reverse()), true);
+    assert.equal(isShopifySummarySet([...stored, "extra"]), false);
+    assert.equal(isShopifySummarySet(stored.slice(1)), false);
+    assert.equal(isShopifySummarySet([...stored.slice(0, 4), "web_total_orders"]), false);
+    assert.equal(isShopifySummarySet(STRUCTURED_TEMPLATE_VARIABLES), false);
+    assert.equal(isStructuredVariableSet(stored), false, "the old shape check does not accept the new one");
+    assert.equal(isStructuredVariableSet(STRUCTURED_TEMPLATE_VARIABLES), true);
+  });
+
+  it("the sender gets the values BY NAME in the template's own order, and asks for the Shopify figures only", async () => {
+    const v = buildStructuredValues("19 Nov 2026", metrics);
+    let asked: StructuredNeed | undefined;
+    const plan = await planTemplateParams({ ...tpl, variables: [...stored].reverse() }, "x", async (need) => { asked = need; return v; });
+    assert.deepEqual(asked, { shopify: true });
+    assert.deepEqual(plan.paramNames, [...stored].reverse());
+    assert.deepEqual(plan.params, ["1,27,581.05", "84", "120", "204", "19 Nov 2026"]);
+    assert.equal(plan.params.length, 5, "no abandoned or website-revenue figure is sent");
+  });
+
+  it("the original ten-variable template still asks for the original figures and is unaffected", async () => {
+    const v = buildStructuredValues("19 Nov 2026", { ...metrics, abandoned: { totalLeads: 538, ordersConverted: 54, revenue: 36634, codOrders: 36, prepaidOrders: 18 } });
+    let asked: StructuredNeed | undefined;
+    const plan = await planTemplateParams({ name: "aayushwellness_daily_team_report_1", variables: [...STRUCTURED_TEMPLATE_VARIABLES] }, "x", async (need) => { asked = need; return v; });
+    assert.deepEqual(asked, { legacy: true });
+    assert.equal(plan.params.length, 10);
+    assert.equal(plan.params[1], "120");
+  });
+
+  it("it needs the figures: without them the send is refused with nothing sent", async () => {
+    await assert.rejects(() => planTemplateParams(tpl, "x"), /Shopify order figures, which were not provided/);
+  });
+
+  it("the template is accepted when APPROVED and listed as usable; a pending one is not", () => {
+    assert.deepEqual(evaluateReportTemplate({ ...tpl, status: "APPROVED" }), { ok: true });
+    assert.equal(evaluateReportTemplate({ ...tpl, status: "PENDING" }).ok, false);
+    const c = classifyReportTemplates([{ ...tpl, provider: "META", language: "en", status: "APPROVED" }]);
+    assert.deepEqual(c.usable.map((t) => t.name), ["aayushwellness_daily_team_report_3"]);
   });
 });

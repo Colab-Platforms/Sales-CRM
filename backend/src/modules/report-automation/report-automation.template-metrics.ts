@@ -18,7 +18,23 @@ export const STRUCTURED_TEMPLATE_VARIABLES = [
   "aband_prepaid_orders",
 ] as const;
 export type StructuredVariable = (typeof STRUCTURED_TEMPLATE_VARIABLES)[number];
-export type StructuredValues = Record<StructuredVariable, string>;
+/** OPTIONAL eleventh variable: website orders with no payment method (neither COD nor prepaid). A template may declare the ten alone (as already approved) or the ten plus this one. */
+export const OPTIONAL_TEMPLATE_VARIABLE = "web_other_orders" as const;
+export type AnyStructuredVariable = StructuredVariable | typeof OPTIONAL_TEMPLATE_VARIABLE;
+
+/**
+ * The FIVE named variables of the "Shopify Orders Summary" template (aayushwellness_daily_team_report_3), in the order they appear in its body - {{1}} to {{5}} of the message:
+ *   report_date (1), total_shopify_orders (2), website_orders (3), telecaller_orders (4), total_revenue (5).
+ * Named, not positional: this CRM only submits and sends named-format templates (the Meta API rejects positional parameters for them). All within Meta's 20-character limit.
+ */
+export const SHOPIFY_SUMMARY_VARIABLES = ["report_date", "total_shopify_orders", "website_orders", "telecaller_orders", "total_revenue"] as const;
+export type ShopifySummaryVariable = (typeof SHOPIFY_SUMMARY_VARIABLES)[number];
+export type StructuredValues = Record<AnyStructuredVariable | ShopifySummaryVariable, string>;
+/** Which sections of the figures a template needs, so a snapshot is only frozen once every section it actually sends was read. No argument = the original website + abandoned shape. */
+export interface StructuredNeed {
+  shopify?: boolean;
+  legacy?: boolean;
+}
 
 export const UNAVAILABLE = "N/A";
 
@@ -27,6 +43,8 @@ export interface WebsiteMetrics {
   totalRevenue: number;
   codOrders: number;
   prepaidOrders: number;
+  /** Orders with no payment method (cod + prepaid + other = total). */
+  otherOrders?: number;
 }
 export interface AbandonedMetrics {
   totalLeads: number;
@@ -35,10 +53,21 @@ export interface AbandonedMetrics {
   codOrders: number;
   prepaidOrders: number;
 }
+/** The complete Shopify order set of the report's day(s): website orders + telecaller-created orders (the "Order Created by" ones are NOT excluded), cancelled and voided included. */
+export interface ShopifyMetrics {
+  /** Every Shopify order (always websiteOrders + telecallerOrders). */
+  totalOrders: number;
+  websiteOrders: number;
+  telecallerOrders: number;
+  /** Sum of every Shopify order's total, in rupees (two decimals). */
+  totalRevenue: number;
+}
 /** null = that section could not be read; each of its values is then "N/A". */
 export interface TemplateMetrics {
   website: WebsiteMetrics | null;
   abandoned: AbandonedMetrics | null;
+  /** The Shopify Orders Summary figures. Optional so figures built before this section existed stay valid. */
+  shopify?: ShopifyMetrics | null;
 }
 export type TemplateMetricsLoader = (user: { id: string; role: Role }, period: { from: string; to: string }) => Promise<TemplateMetrics>;
 
@@ -46,22 +75,30 @@ const finite = (n: unknown): n is number => typeof n === "number" && Number.isFi
 const count = (n: unknown): string => (finite(n) && n >= 0 ? String(Math.round(n)) : UNAVAILABLE);
 /** Whole rupees with Indian digit grouping and NO currency sign - the template text already carries the rupee sign ("Total Revenue: ₹{{...}}"). */
 const rupees = (n: unknown): string => (finite(n) ? Math.round(n).toLocaleString("en-IN") : UNAVAILABLE);
+/** Rupees with paise (always two decimals) and Indian grouping, no currency sign: 127581.05 -> "1,27,581.05". */
+const rupeesExact = (n: unknown): string => (finite(n) ? n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : UNAVAILABLE);
 
 /** The ten values, in template shape. Pure. `reportDate` is the report's own date label in the report's timezone (Asia/Kolkata by default), e.g. "26 Oct 2026". */
 export function buildStructuredValues(reportDate: string, m: TemplateMetrics): StructuredValues {
   const w = m.website;
   const a = m.abandoned;
+  const sh = m.shopify;
   return {
     report_date: reportDate.replace(/[\t\r\n]+/g, " ").trim() || UNAVAILABLE,
     web_total_orders: count(w?.totalOrders),
     web_total_revenue: rupees(w?.totalRevenue),
     web_cod_orders: count(w?.codOrders),
     web_prepaid_orders: count(w?.prepaidOrders),
+    web_other_orders: count(w?.otherOrders),
     aband_total_leads: count(a?.totalLeads),
     aband_orders_conv: count(a?.ordersConverted),
     aband_revenue: rupees(a?.revenue),
     aband_cod_orders: count(a?.codOrders),
     aband_prepaid_orders: count(a?.prepaidOrders),
+    total_shopify_orders: count(sh?.totalOrders),
+    website_orders: count(sh?.websiteOrders),
+    telecaller_orders: count(sh?.telecallerOrders),
+    total_revenue: rupeesExact(sh?.totalRevenue),
   };
 }
 
@@ -95,10 +132,18 @@ const VARIABLE_ALIASES: Readonly<Record<string, StructuredVariable>> = {
 };
 
 /** Which figure a template's variable stands for (undefined = not one of the ten). */
-export const structuredKeyOf = (name: string): StructuredVariable | undefined => (Object.hasOwn(VARIABLE_ALIASES, name) ? VARIABLE_ALIASES[name] : undefined);
+export const structuredKeyOf = (name: string): AnyStructuredVariable | undefined => (name === OPTIONAL_TEMPLATE_VARIABLE ? OPTIONAL_TEMPLATE_VARIABLE : Object.hasOwn(VARIABLE_ALIASES, name) ? VARIABLE_ALIASES[name] : undefined);
 
 /** Does the template declare exactly the ten figures, once each, under their canonical or accepted alias names (any order)? */
 export function isStructuredVariableSet(names: readonly string[]): boolean {
   const keys = new Set(names.map(structuredKeyOf));
-  return names.length === STRUCTURED_TEMPLATE_VARIABLES.length && keys.size === STRUCTURED_TEMPLATE_VARIABLES.length && STRUCTURED_TEMPLATE_VARIABLES.every((v) => keys.has(v));
+  // the ten figures, optionally plus web_other_orders (an eleventh); nothing else is accepted
+  const expected = STRUCTURED_TEMPLATE_VARIABLES.length + (keys.has(OPTIONAL_TEMPLATE_VARIABLE) ? 1 : 0);
+  return names.length === expected && keys.size === expected && STRUCTURED_TEMPLATE_VARIABLES.every((v) => keys.has(v));
+}
+
+/** Does the template declare exactly the five Shopify Orders Summary variables, once each (any order) and nothing else? */
+export function isShopifySummarySet(names: readonly string[]): boolean {
+  const set = new Set(names);
+  return names.length === SHOPIFY_SUMMARY_VARIABLES.length && set.size === SHOPIFY_SUMMARY_VARIABLES.length && SHOPIFY_SUMMARY_VARIABLES.every((v) => set.has(v));
 }
