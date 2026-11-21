@@ -18,6 +18,7 @@ import whatsappMetaWebhookRoutes, { startMetaWebhookWorker } from "./modules/wha
 import { startOmsForwardWorker } from "./modules/whatsapp/whatsapp.oms-forward.js";
 import legalRoutes from "./modules/legal/legal.routes.js";
 import { agencyJsonErrorHandler, createAgencyRoutes } from "./modules/agency/agency.routes.js";
+import { createHrmsRouter } from "./modules/hrms/hrms.routes.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startReportAutomationScheduler } from "./modules/report-automation/report-automation.scheduler.js";
@@ -64,6 +65,8 @@ app.use("/api/webhooks/whatsapp-cloud", express.raw({ type: "*/*", limit: "5mb" 
 
 // The external AI calling agency's API: its own small JSON parser and error shape, authenticated by API key (see modules/agency). Before the CRM-wide parser and sanitiser so the payload reaches it untouched.
 app.use("/api/agency", express.json({ limit: "32kb" }), createAgencyRoutes(), agencyJsonErrorHandler);
+// The HRMS reporting API: read-only, GET only, authenticated by HRMS_INTEGRATION_API_KEY (X-HRMS-Key). Reads no body, so it sits before the CRM-wide parser (see modules/hrms).
+app.use("/api/hrms/v1", createHrmsRouter());
 
 app.use(
   express.json({
