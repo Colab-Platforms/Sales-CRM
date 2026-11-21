@@ -286,6 +286,23 @@ class AdminService {
     return admins.map((a) => ({ ...toPublicUser(a), email: a.email }));
   }
 
+  // Password reset for HR and ADMIN accounts (route is ADMIN-only). The role is checked so this can't be used on any other account by id.
+  private async resetPasswordForRole(id: string, password: string, role: Role, label: string) {
+    const target = await prisma.user.findUnique({ where: { id } });
+    if (!target || target.role !== role) throw new ApiError(`${label} not found`, STATUS_CODES.NOT_FOUND);
+    const passwordHash = await hashPassword(password);
+    const updated = await prisma.user.update({ where: { id }, data: { passwordHash } });
+    return { ...toPublicUser(updated), email: updated.email };
+  }
+
+  resetHrPassword(id: string, password: string) {
+    return this.resetPasswordForRole(id, password, Role.HR, "HR user");
+  }
+
+  resetAdminPassword(id: string, password: string) {
+    return this.resetPasswordForRole(id, password, Role.ADMIN, "Admin");
+  }
+
   async listHr() {
     const hrUsers = await prisma.user.findMany({
       where: { role: Role.HR },

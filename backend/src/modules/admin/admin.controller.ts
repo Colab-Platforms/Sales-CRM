@@ -236,6 +236,25 @@ export const resetRecruiterPassword = async (req: AuthRequest, res: Response): P
   }
 };
 
+const passwordReset =
+  (run: (id: string, password: string) => Promise<unknown>, message: string) =>
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const { error, value } = validateResetPasswordSchema(req.body);
+      if (error) {
+        sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+        return;
+      }
+      const result = await run(req.params.id as string, value.password);
+      sendResponse(res, true, result, message, STATUS_CODES.OK);
+    } catch (error: any) {
+      sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    }
+  };
+
+export const resetHrPassword = passwordReset((id, pw) => adminService.resetHrPassword(id, pw), "HR password updated successfully.");
+export const resetAdminPassword = passwordReset((id, pw) => adminService.resetAdminPassword(id, pw), "Admin password updated successfully.");
+
 export const listHr = async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
     const result = await adminService.listHr();

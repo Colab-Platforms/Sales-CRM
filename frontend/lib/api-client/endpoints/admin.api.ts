@@ -98,6 +98,16 @@ export const adminApi = {
     return res.data.data;
   },
 
+  async resetHrPassword(id: string, payload: ResetPasswordPayload): Promise<HrUser> {
+    const res = await apiClient.patch<ApiEnvelope<HrUser>>(`/admin/hr/${id}/password`, payload);
+    return res.data.data;
+  },
+
+  async resetAdminPassword(id: string, payload: ResetPasswordPayload): Promise<AdminUser> {
+    const res = await apiClient.patch<ApiEnvelope<AdminUser>>(`/admin/admins/${id}/password`, payload);
+    return res.data.data;
+  },
+
   async listAdmins(): Promise<AdminUser[]> {
     const res = await apiClient.get<ApiEnvelope<AdminUser[]>>("/admin/admins");
     return res.data.data;

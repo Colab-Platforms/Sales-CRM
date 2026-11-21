@@ -18,6 +18,8 @@ import {
   listRecruiters,
   updateRecruiter,
   resetRecruiterPassword,
+  resetHrPassword,
+  resetAdminPassword,
   createGroup,
   listGroups,
   getGroup,
@@ -49,10 +51,12 @@ router.patch("/managers/:id/password", adminOnly, resetManagerPassword);
 // HR accounts: ADMIN only.
 router.post("/hr", adminOnly, createHr);
 router.get("/hr", adminOnly, listHr);
+router.patch("/hr/:id/password", adminOnly, resetHrPassword);
 
 // Admin accounts: ADMIN only (HR and everyone else get 403). ADMIN is the top role; there is no SUPERADMIN.
 router.post("/admins", adminOnly, createAdmin);
 router.get("/admins", adminOnly, listAdmins);
+router.patch("/admins/:id/password", adminOnly, resetAdminPassword);
 
 // Recruiters (they call job applicants): ADMIN + HR.
 router.post("/recruiters", adminOrHr, createRecruiter);
