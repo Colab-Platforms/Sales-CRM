@@ -150,3 +150,115 @@ describe(`Delete All Leads against ${TOTAL.toLocaleString("en-IN")} leads (no fi
     console.log(`DELETE ALL RESULT: targeted ${(baseline + TOTAL).toLocaleString("en-IN")} leads (${TOTAL} created + ${baseline} already there), deleted ${deleted}, skipped ${WITH_ORDERS} with orders, ${calls} call(s)`);
   });
 });
+
+// REGRESSION: a lead with real call data. call_recordings and call_transcripts (and a WhatsApp message with per-user state) point at their parents with RESTRICT, so they must be deleted first;
+// the first version deleted calls before their recordings and failed with a foreign-key violation, in the single delete and in Delete All.
+describe("leads with calls, recordings, transcripts, notes, tasks and WhatsApp messages", () => {
+  const made: { leadId: string; orderId?: string }[] = [];
+  let agentId = "";
+  const extraTag = randomUUID().slice(0, 5);
+
+  async function realisticLead(i: number, withOrder: boolean) {
+    const lead = await prisma.lead.create({ data: { leadNumber: `DEP-${tag}-${extraTag}-${i}`, firstName: `Dep${i}`, mobile: `5${String(i).padStart(9, "0")}` }, select: { id: true } });
+    const call = await prisma.call.create({ data: { leadId: lead.id, agentId, provider: "TEST", direction: "OUTBOUND", status: "COMPLETED", startedAt: new Date() } as never, select: { id: true } });
+    await prisma.callRecording.create({ data: { callId: call.id, recordingUrl: "https://rec.test/x.mp3", status: "READY" } as never });
+    await prisma.callTranscript.create({ data: { callId: call.id, transcriptText: "hello", summary: "s" } as never });
+    await prisma.activity.create({ data: { leadId: lead.id, type: "LEAD_CREATED" as never, title: "note", description: "a note" } });
+    await prisma.task.create({ data: { leadId: lead.id, assignedToId: agentId, type: "CALLBACK", title: "call back", scheduledAt: new Date() } as never });
+    const msg = await prisma.whatsAppMessage.create({ data: { leadId: lead.id, provider: "GUPSHUP", direction: "OUTBOUND", status: "SENT", body: "hi" } as never, select: { id: true } });
+    await prisma.whatsAppMessageUserState.create({ data: { messageId: msg.id, userId: agentId, starred: true } as never });
+    let orderId: string | undefined;
+    if (withOrder) {
+      const o = await prisma.order.create({
+        data: { orderNumber: `DEPORD-${tag}-${extraTag}-${i}`, leadId: lead.id, source: "SALESPERSON", status: "CONFIRMED", totalAmount: "549.00", items: { create: [{ productNameSnapshot: "X", quantity: 1, unitPrice: "549.00", totalPrice: "549.00" }] }, payments: { create: [{ amount: "549.00", method: "COD", status: "PENDING" }] }, shipments: { create: [{ status: "SHIPPED", courier: "T" }] } } as never,
+        select: { id: true },
+      });
+      orderId = o.id;
+      orderIds.push(o.id);
+    }
+    made.push({ leadId: lead.id, orderId });
+    return lead.id;
+  }
+  const dependents = (ids: string[]) =>
+    Promise.all([
+      prisma.call.count({ where: { leadId: { in: ids } } }),
+      prisma.callRecording.count({ where: { call: { leadId: { in: ids } } } }),
+      prisma.callTranscript.count({ where: { call: { leadId: { in: ids } } } }),
+      prisma.activity.count({ where: { leadId: { in: ids } } }),
+      prisma.task.count({ where: { leadId: { in: ids } } }),
+      prisma.whatsAppMessage.count({ where: { leadId: { in: ids } } }),
+      prisma.whatsAppMessageUserState.count({ where: { message: { leadId: { in: ids } } } }),
+    ]);
+
+  before(async () => {
+    agentId = users.sales!.id;
+  });
+
+  it("single delete of a lead with all of that data: no foreign-key error, and everything attached is gone", async () => {
+    const id = await realisticLead(900, false);
+    assert.deepEqual(await dependents([id]), [1, 1, 1, 1, 1, 1, 1]);
+    const r = await api("admin", "DELETE", `/lead/leads/${id}`);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    assert.equal(await prisma.lead.count({ where: { id } }), 0);
+    assert.deepEqual(await dependents([id]), [0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("Delete All across SEVERAL batches (1,200 leads with calls > the 500 batch size): all deleted, none left half-deleted, leads with orders skipped and their whole history kept", async () => {
+    const withData: string[] = [];
+    for (let i = 0; i < 1200; i += 1) {
+      // bulk-create the cheap parts; the first 40 get the full realistic set, 3 of those also have an order
+      if (i < 40) withData.push(await realisticLead(i, i < 3));
+      else {
+        const l = await prisma.lead.create({ data: { leadNumber: `DEP-${tag}-${extraTag}-${i}`, firstName: `Dep${i}` }, select: { id: true } });
+        const c = await prisma.call.create({ data: { leadId: l.id, agentId, provider: "TEST", direction: "OUTBOUND", status: "COMPLETED" } as never, select: { id: true } });
+        await prisma.callRecording.create({ data: { callId: c.id, status: "READY" } as never });
+        withData.push(l.id);
+      }
+    }
+    const orderLeads = made.filter((m) => m.orderId).map((m) => m.leadId);
+    assert.equal(orderLeads.length, 3);
+    const mineIds = withData;
+    const before = await api("admin", "POST", "/lead/leads/bulk/delete/preview", { all: true });
+    const expected = before.json.data.deletable;
+    let deleted = 0;
+    let calls = 0;
+    let last: any;
+    for (let first = true; ; first = false) {
+      const r = await api("admin", "POST", "/lead/leads/bulk/delete", { all: true, confirmText: "DELETE ALL", expectedCount: expected, confirm: true, ...(first ? {} : { continuation: true }) });
+      assert.equal(r.status, 200, JSON.stringify(r.json));
+      calls++;
+      deleted += r.json.data.deleted;
+      last = r.json.data;
+      if (r.json.data.done || r.json.data.deleted === 0) break;
+    }
+    assert.equal(deleted, expected, "the returned deleted count is exactly what was deletable");
+    assert.ok(deleted >= 1197, "more than one 500-lead batch was processed");
+    assert.equal(last.done, true);
+    assert.ok(last.skippedWithOrders >= 3, "the leads with orders are reported as skipped");
+    // everything of the deletable leads is gone, in every dependent table; nothing half-deleted
+    const gone = mineIds.filter((id) => !orderLeads.includes(id));
+    assert.equal(await prisma.lead.count({ where: { id: { in: gone } } }), 0);
+    assert.deepEqual(await dependents(gone), [0, 0, 0, 0, 0, 0, 0]);
+    // the leads with orders keep their complete data and their order history
+    assert.equal(await prisma.lead.count({ where: { id: { in: orderLeads } } }), 3);
+    assert.deepEqual(await dependents(orderLeads), [3, 3, 3, 3, 3, 3, 3], "their calls, recordings, transcripts, notes, tasks and messages are untouched too (the lead is kept as a whole)");
+    const oids = made.filter((m) => m.orderId).map((m) => m.orderId!);
+    assert.equal(await prisma.order.count({ where: { id: { in: oids } } }), 3);
+    assert.equal(await prisma.orderItem.count({ where: { orderId: { in: oids } } }), 3);
+    assert.equal(await prisma.payment.count({ where: { orderId: { in: oids } } }), 3);
+    assert.equal(await prisma.shipment.count({ where: { orderId: { in: oids } } }), 3);
+    console.log(`DEPENDENTS RESULT: ${calls} call(s), deleted ${deleted}, skipped ${last.skippedWithOrders}`);
+  });
+
+  after(async () => {
+    const ids = made.map((m) => m.leadId);
+    if (ids.length) {
+      await prisma.$executeRaw`DELETE FROM whatsapp_message_user_states WHERE message_id IN (SELECT id FROM whatsapp_messages WHERE lead_id = ANY(${ids}::uuid[]))`;
+      await prisma.$executeRaw`DELETE FROM whatsapp_messages WHERE lead_id = ANY(${ids}::uuid[])`;
+      await prisma.$executeRaw`DELETE FROM call_recordings WHERE call_id IN (SELECT id FROM calls WHERE lead_id = ANY(${ids}::uuid[]))`;
+      await prisma.$executeRaw`DELETE FROM call_transcripts WHERE call_id IN (SELECT id FROM calls WHERE lead_id = ANY(${ids}::uuid[]))`;
+      await prisma.$executeRaw`DELETE FROM calls WHERE lead_id = ANY(${ids}::uuid[])`;
+      await prisma.$executeRaw`DELETE FROM tasks WHERE lead_id = ANY(${ids}::uuid[])`;
+    }
+  });
+});
