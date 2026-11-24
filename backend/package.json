@@ -36,6 +36,7 @@
   "license": "ISC",
   "type": "module",
   "devDependencies": {
+    "@prisma/adapter-pg": "^7.10.1",
     "@types/bcryptjs": "^2.4.6",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
