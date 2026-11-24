@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { mySalespersonsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { adminSalespersonsQueryOptions } from "@/lib/api-client/queries/admin.queries";
 import { useBulkAssignSalespersonMutation } from "@/lib/api-client/mutations/lead.mutations";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -18,6 +19,7 @@ export function AssignSalespersonDialog({
   leadIds,
   filter,
   count,
+  isAdmin,
   onDone,
 }: {
   open: boolean;
@@ -26,9 +28,13 @@ export function AssignSalespersonDialog({
   /** When set, every lead matching this filter is assigned (the server resolves the ids). */
   filter?: LeadIdFilter | null;
   count?: number;
+  /** Admin: every active salesperson is listed and ONE is chosen (no round robin); the lead's manager is never changed. */
+  isAdmin?: boolean;
   onDone: () => void;
 }) {
-  const { data: salespersons, isPending, error } = useQuery({ ...mySalespersonsQueryOptions(), enabled: open });
+  const mine = useQuery({ ...mySalespersonsQueryOptions(), enabled: open && !isAdmin });
+  const all = useQuery({ ...adminSalespersonsQueryOptions(), enabled: open && Boolean(isAdmin) });
+  const { data: salespersons, isPending, error } = isAdmin ? all : mine;
   const bulkAssign = useBulkAssignSalespersonMutation();
   const [method, setMethod] = useState<"MANUAL" | "ROUND_ROBIN">("MANUAL");
   const [salespersonId, setSalespersonId] = useState("");
@@ -37,7 +43,8 @@ export function AssignSalespersonDialog({
   // Everyone reporting to this manager is assignable — self-added or
   // admin-assigned, whether or not they've been placed in a group yet. A lead
   // just goes out with no group attached (groupId is nullable) in that case.
-  const team = salespersons ?? [];
+  const team = ((isAdmin ? (all.data ?? []).filter((s) => s.status === "ACTIVE").map((s) => ({ id: s.id, name: s.name, groupName: s.reportingManager ? `Manager: ${s.reportingManager.name}` : null })) : (mine.data ?? [])) as { id: string; name: string; groupName: string | null }[]);
+  void salespersons;
 
   // This dialog stays mounted between opens (only its content is conditionally
   // rendered), so without this reset a stale selection from a previous batch
@@ -69,7 +76,8 @@ export function AssignSalespersonDialog({
         : { ...(filter ? { filter } : { leadIds }), method, salespersonIds: [...salespersonIds] },
       {
         onSuccess: (result) => {
-          toast.success(`${result.assignedCount.toLocaleString("en-IN")} lead(s) assigned.`);
+          const unchanged = result.unchangedCount ?? 0;
+          toast.success(`${result.assignedCount.toLocaleString("en-IN")} lead(s) assigned${unchanged > 0 ? `, ${unchanged.toLocaleString("en-IN")} already with this salesperson` : ""}.`);
           onDone();
         },
       },
@@ -93,10 +101,12 @@ export function AssignSalespersonDialog({
                 <input type="radio" checked={method === "MANUAL"} onChange={() => setMethod("MANUAL")} />
                 Manual
               </label>
+              {isAdmin ? null : (
               <label className="sketch-outline flex cursor-pointer items-center gap-2.5 px-3 py-2.5 text-sm font-medium has-checked:border-primary/60 has-checked:bg-primary/8">
                 <input type="radio" checked={method === "ROUND_ROBIN"} onChange={() => setMethod("ROUND_ROBIN")} />
                 Round Robin
               </label>
+              )}
             </div>
 
             {error ? (

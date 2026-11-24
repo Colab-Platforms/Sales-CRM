@@ -53,7 +53,19 @@ const updateLeadSchema = z
   })
   .refine((data) => Object.keys(data).length > 0, { message: "No fields to update" });
 
+/** A person filter: a user id, or NONE for "unassigned". */
+const personFilter = z.union([z.string().guid(), z.literal("NONE")]);
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Dates must look like 2026-11-24").refine((d) => !Number.isNaN(Date.parse(`${d}T00:00:00Z`)), "Not a real date");
+const columnFilters = {
+  name: z.string().trim().max(100).optional(),
+  contact: z.string().trim().max(100).optional(),
+  priority: priorityEnum.optional(),
+  createdFrom: isoDay.optional(),
+  createdTo: isoDay.optional(),
+};
+
 const listLeadsQuerySchema = z.object({
+  ...columnFilters,
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   sourceId: z.string().guid().optional(),
@@ -62,8 +74,8 @@ const listLeadsQuerySchema = z.object({
   workingStatus: workingStatusEnum.optional(),
   lifecycleStage: z.enum(["LEAD", "CUSTOMER"]).optional(),
   assignment: assignmentEnum.optional(),
-  managerId: z.string().guid().optional(),
-  salespersonId: z.string().guid().optional(),
+  managerId: personFilter.optional(),
+  salespersonId: personFilter.optional(),
   bucket: z.enum(["TODAY"]).optional(),
   search: z.string().max(255).optional(),
   aiAgent: z.enum(["ONLY", "EXCLUDE"]).optional(),
@@ -73,14 +85,15 @@ const listLeadsQuerySchema = z.object({
 // "Every lead matching this filter" (e.g. a whole segment) instead of an explicit id list, which could not carry tens of thousands of ids.
 const leadIdFilterSchema = z
   .object({
+    ...columnFilters,
     segmentId: z.string().guid().optional(),
     customerClass: z.enum(["REPEAT", "LOYAL", "VIP"]).optional(),
     assignment: assignmentEnum.optional(),
     sourceId: z.string().guid().optional(),
     workingStatus: workingStatusEnum.optional(),
     search: z.string().max(255).optional(),
-    managerId: z.string().guid().optional(),
-    salespersonId: z.string().guid().optional(),
+    managerId: personFilter.optional(),
+    salespersonId: personFilter.optional(),
   })
   .strict()
   .refine((f) => Object.keys(f).length > 0, { message: "Apply at least one filter or search first: acting on every lead at once (an unfiltered selection) is not allowed" });

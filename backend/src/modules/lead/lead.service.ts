@@ -176,17 +176,20 @@ class LeadService {
   }
 
   /** Bulk assignment of everything a filter matches (e.g. a whole segment), in committed chunks. The round robin cursor is kept between chunks, so the spread stays even. */
-  private async assignInChunks(ids: string[], run: (chunk: string[]) => Promise<{ assignedCount: number }>) {
+  private async assignInChunks(ids: string[], run: (chunk: string[]) => Promise<{ assignedCount: number; unchangedCount?: number }>) {
     if (ids.length === 0) throw new ApiError("No leads match the selected filter", STATUS_CODES.BAD_REQUEST);
     let assignedCount = 0;
+    let unchangedCount = 0;
     for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
       try {
-        assignedCount += (await run(ids.slice(i, i + ASSIGN_CHUNK))).assignedCount;
+        const r = await run(ids.slice(i, i + ASSIGN_CHUNK));
+        assignedCount += r.assignedCount;
+        unchangedCount += r.unchangedCount ?? 0;
       } catch (error: any) {
         throw new ApiError(`${error.message}${assignedCount ? ` (${assignedCount.toLocaleString("en-IN")} of ${ids.length.toLocaleString("en-IN")} leads were already assigned)` : ""}`, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
       }
     }
-    return { assignedCount, matchedCount: ids.length };
+    return { assignedCount, unchangedCount, matchedCount: ids.length };
   }
 
   async bulkAssignManagersByFilter(user: AuthUser, filter: LeadIdFilter, body: Omit<BulkAssignManagerBody, "leadIds">) {
@@ -219,7 +222,20 @@ class LeadService {
 
     // AI Agent filter: leads the AI calling agency made a request about (ONLY), or the leads it did not touch (EXCLUDE). Independent of the human assignment filters above and below.
     const aiConditions = aiAgentWhere(query.aiAgent, query.aiAgentIntent);
-    if (aiConditions.length > 0) where.AND = aiConditions;
+    // every extra condition goes into ONE AND list, so the column filters, the AI filters and the search all apply together
+    const and: Prisma.LeadWhereInput[] = [...aiConditions];
+    // Column filters: Lead (every word in first or last name), Contact (phone digits or e-mail), Priority, Created (inclusive IST days).
+    const words = (query.name ?? "").split(/\s+/).filter(Boolean).slice(0, 6);
+    for (const w of words) and.push({ OR: [{ firstName: { contains: w, mode: "insensitive" } }, { lastName: { contains: w, mode: "insensitive" } }] });
+    const contact = (query.contact ?? "").trim();
+    if (contact) {
+      const digits = contact.replace(/\D/g, "");
+      and.push({ OR: [{ email: { contains: contact, mode: "insensitive" } }, { mobile: { contains: contact, mode: "insensitive" } }, ...(digits.length >= 3 ? [{ normalizedMobile: { contains: digits } }] : [])] });
+    }
+    if (query.priority) where.priority = query.priority;
+    const day = (d: string, plus = 0) => new Date(Date.parse(`${d}T00:00:00+05:30`) + plus * 86_400_000);
+    if (query.createdFrom || query.createdTo) where.createdAt = { ...(query.createdFrom ? { gte: day(query.createdFrom) } : {}), ...(query.createdTo ? { lt: day(query.createdTo, 1) } : {}) };
+    if (and.length > 0) where.AND = and;
 
     if (query.assignment === "UNASSIGNED") {
       where.assignedManagerId = null;
@@ -230,8 +246,9 @@ class LeadService {
       where.ownerId = { not: null };
     }
 
-    if (user.role === Role.ADMIN && query.managerId) where.assignedManagerId = query.managerId;
-    if (user.role !== Role.SALESPERSON && query.salespersonId) where.ownerId = query.salespersonId;
+    // NONE = unassigned. The manager filter is the Admin's (a manager is already scoped to their own leads).
+    if (user.role === Role.ADMIN && query.managerId) where.assignedManagerId = query.managerId === "NONE" ? null : query.managerId;
+    if (user.role !== Role.SALESPERSON && query.salespersonId) where.ownerId = query.salespersonId === "NONE" ? null : query.salespersonId;
     // Today's daily bucket: leads put in the owner's bucket today that they have not worked yet.
     if (query.bucket === "TODAY") {
       where.bucketDate = bucketToday();
@@ -827,6 +844,32 @@ class LeadService {
    * up instead of interleaving or deadlocking), a lead that already belongs to that telecaller is left alone (no duplicate history row), and any failure rolls the whole batch back.
    * A lead nobody manages yet follows the telecaller's team manager (so that manager sees it); an existing manager is never changed.
    */
+  /**
+   * ADMIN: assign leads straight to one active salesperson, whoever their manager is. Independent of the manager: the lead's assignedManagerId is NEVER changed here (and assigning a manager never changes the salesperson).
+   * Leads already owned by this salesperson are left alone (no duplicate history row) and counted as unchanged; the rows are locked so two overlapping requests cannot both assign the same lead.
+   */
+  async bulkAssignSalespersonsAsAdmin(adminId: string, body: { leadIds: string[]; salespersonId: string }) {
+    const salesperson = await prisma.user.findUnique({ where: { id: body.salespersonId } });
+    if (!salesperson || salesperson.role !== Role.SALESPERSON || salesperson.status !== UserStatus.ACTIVE) throw new ApiError("Invalid or inactive salesperson", STATUS_CODES.BAD_REQUEST);
+    const membership = await prisma.groupMember.findFirst({ where: { userId: salesperson.id, isActive: true, group: { status: "ACTIVE" } }, select: { groupId: true } });
+    const leadIds = [...new Set(body.leadIds)].sort();
+    return prisma.$transaction(
+      async (tx) => {
+        await tx.$queryRaw`SELECT id FROM leads WHERE id = ANY(${leadIds}::uuid[]) ORDER BY id FOR UPDATE`;
+        const leads = await this.fetchLeadsOrThrow(tx, leadIds);
+        const toAssign = leads.filter((lead) => lead.ownerId !== salesperson.id);
+        if (toAssign.length > 0) await this.bulkAssignLeadsToSalesperson(tx, toAssign.map((lead) => ({ lead, salesperson, groupId: membership?.groupId ?? null })), adminId, AssignmentType.MANUAL);
+        return { assignedCount: toAssign.length, unchangedCount: leads.length - toAssign.length };
+      },
+      { timeout: 20000, maxWait: 10000 },
+    );
+  }
+
+  async bulkAssignSalespersonsAsAdminByFilter(user: AuthUser, filter: LeadIdFilter, salespersonId: string) {
+    const ids = await this.resolveLeadIds(user, filter);
+    return this.assignInChunks(ids, (chunk) => this.bulkAssignSalespersonsAsAdmin(user.id, { leadIds: chunk, salespersonId }));
+  }
+
   async bulkAssignSalespersonsByStaff(actorId: string, body: { leadIds: string[]; salespersonId: string }, db: Pick<typeof prisma, "$transaction" | "user" | "groupMember"> = prisma) {
     const salesperson = await db.user.findUnique({ where: { id: body.salespersonId } });
     if (!salesperson || salesperson.role !== Role.SALESPERSON || salesperson.status !== UserStatus.ACTIVE) {

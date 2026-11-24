@@ -68,8 +68,8 @@ export const leadApi = {
     return res.data.data;
   },
 
-  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number }> {
-    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>(
+  async bulkAssignSalesperson(payload: BulkAssignSalespersonPayload): Promise<{ assignedCount: number; unchangedCount?: number }> {
+    const res = await apiClient.post<ApiEnvelope<{ assignedCount: number; unchangedCount?: number }>>(
       "/lead/leads/bulk/assign-salesperson",
       payload,
       { timeout: 300_000 },

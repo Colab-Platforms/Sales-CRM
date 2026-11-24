@@ -23,6 +23,7 @@ import { SelectAllMatching } from "@/components/leads/select-all-matching";
 import { BulkDeleteLeadsDialog, type BulkDeleteMode } from "@/components/leads/bulk-delete-leads-dialog";
 import { NativeSelect } from "@/components/ui/native-select";
 import { idFilterOf } from "@/lib/lead-filter";
+import { LeadColumnFilters } from "@/components/leads/lead-column-filters";
 
 export const PAGE_SIZES = [20, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 20;
@@ -32,6 +33,8 @@ function LeadsPageContent() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
   const [deleteMode, setDeleteMode] = useState<BulkDeleteMode | null>(null);
+  // bumped by "Clear Filters" so the filter inputs (which keep their own typing state) start empty again
+  const [resetKey, setResetKey] = useState(0);
   // the Segments page links here with ?segmentId=...
   const initialSegment = useSearchParams().get("segmentId") ?? undefined;
   const [filters, setFilters] = useState<LeadFilterState>(initialSegment ? { segmentId: initialSegment } : {});
@@ -57,6 +60,14 @@ function LeadsPageContent() {
   function clearSelection() {
     setSelectedIds(new Set());
     setAllMatching(false);
+  }
+
+  // ONE handler for every filter change (top bar and column row): back to page 1, selection dropped (it belonged to the old list), and an emptied filter set also resets the inputs
+  function changeFilters(next: typeof filters) {
+    setFilters(next);
+    setPage(1);
+    clearSelection();
+    if (Object.keys(next).length === 0) setResetKey((k) => k + 1);
   }
 
   const idFilter = idFilterOf(filters);
@@ -117,12 +128,9 @@ function LeadsPageContent() {
       ) : null}
 
       <LeadFilters
+        key={resetKey}
         value={filters}
-        onChange={(next) => {
-          setFilters(next);
-          setPage(1);
-          clearSelection();
-        }}
+        onChange={changeFilters}
         role={user.role}
       />
 
@@ -141,7 +149,7 @@ function LeadsPageContent() {
           count={selectedCount}
           onClear={clearSelection}
           onAssignManager={isAdmin ? () => setAssignManagerOpen(true) : undefined}
-          onAssignSalesperson={isManager ? () => setAssignSalespersonOpen(true) : undefined}
+          onAssignSalesperson={isManager || isAdmin ? () => setAssignSalespersonOpen(true) : undefined}
           // changing the status of a filter-wide selection is not offered: it only exists for explicit ids
           onUpdateStatus={isAdmin && !useFilter ? () => setUpdateStatusOpen(true) : undefined}
           // Two different deletions (Admin only): what is selected on this page, or every lead matching the filters across all pages.
@@ -196,6 +204,7 @@ function LeadsPageContent() {
           onToggleAll={toggleAll}
           pagination={data?.pagination}
           onPageChange={setPage}
+          filterRow={<LeadColumnFilters value={filters} onChange={changeFilters} role={user.role} resetKey={resetKey} onClearAll={() => changeFilters({})} />}
         />
       )}
 
@@ -216,6 +225,7 @@ function LeadsPageContent() {
         leadIds={[...selectedIds]}
         filter={useFilter ? idFilter : null}
         count={selectedCount}
+        isAdmin={isAdmin}
         onDone={() => {
           setAssignSalespersonOpen(false);
           clearSelection();

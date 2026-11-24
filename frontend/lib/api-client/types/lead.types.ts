@@ -101,6 +101,12 @@ export interface LeadListParams {
   salespersonId?: string;
   bucket?: "TODAY";
   search?: string;
+  /** Column filters of the Leads table. managerId / salespersonId also accept "NONE" (unassigned). Dates are inclusive YYYY-MM-DD (India time). */
+  name?: string;
+  contact?: string;
+  priority?: LeadPriority;
+  createdFrom?: string;
+  createdTo?: string;
   /** Campaign segment and customer classification: two independent filters. */
   segmentId?: string;
   customerClass?: CustomerClass;
@@ -159,7 +165,7 @@ export interface LeadAssignmentRecord {
 }
 
 /** "Every lead matching this filter" (e.g. a whole segment) instead of an explicit id list. */
-export type LeadIdFilter = Pick<LeadListParams, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId">;
+export type LeadIdFilter = Pick<LeadListParams, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId" | "name" | "contact" | "priority" | "createdFrom" | "createdTo">;
 
 export interface BulkDeletePreview {
   /** Leads matching the selection. */
