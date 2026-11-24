@@ -30,6 +30,7 @@ import ticketsRoutes from "@modules/tickets/tickets.routes.js";
 import performanceMatrixRoutes from "@modules/performance-matrix/matrix.routes.js";
 import incentivesRoutes from "@modules/incentives/incentives.routes.js";
 import { prisma } from "@/lib/prisma.js";
+import { buildInfo } from "@/lib/buildInfo.js";
 import { createCachedDatabaseCheck } from "@/lib/dbHealth.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { publicQrRoutes } from "@modules/whatsapp/whatsapp.payment-qr.routes.js";
@@ -37,8 +38,9 @@ import { Role } from "../generated/prisma/enums.js";
 
 const router = Router();
 
+// Liveness (no login, no database): the original { success, message } plus which commit is running and the environment, so a deploy can be verified without access to the host.
 router.get("/health", (_req, res) => {
-  res.status(200).json({ success: true, message: "ok" });
+  res.status(200).json({ success: true, message: "ok", ...buildInfo() });
 });
 
 // Readiness: actually reaches the database (this wakes a suspended Neon compute), so it is admin-only and cached for 30 s - an open endpoint would let anyone keep the database awake
