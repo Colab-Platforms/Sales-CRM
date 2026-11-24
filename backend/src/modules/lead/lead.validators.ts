@@ -8,7 +8,10 @@ import type {
   BulkAssignSalespersonBody,
   BulkUpdateStatusBody,
   ImportPreviewBody,
+  LeadIdFilter,
 } from "./lead.types.js";
+
+export const DELETE_ALL_PHRASE = "DELETE ALL";
 
 // .guid() (not .uuid()) throughout this file — .uuid() enforces RFC 9562
 // version/variant bits, but Postgres's uuid column (and thus ids already in
@@ -80,7 +83,27 @@ const leadIdFilterSchema = z
     salespersonId: z.string().guid().optional(),
   })
   .strict()
-  .refine((f) => Object.keys(f).length > 0, { message: "The filter is empty" });
+  .refine((f) => Object.keys(f).length > 0, { message: "Apply at least one filter or search first: acting on every lead at once (an unfiltered selection) is not allowed" });
+
+// Bulk delete: ids of the page being viewed (at most 100) OR a filter (every match across all pages), plus the exact count the user confirmed and an explicit confirm flag.
+const bulkDeleteSchema = z
+  .object({
+    leadIds: z.array(z.string().guid()).min(1, "No leads selected").max(100, "At most 100 leads can be deleted by id; use a filter for more").optional(),
+    filter: leadIdFilterSchema.optional(),
+    // "Delete All Leads": every lead the Leads page lists, no filter. Needs the typed phrase on EVERY call, so it can never happen by accident or from a half-built request.
+    all: z.literal(true).optional(),
+    confirmText: z.string().max(40).optional(),
+    expectedCount: z.number().int().min(0),
+    confirm: z.literal(true, { error: "Deletion must be confirmed" }),
+    continuation: z.boolean().optional(),
+  })
+  .strict()
+  .refine((d) => [Boolean(d.leadIds?.length), Boolean(d.filter), d.all === true].filter(Boolean).length === 1, { message: "Send exactly one of leadIds, a filter, or all" })
+  .refine((d) => d.all !== true || d.confirmText === DELETE_ALL_PHRASE, { message: `Type ${DELETE_ALL_PHRASE} to confirm deleting all leads` });
+const bulkDeletePreviewSchema = z
+  .object({ leadIds: z.array(z.string().guid()).min(1, "No leads selected").max(100, "At most 100 leads can be deleted by id; use a filter for more").optional(), filter: leadIdFilterSchema.optional(), all: z.literal(true).optional() })
+  .strict()
+  .refine((d) => [Boolean(d.leadIds?.length), Boolean(d.filter), d.all === true].filter(Boolean).length === 1, { message: "Send exactly one of leadIds, a filter, or all" });
 
 const bulkAssignManagerSchema = z
   .object({
@@ -117,6 +140,9 @@ const bulkUpdateStatusSchema = z.object({
 const importPreviewSchema = z.object({
   columnMapping: z.record(z.string(), z.string()),
 });
+
+export const validateBulkDeleteSchema = (body: unknown) => validateSchema<{ leadIds?: string[]; filter?: LeadIdFilter; all?: true; confirmText?: string; expectedCount: number; confirm: true; continuation?: boolean }>(bulkDeleteSchema, body);
+export const validateBulkDeletePreviewSchema = (body: unknown) => validateSchema<{ leadIds?: string[]; filter?: LeadIdFilter; all?: true }>(bulkDeletePreviewSchema, body);
 
 export const validateCreateLeadSchema = (body: unknown) => validateSchema<CreateLeadBody>(createLeadSchema, body);
 

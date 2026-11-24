@@ -5,6 +5,7 @@ import { getLeadScope } from "@/lib/leadScope.js";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { Role } from "../../../generated/prisma/enums.js";
+import { logger } from "@/utils/logger.js";
 import CouponsService, { CUSTOMER_TYPES } from "./coupons.service.js";
 
 const service = new CouponsService();
@@ -13,7 +14,10 @@ const run = (fn: (req: AuthRequest) => Promise<unknown>, okStatus: number = STAT
   try {
     sendResponse(res, true, await fn(req), "ok", okStatus);
   } catch (error: any) {
-    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    const status = error.statusCode ?? STATUS_CODES.SERVER_ERROR;
+    // an expected refusal (validation, duplicate code, not found) is for the caller; anything else is a fault and is logged here too, so the real cause is visible in the server log, not only in the browser
+    if (status >= 500) logger.error(`Coupons API ${req.method} ${req.originalUrl.split("?")[0]} failed (${status}): ${error?.name ?? "Error"}${error?.code ? " " + error.code : ""} ${String(error?.message ?? "").slice(0, 400)}`);
+    sendResponse(res, false, null, error.message, status);
   }
 };
 const bad = (m: string) => Object.assign(new Error(m), { statusCode: STATUS_CODES.BAD_REQUEST });

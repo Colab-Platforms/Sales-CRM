@@ -19,6 +19,8 @@ export function useDiscountOptions(flow: DiscountFlow, enabled = true, leadId?: 
     queryFn: async () => (await apiClient.get<ApiEnvelope<DiscountOptions>>("/discounts/options", { params: { flow, ...(leadId ? { leadId } : {}) } })).data.data,
     enabled: Boolean(token) && enabled,
     staleTime: 15_000,
+    // a coupon the Admin just created / activated must be offered the next time the order screen opens
+    refetchOnMount: "always",
   });
   return { options: q.data ?? FALLBACK, isLoading: q.isPending, loaded: q.isSuccess };
 }

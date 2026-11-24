@@ -161,6 +161,23 @@ export interface LeadAssignmentRecord {
 /** "Every lead matching this filter" (e.g. a whole segment) instead of an explicit id list. */
 export type LeadIdFilter = Pick<LeadListParams, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId">;
 
+export interface BulkDeletePreview {
+  /** Leads matching the selection. */
+  matched: number;
+  /** Of those, how many will be deleted (the rest have orders and are kept). */
+  deletable: number;
+  skippedWithOrders: number;
+}
+
+export interface BulkDeleteResult {
+  deleted: number;
+  remaining: number;
+  skippedWithOrders: number;
+  done: boolean;
+}
+
+export type BulkDeletePayload = { leadIds?: string[]; filter?: LeadIdFilter; all?: true; confirmText?: string; expectedCount: number; confirm: true; continuation?: boolean };
+
 export interface BulkAssignManagerPayload {
   leadIds?: string[];
   filter?: LeadIdFilter;

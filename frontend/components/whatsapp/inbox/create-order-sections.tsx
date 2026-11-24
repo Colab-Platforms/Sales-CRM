@@ -559,7 +559,7 @@ export function ShippingSection({
             shippingFree
               ? "Prepaid orders ship free - no shipping charge is added. The courier rates below only check that this pincode is serviceable."
               : shippingFlat
-              ? "Cash on Delivery has a flat shipping charge of ₹50. The courier rates below only check that this pincode is serviceable."
+              ? "Cash on Delivery has a flat shipping charge of ₹49. The courier rates below only check that this pincode is serviceable."
               : shippingStatus?.kind === "rate"
               ? `Shiprocket's charge${shippingStatus.courier ? ` for ${shippingStatus.courier}` : ""}. Choose another courier below to change it.`
               : shippingStatus?.kind === "calculating"

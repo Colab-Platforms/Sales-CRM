@@ -147,15 +147,15 @@ describe("COD: the flat shipping charge (the courier rate no longer sets what th
     );
   const input = (h: string) => /<input[^>]*id="ship-amount"[^>]*>/.exec(h)?.[0] ?? "";
 
-  it("the form constant is the business rule: exactly 50.00", async () => {
+  it("the form constant is the business rule: exactly 49.00", async () => {
     const { COD_SHIPPING_CHARGE } = await import("@/lib/cod-shipping");
-    assert.equal(COD_SHIPPING_CHARGE, "50.00");
+    assert.equal(COD_SHIPPING_CHARGE, "49.00");
   });
-  it("a COD form shows 50.00, read-only and explained - even when Shiprocket quoted 66.96 for the selected courier", () => {
-    const h = flat(true, "50.00", { kind: "rate", amount: 66.96, courier: "Courier A" });
-    assert.match(input(h), /value="50.00"/);
+  it("a COD form shows 49.00, read-only and explained - even when Shiprocket quoted 66.96 for the selected courier", () => {
+    const h = flat(true, "49.00", { kind: "rate", amount: 66.96, courier: "Courier A" });
+    assert.match(input(h), /value="49.00"/);
     assert.match(input(h), /readOnly=""/);
-    assert.match(text(h), /flat shipping charge of ₹50/);
+    assert.match(text(h), /flat shipping charge of ₹49/);
     assert.doesNotMatch(h, /66\.96/, "the courier quote is not the charge");
   });
   it("without the flag the existing courier-driven behaviour is untouched (the shipment dialog and any other caller)", () => {

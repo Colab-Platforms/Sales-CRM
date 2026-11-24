@@ -137,42 +137,42 @@ describe("Create Order: default, edit, Fastrr coupon, custom, persistence, tampe
   const FIFTY = { type: "FIXED", value: "50" }; // the configured default: a COD order drops it (the prepaid incentive), so these tests use SIXTY where a discount must stick
   const SIXTY = { type: "FIXED", value: "60" };
 
-  it("custom ₹60 on COD: 499 - 60 + 50 shipping = 489, persisted as a CUSTOM discount (no coupon) with original subtotal and final total; the ₹50 default is dropped on COD", async () => {
+  it("custom ₹60 on COD: 499 - 60 + 49 shipping = 488, persisted as a CUSTOM discount (no coupon) with original subtotal and final total; the ₹50 default is dropped on COD", async () => {
     await inRollback(async (tx) => {
       const { create } = await setup(tx);
       const r = await create({ discount: SIXTY });
-      assert.deepEqual([Number(r.order.subtotal), Number(r.order.discountAmount), Number(r.order.totalAmount)], [499, 60, 489]);
+      assert.deepEqual([Number(r.order.subtotal), Number(r.order.discountAmount), Number(r.order.totalAmount)], [499, 60, 488]);
       const d = await meta(tx, r.order.id);
-      assert.deepEqual([d.originalSubtotal, d.discountType, d.discountValue, d.discountAmount, d.couponId, d.couponCode, d.couponSource, d.source, d.wasDefault, d.finalTotal], ["499.00", "FIXED", "60.00", "60.00", null, null, null, "CUSTOM", false, "489.00"]);
+      assert.deepEqual([d.originalSubtotal, d.discountType, d.discountValue, d.discountAmount, d.couponId, d.couponCode, d.couponSource, d.source, d.wasDefault, d.finalTotal], ["499.00", "FIXED", "60.00", "60.00", null, null, null, "CUSTOM", false, "488.00"]);
       assert.equal(r.order.discountReason, "Custom discount");
       const dropped = await create({ discount: FIFTY });
-      assert.deepEqual([Number(dropped.order.discountAmount), Number(dropped.order.totalAmount)], [0, 549], "the exact default is dropped on COD");
+      assert.deepEqual([Number(dropped.order.discountAmount), Number(dropped.order.totalAmount)], [0, 548], "the exact default is dropped on COD");
     });
   });
   it("Edit 50 -> 100 gives 399 (replaces, never 349); 10% gives 449.10; a Fastrr coupon is persisted with its source; none removes it", async () => {
     await inRollback(async (tx) => {
       const { create } = await setup(tx);
       const a = await create({ discount: { type: "FIXED", value: "100" } });
-      assert.deepEqual([Number(a.order.discountAmount), Number(a.order.totalAmount)], [100, 449]); // 499 - 100 + the flat COD shipping of 50
+      assert.deepEqual([Number(a.order.discountAmount), Number(a.order.totalAmount)], [100, 448]); // 499 - 100 + the flat COD shipping of 49
       const b = await create({ discount: { type: "PERCENT", value: "10" } });
-      assert.deepEqual([Number(b.order.discountAmount), Number(b.order.totalAmount)], [49.9, 499.1]);
+      assert.deepEqual([Number(b.order.discountAmount), Number(b.order.totalAmount)], [49.9, 498.1]);
       const e = await create({ discount: { type: "PERCENT", value: "20" } });
-      assert.equal(Number(e.order.totalAmount), 449.2);
+      assert.equal(Number(e.order.totalAmount), 448.2);
       const f = await create({ discount: { couponCode: "FASTRR100" } });
-      assert.deepEqual([Number(f.order.totalAmount), f.order.discountReason], [449, "Fastrr coupon FASTRR100"]);
+      assert.deepEqual([Number(f.order.totalAmount), f.order.discountReason], [448, "Fastrr coupon FASTRR100"]);
       const fd = await meta(tx, f.order.id);
-      assert.deepEqual([fd.source, fd.couponSource, fd.couponCode, fd.couponId, fd.discountType, fd.discountValue, fd.discountAmount, fd.finalTotal], ["FASTRR", "FASTRR", "FASTRR100", "fr-1", "FIXED", "100.00", "100.00", "449.00"]);
+      assert.deepEqual([fd.source, fd.couponSource, fd.couponCode, fd.couponId, fd.discountType, fd.discountValue, fd.discountAmount, fd.finalTotal], ["FASTRR", "FASTRR", "FASTRR100", "fr-1", "FIXED", "100.00", "100.00", "448.00"]);
       const none = await create({ discount: { none: true } });
-      assert.deepEqual([Number(none.order.discountAmount), Number(none.order.totalAmount)], [0, 549]);
+      assert.deepEqual([Number(none.order.discountAmount), Number(none.order.totalAmount)], [0, 548]);
     });
   });
-  it("the flat COD shipping (50, whatever the request says) is added after the discount; a legacy request with no discount field gets no implicit discount", async () => {
+  it("the flat COD shipping (49, whatever the request says) is added after the discount; a legacy request with no discount field gets no implicit discount", async () => {
     await inRollback(async (tx) => {
       const { create } = await setup(tx);
       const a = await create({ discount: { type: "FIXED", value: "60" }, shippingAmount: "40.00" });
-      assert.equal(Number(a.order.totalAmount), 489, "499 - 60 + 50 (the 40 in the request is ignored)");
+      assert.equal(Number(a.order.totalAmount), 488, "499 - 60 + 49 (the 40 in the request is ignored)");
       const legacy = await create({});
-      assert.deepEqual([Number(legacy.order.discountAmount), Number(legacy.order.totalAmount)], [0, 549]);
+      assert.deepEqual([Number(legacy.order.discountAmount), Number(legacy.order.totalAmount)], [0, 548]);
     });
   });
   it("tamper-proof: a different total is refused with nothing created; old CRM coupon codes/ids and bad values are refused", async () => {
@@ -187,8 +187,8 @@ describe("Create Order: default, edit, Fastrr coupon, custom, persistence, tampe
       await assert.rejects(() => create({ discount: { type: "FIXED", value: "-1" } }), (e: any) => e.statusCode === 400);
       await assert.rejects(() => create({ discount: SIXTY, discountPercent: "5" }), (e: any) => e.statusCode === 400, "one discount only");
       assert.equal(await tx.order.count(), before, "a refused discount never leaves an order behind");
-      const ok = await create({ discount: SIXTY, expectedTotal: "489.00" });
-      assert.equal(Number(ok.order.totalAmount), 489);
+      const ok = await create({ discount: SIXTY, expectedTotal: "488.00" });
+      assert.equal(Number(ok.order.totalAmount), 488);
     });
   });
   it("historical orders are untouched: an order carrying a SAVE50 discount still reads back its coupon, amount and final total", async () => {
@@ -199,7 +199,7 @@ describe("Create Order: default, edit, Fastrr coupon, custom, persistence, tampe
       const old = { originalSubtotal: "499.00", discountType: "FIXED", discountValue: "50.00", discountAmount: "50.00", couponId: uid(), couponCode: "SAVE50", source: "COUPON", wasDefault: true, finalTotal: "449.00" };
       await tx.order.update({ where: { id: r.order.id }, data: { discountReason: "Coupon SAVE50", metadata: { discount: old } as never } });
       const row = await tx.order.findUniqueOrThrow({ where: { id: r.order.id }, select: { discountReason: true, discountAmount: true, totalAmount: true, metadata: true } });
-      assert.deepEqual([row.discountReason, Number(row.discountAmount), Number(row.totalAmount), (row.metadata as any).discount.couponCode], ["Coupon SAVE50", 60, 489, "SAVE50"]);
+      assert.deepEqual([row.discountReason, Number(row.discountAmount), Number(row.totalAmount), (row.metadata as any).discount.couponCode], ["Coupon SAVE50", 60, 488, "SAVE50"]);
     });
   });
 });

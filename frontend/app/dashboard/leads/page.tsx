@@ -5,7 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Upload } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
-import { leadListQueryOptions } from "@/lib/api-client/queries/lead.queries";
+import { leadListQueryOptions, leadKeys } from "@/lib/api-client/queries/lead.queries";
+import { leadApi } from "@/lib/api-client/endpoints/lead.api";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/page-header";
@@ -19,13 +20,18 @@ import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
 import { BucketSummary } from "@/components/leads/bucket-summary";
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
 import { SelectAllMatching } from "@/components/leads/select-all-matching";
+import { BulkDeleteLeadsDialog, type BulkDeleteMode } from "@/components/leads/bulk-delete-leads-dialog";
+import { NativeSelect } from "@/components/ui/native-select";
 import { idFilterOf } from "@/lib/lead-filter";
 
-const PAGE_SIZE = 20;
+export const PAGE_SIZES = [20, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 20;
 
 function LeadsPageContent() {
   const user = useAuthStore((s) => s.user);
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  const [deleteMode, setDeleteMode] = useState<BulkDeleteMode | null>(null);
   // the Segments page links here with ?segmentId=...
   const initialSegment = useSearchParams().get("segmentId") ?? undefined;
   const [filters, setFilters] = useState<LeadFilterState>(initialSegment ? { segmentId: initialSegment } : {});
@@ -38,7 +44,9 @@ function LeadsPageContent() {
   // "Select all N leads matching this filter" (e.g. a whole campaign segment): the server resolves the ids, the browser never holds them.
   const [allMatching, setAllMatching] = useState(false);
 
-  const params = useMemo(() => ({ page, limit: PAGE_SIZE, ...filters }), [page, filters]);
+  // The real total from the database (not the filtered list): what "Delete All Leads" would act on. Admin only.
+  const allCount = useQuery({ queryKey: [...leadKeys.all, "delete-all-count"], queryFn: () => leadApi.previewBulkDelete({ all: true }), enabled: user?.role === "ADMIN" });
+  const params = useMemo(() => ({ page, limit: pageSize, ...filters }), [page, pageSize, filters]);
   const { data, isPending, error } = useQuery(leadListQueryOptions(params));
 
   if (!user) return null;
@@ -118,6 +126,12 @@ function LeadsPageContent() {
         role={user.role}
       />
 
+      {selectedIds.size > 0 && !idFilter && pageCount > 0 && selectedIds.size === pageCount && total > pageCount ? (
+        <p className="sketch-outline bg-muted/50 px-4 py-2.5 text-sm text-muted-foreground" data-testid="unfiltered-note">
+          Selecting every lead across all pages is only available after you apply a filter or search ({total.toLocaleString("en-IN")} leads match right now). To delete every lead, use the separate <strong>Delete All Leads</strong> button (Admin only, typed confirmation).
+        </p>
+      ) : null}
+
       {selectedIds.size > 0 && idFilter && pageCount > 0 && selectedIds.size === pageCount ? (
         <SelectAllMatching pageCount={pageCount} total={total} allSelected={useFilter} onSelectAll={() => setAllMatching(true)} onClear={clearSelection} />
       ) : null}
@@ -130,8 +144,43 @@ function LeadsPageContent() {
           onAssignSalesperson={isManager ? () => setAssignSalespersonOpen(true) : undefined}
           // changing the status of a filter-wide selection is not offered: it only exists for explicit ids
           onUpdateStatus={isAdmin && !useFilter ? () => setUpdateStatusOpen(true) : undefined}
+          // Two different deletions (Admin only): what is selected on this page, or every lead matching the filters across all pages.
+          onDeletePage={isAdmin ? () => setDeleteMode("PAGE") : undefined}
+          onDeleteMatching={isAdmin && useFilter ? () => setDeleteMode("MATCHING") : undefined}
         />
       ) : null}
+
+      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+        {isAdmin ? (
+          <Button type="button" variant="destructive" size="sm" onClick={() => setDeleteMode("ALL")} disabled={!allCount.data || allCount.data.matched === 0} data-testid="delete-all-leads">
+            Delete All Leads ({allCount.data ? allCount.data.matched.toLocaleString("en-IN") : "…"})
+          </Button>
+        ) : (
+          <span />
+        )}
+      <div className="flex items-center justify-end gap-2 text-sm" data-testid="page-size">
+        <label htmlFor="lead-page-size" className="text-xs text-muted-foreground">
+          Records per page
+        </label>
+        <NativeSelect
+          id="lead-page-size"
+          wrapperClassName="w-24"
+          value={String(pageSize)}
+          onChange={(e) => {
+            // filters and search stay as they are; only the page size and position change
+            setPageSize(Number(e.target.value));
+            setPage(1);
+            clearSelection();
+          }}
+        >
+          {PAGE_SIZES.map((size) => (
+            <option key={size} value={size}>
+              {size}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+      </div>
 
       {error ? (
         <div className="sketch-outline border-destructive/30 bg-destructive/10 p-4 text-sm text-destructive">
@@ -178,6 +227,18 @@ function LeadsPageContent() {
         leadIds={[...selectedIds]}
         onDone={() => {
           setUpdateStatusOpen(false);
+          clearSelection();
+        }}
+      />
+      <BulkDeleteLeadsDialog
+        open={deleteMode !== null}
+        onOpenChange={(next) => !next && setDeleteMode(null)}
+        mode={deleteMode ?? "PAGE"}
+        // current-page deletion is limited to the leads on screen, even when "all matching" is selected
+        leadIds={deleteMode === "PAGE" ? (useFilter ? (data?.data.map((l) => l.id) ?? []) : [...selectedIds]) : []}
+        filter={idFilter}
+        onDone={() => {
+          setDeleteMode(null);
           clearSelection();
         }}
       />
