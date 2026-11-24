@@ -50,9 +50,7 @@ export function PreviewSummary({ preview, segment }: { preview: FileImportPrevie
   const rows: [string, number, string?][] = [
     ["Total records in file", preview.totalRows],
     ["Eligible for import", preview.eligibleRows],
-    ["New leads", preview.newLeads],
-    ["Match existing leads (will be updated)", preview.matchExistingLeads],
-    ["Repeated inside the file (skipped)", preview.duplicatesInFile],
+    ["New leads that will be created (one per eligible row)", preview.newLeads],
     ["Invalid (cannot be imported)", preview.invalidRows],
     ["Missing phone number", preview.missingPhone],
     ["Missing order count", preview.missingOrderCount],
@@ -191,9 +189,7 @@ function ResultView({ progress, onDone }: { progress: FileImportProgress; onDone
         {(
           [
             ["New leads created", progress.created],
-            ["Existing leads updated", progress.updated],
             ["Segment tags added", progress.segmentMembershipsAdded],
-            ["Duplicates handled", progress.duplicates],
             ["Failed records", progress.failed],
           ] as [string, number][]
         ).map(([label, value]) => (
