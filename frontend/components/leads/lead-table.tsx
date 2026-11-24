@@ -334,6 +334,8 @@ interface LeadTableProps {
   onToggleAll: (checked: boolean) => void;
   pagination?: LeadListPagination;
   onPageChange: (page: number) => void;
+  /** The column-filter row, rendered directly under the column headers. */
+  filterRow?: React.ReactNode;
 }
 
 export function LeadTable({
@@ -345,6 +347,7 @@ export function LeadTable({
   onToggleAll,
   pagination,
   onPageChange,
+  filterRow,
 }: LeadTableProps) {
   const allSelected =
     leads.length > 0 && leads.every((lead) => selectedIds.has(lead.id));
@@ -389,6 +392,7 @@ export function LeadTable({
               <TableHead>Created</TableHead>
               <TableHead className="text-right pr-4">Actions</TableHead>
             </TableRow>
+            {filterRow}
           </TableHeader>
           <TableBody>
             {leads.length === 0 ? (

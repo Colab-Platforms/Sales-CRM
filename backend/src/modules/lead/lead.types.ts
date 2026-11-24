@@ -39,6 +39,15 @@ export interface ListLeadsQuery {
   segmentId?: string;
   customerClass?: CustomerClassFilter;
   workingStatus?: string;
+  // Column filters of the Leads table (all combine with each other and with everything above).
+  /** Lead column: every word must appear in the first or last name. */
+  name?: string;
+  /** Contact column: part of the phone number or the e-mail. */
+  contact?: string;
+  priority?: "LOW" | "MEDIUM" | "HIGH";
+  /** Created column: inclusive IST calendar days, YYYY-MM-DD. */
+  createdFrom?: string;
+  createdTo?: string;
   lifecycleStage?: "LEAD" | "CUSTOMER";
   assignment?: AssignmentFilter;
   managerId?: string;
@@ -52,7 +61,7 @@ export interface ListLeadsQuery {
 }
 
 /** The filters a "select every lead in this segment" bulk action may carry instead of explicit ids. */
-export type LeadIdFilter = Partial<Pick<ListLeadsQuery, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId">>;
+export type LeadIdFilter = Partial<Pick<ListLeadsQuery, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId" | "name" | "contact" | "priority" | "createdFrom" | "createdTo">>;
 
 export interface BulkAssignManagerBody {
   leadIds: string[];

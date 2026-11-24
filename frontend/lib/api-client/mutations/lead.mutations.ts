@@ -106,7 +106,7 @@ export function useBulkAssignManagerMutation() {
 export function useBulkAssignSalespersonMutation() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ assignedCount: number }, unknown, BulkAssignSalespersonPayload>({
+  return useMutation<{ assignedCount: number; unchangedCount?: number }, unknown, BulkAssignSalespersonPayload>({
     mutationFn: (payload) => leadApi.bulkAssignSalesperson(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: leadKeys.all });

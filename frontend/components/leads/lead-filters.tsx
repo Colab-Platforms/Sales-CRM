@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Label } from "@/components/ui/label";
 import { Search, X } from "lucide-react";
+import { hasActiveFilters } from "@/lib/lead-filter";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
 import type { AssignmentFilter, LeadListParams } from "@/lib/api-client/types/lead.types";
 import type { LeadWorkingStatus } from "@/lib/api-client/types/dashboard.types";
@@ -80,7 +81,7 @@ export function LeadFilters({
 
   // admins and managers see per-segment totals; a salesperson only needs the names
   const { data: segments } = useQuery(segmentsQueryOptions({ counts: role !== "SALESPERSON" }));
-  const hasFilters = Boolean(value.segmentId || value.customerClass || value.search || value.workingStatus || value.assignment || value.bucket || value.aiAgent || value.aiAgentIntent);
+  const hasFilters = hasActiveFilters(value);
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });

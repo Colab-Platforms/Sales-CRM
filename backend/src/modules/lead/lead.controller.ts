@@ -133,6 +133,18 @@ export const bulkAssignSalesperson = async (req: AuthRequest, res: Response): Pr
       return;
     }
 
+    if (req.user!.role === "ADMIN") {
+      // an Admin assigns ONE salesperson directly (not through a manager's team, and without touching the manager)
+      if (value.method !== "MANUAL" || !value.salespersonId) {
+        sendResponse(res, false, null, "Choose one salesperson to assign the leads to", STATUS_CODES.BAD_REQUEST);
+        return;
+      }
+      const result = value.filter
+        ? await leadService.bulkAssignSalespersonsAsAdminByFilter(req.user!, value.filter, value.salespersonId)
+        : await leadService.bulkAssignSalespersonsAsAdmin(req.user!.id, { leadIds: value.leadIds!, salespersonId: value.salespersonId });
+      sendResponse(res, true, result, "Leads assigned to salesperson successfully.", STATUS_CODES.OK);
+      return;
+    }
     const { filter, leadIds, ...rest } = value;
     const result = filter ? await leadService.bulkAssignSalespersonsByFilter(req.user!, filter, rest) : await leadService.bulkAssignSalespersons(req.user!.id, { ...rest, leadIds: leadIds! });
     sendResponse(res, true, result, "Leads assigned to salesperson successfully.", STATUS_CODES.OK);

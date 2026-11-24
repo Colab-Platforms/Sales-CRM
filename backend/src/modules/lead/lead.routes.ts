@@ -36,7 +36,7 @@ router.patch("/leads/:id", requireRole(Role.ADMIN, Role.MANAGER, Role.SALESPERSO
 router.delete("/leads/:id", requireRole(Role.ADMIN), deleteLead);
 
 router.post("/leads/bulk/assign-manager", requireRole(Role.ADMIN), bulkAssignManager);
-router.post("/leads/bulk/assign-salesperson", requireRole(Role.MANAGER), bulkAssignSalesperson);
+router.post("/leads/bulk/assign-salesperson", requireRole(Role.ADMIN, Role.MANAGER), bulkAssignSalesperson);
 router.post("/leads/bulk/update-status", requireRole(Role.ADMIN), bulkUpdateStatus);
 // Bulk deletion: ADMIN only, like deleting one lead. Leads that have orders are never deleted (see LeadService.bulkDeleteLeads).
 router.post("/leads/bulk/delete/preview", requireRole(Role.ADMIN), previewBulkDelete);
