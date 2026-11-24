@@ -921,7 +921,7 @@ class OrdersService {
     // Billing rules, decided HERE (the browser's figures are only a preview):
     //  - the configured default discount (Rs 50 unless the business changes it) is a PREPAID promotion: it never applies to a COD order. A discount chosen on purpose
     //    (a Fastrr coupon, or a custom value that is not the default) is not "automatic" and is left exactly as it was;
-    //  - shipping is a flat rule (orders.shipping.ts): COD pays exactly INR 50, once per order; a prepaid order is always shipped free. The shippingAmount the request carried
+    //  - shipping is a flat rule (orders.shipping.ts): COD pays exactly INR 49, once per order; a prepaid order is always shipped free. The shippingAmount the request carried
     //    (a courier quote, or a manipulated value) is IGNORED - the order row, the Cashfree/WhatsApp amounts and the Shopify payload all read what is computed here.
     const isCod = input.paymentMethod === "COD";
     const selected: ResolvedDiscount | null = resolvedDiscount && isCod && resolvedDiscount.source === "CUSTOM" && resolvedDiscount.wasDefault ? null : resolvedDiscount;

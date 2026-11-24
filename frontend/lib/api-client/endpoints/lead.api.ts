@@ -5,6 +5,10 @@ import type {
   BucketSummaryRow,
   BulkAssignManagerPayload,
   BulkAssignSalespersonPayload,
+  BulkDeletePayload,
+  BulkDeletePreview,
+  BulkDeleteResult,
+  LeadIdFilter,
   BulkUpdateStatusPayload,
   CreateLeadPayload,
   FileImportAnalysis,
@@ -70,6 +74,16 @@ export const leadApi = {
       payload,
       { timeout: 300_000 },
     );
+    return res.data.data;
+  },
+
+  async previewBulkDelete(selection: { leadIds?: string[]; filter?: LeadIdFilter; all?: true }): Promise<BulkDeletePreview> {
+    const res = await apiClient.post<ApiEnvelope<BulkDeletePreview>>("/lead/leads/bulk/delete/preview", selection, { timeout: 120_000 });
+    return res.data.data;
+  },
+
+  async bulkDeleteLeads(payload: BulkDeletePayload): Promise<BulkDeleteResult> {
+    const res = await apiClient.post<ApiEnvelope<BulkDeleteResult>>("/lead/leads/bulk/delete", payload, { timeout: 300_000 });
     return res.data.data;
   },
 

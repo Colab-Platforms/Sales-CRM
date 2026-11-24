@@ -347,15 +347,15 @@ describe("Custom Discount (percentage) on order creation", () => {
     });
   });
 
-  it("COD 15% total is 644.15 (594.15 + the flat COD shipping of 50); 0% and no discount behave identically (no customDiscount recorded)", async () => {
+  it("COD 15% total is 643.15 (594.15 + the flat COD shipping of 49); 0% and no discount behave identically (no customDiscount recorded)", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner, { provider: "META" });
       const cod = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "15" });
-      assert.equal(Number(cod.order.totalAmount), 644.15);
+      assert.equal(Number(cod.order.totalAmount), 643.15);
       const zero = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "0" });
       const none = await createWith(t, tx, { paymentMethod: "COD" });
       for (const o of [zero.order, none.order]) {
-        assert.equal(Number(o.totalAmount), 749.00, "699 + the flat COD shipping of 50");
+        assert.equal(Number(o.totalAmount), 748.00, "699 + the flat COD shipping of 49");
         assert.equal(Number(o.discountAmount), 0.00);
       }
       const row = await tx.order.findUniqueOrThrow({ where: { id: zero.order.id }, select: { metadata: true } });
@@ -367,7 +367,7 @@ describe("Custom Discount (percentage) on order creation", () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner, { provider: "META" });
       const withShip = await createWith(t, tx, { paymentMethod: "COD", discountPercent: "10", shippingAmount: "50.00" });
-      assert.equal(Number(withShip.order.totalAmount), 679.10); // 699 - 69.90 + 50
+      assert.equal(Number(withShip.order.totalAmount), 678.10); // 699 - 69.90 + 49
       const before = await tx.order.count();
       for (const bad of [{ discountPercent: "-5" }, { discountPercent: "100.5" }, { discountPercent: "abc" }, { discountPercent: "5", discountAmount: "10.00" }]) {
         await assert.rejects(() => createWith(t, tx, { paymentMethod: "COD", ...bad }), (e: any) => e.statusCode === 400, JSON.stringify(bad));
@@ -376,7 +376,7 @@ describe("Custom Discount (percentage) on order creation", () => {
     });
   });
 
-  it("regression (Dia Shield Tablets / Pack Of 3, unitPrice 1249): exactly the payload the form sends, with no discount, stores discount 0 and total 1249 for prepaid (1299 for COD: + the flat shipping of 50)", async () => {
+  it("regression (Dia Shield Tablets / Pack Of 3, unitPrice 1249): exactly the payload the form sends, with no discount, stores discount 0 and total 1249 for prepaid (1298 for COD: + the flat shipping of 50)", async () => {
     await inRollback(async (tx, runner) => {
       const t = await setup(tx, runner, { provider: "META" });
       const product = await tx.product.create({ data: { name: "Dia Shield Tablets", type: ProductType.PRODUCT, sku: `AW-DS-TB-60-${uid()}`, basePrice: "1249.00" }, select: { id: true } });
@@ -385,7 +385,7 @@ describe("Custom Discount (percentage) on order creation", () => {
       const cod = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "COD" });
       assert.equal(Number(cod.order.subtotal), 1249);
       assert.equal(Number(cod.order.discountAmount), 0);
-      assert.equal(Number(cod.order.totalAmount), 1299);
+      assert.equal(Number(cod.order.totalAmount), 1298);
       assert.equal(Number(cod.order.items[0]!.totalPrice), 1249, "line total");
       assert.equal(Number(cod.order.items[0]!.discountAmount), 0, "no line discount");
       const prepaid = await t.orders.createManualOrder(as(t.admin, Role.ADMIN), { ...payload, paymentMethod: "PAYMENT_LINK" });

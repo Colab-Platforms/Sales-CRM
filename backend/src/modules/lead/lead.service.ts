@@ -105,6 +105,7 @@ const leadListInclude = {
 export { aiAgentTag };
 
 const MAX_FILTER_ASSIGN = 100_000;
+const BULK_DELETE_CHUNK = 500;
 const ASSIGN_CHUNK = 2500;
 
 class LeadService {
@@ -141,7 +142,8 @@ class LeadService {
       prisma.lead.findMany({
         where,
         include: leadListInclude,
-        orderBy: { createdAt: "desc" },
+        // id breaks ties: rows created in one batch (an import chunk) share a created_at, and without a unique tie-break pages overlap or skip rows
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
         skip,
         take: query.limit,
       }),
@@ -468,23 +470,24 @@ class LeadService {
   // removes the CRM's own copy and its link to this lead. No Shopify or Shiprocket API call is made
   // anywhere in this function, so the real order/shipment on those platforms is completely unaffected;
   // only the CRM stops knowing about it.
+  /**
+   * Deletes one lead and its own working history (calls, tasks, notes, messages, assignments...). A lead that has ORDERS is never deleted: its orders, items, payments and shipments are business records that must
+   * stay, and the customer they belong to must stay with them. The caller gets a 409 saying how many orders block it (same rule as the bulk delete, which skips such leads).
+   */
   async deleteLead(user: AuthUser, id: string): Promise<{ id: string }> {
     await this.getLeadById(user, id); // same RBAC scope + 404 as every other single-lead action
 
+    const orders = await prisma.order.count({ where: { leadId: id } });
+    if (orders > 0) {
+      throw new ApiError(`This lead has ${orders} order${orders === 1 ? "" : "s"}, so it cannot be deleted. Orders, payments and shipments are kept for the records, together with the customer they belong to.`, STATUS_CODES.CONFLICT, { orders });
+    }
+
     await prisma.$transaction(async (tx) => {
-      const orders = await tx.order.findMany({ where: { leadId: id }, select: { id: true } });
-      const orderIds = orders.map((o) => o.id);
       const abandonments = await tx.abandonment.findMany({ where: { leadId: id }, select: { id: true } });
       const abandonmentIds = abandonments.map((a) => a.id);
 
-      if (orderIds.length > 0) {
-        await tx.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
-        await tx.payment.deleteMany({ where: { orderId: { in: orderIds } } });
-        await tx.shipment.deleteMany({ where: { orderId: { in: orderIds } } });
-      }
-
-      await tx.whatsAppMessage.deleteMany({ where: { OR: [{ leadId: id }, ...(orderIds.length > 0 ? [{ orderId: { in: orderIds } }] : [])] } });
-      await tx.whatsAppAutomationRun.deleteMany({ where: { OR: [{ leadId: id }, ...(orderIds.length > 0 ? [{ orderId: { in: orderIds } }] : [])] } });
+      await tx.whatsAppMessage.deleteMany({ where: { leadId: id } });
+      await tx.whatsAppAutomationRun.deleteMany({ where: { leadId: id } });
       await tx.whatsAppCampaignRecipient.deleteMany({ where: { leadId: id } });
       await tx.whatsAppConversation.deleteMany({ where: { leadId: id } });
 
@@ -498,14 +501,80 @@ class LeadService {
       await tx.communicationPreference.deleteMany({ where: { leadId: id } });
       await tx.task.deleteMany({ where: { leadId: id } });
 
-      if (orderIds.length > 0) {
-        await tx.order.deleteMany({ where: { id: { in: orderIds } } });
-      }
-
-      await tx.lead.delete({ where: { id } });
+      // re-checked inside the transaction: an order created a moment ago still blocks the delete (and rolls the history deletes above back)
+      const removed = await tx.lead.deleteMany({ where: { id, orders: { none: {} } } });
+      if (removed.count === 0) throw new ApiError("This lead has orders, so it cannot be deleted.", STATUS_CODES.CONFLICT);
     });
 
     return { id };
+  }
+
+  // ---------- Bulk deletion ----------
+  // Only leads WITHOUT orders are deleted: an order (with its items, payments and shipments) and the customer record behind it are never removed by a bulk action. Leads that have orders are counted and reported as skipped.
+  // Admin only (route), and the caller's own scope is applied again here. The selection is either explicit ids (the page being viewed) or a filter (every lead matching it, across all pages).
+
+  private bulkDeleteWhere(user: AuthUser, sel: { leadIds?: string[]; filter?: LeadIdFilter; all?: true }): { all: Prisma.LeadWhereInput; deletable: Prisma.LeadWhereInput } {
+    // all: every lead the Leads page lists for this caller (no filter at all); a filter / ids narrow it
+    const all: Prisma.LeadWhereInput = sel.all
+      ? this.buildListWhere(user, { page: 1, limit: 1 })
+      : sel.filter
+      ? this.buildListWhere(user, { page: 1, limit: 1, ...sel.filter })
+      : { AND: [this.buildScopeWhere(user), { id: { in: sel.leadIds ?? [] }, abandonments: { none: {} } }] };
+    return { all, deletable: { AND: [all, { orders: { none: {} } }] } };
+  }
+
+  /** What a bulk delete would do right now: how many leads match, how many can be deleted, and how many are kept because they have orders. */
+  async previewBulkDelete(user: AuthUser, sel: { leadIds?: string[]; filter?: LeadIdFilter; all?: true }) {
+    const { all, deletable } = this.bulkDeleteWhere(user, sel);
+    const [matched, deletableCount] = await Promise.all([prisma.lead.count({ where: all }), prisma.lead.count({ where: deletable })]);
+    return { matched, deletable: deletableCount, skippedWithOrders: matched - deletableCount };
+  }
+
+  /**
+   * Deletes in committed chunks until the time budget is used, then reports what is left: the caller repeats the call (continuation) until done. A first call must carry the exact number the user confirmed;
+   * if the real number differs (leads were added, assigned away or already deleted since the preview) nothing is deleted and the user is asked to review again.
+   */
+  async bulkDeleteLeads(user: AuthUser, body: { leadIds?: string[]; filter?: LeadIdFilter; all?: true; expectedCount: number; continuation?: boolean }, budgetMs = 40_000) {
+    const { all, deletable } = this.bulkDeleteWhere(user, body);
+    {
+      const count = await prisma.lead.count({ where: deletable });
+      // a first call must match exactly; a continuation may only find FEWER than were confirmed (some are already gone), never more
+      if (body.continuation ? count > body.expectedCount : count !== body.expectedCount) throw new ApiError("The number of leads changed (" + count.toLocaleString("en-IN") + " can be deleted now, you confirmed " + body.expectedCount.toLocaleString("en-IN") + "). Review the selection and try again.", STATUS_CODES.CONFLICT);
+      if (count === 0 && !body.continuation) throw new ApiError("None of the selected leads can be deleted (leads with orders are kept)", STATUS_CODES.BAD_REQUEST);
+    }
+    const started = Date.now();
+    let deleted = 0;
+    while (Date.now() - started < budgetMs) {
+      const chunk = (await prisma.lead.findMany({ where: deletable, select: { id: true }, orderBy: { id: "asc" }, take: BULK_DELETE_CHUNK })).map((l) => l.id);
+      if (chunk.length === 0) break;
+      deleted += await this.deleteLeadsWithoutOrders(chunk);
+    }
+    const [remaining, matched] = await Promise.all([prisma.lead.count({ where: deletable }), prisma.lead.count({ where: all })]);
+    logger.info("Bulk lead delete by " + user.id + ": " + deleted + " deleted this call, " + remaining + " left");
+    return { deleted, remaining, skippedWithOrders: matched - remaining, done: remaining === 0 };
+  }
+
+  /** One transaction for a chunk. The lead's own history (calls, tasks, messages, assignments, ...) goes with it, exactly as for a single delete; orders are never touched (callers pass only leads that have none). */
+  private async deleteLeadsWithoutOrders(ids: string[]): Promise<number> {
+    return prisma.$transaction(
+      async (tx) => {
+        await tx.whatsAppMessage.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.whatsAppAutomationRun.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.whatsAppCampaignRecipient.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.whatsAppConversation.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.recoveryAction.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.activity.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.call.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.interestedLeadPeriod.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.leadAssignment.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.communicationPreference.deleteMany({ where: { leadId: { in: ids } } });
+        await tx.task.deleteMany({ where: { leadId: { in: ids } } });
+        // re-check inside the transaction: a lead that got an order a moment ago is kept
+        const r = await tx.lead.deleteMany({ where: { id: { in: ids }, orders: { none: {} } } });
+        return r.count;
+      },
+      { timeout: 60_000, maxWait: 15_000 },
+    );
   }
 
   async getAssignmentHistory(user: AuthUser, id: string) {

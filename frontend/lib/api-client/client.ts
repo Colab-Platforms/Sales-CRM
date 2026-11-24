@@ -124,7 +124,9 @@ if (typeof window !== "undefined") {
 export function getErrorMessage(error: unknown, fallback = "Something went wrong."): string {
   if (axios.isAxiosError(error)) {
     const data = error.response?.data as { message?: string } | undefined;
-    return data?.message ?? fallback;
+    if (data?.message) return data.message;
+    if (!error.response) return "Cannot reach the server. Check your connection and that the backend is running, then try again.";
+    return `${fallback.replace(/\.$/, "")} (server error ${error.response.status}).`;
   }
   return fallback;
 }

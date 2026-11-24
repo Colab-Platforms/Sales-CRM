@@ -140,7 +140,7 @@ describe("duplicate-order protection", () => {
       await rejects(w.create("COD", { idempotencyKey: key, items: [{ productId: w.product.id, quantity: 2, unitPrice: "649.00" }] }), 422, /different order request/);
       await rejects(w.create("PAYMENT_LINK", { idempotencyKey: key }), 422);
       assert.equal(await orderCount(tx, w.lead.id), 1);
-      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: first.order.id }, select: { totalAmount: true } })).totalAmount.toString(), "699");
+      assert.equal((await tx.order.findUniqueOrThrow({ where: { id: first.order.id }, select: { totalAmount: true } })).totalAmount.toString(), "698");
     });
   });
 
@@ -614,10 +614,10 @@ describe("Shopify order totals: customer fallback and the amount guard (MOCKED S
     await inRollback(async (tx) => {
       const w = await world(tx, { rejectUpsertWithoutEmail: true });
       const r = await w.create("COD");
-      assert.equal(r.order.totalAmount.toString(), "699");
+      assert.equal(r.order.totalAmount.toString(), "698");
       assert.deepEqual(w.shop.state.attempts, [{ customer: true, shippingLines: true, discount: false }], "one request, the created customer associated, shipping line sent");
       assert.equal(w.shop.state.created.length, 1);
-      assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 50);
+      assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 49);
       const sync = await syncOf(tx, r.order.id);
       assert.equal(sync.status, "complete", JSON.stringify({ s: sync.status, m: sync.missing }));
       assert.match(sync.customer, /created from the CRM name and phone/);
@@ -651,7 +651,7 @@ describe("Shopify order totals: customer fallback and the amount guard (MOCKED S
       await tx.lead.update({ where: { id: w.lead.id }, data: { email: "buyer@example.com" } });
       const r = await w.create("COD");
       assert.deepEqual(w.shop.state.attempts, [{ customer: true, shippingLines: true, discount: false }, { customer: false, shippingLines: true, discount: false }]);
-      assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 50, "shipping preserved in the retry");
+      assert.equal(Number(w.shop.state.created[0].shippingLines[0].priceSet.shopMoney.amount), 49, "shipping preserved in the retry");
       const sync = await syncOf(tx, r.order.id);
       assert.equal(sync.status, "partial");
       assert.equal(sync.retryAdvice, "ADMIN");
@@ -683,9 +683,9 @@ describe("Shopify order totals: customer fallback and the amount guard (MOCKED S
       assert.equal(w.shop.state.created.length, 0, "no Shopify order without the shipping charge");
       assert.equal(r.shopify.status, "failed");
       assert.equal((await linked(tx, r.order.id)).externalId, null);
-      assert.equal((await linked(tx, r.order.id)).totalAmount.toString(), "699", "the CRM order is untouched");
+      assert.equal((await linked(tx, r.order.id)).totalAmount.toString(), "698", "the CRM order is untouched");
       const sync = await syncOf(tx, r.order.id);
-      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.difference, sync.totals.shipping, sync.totals.shippingLineSent], ["failed", "ADMIN", "shipping_or_discount_rejected", "699", null, "699", "50", true]);
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.difference, sync.totals.shipping, sync.totals.shippingLineSent], ["failed", "ADMIN", "shipping_or_discount_rejected", "698", null, "698", "49", true]);
       assert.match(sync.error, /NOT created without those charges/);
     });
   });
@@ -718,8 +718,8 @@ describe("Shopify order totals: customer fallback and the amount guard (MOCKED S
       assert.equal(w.shop.state.created.length, 1, "no second order");
       assert.equal(w.shop.state.updates.length, 0, "nothing was edited");
       const sync = await syncOf(tx, r.order.id);
-      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.difference, sync.totals.shippingLineSent], ["failed", "ADMIN", "total_mismatch", "699.00", "649.00", "50.00", true]);
-      assert.match(sync.error, /649\.00 differs from the CRM total 699\.00 \(difference 50\.00\)/);
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.difference, sync.totals.shippingLineSent], ["failed", "ADMIN", "total_mismatch", "698.00", "648.00", "50.00", true]);
+      assert.match(sync.error, /648\.00 differs from the CRM total 698\.00 \(difference 50\.00\)/);
       assert.ok(sync.missing.includes("totals"));
       assert.ok((await linked(tx, r.order.id)).externalId, "the order stays linked; an administrator decides");
     });
@@ -754,12 +754,12 @@ describe("refusal category: shipping/discount only when Shopify names them (MOCK
       assert.equal(w.shop.state.created.length, 0, "no Shopify order");
       assert.equal(r.shopify.status, "failed");
       const sync = await syncOf(tx, r.order.id);
-      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.shippingLineSent], ["failed", "ADMIN", "order_rejected", "699", null, true]);
+      assert.deepEqual([sync.status, sync.retryAdvice, sync.totals.category, sync.totals.expected, sync.totals.actual, sync.totals.shippingLineSent], ["failed", "ADMIN", "order_rejected", "698", null, true]);
       assert.deepEqual(sync.missing, ["order refused by Shopify"]);
       assert.match(sync.error, /does not name the shipping or discount lines.*NOT removed/);
       assert.ok(!/NOT created without those charges/.test(sync.error), "it does not blame the charges");
       const o = await row(tx, r.order.id);
-      assert.deepEqual([o.externalId, o.totalAmount.toString(), o.shippingAmount.toString()], [null, "699", "50"], "the CRM order is untouched and unlinked");
+      assert.deepEqual([o.externalId, o.totalAmount.toString(), o.shippingAmount.toString()], [null, "698", "49"], "the CRM order is untouched and unlinked");
     });
   });
 

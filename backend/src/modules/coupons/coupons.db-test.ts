@@ -37,7 +37,7 @@ async function world(tx: Prisma.TransactionClient) {
   const product = await tx.product.create({ data: { name: "Herbal Masala", type: ProductType.PRODUCT, sku: `SKU-${uid()}`, basePrice: "1199.00" }, select: { id: true } });
   const lead = async (customerType: "REGULAR" | "DISTRIBUTOR") => tx.lead.create({ data: { leadNumber: `L-${uid()}`, firstName: "Priya", mobile: "9876500000", normalizedMobile: "+919876500000", ownerId: tele.id, customerType }, select: { id: true } });
   const create = (leadId: string, discount: unknown, extra: Record<string, unknown> = {}) =>
-    orders.createManualOrder({ id: tele.id, username: tele.username, role: tele.role } as never, { leadId, items: [{ productId: product.id, quantity: 1, unitPrice: "1199.00" }], paymentMethod: "COD", shippingAddress: ADDRESS, shippingPincode: "411001", shippingAmount: "50", idempotencyKey: `k-${uid()}`, ...(discount === undefined ? {} : { discount }), ...extra } as never);
+    orders.createManualOrder({ id: tele.id, username: tele.username, role: tele.role } as never, { leadId, items: [{ productId: product.id, quantity: 1, unitPrice: "1199.00" }], paymentMethod: "COD", shippingAddress: ADDRESS, shippingPincode: "411001", shippingAmount: "49", idempotencyKey: `k-${uid()}`, ...(discount === undefined ? {} : { discount }), ...extra } as never);
   return { tx, orders, coupons, admin, tele, lead, create };
 }
 const NEW = { code: "SAVE100", discountType: "FIXED" as const, discountValue: "100", eligibility: "ALL" as const };
@@ -59,12 +59,12 @@ describe("DISTRIBUTOR500, the default coupon", () => {
       const row = await orderRow(tx, r.order.id);
       assert.equal(row.discountAmount.toString(), "500");
       assert.equal(row.subtotal.toString(), "1199");
-      assert.equal(row.totalAmount.toString(), "749", "1199 - 500 + 50 shipping");
+      assert.equal(row.totalAmount.toString(), "748", "1199 - 500 + 49 shipping");
       assert.equal(row.couponCode, "DISTRIBUTOR500");
       assert.ok(row.couponId);
       assert.match(row.discountReason ?? "", /Coupon DISTRIBUTOR500/);
       const d = (row.metadata as { discount: Record<string, unknown> }).discount;
-      assert.deepEqual([d.couponCode, d.couponSource, d.discountType, d.discountAmount, d.finalTotal], ["DISTRIBUTOR500", "CRM", "FIXED", "500.00", "749.00"]);
+      assert.deepEqual([d.couponCode, d.couponSource, d.discountType, d.discountAmount, d.finalTotal], ["DISTRIBUTOR500", "CRM", "FIXED", "500.00", "748.00"]);
     });
   });
 
@@ -170,7 +170,7 @@ describe("existing discounts are unchanged", () => {
       const w = await world(tx);
       const l = await w.lead("REGULAR");
       const fixed = await orderRow(tx, (await w.create(l.id, { type: "FIXED", value: "75" })).order.id);
-      assert.deepEqual([fixed.discountAmount.toString(), fixed.totalAmount.toString(), fixed.couponId, fixed.couponCode], ["75", "1174", null, null]);
+      assert.deepEqual([fixed.discountAmount.toString(), fixed.totalAmount.toString(), fixed.couponId, fixed.couponCode], ["75", "1173", null, null]);
       const pct = await orderRow(tx, (await w.create(l.id, { type: "PERCENT", value: "10" })).order.id);
       assert.equal(pct.discountAmount.toString(), "119.9");
       const none = await orderRow(tx, (await w.create(l.id, { none: true })).order.id);
@@ -214,7 +214,7 @@ describe("Admin manages coupons", () => {
       assert.ok(!(await w.coupons.list()).some((x) => x.id === c.id));
 
       const row = await orderRow(tx, r.order.id);
-      assert.deepEqual([row.couponId, row.couponCode, row.discountAmount.toString(), row.totalAmount.toString()], [c.id, "SAVE100", "100", "1149"]);
+      assert.deepEqual([row.couponId, row.couponCode, row.discountAmount.toString(), row.totalAmount.toString()], [c.id, "SAVE100", "100", "1148"]);
       assert.equal((row.metadata as { discount: { couponCode: string } }).discount.couponCode, "SAVE100");
 
       const again = await w.coupons.create(w.admin.id, { ...NEW, discountValue: "30" });
@@ -232,7 +232,7 @@ describe("Admin manages coupons", () => {
       await w.coupons.setActive(c.id, false);
       await w.coupons.update(c.id, { ...NEW, discountValue: "999" });
       const row = await orderRow(tx, r.order.id);
-      assert.deepEqual([row.discountAmount.toString(), row.couponCode, row.totalAmount.toString()], ["100", "SAVE100", "1149"]);
+      assert.deepEqual([row.discountAmount.toString(), row.couponCode, row.totalAmount.toString()], ["100", "SAVE100", "1148"]);
     });
   });
 

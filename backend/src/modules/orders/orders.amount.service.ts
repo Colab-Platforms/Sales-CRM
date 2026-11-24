@@ -19,7 +19,7 @@ import { canViewAllOrders, orderActionWhere } from "./orders.filters.js";
 import { withOrderEditClaim } from "./orders.claim.js";
 
 // REVIEW & CORRECT AMOUNT (order page). The CRM and the Shopify order disagree on what the customer owes. This compares every money field, explains the difference, and - for the ONE case it can safely repair - offers
-// the correction: the CRM charges a shipping amount that the Shopify order has no shipping line for (the COD shipping rule is a flat 50.00). Everything else (a discount, a tax, a line item or price difference)
+// the correction: the CRM charges a shipping amount that the Shopify order has no shipping line for (the COD shipping rule is a flat 49.00). Everything else (a discount, a tax, a line item or price difference)
 // is shown and routed to manual review.
 //
 // This IS a financial edit (it raises the amount owed), so it is gated hard, and every gate is checked on a fresh read of the CRM, Shopify AND Shiprocket right before the edit:

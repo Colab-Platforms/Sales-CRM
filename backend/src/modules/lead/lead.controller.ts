@@ -11,6 +11,8 @@ import {
   validateBulkAssignSalespersonSchema,
   validateBulkUpdateStatusSchema,
   validateImportPreviewSchema,
+  validateBulkDeleteSchema,
+  validateBulkDeletePreviewSchema,
 } from "./lead.validators.js";
 
 const leadService = new LeadService();
@@ -123,6 +125,33 @@ export const bulkAssignSalesperson = async (req: AuthRequest, res: Response): Pr
     const { filter, leadIds, ...rest } = value;
     const result = filter ? await leadService.bulkAssignSalespersonsByFilter(req.user!, filter, rest) : await leadService.bulkAssignSalespersons(req.user!.id, { ...rest, leadIds: leadIds! });
     sendResponse(res, true, result, "Leads assigned to salesperson successfully.", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const previewBulkDelete = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateBulkDeletePreviewSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    sendResponse(res, true, await leadService.previewBulkDelete(req.user!, value), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const bulkDeleteLeads = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateBulkDeleteSchema(req.body);
+    if (error) {
+      sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      return;
+    }
+    const { confirm: _confirm, confirmText: _confirmText, ...rest } = value;
+    sendResponse(res, true, await leadService.bulkDeleteLeads(req.user!, rest), "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

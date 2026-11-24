@@ -149,7 +149,7 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
       assert.equal(result.order.status, "CONFIRMED", "COD orders are confirmed immediately");
       assert.equal(result.order.items.length, 1);
       assert.equal(result.order.items[0]!.quantity, 2);
-      assert.equal(result.order.totalAmount, "748", "698 of items + the flat COD shipping of 50");
+      assert.equal(result.order.totalAmount, "747", "698 of items + the flat COD shipping of 49");
       assert.equal(result.order.paymentMode, "COD");
       assert.ok(result.order.orderNumber.startsWith("CRM-"));
 
@@ -221,8 +221,8 @@ describe("createManualOrder (WhatsApp Inbox -> CRM Order)", () => {
 
       assert.equal(result.order.subtotal, "698");
       assert.equal(result.order.discountAmount, "50");
-      assert.equal(result.order.shippingAmount, "50", "the 49 in the request is ignored: COD shipping is the flat 50");
-      assert.equal(result.order.totalAmount, "698", "698 - 50 discount + 50 shipping");
+      assert.equal(result.order.shippingAmount, "49", "COD shipping is the flat 49 whatever the request carries");
+      assert.equal(result.order.totalAmount, "697", "698 - 50 discount + 49 shipping");
     });
   });
 

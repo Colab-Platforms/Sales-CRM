@@ -7,6 +7,8 @@ export function LeadSelectionToolbar({
   onAssignManager,
   onAssignSalesperson,
   onUpdateStatus,
+  onDeletePage,
+  onDeleteMatching,
   onDownload,
   downloading,
 }: {
@@ -15,6 +17,10 @@ export function LeadSelectionToolbar({
   onAssignManager?: () => void;
   onAssignSalesperson?: () => void;
   onUpdateStatus?: () => void;
+  /** Delete only the leads selected on this page (Admin). */
+  onDeletePage?: () => void;
+  /** Delete every lead matching the current filters, across all pages (Admin). Only offered when all matching leads are selected. */
+  onDeleteMatching?: () => void;
   /** Download the selected leads as an Excel file. */
   onDownload?: () => void;
   downloading?: boolean;
@@ -46,6 +52,16 @@ export function LeadSelectionToolbar({
         {onUpdateStatus ? (
           <Button size="sm" variant="outline" onClick={onUpdateStatus}>
             Change Status
+          </Button>
+        ) : null}
+        {onDeletePage ? (
+          <Button size="sm" variant="destructive" onClick={onDeletePage} data-testid="delete-page">
+            Delete current page data
+          </Button>
+        ) : null}
+        {onDeleteMatching ? (
+          <Button size="sm" variant="destructive" onClick={onDeleteMatching} data-testid="delete-matching">
+            Delete all selected / full matching data ({count.toLocaleString("en-IN")})
           </Button>
         ) : null}
         <Button size="sm" variant="ghost" onClick={onClear}>
