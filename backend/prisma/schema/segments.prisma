@@ -1,0 +1,79 @@
+// CAMPAIGN SEGMENTS (migration 20261124000000). A segment is an admin-defined campaign group (Diwali Mega Sale, VIP Special Offers, ...). It is NOT the customer classification (Lead.customerClass, which comes from order
+// history): a lead can be a VIP customer AND belong to several campaign segments. Membership is a relation (LeadSegment), independent of who the lead is assigned to, so assigning, reassigning or working a lead never changes it.
+model Segment {
+  id String @id @default(uuid()) @db.Uuid
+
+  name    String @map("name") @db.VarChar(100)
+  // Lower-cased, whitespace-collapsed name: the unique key, so "VIP  customers" and "vip customers" cannot both exist.
+  nameKey String @unique @map("name_key") @db.VarChar(100)
+
+  // #RRGGBB, used for the tag shown wherever the lead appears.
+  color String @default("#6366f1") @map("color") @db.VarChar(7)
+
+  // Inactive (archived) segments stay on the leads that have them but cannot be chosen for new imports.
+  isActive Boolean @default(true) @map("is_active")
+  // The three built-in segments (Repeat / Loyal / VIP Customers).
+  isSystem Boolean @default(false) @map("is_system")
+
+  createdById String? @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  leads         LeadSegment[]
+  importBatches LeadImportBatch[]
+
+  @@map("segments")
+}
+
+model LeadSegment {
+  leadId String @map("lead_id") @db.Uuid
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  segmentId String  @map("segment_id") @db.Uuid
+  segment   Segment @relation(fields: [segmentId], references: [id])
+
+  // The import that added the lead to the segment (null when added another way).
+  importBatchId String? @map("import_batch_id") @db.Uuid
+  addedById     String? @map("added_by_id") @db.Uuid
+  addedAt       DateTime @default(now()) @map("added_at")
+
+  @@id([leadId, segmentId])
+  @@index([segmentId])
+  @@index([importBatchId])
+  @@map("lead_segments")
+}
+
+// One uploaded row, staged so a very large file is never held in memory or in one JSON value, can be processed in small committed chunks, resumed after a crash, and reported row by row.
+model LeadImportRow {
+  id Int @id @default(autoincrement())
+
+  batchId String          @map("batch_id") @db.Uuid
+  batch   LeadImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  rowNumber Int  @map("row_number")
+  // The raw cells, keyed by the file's own header text.
+  data      Json @map("data")
+
+  status ImportRowStatus @default(PENDING) @map("status")
+  reason String?         @map("reason") @db.VarChar(255)
+  leadId String?         @map("lead_id") @db.Uuid
+
+  @@unique([batchId, rowNumber])
+  @@index([batchId, status])
+  @@map("lead_import_rows")
+}
+
+// Remembers how a recurring file format was mapped: keyed by a signature of the file's header names.
+model LeadImportMapping {
+  id String @id @default(uuid()) @db.Uuid
+
+  signature String @unique @map("signature") @db.VarChar(64)
+  mapping   Json   @map("mapping")
+  useCount  Int    @default(1) @map("use_count")
+
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+  lastUsedAt  DateTime @default(now()) @map("last_used_at")
+
+  @@map("lead_import_mappings")
+}

@@ -19,6 +19,7 @@ import { startOmsForwardWorker } from "./modules/whatsapp/whatsapp.oms-forward.j
 import legalRoutes from "./modules/legal/legal.routes.js";
 import { agencyJsonErrorHandler, createAgencyRoutes } from "./modules/agency/agency.routes.js";
 import { createHrmsRouter } from "./modules/hrms/hrms.routes.js";
+import { resumeInterruptedImports } from "./modules/lead/import/import.runner.js";
 import { startLifecycleAutomationScheduler } from "./modules/whatsapp/whatsapp.automation.scheduler.js";
 import { startCampaignScheduler } from "./modules/whatsapp/whatsapp.campaign.scheduler.js";
 import { startReportAutomationScheduler } from "./modules/report-automation/report-automation.scheduler.js";
@@ -111,6 +112,7 @@ const server = app.listen(PORT, () => {
   startLifecycleAutomationScheduler();
   startCampaignScheduler();
   startReportAutomationScheduler(); // daily WhatsApp telecaller report (Admin / Manager automation)
+  resumeInterruptedImports().then((n) => n > 0 && console.log(`[lead-import] resumed ${n} interrupted import(s)`)).catch((error) => console.error("[lead-import] could not resume interrupted imports:", error)); // continues file imports a restart cut short
   startAbandonedPoolSweep(); // retries unowned abandoned leads for the 24/7 pool (no-op while the pool is off)
   startCallTranscriptionWorker().catch((error) => console.error("[transcription] failed to start worker:", error));
   startRecordingExportWorker().catch((error) => console.error("[recording-export] failed to start worker:", error)); // background ZIP exports of call recordings (pg-boss)

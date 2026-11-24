@@ -37,6 +37,7 @@ import { AI_AGENT_INCLUDE, aiAgentTag, aiAgentWhere } from "../agency/agency.tag
 import type { User, Lead } from "../../../generated/prisma/client.js";
 import type { AuthUser } from "@/middlewares/auth.js";
 import type {
+  LeadIdFilter,
   CreateLeadBody,
   UpdateLeadBody,
   ListLeadsQuery,
@@ -95,11 +96,16 @@ const leadListInclude = {
     },
     orderBy: { createdAt: "desc" },
   },
+  // Campaign segment tags (relation, any number per lead) - shown wherever the lead appears. Customer classification (customerClass) is a plain column on the lead.
+  segments: { select: { segment: { select: { id: true, name: true, color: true, isActive: true } } }, orderBy: { addedAt: "asc" as const } },
   // The "AI Agent" tag: the latest request the external AI calling agency made about this lead (see agency.repo recordAiAgentActivity). Separate from owner / assignedManager, which are human telecallers.
   ...AI_AGENT_INCLUDE,
 } satisfies Prisma.LeadInclude;
 
 export { aiAgentTag };
+
+const MAX_FILTER_ASSIGN = 100_000;
+const ASSIGN_CHUNK = 2500;
 
 class LeadService {
   // Salespersons see their calls (status, duration) but can't hear the recording —
@@ -108,9 +114,11 @@ class LeadService {
   private presentForRole<T extends { workingStatus: Lead["workingStatus"]; calls: { recording: { recordingUrl: string | null } | null }[]; activities: { createdAt: Date; title: string | null; metadata: Prisma.JsonValue | null }[]; _count: { activities: number } }>(
     lead: T,
     role: Role,
-  ): Omit<T, "activities" | "_count"> & { aiAgent: ReturnType<typeof aiAgentTag> } {
+  ): Omit<T, "activities" | "_count" | "segments"> & { segments: { id: string; name: string; color: string; isActive: boolean }[]; aiAgent: ReturnType<typeof aiAgentTag> } {
     const { activities, _count, ...rest } = lead;
-    const entity = { ...rest, aiAgent: aiAgentTag(activities, _count.activities) };
+    // segments come back as [{ segment }] from the relation table; the API exposes the flat tag list
+    const flatSegments = ((rest as { segments?: { segment: unknown }[] }).segments ?? []).map((s) => s.segment);
+    const entity = { ...rest, segments: flatSegments, aiAgent: aiAgentTag(activities, _count.activities) } as unknown as Omit<T, "activities" | "_count" | "segments"> & { segments: { id: string; name: string; color: string; isActive: boolean }[]; aiAgent: ReturnType<typeof aiAgentTag> };
     if (role !== Role.SALESPERSON) return entity;
     return {
       ...entity,
@@ -126,9 +134,76 @@ class LeadService {
   }
 
   async listLeads(user: AuthUser, query: ListLeadsQuery) {
+    const where = this.buildListWhere(user, query);
+    const skip = (query.page - 1) * query.limit;
+
+    const [data, total] = await Promise.all([
+      prisma.lead.findMany({
+        where,
+        include: leadListInclude,
+        orderBy: { createdAt: "desc" },
+        skip,
+        take: query.limit,
+      }),
+      prisma.lead.count({ where }),
+    ]);
+
+    return {
+      data: data.map((lead) => this.presentForRole(lead, user.role)),
+      pagination: {
+        page: query.page,
+        limit: query.limit,
+        total,
+        totalPages: Math.ceil(total / query.limit),
+      },
+    };
+  }
+
+  /** Every lead the caller may see that matches the filter, as ids (for "select all in this segment" bulk actions). Bounded, so a runaway filter cannot load the whole table. */
+  async resolveLeadIds(user: AuthUser, filter: LeadIdFilter): Promise<string[]> {
+    const where = this.buildListWhere(user, { page: 1, limit: 1, ...filter });
+    const ids: string[] = [];
+    let cursor: string | undefined;
+    for (;;) {
+      const rows = await prisma.lead.findMany({ where, select: { id: true }, orderBy: { id: "asc" }, take: 5000, ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}) });
+      ids.push(...rows.map((r) => r.id));
+      if (ids.length > MAX_FILTER_ASSIGN) throw new ApiError(`More than ${MAX_FILTER_ASSIGN.toLocaleString("en-IN")} leads match. Narrow the filter.`, STATUS_CODES.BAD_REQUEST);
+      if (rows.length < 5000) return ids;
+      cursor = rows[rows.length - 1]!.id;
+    }
+  }
+
+  /** Bulk assignment of everything a filter matches (e.g. a whole segment), in committed chunks. The round robin cursor is kept between chunks, so the spread stays even. */
+  private async assignInChunks(ids: string[], run: (chunk: string[]) => Promise<{ assignedCount: number }>) {
+    if (ids.length === 0) throw new ApiError("No leads match the selected filter", STATUS_CODES.BAD_REQUEST);
+    let assignedCount = 0;
+    for (let i = 0; i < ids.length; i += ASSIGN_CHUNK) {
+      try {
+        assignedCount += (await run(ids.slice(i, i + ASSIGN_CHUNK))).assignedCount;
+      } catch (error: any) {
+        throw new ApiError(`${error.message}${assignedCount ? ` (${assignedCount.toLocaleString("en-IN")} of ${ids.length.toLocaleString("en-IN")} leads were already assigned)` : ""}`, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+      }
+    }
+    return { assignedCount, matchedCount: ids.length };
+  }
+
+  async bulkAssignManagersByFilter(user: AuthUser, filter: LeadIdFilter, body: Omit<BulkAssignManagerBody, "leadIds">) {
+    const ids = await this.resolveLeadIds(user, filter);
+    return this.assignInChunks(ids, (chunk) => this.bulkAssignManagers(user.id, { ...body, leadIds: chunk }));
+  }
+
+  async bulkAssignSalespersonsByFilter(user: AuthUser, filter: LeadIdFilter, body: Omit<BulkAssignSalespersonBody, "leadIds">) {
+    const ids = await this.resolveLeadIds(user, filter);
+    return this.assignInChunks(ids, (chunk) => this.bulkAssignSalespersons(user.id, { ...body, leadIds: chunk }));
+  }
+
+  private buildListWhere(user: AuthUser, query: ListLeadsQuery): Prisma.LeadWhereInput {
     const where: Prisma.LeadWhereInput = { ...this.buildScopeWhere(user) };
 
     if (query.sourceId) where.sourceId = query.sourceId;
+    // Campaign segment and customer classification: two independent filters (a VIP customer in the "Diwali Mega Sale" segment matches both).
+    if (query.segmentId) where.segments = { some: { segmentId: query.segmentId } };
+    if (query.customerClass) where.customerClass = query.customerClass;
     if (query.workingStatus) {
       const status = query.workingStatus as Lead["workingStatus"];
       // A salesperson's NEW includes leads that are ASSIGNED underneath; they can't filter on ASSIGNED itself.
@@ -171,28 +246,7 @@ class LeadService {
       ];
     }
 
-    const skip = (query.page - 1) * query.limit;
-
-    const [data, total] = await Promise.all([
-      prisma.lead.findMany({
-        where,
-        include: leadListInclude,
-        orderBy: { createdAt: "desc" },
-        skip,
-        take: query.limit,
-      }),
-      prisma.lead.count({ where }),
-    ]);
-
-    return {
-      data: data.map((lead) => this.presentForRole(lead, user.role)),
-      pagination: {
-        page: query.page,
-        limit: query.limit,
-        total,
-        totalPages: Math.ceil(total / query.limit),
-      },
-    };
+    return where;
   }
 
   /**

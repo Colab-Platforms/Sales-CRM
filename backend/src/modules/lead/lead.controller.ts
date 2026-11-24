@@ -104,7 +104,8 @@ export const bulkAssignManager = async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    const result = await leadService.bulkAssignManagers(req.user!.id, value);
+    const { filter, leadIds, ...rest } = value;
+    const result = filter ? await leadService.bulkAssignManagersByFilter(req.user!, filter, rest) : await leadService.bulkAssignManagers(req.user!.id, { ...rest, leadIds: leadIds! });
     sendResponse(res, true, result, "Leads assigned to manager successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
@@ -119,7 +120,8 @@ export const bulkAssignSalesperson = async (req: AuthRequest, res: Response): Pr
       return;
     }
 
-    const result = await leadService.bulkAssignSalespersons(req.user!.id, value);
+    const { filter, leadIds, ...rest } = value;
+    const result = filter ? await leadService.bulkAssignSalespersonsByFilter(req.user!, filter, rest) : await leadService.bulkAssignSalespersons(req.user!.id, { ...rest, leadIds: leadIds! });
     sendResponse(res, true, result, "Leads assigned to salesperson successfully.", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);

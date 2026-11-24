@@ -128,6 +128,26 @@ export function useBulkUpdateStatusMutation() {
   });
 }
 
+export function useAnalyzeImportFileMutation() {
+  return useMutation<Awaited<ReturnType<typeof leadApi.analyzeImportFile>>, unknown, { file: File; segmentId?: string }>({
+    mutationFn: ({ file, segmentId }) => leadApi.analyzeImportFile(file, segmentId),
+  });
+}
+
+export function useUpdateImportMappingMutation() {
+  return useMutation<Awaited<ReturnType<typeof leadApi.updateImportMapping>>, unknown, { batchId: string; mapping?: Record<string, string>; segmentId?: string | null }>({
+    mutationFn: ({ batchId, ...payload }) => leadApi.updateImportMapping(batchId, payload),
+  });
+}
+
+export function useStartImportFileMutation() {
+  const queryClient = useQueryClient();
+  return useMutation<Awaited<ReturnType<typeof leadApi.startImportFile>>, unknown, { batchId: string; segmentId?: string | null }>({
+    mutationFn: ({ batchId, segmentId }) => leadApi.startImportFile(batchId, segmentId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: leadKeys.all }),
+  });
+}
+
 export function usePreviewImportMutation() {
   return useMutation<
     Awaited<ReturnType<typeof leadApi.previewImport>>,

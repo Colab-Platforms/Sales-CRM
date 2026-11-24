@@ -54,6 +54,8 @@ const listLeadsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
   sourceId: z.string().guid().optional(),
+  segmentId: z.string().guid().optional(),
+  customerClass: z.enum(["REPEAT", "LOYAL", "VIP"]).optional(),
   workingStatus: workingStatusEnum.optional(),
   lifecycleStage: z.enum(["LEAD", "CUSTOMER"]).optional(),
   assignment: assignmentEnum.optional(),
@@ -65,24 +67,43 @@ const listLeadsQuerySchema = z.object({
   aiAgentIntent: z.enum(["ALREADY_ORDERED", "INTERESTED"]).optional(),
 });
 
+// "Every lead matching this filter" (e.g. a whole segment) instead of an explicit id list, which could not carry tens of thousands of ids.
+const leadIdFilterSchema = z
+  .object({
+    segmentId: z.string().guid().optional(),
+    customerClass: z.enum(["REPEAT", "LOYAL", "VIP"]).optional(),
+    assignment: assignmentEnum.optional(),
+    sourceId: z.string().guid().optional(),
+    workingStatus: workingStatusEnum.optional(),
+    search: z.string().max(255).optional(),
+    managerId: z.string().guid().optional(),
+    salespersonId: z.string().guid().optional(),
+  })
+  .strict()
+  .refine((f) => Object.keys(f).length > 0, { message: "The filter is empty" });
+
 const bulkAssignManagerSchema = z
   .object({
-    leadIds: z.array(z.string().guid()).min(1, "No leads selected"),
+    leadIds: z.array(z.string().guid()).min(1, "No leads selected").optional(),
+    filter: leadIdFilterSchema.optional(),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
     managerId: z.string().guid().optional(),
     managerIds: z.array(z.string().guid()).optional(),
   })
+  .refine((data) => Boolean(data.leadIds?.length) !== Boolean(data.filter), { message: "Send either leadIds or a filter" })
   .refine((data) => (data.method === "MANUAL" ? Boolean(data.managerId) : Boolean(data.managerIds?.length)), {
     message: "managerId is required for manual assignment, managerIds is required for round robin",
   });
 
 const bulkAssignSalespersonSchema = z
   .object({
-    leadIds: z.array(z.string().guid()).min(1, "No leads selected"),
+    leadIds: z.array(z.string().guid()).min(1, "No leads selected").optional(),
+    filter: leadIdFilterSchema.optional(),
     method: z.enum(["MANUAL", "ROUND_ROBIN"]),
     salespersonId: z.string().guid().optional(),
     salespersonIds: z.array(z.string().guid()).optional(),
   })
+  .refine((data) => Boolean(data.leadIds?.length) !== Boolean(data.filter), { message: "Send either leadIds or a filter" })
   .refine((data) => (data.method === "MANUAL" ? Boolean(data.salespersonId) : Boolean(data.salespersonIds?.length)), {
     message: "salespersonId is required for manual assignment, salespersonIds is required for round robin",
   });
@@ -105,10 +126,10 @@ export const validateListLeadsQuerySchema = (query: unknown) =>
   validateSchema<ListLeadsQuery>(listLeadsQuerySchema, query);
 
 export const validateBulkAssignManagerSchema = (body: unknown) =>
-  validateSchema<BulkAssignManagerBody>(bulkAssignManagerSchema, body);
+  validateSchema<Omit<BulkAssignManagerBody, "leadIds"> & { leadIds?: string[] }>(bulkAssignManagerSchema, body);
 
 export const validateBulkAssignSalespersonSchema = (body: unknown) =>
-  validateSchema<BulkAssignSalespersonBody>(bulkAssignSalespersonSchema, body);
+  validateSchema<Omit<BulkAssignSalespersonBody, "leadIds"> & { leadIds?: string[] }>(bulkAssignSalespersonSchema, body);
 
 export const validateBulkUpdateStatusSchema = (body: unknown) =>
   validateSchema<BulkUpdateStatusBody>(bulkUpdateStatusSchema, body);

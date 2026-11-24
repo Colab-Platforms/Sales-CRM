@@ -369,6 +369,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Pipeline",
       items: [
         { title: "Leads", href: "/dashboard/leads", icon: Users },
+        { title: "Segments", href: "/dashboard/segments", icon: Ticket },
         { title: "Orders", href: "/dashboard/orders", icon: ShoppingCart },
         { title: "Orders Dashboard", href: "/dashboard/orders-dashboard", icon: BarChart3 },
         { title: "Offers", href: "/dashboard/offers", icon: Ticket },

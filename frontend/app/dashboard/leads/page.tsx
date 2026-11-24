@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Upload } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
@@ -17,19 +18,25 @@ import { BulkUpdateStatusDialog } from "@/components/leads/bulk-update-status-di
 import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
 import { BucketSummary } from "@/components/leads/bucket-summary";
 import { CreateLeadDialog } from "@/components/leads/create-lead-dialog";
+import { SelectAllMatching } from "@/components/leads/select-all-matching";
+import { idFilterOf } from "@/lib/lead-filter";
 
 const PAGE_SIZE = 20;
 
-export default function LeadsPage() {
+function LeadsPageContent() {
   const user = useAuthStore((s) => s.user);
   const [page, setPage] = useState(1);
-  const [filters, setFilters] = useState<LeadFilterState>({});
+  // the Segments page links here with ?segmentId=...
+  const initialSegment = useSearchParams().get("segmentId") ?? undefined;
+  const [filters, setFilters] = useState<LeadFilterState>(initialSegment ? { segmentId: initialSegment } : {});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [assignManagerOpen, setAssignManagerOpen] = useState(false);
   const [assignSalespersonOpen, setAssignSalespersonOpen] = useState(false);
   const [updateStatusOpen, setUpdateStatusOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  // "Select all N leads matching this filter" (e.g. a whole campaign segment): the server resolves the ids, the browser never holds them.
+  const [allMatching, setAllMatching] = useState(false);
 
   const params = useMemo(() => ({ page, limit: PAGE_SIZE, ...filters }), [page, filters]);
   const { data, isPending, error } = useQuery(leadListQueryOptions(params));
@@ -41,7 +48,14 @@ export default function LeadsPage() {
 
   function clearSelection() {
     setSelectedIds(new Set());
+    setAllMatching(false);
   }
+
+  const idFilter = idFilterOf(filters);
+  const total = data?.pagination.total ?? 0;
+  const pageCount = data?.data.length ?? 0;
+  const useFilter = allMatching && idFilter !== null;
+  const selectedCount = useFilter ? total : selectedIds.size;
 
   function toggleAll(checked: boolean) {
     if (!data) return;
@@ -73,7 +87,7 @@ export default function LeadsPage() {
             {isAdmin || isManager ? (
               <Button variant="outline" onClick={() => setImportOpen(true)}>
                 <Upload />
-                Import CSV
+                Import Excel / CSV
               </Button>
             ) : null}
             <Button onClick={() => setCreateOpen(true)}>
@@ -104,13 +118,18 @@ export default function LeadsPage() {
         role={user.role}
       />
 
+      {selectedIds.size > 0 && idFilter && pageCount > 0 && selectedIds.size === pageCount ? (
+        <SelectAllMatching pageCount={pageCount} total={total} allSelected={useFilter} onSelectAll={() => setAllMatching(true)} onClear={clearSelection} />
+      ) : null}
+
       {selectedIds.size > 0 ? (
         <LeadSelectionToolbar
-          count={selectedIds.size}
+          count={selectedCount}
           onClear={clearSelection}
           onAssignManager={isAdmin ? () => setAssignManagerOpen(true) : undefined}
           onAssignSalesperson={isManager ? () => setAssignSalespersonOpen(true) : undefined}
-          onUpdateStatus={isAdmin ? () => setUpdateStatusOpen(true) : undefined}
+          // changing the status of a filter-wide selection is not offered: it only exists for explicit ids
+          onUpdateStatus={isAdmin && !useFilter ? () => setUpdateStatusOpen(true) : undefined}
         />
       ) : null}
 
@@ -135,6 +154,8 @@ export default function LeadsPage() {
         open={assignManagerOpen}
         onOpenChange={setAssignManagerOpen}
         leadIds={[...selectedIds]}
+        filter={useFilter ? idFilter : null}
+        count={selectedCount}
         onDone={() => {
           setAssignManagerOpen(false);
           clearSelection();
@@ -144,6 +165,8 @@ export default function LeadsPage() {
         open={assignSalespersonOpen}
         onOpenChange={setAssignSalespersonOpen}
         leadIds={[...selectedIds]}
+        filter={useFilter ? idFilter : null}
+        count={selectedCount}
         onDone={() => {
           setAssignSalespersonOpen(false);
           clearSelection();
@@ -166,5 +189,14 @@ export default function LeadsPage() {
       />
       <CreateLeadDialog open={createOpen} onOpenChange={setCreateOpen} onDone={() => setCreateOpen(false)} />
     </div>
+  );
+}
+
+// useSearchParams (the Segments page deep-links here) needs a Suspense boundary.
+export default function LeadsPage() {
+  return (
+    <Suspense fallback={null}>
+      <LeadsPageContent />
+    </Suspense>
   );
 }

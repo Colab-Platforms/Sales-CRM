@@ -76,6 +76,7 @@ enum ImportBatchStatus {
   DRAFT
   COMMITTED
   FAILED
+  PROCESSING
 
   @@map("import_batch_status")
 }
@@ -668,4 +669,23 @@ enum CouponDiscountType {
   PERCENT
 
   @@map("coupon_discount_type")
+}
+
+// Customer classification by real order count (see Lead.customerClass).
+enum CustomerClass {
+  REPEAT
+  LOYAL
+  VIP
+
+  @@map("customer_class")
+}
+
+enum ImportRowStatus {
+  PENDING
+  CREATED
+  UPDATED
+  DUPLICATE
+  FAILED
+
+  @@map("import_row_status")
 }
