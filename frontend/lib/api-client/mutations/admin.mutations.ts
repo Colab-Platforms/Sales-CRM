@@ -101,6 +101,18 @@ export function useCreateHrMutation() {
   });
 }
 
+export function useResetHrPasswordMutation() {
+  return useMutation<HrUser, unknown, { id: string; payload: ResetPasswordPayload }>({
+    mutationFn: ({ id, payload }) => adminApi.resetHrPassword(id, payload),
+  });
+}
+
+export function useResetAdminPasswordMutation() {
+  return useMutation<AdminUser, unknown, { id: string; payload: ResetPasswordPayload }>({
+    mutationFn: ({ id, payload }) => adminApi.resetAdminPassword(id, payload),
+  });
+}
+
 export function useCreateAdminMutation() {
   const queryClient = useQueryClient();
 

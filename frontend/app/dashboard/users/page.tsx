@@ -11,6 +11,8 @@ import {
   useCreateManagerMutation,
   useCreateSalespersonMutation,
   useDeactivateManagerMutation,
+  useResetAdminPasswordMutation,
+  useResetHrPasswordMutation,
   useResetManagerPasswordMutation,
   useResetSalespersonPasswordMutation,
   useUpdateManagerMutation,
@@ -447,32 +449,98 @@ function CreateAdminModalContent({ onDone }: { onDone: () => void }) {
 
 function AdminRow({ admin }: { admin: AdminUser }) {
   const isActive = admin.status === "ACTIVE";
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const resetAdminPassword = useResetAdminPasswordMutation();
 
   return (
-    <TableRow>
-      <TableCell className="pl-5 font-semibold">{admin.name}</TableCell>
-      <TableCell className="text-muted-foreground">{admin.username}</TableCell>
-      <TableCell>{admin.email ?? "—"}</TableCell>
-      <TableCell>{admin.phone ?? "—"}</TableCell>
-      <TableCell className="pr-5">
-        <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow>
+        <TableCell className="pl-5 font-semibold">{admin.name}</TableCell>
+        <TableCell className="text-muted-foreground">{admin.username}</TableCell>
+        <TableCell>{admin.email ?? "—"}</TableCell>
+        <TableCell>{admin.phone ?? "—"}</TableCell>
+        <TableCell>
+          <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
+        </TableCell>
+        <TableCell className="pr-5 text-right">
+          <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+            <KeyRound />
+            Change Password
+          </Button>
+        </TableCell>
+      </TableRow>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            title="Change Password"
+            description={`Set a new password for ${admin.name}.`}
+            isPending={resetAdminPassword.isPending}
+            error={resetAdminPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetAdminPassword.mutate(
+                { id: admin.id, payload: { password } },
+                {
+                  onSuccess: () => {
+                    toast.success("Admin password updated successfully.");
+                    onSuccess();
+                  },
+                },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+    </>
   );
 }
 
 function HrRow({ hr }: { hr: HrUser }) {
   const isActive = hr.status === "ACTIVE";
+  const [isPasswordDialogOpen, setIsPasswordDialogOpen] = useState(false);
+  const resetHrPassword = useResetHrPasswordMutation();
 
   return (
-    <TableRow>
-      <TableCell className="pl-5 font-semibold">{hr.name}</TableCell>
-      <TableCell className="text-muted-foreground">{hr.username}</TableCell>
-      <TableCell>{hr.phone ?? "—"}</TableCell>
-      <TableCell className="pr-5">
-        <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
-      </TableCell>
-    </TableRow>
+    <>
+      <TableRow>
+        <TableCell className="pl-5 font-semibold">{hr.name}</TableCell>
+        <TableCell className="text-muted-foreground">{hr.username}</TableCell>
+        <TableCell>{hr.phone ?? "—"}</TableCell>
+        <TableCell>
+          <Badge variant={isActive ? "default" : "secondary"}>{isActive ? "Active" : "Inactive"}</Badge>
+        </TableCell>
+        <TableCell className="pr-5 text-right">
+          <Button size="sm" variant="outline" onClick={() => setIsPasswordDialogOpen(true)}>
+            <KeyRound />
+            Change Password
+          </Button>
+        </TableCell>
+      </TableRow>
+
+      <Dialog open={isPasswordDialogOpen} onOpenChange={setIsPasswordDialogOpen}>
+        {isPasswordDialogOpen ? (
+          <ChangePasswordModalContent
+            title="Change Password"
+            description={`Set a new password for ${hr.name}.`}
+            isPending={resetHrPassword.isPending}
+            error={resetHrPassword.error}
+            onSubmit={(password, onSuccess) =>
+              resetHrPassword.mutate(
+                { id: hr.id, payload: { password } },
+                {
+                  onSuccess: () => {
+                    toast.success("HR password updated successfully.");
+                    onSuccess();
+                  },
+                },
+              )
+            }
+            onDone={() => setIsPasswordDialogOpen(false)}
+          />
+        ) : null}
+      </Dialog>
+    </>
   );
 }
 
@@ -1294,7 +1362,8 @@ export default function UsersPage() {
                   <TableHead>Username</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Phone</TableHead>
-                  <TableHead className="pr-5">Status</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>{admins?.map((admin) => <AdminRow key={admin.id} admin={admin} />)}</TableBody>
@@ -1328,13 +1397,14 @@ export default function UsersPage() {
                   <TableHead className="pl-5">Name</TableHead>
                   <TableHead>Username</TableHead>
                   <TableHead>Phone</TableHead>
-                  <TableHead className="pr-5">Status</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="pr-5 text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {hrUsers && hrUsers.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-14 text-center">
+                    <TableCell colSpan={5} className="py-14 text-center">
                       <div className="flex flex-col items-center justify-center gap-2">
                         <Users className="size-9 text-muted-foreground/40" />
                         <p className="font-heading text-lg font-bold">No HR users yet</p>
