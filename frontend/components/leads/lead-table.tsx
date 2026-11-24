@@ -29,6 +29,7 @@ import { useUpdateLeadMutation } from "@/lib/api-client/mutations/lead.mutations
 import { leadCallsQueryOptions } from "@/lib/api-client/queries/calling.queries";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { STATUS_LABELS, STATUS_ORDER } from "@/lib/status";
+import { LeadTags } from "@/components/leads/lead-tags";
 import { ScheduleFollowUpDialog } from "@/components/follow-ups/schedule-follow-up-dialog";
 import {
   FOLLOW_UP_TYPE_LABEL,
@@ -426,6 +427,7 @@ export function LeadTable({
                     <div className="font-mono text-xs text-muted-foreground">
                       {lead.leadNumber}
                     </div>
+                    <LeadTags customerClass={lead.customerClass} segments={lead.segments} className="mt-1" />
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center gap-1">

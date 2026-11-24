@@ -7,6 +7,9 @@ import type {
   BulkAssignSalespersonPayload,
   BulkUpdateStatusPayload,
   CreateLeadPayload,
+  FileImportAnalysis,
+  FileImportMappingResult,
+  FileImportProgress,
   ImportBatchSummary,
   ImportPreviewResult,
   Lead,
@@ -56,6 +59,7 @@ export const leadApi = {
     const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>(
       "/lead/leads/bulk/assign-manager",
       payload,
+      { timeout: 300_000 },
     );
     return res.data.data;
   },
@@ -64,6 +68,7 @@ export const leadApi = {
     const res = await apiClient.post<ApiEnvelope<{ assignedCount: number }>>(
       "/lead/leads/bulk/assign-salesperson",
       payload,
+      { timeout: 300_000 },
     );
     return res.data.data;
   },
@@ -91,6 +96,36 @@ export const leadApi = {
       `/lead/leads/import/${batchId}/confirm`,
     );
     return res.data.data;
+  },
+
+  // ---- file import v2 (Excel / CSV)
+  async analyzeImportFile(file: File, segmentId?: string): Promise<FileImportAnalysis> {
+    const formData = new FormData();
+    formData.append("file", file);
+    if (segmentId) formData.append("segmentId", segmentId);
+    const res = await apiClient.post<ApiEnvelope<FileImportAnalysis>>("/lead/leads/import/file", formData, { headers: { "Content-Type": "multipart/form-data" }, timeout: 300_000 });
+    return res.data.data;
+  },
+
+  async updateImportMapping(batchId: string, payload: { mapping?: Record<string, string>; segmentId?: string | null }): Promise<FileImportMappingResult> {
+    const res = await apiClient.patch<ApiEnvelope<FileImportMappingResult>>(`/lead/leads/import/${batchId}/mapping`, payload, { timeout: 120_000 });
+    return res.data.data;
+  },
+
+  async startImportFile(batchId: string, segmentId?: string | null): Promise<FileImportProgress> {
+    const res = await apiClient.post<ApiEnvelope<FileImportProgress>>(`/lead/leads/import/${batchId}/start`, segmentId !== undefined ? { segmentId } : {});
+    return res.data.data;
+  },
+
+  async getImportProgress(batchId: string): Promise<FileImportProgress> {
+    const res = await apiClient.get<ApiEnvelope<FileImportProgress>>(`/lead/leads/import/${batchId}/progress`);
+    return res.data.data;
+  },
+
+  /** The failed (or duplicate) rows with their reasons, as a CSV Blob the user can correct and re-upload. */
+  async downloadImportReport(batchId: string, kind: "failed" | "duplicates"): Promise<Blob> {
+    const res = await apiClient.get<Blob>(`/lead/leads/import/${batchId}/report`, { params: { kind }, responseType: "blob" });
+    return res.data;
   },
 
   async getImportBatch(batchId: string): Promise<ImportBatchSummary> {

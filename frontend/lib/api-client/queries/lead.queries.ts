@@ -11,6 +11,16 @@ export const leadKeys = {
   importBatch: (batchId: string) => [...leadKeys.all, "import", batchId] as const,
 };
 
+export function importProgressQueryOptions(batchId: string, enabled = true) {
+  return queryOptions({
+    queryKey: [...leadKeys.all, "import-progress", batchId] as const,
+    queryFn: () => leadApi.getImportProgress(batchId),
+    enabled,
+    // poll while the import runs; stop once it has finished or stopped
+    refetchInterval: (query) => (query.state.data && (query.state.data.status === "PROCESSING" || query.state.data.status === "DRAFT") ? 1500 : false),
+  });
+}
+
 export function leadListQueryOptions(params: LeadListParams) {
   return queryOptions({
     queryKey: leadKeys.list(params),

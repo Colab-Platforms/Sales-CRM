@@ -38,6 +38,17 @@ export interface AiAgentTag {
   interested: boolean;
 }
 
+/** Customer classification from real order history. Independent of campaign segments. */
+export type CustomerClass = "REPEAT" | "LOYAL" | "VIP";
+
+/** A campaign segment tag on a lead (admin-defined group, e.g. "Diwali Mega Sale"). */
+export interface SegmentTag {
+  id: string;
+  name: string;
+  color: string;
+  isActive: boolean;
+}
+
 export interface Lead {
   id: string;
   leadNumber: string;
@@ -61,6 +72,11 @@ export interface Lead {
   tasks: LeadFollowUp[];
   /** The "AI Agent" tag: the latest request the AI calling agency made about this lead; null when it never did. Separate from owner / assignedManager (human telecallers). */
   aiAgent: AiAgentTag | null;
+  /** Campaign segments the lead belongs to (any number). Stay on the lead whoever it is assigned to. */
+  segments: SegmentTag[];
+  /** Repeat / Loyal / VIP from the customer's real order count; null = not classified. */
+  customerClass: CustomerClass | null;
+  orderCount?: number | null;
 }
 
 export interface LeadListPagination {
@@ -85,6 +101,9 @@ export interface LeadListParams {
   salespersonId?: string;
   bucket?: "TODAY";
   search?: string;
+  /** Campaign segment and customer classification: two independent filters. */
+  segmentId?: string;
+  customerClass?: CustomerClass;
   /** ONLY: leads the AI calling agency made a request about. EXCLUDE: leads it did not. */
   aiAgent?: "ONLY" | "EXCLUDE";
   /** Leads with an AI Agent request of this intent (implies AI Agent leads). */
@@ -139,15 +158,20 @@ export interface LeadAssignmentRecord {
   group: LeadGroupRef | null;
 }
 
+/** "Every lead matching this filter" (e.g. a whole segment) instead of an explicit id list. */
+export type LeadIdFilter = Pick<LeadListParams, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId">;
+
 export interface BulkAssignManagerPayload {
-  leadIds: string[];
+  leadIds?: string[];
+  filter?: LeadIdFilter;
   method: "MANUAL" | "ROUND_ROBIN";
   managerId?: string;
   managerIds?: string[];
 }
 
 export interface BulkAssignSalespersonPayload {
-  leadIds: string[];
+  leadIds?: string[];
+  filter?: LeadIdFilter;
   method: "MANUAL" | "ROUND_ROBIN";
   salespersonId?: string;
   salespersonIds?: string[];
@@ -179,4 +203,71 @@ export interface ImportBatchSummary {
   invalidRows: number;
   createdAt: string;
   committedAt: string | null;
+}
+
+// ----------------------------------------------------------------------------------------------- file import v2 (Excel / CSV)
+
+export type ImportField =
+  | "fullName" | "firstName" | "lastName" | "mobile" | "email" | "orderCount" | "totalOrdersValue" | "city" | "state" | "address"
+  | "pincode" | "product" | "lastOrderDate" | "paymentInfo" | "requirement" | "location" | "sourceName" | "extra";
+
+export interface ImportDetectedColumn {
+  header: string;
+  field: ImportField;
+  confidence: "exact" | "likely" | "none";
+  conflictWith?: string;
+  samples: string[];
+}
+
+export interface FileImportPreview {
+  totalRows: number;
+  eligibleRows: number;
+  invalidRows: number;
+  duplicatesInFile: number;
+  matchExistingLeads: number;
+  newLeads: number;
+  missingPhone: number;
+  missingOrderCount: number;
+  invalidOrderCount: number;
+  classification: { repeat: number; loyal: number; vip: number; unclassified: number };
+  problems: { row: number; reason: string }[];
+}
+
+export interface FileImportAnalysis {
+  batchId: string;
+  fileName: string;
+  totalRows: number;
+  segmentId: string | null;
+  rememberedMapping: boolean;
+  columns: ImportDetectedColumn[];
+  mapping: Record<string, ImportField>;
+  needsReview: { header: string; conflictWith?: string }[];
+  unrecognized: string[];
+  preview: FileImportPreview;
+}
+
+export interface FileImportMappingResult {
+  batchId: string;
+  mapping: Record<string, ImportField>;
+  preview: FileImportPreview;
+}
+
+export interface FileImportProgress {
+  batchId: string;
+  fileName: string;
+  status: "DRAFT" | "PROCESSING" | "COMMITTED" | "FAILED";
+  segmentId: string | null;
+  totalRows: number;
+  processedRows: number;
+  pendingRows: number;
+  percent: number;
+  created: number;
+  updated: number;
+  segmentMembershipsAdded: number;
+  duplicates: number;
+  failed: number;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  canResume: boolean;
 }

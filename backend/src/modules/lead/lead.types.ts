@@ -29,10 +29,15 @@ export interface UpdateLeadBody {
 
 export type AssignmentFilter = "UNASSIGNED" | "ASSIGNED_TO_MANAGER" | "ASSIGNED_TO_SALESPERSON";
 
+export type CustomerClassFilter = "REPEAT" | "LOYAL" | "VIP";
+
 export interface ListLeadsQuery {
   page: number;
   limit: number;
   sourceId?: string;
+  // Campaign segment (membership) and customer classification (order history): independent filters.
+  segmentId?: string;
+  customerClass?: CustomerClassFilter;
   workingStatus?: string;
   lifecycleStage?: "LEAD" | "CUSTOMER";
   assignment?: AssignmentFilter;
@@ -46,8 +51,12 @@ export interface ListLeadsQuery {
   aiAgentIntent?: "ALREADY_ORDERED" | "INTERESTED";
 }
 
+/** The filters a "select every lead in this segment" bulk action may carry instead of explicit ids. */
+export type LeadIdFilter = Partial<Pick<ListLeadsQuery, "segmentId" | "customerClass" | "assignment" | "sourceId" | "workingStatus" | "search" | "managerId" | "salespersonId">>;
+
 export interface BulkAssignManagerBody {
   leadIds: string[];
+  filter?: LeadIdFilter;
   method: "MANUAL" | "ROUND_ROBIN";
   managerId?: string;
   managerIds?: string[];
@@ -55,6 +64,7 @@ export interface BulkAssignManagerBody {
 
 export interface BulkAssignSalespersonBody {
   leadIds: string[];
+  filter?: LeadIdFilter;
   method: "MANUAL" | "ROUND_ROBIN";
   salespersonId?: string;
   salespersonIds?: string[];

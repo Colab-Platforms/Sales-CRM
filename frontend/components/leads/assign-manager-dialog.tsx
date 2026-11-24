@@ -10,16 +10,22 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import type { LeadIdFilter } from "@/lib/api-client/types/lead.types";
 
 export function AssignManagerDialog({
   open,
   onOpenChange,
   leadIds,
+  filter,
+  count,
   onDone,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   leadIds: string[];
+  /** When set, every lead matching this filter is assigned (the server resolves the ids). */
+  filter?: LeadIdFilter | null;
+  count?: number;
   onDone: () => void;
 }) {
   const { data: managers } = useQuery({ ...managersQueryOptions(), enabled: open });
@@ -55,10 +61,12 @@ export function AssignManagerDialog({
 
   function handleSubmit() {
     bulkAssign.mutate(
-      method === "MANUAL" ? { leadIds, method, managerId } : { leadIds, method, managerIds: [...managerIds] },
+      method === "MANUAL"
+        ? { ...(filter ? { filter } : { leadIds }), method, managerId }
+        : { ...(filter ? { filter } : { leadIds }), method, managerIds: [...managerIds] },
       {
         onSuccess: (result) => {
-          toast.success(`${result.assignedCount} lead(s) assigned.`);
+          toast.success(`${result.assignedCount.toLocaleString("en-IN")} lead(s) assigned.`);
           onDone();
         },
       },
@@ -73,7 +81,7 @@ export function AssignManagerDialog({
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle>Assign Manager</DialogTitle>
-            <DialogDescription>{leadIds.length} lead(s) selected.</DialogDescription>
+            <DialogDescription>{(count ?? leadIds.length).toLocaleString("en-IN")} lead(s) selected.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">

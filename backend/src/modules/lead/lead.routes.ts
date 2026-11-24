@@ -15,7 +15,8 @@ import {
   getImportBatch,
 } from "./lead.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
-import { csvUpload } from "@/middlewares/upload.js";
+import { csvUpload, leadImportUpload } from "@/middlewares/upload.js";
+import { analyzeImportFile, getImportProgress, getImportReport, startImportFile, updateImportMapping } from "./import/import.controller.js";
 import { Role } from "../../../generated/prisma/enums.js";
 
 const router = Router();
@@ -44,5 +45,12 @@ router.post(
 );
 router.post("/leads/import/:batchId/confirm", requireRole(Role.ADMIN, Role.MANAGER), confirmImport);
 router.get("/leads/import/:batchId", requireRole(Role.ADMIN, Role.MANAGER), getImportBatch);
+
+// File import v2 (Excel / CSV, automatic column detection, campaign segment, background processing with progress). The routes above stay for the old CSV flow.
+router.post("/leads/import/file", requireRole(Role.ADMIN, Role.MANAGER), leadImportUpload.single("file"), analyzeImportFile);
+router.patch("/leads/import/:batchId/mapping", requireRole(Role.ADMIN, Role.MANAGER), updateImportMapping);
+router.post("/leads/import/:batchId/start", requireRole(Role.ADMIN, Role.MANAGER), startImportFile);
+router.get("/leads/import/:batchId/progress", requireRole(Role.ADMIN, Role.MANAGER), getImportProgress);
+router.get("/leads/import/:batchId/report", requireRole(Role.ADMIN, Role.MANAGER), getImportReport);
 
 export default router;

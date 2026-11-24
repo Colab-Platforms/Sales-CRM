@@ -10,16 +10,22 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
+import type { LeadIdFilter } from "@/lib/api-client/types/lead.types";
 
 export function AssignSalespersonDialog({
   open,
   onOpenChange,
   leadIds,
+  filter,
+  count,
   onDone,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   leadIds: string[];
+  /** When set, every lead matching this filter is assigned (the server resolves the ids). */
+  filter?: LeadIdFilter | null;
+  count?: number;
   onDone: () => void;
 }) {
   const { data: salespersons, isPending, error } = useQuery({ ...mySalespersonsQueryOptions(), enabled: open });
@@ -59,11 +65,11 @@ export function AssignSalespersonDialog({
   function handleSubmit() {
     bulkAssign.mutate(
       method === "MANUAL"
-        ? { leadIds, method, salespersonId }
-        : { leadIds, method, salespersonIds: [...salespersonIds] },
+        ? { ...(filter ? { filter } : { leadIds }), method, salespersonId }
+        : { ...(filter ? { filter } : { leadIds }), method, salespersonIds: [...salespersonIds] },
       {
         onSuccess: (result) => {
-          toast.success(`${result.assignedCount} lead(s) assigned.`);
+          toast.success(`${result.assignedCount.toLocaleString("en-IN")} lead(s) assigned.`);
           onDone();
         },
       },
@@ -78,7 +84,7 @@ export function AssignSalespersonDialog({
         <DialogContent className="sm:max-w-[480px]">
           <DialogHeader>
             <DialogTitle>Assign Salesperson</DialogTitle>
-            <DialogDescription>{leadIds.length} lead(s) selected.</DialogDescription>
+            <DialogDescription>{(count ?? leadIds.length).toLocaleString("en-IN")} lead(s) selected.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">

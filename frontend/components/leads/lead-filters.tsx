@@ -1,6 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { segmentsQueryOptions } from "@/lib/api-client/queries/segment.queries";
+import { CUSTOMER_CLASS_LABELS } from "@/components/leads/lead-tags";
+import type { Segment } from "@/lib/api-client/types/segment.types";
+import type { CustomerClass } from "@/lib/api-client/types/lead.types";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -25,6 +30,43 @@ const ASSIGNMENT_OPTIONS: AssignmentFilter[] = [
   "ASSIGNED_TO_SALESPERSON",
 ];
 
+const CLASS_OPTIONS: CustomerClass[] = ["REPEAT", "LOYAL", "VIP"];
+
+/** The campaign-segment and customer-classification filters: independent of each other (a VIP customer in "Diwali Mega Sale" matches both). Counts are shown when the caller may see them. */
+export function SegmentClassFilters({ value, onChange, segments }: { value: LeadFilterState; onChange: (value: LeadFilterState) => void; segments: Segment[] }) {
+  return (
+    <>
+      <div className="w-full space-y-2 sm:w-56">
+        <Label htmlFor="lead-segment-filter" className="text-xs text-muted-foreground">
+          Campaign segment
+        </Label>
+        <NativeSelect id="lead-segment-filter" value={value.segmentId ?? ""} onChange={(e) => onChange({ ...value, segmentId: e.target.value || undefined })}>
+          <option value="">All segments</option>
+          {segments.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+              {s.counts ? ` (${s.counts.total.toLocaleString("en-IN")})` : ""}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+      <div className="w-full space-y-2 sm:w-44">
+        <Label htmlFor="lead-class-filter" className="text-xs text-muted-foreground">
+          Customer type
+        </Label>
+        <NativeSelect id="lead-class-filter" value={value.customerClass ?? ""} onChange={(e) => onChange({ ...value, customerClass: (e.target.value || undefined) as CustomerClass | undefined })}>
+          <option value="">All customers</option>
+          {CLASS_OPTIONS.map((c) => (
+            <option key={c} value={c}>
+              {CUSTOMER_CLASS_LABELS[c]}
+            </option>
+          ))}
+        </NativeSelect>
+      </div>
+    </>
+  );
+}
+
 export function LeadFilters({
   value,
   onChange,
@@ -36,7 +78,9 @@ export function LeadFilters({
 }) {
   const [search, setSearch] = useState(value.search ?? "");
 
-  const hasFilters = Boolean(value.search || value.workingStatus || value.assignment || value.bucket || value.aiAgent || value.aiAgentIntent);
+  // admins and managers see per-segment totals; a salesperson only needs the names
+  const { data: segments } = useQuery(segmentsQueryOptions({ counts: role !== "SALESPERSON" }));
+  const hasFilters = Boolean(value.segmentId || value.customerClass || value.search || value.workingStatus || value.assignment || value.bucket || value.aiAgent || value.aiAgentIntent);
 
   function submitSearch() {
     onChange({ ...value, search: search || undefined });
@@ -91,6 +135,8 @@ export function LeadFilters({
           ))}
         </NativeSelect>
       </div>
+
+      <SegmentClassFilters value={value} onChange={onChange} segments={segments ?? []} />
 
       {role !== "SALESPERSON" ? (
         <div className="w-full space-y-2 sm:w-56">

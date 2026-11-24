@@ -33,6 +33,14 @@ model Lead {
   importBatchId String?          @map("import_batch_id") @db.Uuid
   importBatch   LeadImportBatch? @relation(fields: [importBatchId], references: [id])
 
+  // CUSTOMER CLASSIFICATION, from the customer's real order count (2 = REPEAT, 3-4 = LOYAL, 5+ = VIP; null = not classified). Independent of campaign segments (LeadSegment).
+  orderCount       Int?      @map("order_count")
+  totalOrdersValue Decimal?  @map("total_orders_value") @db.Decimal(14, 2)
+  lastOrderAt      DateTime? @map("last_order_at")
+  customerClass    CustomerClass? @map("customer_class")
+  // Everything else a customer file carried (city, state, address, product, payment info, and every column the CRM has no field for), so nothing is lost on import.
+  importData Json? @map("import_data")
+
   workingStatus LeadWorkingStatus @default(NEW) @map("working_status")
   priority      LeadPriority      @default(MEDIUM) @map("priority")
 
@@ -69,6 +77,7 @@ model Lead {
   whatsAppConversation     WhatsAppConversation?
   whatsAppAutomationRuns   WhatsAppAutomationRun[]
   whatsAppCampaignRecipients WhatsAppCampaignRecipient[]
+  segments                 LeadSegment[]
 
   @@unique([externalSource, externalId])
   @@index([normalizedMobile])
@@ -79,6 +88,7 @@ model Lead {
   @@index([groupId])
   @@index([assignedManagerId])
   @@index([importBatchId])
+  @@index([customerClass])
   @@index([workingStatus])
   @@index([lifecycleStage, createdAt])
   @@index([priority])
@@ -153,10 +163,24 @@ model LeadImportBatch {
   parsedRows    Json? @map("parsed_rows")
   errorRows     Json? @map("error_rows")
 
+  // File import v2 (staged rows, background processing): the campaign segment applied to the whole batch, a header signature for remembered mappings, and live progress.
+  segmentId String?  @map("segment_id") @db.Uuid
+  segment   Segment? @relation(fields: [segmentId], references: [id])
+  signature String?  @map("signature") @db.VarChar(64)
+  processedRows   Int @default(0) @map("processed_rows")
+  createdRows     Int @default(0) @map("created_rows")
+  updatedRows     Int @default(0) @map("updated_rows")
+  failedRows      Int @default(0) @map("failed_rows")
+  segmentAdded    Int @default(0) @map("segment_added")
+  startedAt       DateTime? @map("started_at")
+  finishedAt      DateTime? @map("finished_at")
+  lastError       String?   @map("last_error") @db.VarChar(500)
+
   createdAt   DateTime  @default(now()) @map("created_at")
   committedAt DateTime? @map("committed_at")
 
   leads Lead[]
+  rows  LeadImportRow[]
 
   @@index([uploadedById])
   @@index([status])

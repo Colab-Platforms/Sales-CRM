@@ -34,3 +34,22 @@ export const catalogUpload = multer({
     cb(null, true);
   },
 });
+
+// Customer files (Excel / CSV) for the lead import: spooled to disk and streamed by the importer (which deletes the file when it is done), so a large workbook is never held in memory.
+export const LEAD_IMPORT_MAX_BYTES = 60 * 1024 * 1024;
+export const leadImportUpload = multer({
+  storage: multer.diskStorage({ destination: os.tmpdir(), filename: (_req, file, cb) => cb(null, `lead-import-${randomUUID()}${file.originalname.toLowerCase().endsWith(".csv") ? ".csv" : ".xlsx"}`) }),
+  limits: { fileSize: LEAD_IMPORT_MAX_BYTES, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const name = file.originalname.toLowerCase();
+    if (name.endsWith(".xls")) {
+      cb(new ApiError("Old Excel files (.xls) are not supported. Save the file as .xlsx or .csv and upload it again.", STATUS_CODES.BAD_REQUEST));
+      return;
+    }
+    if (!name.endsWith(".csv") && !name.endsWith(".xlsx")) {
+      cb(new ApiError("Upload an Excel (.xlsx) or CSV (.csv) file.", STATUS_CODES.BAD_REQUEST));
+      return;
+    }
+    cb(null, true);
+  },
+});

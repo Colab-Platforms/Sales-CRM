@@ -18,6 +18,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { LeadTags } from "@/components/leads/lead-tags";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatusBadge } from "@/components/dashboard/status-badge";
 import { CustomerTimeline } from "@/components/customers/customer-timeline";
@@ -228,6 +229,9 @@ export function LeadDetailView({ leadId }: { leadId: string }) {
                 ★ {LEAD_PRIORITY_LABELS[lead.priority]}
               </Badge>
             </div>
+
+            {/* Customer classification + campaign segments: two independent tags */}
+            <LeadTags customerClass={lead.customerClass} segments={lead.segments} />
 
             {/* Lead Number */}
             <div className="flex items-center gap-2">
