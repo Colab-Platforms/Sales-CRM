@@ -26,8 +26,7 @@ export type ImportPreview = {
   totalRows: number;
   eligibleRows: number;
   invalidRows: number;
-  duplicatesInFile: number;
-  matchExistingLeads: number;
+  /** Every eligible row becomes a new lead (nothing is matched, merged or skipped). */
   newLeads: number;
   missingPhone: number;
   missingOrderCount: number;
@@ -111,25 +110,13 @@ class LeadImportService {
 
   /** Counts for the preview step, from the staged rows and the CRM's current leads. Reads the rows page by page: never the whole file at once. */
   async computePreview(batchId: string, mapping: ColumnMapping): Promise<ImportPreview> {
-    const p: ImportPreview = { totalRows: 0, eligibleRows: 0, invalidRows: 0, duplicatesInFile: 0, matchExistingLeads: 0, newLeads: 0, missingPhone: 0, missingOrderCount: 0, invalidOrderCount: 0, classification: { repeat: 0, loyal: 0, vip: 0, unclassified: 0 }, problems: [] };
-    const seenMobile = new Set<string>();
-    const seenEmail = new Set<string>();
+    const p: ImportPreview = { totalRows: 0, eligibleRows: 0, invalidRows: 0, newLeads: 0, missingPhone: 0, missingOrderCount: 0, invalidOrderCount: 0, classification: { repeat: 0, loyal: 0, vip: 0, unclassified: 0 }, problems: [] };
     let cursor = 0;
     for (;;) {
       const rows = await prisma.leadImportRow.findMany({ where: { batchId, id: { gt: cursor } }, orderBy: { id: "asc" }, take: PREVIEW_PAGE, select: { id: true, rowNumber: true, data: true } });
       if (rows.length === 0) break;
       cursor = rows[rows.length - 1]!.id;
       const parsed = rows.map((r) => ({ r, c: readCustomer(r.data as Record<string, string>, mapping) }));
-      const mobiles = [...new Set(parsed.map((x) => x.c.normalizedMobile).filter((v): v is string => Boolean(v)))];
-      const emails = [...new Set(parsed.map((x) => x.c.normalizedEmail).filter((v): v is string => Boolean(v)))];
-      const known = new Set<string>();
-      if (mobiles.length || emails.length) {
-        const found = await prisma.lead.findMany({ where: { OR: [...(mobiles.length ? [{ normalizedMobile: { in: mobiles } }] : []), ...(emails.length ? [{ normalizedEmail: { in: emails } }] : [])] }, select: { normalizedMobile: true, normalizedEmail: true } });
-        for (const l of found) {
-          if (l.normalizedMobile) known.add(`m:${l.normalizedMobile}`);
-          if (l.normalizedEmail) known.add(`e:${l.normalizedEmail}`);
-        }
-      }
       for (const { r, c } of parsed) {
         p.totalRows += 1;
         if (!c.mobile) p.missingPhone += 1;
@@ -141,16 +128,8 @@ class LeadImportService {
         }
         if (c.orderCount.state === "missing") p.missingOrderCount += 1;
         else if (c.orderCount.state === "invalid") p.invalidOrderCount += 1;
-        const dup = (c.normalizedMobile && seenMobile.has(c.normalizedMobile)) || (c.normalizedEmail && seenEmail.has(c.normalizedEmail));
-        if (dup) {
-          p.duplicatesInFile += 1;
-          continue;
-        }
-        if (c.normalizedMobile) seenMobile.add(c.normalizedMobile);
-        if (c.normalizedEmail) seenEmail.add(c.normalizedEmail);
         p.eligibleRows += 1;
-        if ((c.normalizedMobile && known.has(`m:${c.normalizedMobile}`)) || (c.normalizedEmail && known.has(`e:${c.normalizedEmail}`))) p.matchExistingLeads += 1;
-        else p.newLeads += 1;
+        p.newLeads += 1;
         const cls = classifyCustomer(c.orderCount.state === "ok" ? c.orderCount.value : null);
         if (cls === "REPEAT") p.classification.repeat += 1;
         else if (cls === "LOYAL") p.classification.loyal += 1;

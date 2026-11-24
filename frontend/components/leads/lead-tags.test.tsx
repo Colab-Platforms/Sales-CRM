@@ -43,10 +43,10 @@ describe("lead tags", () => {
 });
 
 describe("import preview", () => {
-  const preview = { totalRows: 56000, eligibleRows: 54315, invalidRows: 577, duplicatesInFile: 1108, matchExistingLeads: 300, newLeads: 54015, missingPhone: 600, missingOrderCount: 12, invalidOrderCount: 3, classification: { repeat: 20000, loyal: 20000, vip: 14315, unclassified: 0 }, problems: [{ row: 5, reason: "No phone number or email" }] };
+  const preview = { totalRows: 56000, eligibleRows: 54315, invalidRows: 577, newLeads: 54015, missingPhone: 600, missingOrderCount: 12, invalidOrderCount: 3, classification: { repeat: 20000, loyal: 20000, vip: 14315, unclassified: 0 }, problems: [{ row: 5, reason: "No phone number or email" }] };
   it("shows the totals, the chosen segment, duplicates, invalid, missing phone and missing order counts", () => {
     const html = renderToStaticMarkup(<PreviewSummary preview={preview} segment={{ id: "s", name: "Repeat Customers", color: "#0ea5e9", isActive: true, isSystem: true, createdAt: "" }} />);
-    for (const text of ["56,000", "54,315", "1,108", "577", "600", "Repeat Customers", "Row 5: No phone number or email", "20,000 Repeat", "14,315 VIP"]) assert.ok(html.includes(text), text);
+    for (const text of ["56,000", "54,315", "577", "600", "Repeat Customers", "Row 5: No phone number or email", "20,000 Repeat", "14,315 VIP"]) assert.ok(html.includes(text), text);
   });
   it("says so when no segment is selected", () => {
     assert.match(renderToStaticMarkup(<PreviewSummary preview={preview} segment={null} />), /None selected/);

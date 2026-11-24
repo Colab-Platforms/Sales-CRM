@@ -240,8 +240,6 @@ export interface FileImportPreview {
   totalRows: number;
   eligibleRows: number;
   invalidRows: number;
-  duplicatesInFile: number;
-  matchExistingLeads: number;
   newLeads: number;
   missingPhone: number;
   missingOrderCount: number;

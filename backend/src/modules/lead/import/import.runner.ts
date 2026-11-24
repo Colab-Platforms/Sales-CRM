@@ -6,15 +6,13 @@ import { ActivityType, AssignmentType, ImportBatchStatus, Role } from "../../../
 import { Prisma } from "../../../../generated/prisma/client.js";
 import { readCustomer, rowProblem, type ColumnMapping, type ParsedCustomer } from "./import.columns.js";
 
-// BACKGROUND PROCESSING OF A STAGED FILE IMPORT. The upload request only stages the rows; this runs afterwards, in small committed chunks:
+// BACKGROUND PROCESSING OF A STAGED FILE IMPORT. EVERY valid row becomes its own NEW lead: a phone number or email that already exists in the CRM, or repeats in the file, is NOT a reason to update, merge or skip anything.
+// The upload request only stages the rows; this runs afterwards, in small committed chunks:
 //  - every chunk is ONE transaction (lead creation, field updates, segment membership, row outcomes, batch counters), so a failure can never leave a chunk half-applied;
 //  - rows still PENDING are what is left to do, so a crash or restart resumes exactly where it stopped (resumeInterruptedImports) and nothing is imported twice;
-//  - a transaction-scoped advisory lock serialises chunks across concurrent imports, so two imports of the same customer cannot both create a lead;
-//  - leads are matched with the CRM's own identity rule (normalised phone, else normalised email); similar names never merge two customers;
-//  - existing leads only receive NON-EMPTY values: a blank cell never erases what the CRM already knows.
+//  - retry safety comes from the ROW (its status moves PENDING -> CREATED in the same transaction as its lead), never from who the customer is: a chunk is either fully applied or not at all, so a retry cannot create a row's lead twice.
 
 export const CHUNK_SIZE = 500;
-const LOCK_KEY = "lead-file-import-chunk";
 const DEFAULT_SOURCE = "Customer Import";
 
 export type BatchContext = {
@@ -26,8 +24,6 @@ export type BatchContext = {
 };
 
 type RowOutcome = { id: number; status: "CREATED" | "UPDATED" | "DUPLICATE" | "FAILED"; reason: string | null; leadId: string | null };
-
-const blank = (v: unknown): boolean => v === null || v === undefined || (typeof v === "string" && v.trim() === "");
 
 /** What a customer file carried that the lead has no column for: structured, so nothing is lost. */
 export function buildImportData(c: ParsedCustomer): { fields: Record<string, string>; extra: Record<string, string> } | null {
@@ -55,19 +51,6 @@ export function mergeImportData(existing: unknown, incoming: ReturnType<typeof b
   return { ...base, fields: { ...(base.fields ?? {}), ...incoming.fields }, extra: { ...(base.extra ?? {}), ...incoming.extra }, lastImportBatchId: batchId };
 }
 
-type ExistingLead = {
-  id: string;
-  lastName: string | null;
-  mobile: string | null;
-  normalizedMobile: string | null;
-  email: string | null;
-  normalizedEmail: string | null;
-  location: string | null;
-  orderCount: number | null;
-  importData: Prisma.JsonValue | null;
-  importBatchId: string | null;
-};
-
 const leadNumberFor = (stamp: string, i: number) => `LEAD-${stamp}-${Math.random().toString(36).slice(2, 6).toUpperCase()}${i.toString(36).toUpperCase()}`;
 
 async function sourceIds(names: Set<string>, cache: Map<string, string>): Promise<void> {
@@ -86,8 +69,6 @@ export async function processChunk(
   rows: { id: number; rowNumber: number; data: Prisma.JsonValue }[],
   sources: Map<string, string>,
 ): Promise<{ created: number; updated: number; duplicates: number; failed: number; segmentAdded: number }> {
-  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${LOCK_KEY}))`;
-
   const outcomes: RowOutcome[] = [];
   const importable: { row: (typeof rows)[number]; c: ParsedCustomer }[] = [];
   for (const row of rows) {
@@ -97,54 +78,8 @@ export async function processChunk(
     else importable.push({ row, c });
   }
 
-  const mobiles = [...new Set(importable.map((i) => i.c.normalizedMobile).filter((v): v is string => Boolean(v)))];
-  const emails = [...new Set(importable.map((i) => i.c.normalizedEmail).filter((v): v is string => Boolean(v)))];
-  const existing: ExistingLead[] =
-    mobiles.length || emails.length
-      ? await tx.lead.findMany({
-          where: { OR: [...(mobiles.length ? [{ normalizedMobile: { in: mobiles } }] : []), ...(emails.length ? [{ normalizedEmail: { in: emails } }] : [])] },
-          select: { id: true, lastName: true, mobile: true, normalizedMobile: true, email: true, normalizedEmail: true, location: true, orderCount: true, importData: true, importBatchId: true },
-          orderBy: { createdAt: "asc" },
-        })
-      : [];
-  const byMobile = new Map<string, ExistingLead>();
-  const byEmail = new Map<string, ExistingLead>();
-  for (const l of existing) {
-    if (l.normalizedMobile && !byMobile.has(l.normalizedMobile)) byMobile.set(l.normalizedMobile, l);
-    if (l.normalizedEmail && !byEmail.has(l.normalizedEmail)) byEmail.set(l.normalizedEmail, l);
-  }
-  // existing leads this import already handled in an earlier chunk: a second row for the same customer is a duplicate, not a second update
-  const matchedIds = existing.filter((l) => l.importBatchId !== ctx.batchId).map((l) => l.id);
-  const handledBefore = new Set(matchedIds.length ? (await tx.leadImportRow.findMany({ where: { batchId: ctx.batchId, leadId: { in: matchedIds } }, select: { leadId: true } })).map((r) => r.leadId!) : []);
-
-  const newByMobile = new Map<string, string>();
-  const newByEmail = new Map<string, string>();
-  const handledNow = new Set<string>();
-  const creates: { leadId: string; c: ParsedCustomer; rowId: number }[] = [];
-  const updates: { lead: ExistingLead; c: ParsedCustomer; rowId: number }[] = [];
+  const creates = importable.map(({ row, c }) => ({ leadId: randomUUID(), c, rowId: row.id }));
   const stamp = Date.now().toString(36).toUpperCase();
-
-  for (const { row, c } of importable) {
-    const inFile = (c.normalizedMobile && newByMobile.get(c.normalizedMobile)) || (c.normalizedEmail && newByEmail.get(c.normalizedEmail)) || null;
-    if (inFile) {
-      outcomes.push({ id: row.id, status: "DUPLICATE", reason: "Same customer appears earlier in this file", leadId: inFile });
-      continue;
-    }
-    const match = (c.normalizedMobile && byMobile.get(c.normalizedMobile)) || (c.normalizedEmail && byEmail.get(c.normalizedEmail)) || null;
-    if (match) {
-      if (match.importBatchId === ctx.batchId || handledBefore.has(match.id) || handledNow.has(match.id)) {
-        outcomes.push({ id: row.id, status: "DUPLICATE", reason: "Same customer appears earlier in this file", leadId: match.id });
-        continue;
-      }
-      handledNow.add(match.id);
-      updates.push({ lead: match, c, rowId: row.id });
-      continue;
-    }
-    const leadId = randomUUID();
-    if (c.normalizedMobile) newByMobile.set(c.normalizedMobile, leadId);
-    if (c.normalizedEmail) newByEmail.set(c.normalizedEmail, leadId);
-    creates.push({ leadId, c, rowId: row.id });
-  }
 
   await sourceIds(new Set([...creates.map((x) => x.c.sourceName?.trim() || DEFAULT_SOURCE)]), sources);
 
@@ -185,38 +120,10 @@ export async function processChunk(
     for (const x of creates) outcomes.push({ id: x.rowId, status: "CREATED", reason: null, leadId: x.leadId });
   }
 
-  // ---- existing leads: only non-empty values, never the customer's name, never an existing value replaced by a blank
-  for (const { lead, c, rowId } of updates) {
-    const data: Prisma.LeadUpdateInput = {};
-    if (blank(lead.mobile) && c.mobile) {
-      data.mobile = c.mobile;
-      data.normalizedMobile = c.normalizedMobile;
-    }
-    if (blank(lead.email) && c.email) {
-      data.email = c.email;
-      data.normalizedEmail = c.normalizedEmail;
-    }
-    if (blank(lead.lastName) && c.lastName) data.lastName = c.lastName;
-    if (blank(lead.location) && c.location) data.location = c.location;
-    if (c.orderCount.state === "ok") {
-      data.orderCount = c.orderCount.value;
-      data.customerClass = classifyCustomer(c.orderCount.value);
-    }
-    if (c.totalOrdersValue !== null) data.totalOrdersValue = c.totalOrdersValue;
-    if (c.lastOrderAt) data.lastOrderAt = c.lastOrderAt;
-    const merged = mergeImportData(lead.importData, buildImportData(c), ctx.batchId);
-    if (merged) data.importData = merged as Prisma.InputJsonValue;
-    if (Object.keys(data).length > 0) await tx.lead.update({ where: { id: lead.id }, data });
-    outcomes.push({ id: rowId, status: "UPDATED", reason: null, leadId: lead.id });
-  }
-  if (updates.length) {
-    await tx.activity.createMany({ data: updates.map(({ lead }) => ({ leadId: lead.id, actorId: ctx.uploaderId, type: ActivityType.LEAD_CREATED, referenceType: "LeadImportBatch", referenceId: ctx.batchId, title: "Customer data updated via file import" })) });
-  }
-
-  // ---- campaign segment: every created and updated customer joins it; memberships it already has are left alone, and other segments are never removed
+  // ---- campaign segment: every lead this import created joins it; other segments are never touched
   let segmentAdded = 0;
   if (ctx.segmentId) {
-    const members = [...creates.map((x) => x.leadId), ...updates.map((x) => x.lead.id)];
+    const members = creates.map((x) => x.leadId);
     if (members.length) {
       const r = await tx.leadSegment.createMany({ data: members.map((leadId) => ({ leadId, segmentId: ctx.segmentId!, importBatchId: ctx.batchId, addedById: ctx.uploaderId })), skipDuplicates: true });
       segmentAdded = r.count;

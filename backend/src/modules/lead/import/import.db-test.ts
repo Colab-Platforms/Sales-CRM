@@ -61,7 +61,7 @@ before(async () => {
 
 after(async () => {
   server?.close();
-  const ids = (await prisma.$queryRaw<{ id: string }[]>`SELECT id::text FROM leads WHERE normalized_mobile LIKE ${`+917${RUN}%`} OR import_batch_id IN (SELECT id FROM lead_import_batches WHERE uploaded_by_id IN (SELECT id FROM users WHERE username LIKE ${`li-${tag}-%`}))`).map((r) => r.id);
+  const ids = (await prisma.$queryRaw<{ id: string }[]>`SELECT id::text FROM leads WHERE normalized_mobile LIKE ${`+917${RUN}%`} OR lead_number LIKE ${`EX-${tag}-%`} OR import_batch_id IN (SELECT id FROM lead_import_batches WHERE uploaded_by_id IN (SELECT id FROM users WHERE username LIKE ${`li-${tag}-%`}))`).map((r) => r.id);
   if (ids.length) {
     await prisma.$executeRaw`DELETE FROM activities WHERE lead_id = ANY(${ids}::uuid[])`;
     await prisma.$executeRaw`DELETE FROM lead_assignments WHERE lead_id = ANY(${ids}::uuid[])`;
@@ -120,7 +120,8 @@ async function newSegment(name: string, who = "admin") {
   if (r.status === 201) segmentIds.push(r.json.data.id);
   return r;
 }
-const byMobile = (i: number) => prisma.lead.findFirst({ where: { normalizedMobile: e164(i) }, include: { segments: { include: { segment: true } } } });
+// the first file has TWO rows for phone(1) ("Rahul Sharma" and "Rahul Again"): this returns the Sharma one
+const byMobile = (i: number) => prisma.lead.findFirst({ where: { normalizedMobile: e164(i), NOT: { lastName: "Again" } }, include: { segments: { include: { segment: true } } } });
 
 const HEAD = ["Customer Name", "Phone Number", "Email ID", "Total Orders", "Total Orders Value", "City", "State", "Address", "Product Name", "Last Order Date", "Payment Mode", "Favourite Colour"];
 
@@ -183,14 +184,13 @@ describe("Excel import: detection, preview, segment, classification, data preser
     assert.deepEqual(d.needsReview, [], "nothing needs manual mapping");
     assert.equal(d.segmentId, segA);
     const p = d.preview;
-    assert.equal(p.eligibleRows, 7);
+    assert.equal(p.eligibleRows, 8, "every valid row is eligible - the repeated phone included");
+    assert.equal(p.newLeads, 8, "each one becomes its own new lead");
     assert.equal(p.invalidRows, 3); // nobody, bad phone, formula row
-    assert.equal(p.duplicatesInFile, 1);
     assert.equal(p.missingPhone, 3);
     assert.equal(p.missingOrderCount, 1);
     assert.equal(p.invalidOrderCount, 1);
-    assert.deepEqual(p.classification, { repeat: 1, loyal: 2, vip: 1, unclassified: 3 });
-    assert.equal(p.newLeads, 7);
+    assert.deepEqual(p.classification, { repeat: 1, loyal: 2, vip: 2, unclassified: 3 });
   });
 
   it("imports in the background with progress, classifies by order count and tags every imported lead with the segment", async () => {
@@ -199,10 +199,10 @@ describe("Excel import: detection, preview, segment, classification, data preser
     const p = await finish("admin", batchId);
     assert.equal(p.status, "COMMITTED");
     assert.equal(p.percent, 100);
-    assert.equal(p.created, 7);
-    assert.equal(p.duplicates, 1);
+    assert.equal(p.created, 8, "all 8 valid rows became leads");
+    assert.deepEqual([p.updated, p.duplicates], [0, 0], "nothing is matched, updated or skipped");
     assert.equal(p.failed, 3);
-    assert.equal(p.segmentMembershipsAdded, 7);
+    assert.equal(p.segmentMembershipsAdded, 8);
     const rahul = (await byMobile(1))!;
     assert.equal(rahul.customerClass, "VIP");
     assert.equal(rahul.orderCount, 5);
@@ -224,8 +224,10 @@ describe("Excel import: detection, preview, segment, classification, data preser
     assert.equal(emailOnly.mobile, null);
     // the segment came from the upload, not from the classification: both are independently present
     for (const i of [1, 2, 3, 4, 5, 6]) assert.deepEqual((await byMobile(i))!.segments.map((s) => s.segmentId), [segA], `lead ${i}`);
-    // classification is never taken from the number of rows: Rahul appears twice in the file but has 5 orders
-    assert.equal(await prisma.lead.count({ where: { normalizedMobile: e164(1) } }), 1);
+    // the repeated phone is two independent leads, each with its own order count and the segment
+    const both = await prisma.lead.findMany({ where: { normalizedMobile: e164(1) }, include: { segments: true } });
+    assert.equal(both.length, 2);
+    assert.ok(both.every((l) => l.customerClass === "VIP" && l.segments.length === 1));
   });
 
   it("downloads the failed rows with their reasons, and a duplicate report; spreadsheet formulas are neutralised", async () => {
@@ -236,44 +238,53 @@ describe("Excel import: detection, preview, segment, classification, data preser
     assert.ok(failed.text.includes("'=HYPERLINK"), "a formula cell is prefixed so Excel will not run it");
     assert.ok(failed.text.split("\r\n")[0]!.includes("Customer Name"), "the original columns come back so the file can be corrected and re-uploaded");
     const dup = await api("admin", "GET", `/lead/leads/import/${batchId}/report?kind=duplicates`);
-    assert.match(dup.text, /Same customer appears earlier in this file/);
+    assert.equal(dup.text.split("\r\n").filter(Boolean).length, 1, "nothing is treated as a duplicate any more: the report has only its header");
   });
 
-  it("a second file updates existing customers with non-empty values only, adds another segment without removing the first, and reuses the remembered mapping", async () => {
+  it("a second file never touches existing leads: every row is a NEW lead, even for a phone that already exists, and the first file's leads are unchanged", async () => {
     const segB = (await newSegment(`VIP Special ${tag}`)).json.data.id;
     const before = (await byMobile(1))!;
     const second = await xlsx(HEAD, [
-      ["", phone(1), "", "", "", "", "", "", "", "", "", ""], // blank cells everywhere: nothing may be overwritten
-      ["Amit Different Name", phone(3), "amit@example.test", 4, "", "", "", "", "", "", "", "Green"], // new email + new order count -> LOYAL
-      ["Brand New", phone(7), "", 6, 12000, "Surat", "GJ", "", "", "", "", ""], // new VIP
+      ["", phone(1), "", "", "", "", "", "", "", "", "", ""],
+      ["Amit Different Name", phone(3), "amit@example.test", 4, "", "", "", "", "", "", "", "Green"],
+      ["Brand New", phone(7), "", 6, 12000, "Surat", "GJ", "", "", "", "", ""],
     ]);
     const up = await upload("admin", second, "november-customers.xlsx", segB);
     assert.equal(up.json.data.rememberedMapping, true, "the same header format finds its remembered mapping");
-    assert.equal(up.json.data.preview.matchExistingLeads, 2);
+    assert.equal(up.json.data.preview.newLeads, 3, "all 3 rows will be new leads");
     await api("admin", "POST", `/lead/leads/import/${up.json.data.batchId}/start`, {});
     const p = await finish("admin", up.json.data.batchId);
-    assert.equal(p.created, 1);
-    assert.equal(p.updated, 2);
-    assert.equal(p.segmentMembershipsAdded, 3);
-
+    assert.deepEqual([p.created, p.updated, p.duplicates, p.failed, p.segmentMembershipsAdded], [3, 0, 0, 0, 3]);
+    // the earlier leads are exactly as they were
     const rahul = (await byMobile(1))!;
-    assert.equal(rahul.firstName, before.firstName, "a blank name never overwrites");
-    assert.equal(rahul.email, before.email);
-    assert.equal(rahul.orderCount, 5, "a blank order count never overwrites");
-    assert.equal(rahul.customerClass, "VIP");
-    assert.equal(Number(rahul.totalOrdersValue), 25000);
-    assert.deepEqual(rahul.importData, before.importData);
-    assert.deepEqual(rahul.segments.map((s) => s.segmentId).sort(), [segA, segB].sort(), "memberships are added, never removed");
+    assert.deepEqual([rahul.firstName, rahul.orderCount, rahul.customerClass, rahul.email], [before.firstName, 5, "VIP", before.email]);
+    assert.deepEqual(rahul.segments.map((s) => s.segmentId), [segA], "the old lead did not get the new segment");
+    const amitLeads = await prisma.lead.findMany({ where: { normalizedMobile: e164(3) }, include: { segments: true }, orderBy: { createdAt: "asc" } });
+    assert.equal(amitLeads.length, 2, "Amit exists twice: the original and the new import row");
+    assert.equal(amitLeads[0]!.orderCount, 2, "the original is unchanged");
+    const fresh = amitLeads.find((l) => l.importBatchId === up.json.data.batchId)!;
+    assert.deepEqual([fresh.firstName, fresh.orderCount, fresh.customerClass, fresh.segments.map((x) => x.segmentId)], ["Amit", 4, "LOYAL", [segB]]);
+    assert.equal(await prisma.lead.count({ where: { normalizedMobile: { startsWith: `+917${RUN}` } } }), 7 + 3, "7 phone rows from the first file (the 8th has only an email) + 3 new, none merged");
+  });
 
-    const amit = (await byMobile(3))!;
-    assert.equal(amit.firstName, "Amit", "a different name in the file never renames the customer");
-    assert.equal(amit.email, "amit@example.test");
-    assert.equal(amit.orderCount, 4);
-    assert.equal(amit.customerClass, "LOYAL", "re-classified from the new order count");
-    assert.equal((amit.importData as any).extra["Favourite Colour"], "Green");
-    assert.equal((amit.importData as any).fields.city, "Delhi", "earlier data is kept");
-    assert.equal((await byMobile(7))!.customerClass, "VIP");
-    assert.equal(await prisma.lead.count({ where: { normalizedMobile: { startsWith: `+917${RUN}` } } }), 7, "no duplicate leads were created (6 first-file customers with a phone + 1 new; the email-only customer has no phone)");
+  it("120 valid rows, 76 of them matching existing CRM leads: exactly 120 NEW leads are created, the 76 existing leads are untouched, all carry the segment", async () => {
+    const seg = (await newSegment(`Hundred Twenty ${tag}`)).json.data.id;
+    // 76 customers that already exist in the CRM (phone + email)
+    const existing = Array.from({ length: 76 }, (_, i) => ({ id: randomUUID(), leadNumber: `EX-${tag}-${i}`, firstName: `Existing${i}`, mobile: phone(7000 + i), normalizedMobile: e164(7000 + i), email: `ex${i}@example.test`, normalizedEmail: `ex${i}@example.test`, orderCount: 1 }));
+    await prisma.lead.createMany({ data: existing });
+    const rows = Array.from({ length: 120 }, (_, i) => (i < 76 ? [`Row ${i}`, phone(7000 + i), `ex${i}@example.test`, 3, "", "", "", "", "", "", "", ""] : [`Row ${i}`, phone(7000 + i), "", 2, "", "", "", "", "", "", "", ""])) as (string | number | null)[][];
+    const up = await upload("admin", await xlsx(HEAD, rows), "hundred-twenty.xlsx", seg);
+    assert.equal(up.json.data.totalRows, 120);
+    assert.deepEqual([up.json.data.preview.eligibleRows, up.json.data.preview.newLeads, up.json.data.preview.invalidRows], [120, 120, 0]);
+    await api("admin", "POST", `/lead/leads/import/${up.json.data.batchId}/start`, {});
+    const p = await finish("admin", up.json.data.batchId);
+    assert.deepEqual([p.status, p.created, p.updated, p.duplicates, p.failed, p.segmentMembershipsAdded], ["COMMITTED", 120, 0, 0, 0, 120]);
+    assert.equal(await prisma.lead.count({ where: { importBatchId: up.json.data.batchId } }), 120, "exactly 120 new leads in the database");
+    assert.equal(await prisma.leadSegment.count({ where: { segmentId: seg } }), 120, "all 120 carry the selected segment");
+    const stillThere = await prisma.lead.findMany({ where: { leadNumber: { startsWith: `EX-${tag}-` } }, select: { firstName: true, orderCount: true, importBatchId: true, customerClass: true } });
+    assert.equal(stillThere.length, 76);
+    assert.ok(stillThere.every((l) => l.firstName.startsWith("Existing") && l.orderCount === 1 && l.importBatchId === null && l.customerClass === null), "the 76 existing leads were not updated");
+    console.log(`IMPORT 120 RESULT: rows=120 created=${p.created} newLeadsInDb=${await prisma.lead.count({ where: { importBatchId: up.json.data.batchId } })} updated=${p.updated} skipped=${p.duplicates} existingUntouched=${stillThere.length}`);
   });
 
   it("manual mapping is only for unrecognised columns, and is validated", async () => {
@@ -435,17 +446,16 @@ describe("recovery and concurrency", () => {
     assert.equal(await prisma.leadSegment.count({ where: { segmentId: seg } }), 1300);
   });
 
-  it("two imports of the same customers running at once create each customer exactly once", async () => {
+  it("two imports of the same file running at once each create all their rows (nothing is merged)", async () => {
     const rows = Array.from({ length: 700 }, (_, i) => [`C${i}`, phone(5000 + i), "", 3, "", "", "", "", "", "", "", ""]) as (string | number | null)[][];
     const f1 = await xlsx(HEAD, rows);
     const f2 = await xlsx(HEAD, rows);
     const [a, b] = await Promise.all([upload("admin", f1, "a.xlsx"), upload("m1", f2, "b.xlsx")]);
     await Promise.all([api("admin", "POST", `/lead/leads/import/${a.json.data.batchId}/start`, {}), api("m1", "POST", `/lead/leads/import/${b.json.data.batchId}/start`, {})]);
     const [pa, pb] = await Promise.all([finish("admin", a.json.data.batchId), finish("m1", b.json.data.batchId)]);
-    assert.equal(pa.created + pb.created, 700, "every customer was created once, by whichever import got there first");
-    assert.equal(pa.updated + pb.updated, 700, "the other import updated them instead of duplicating");
-    const dups = await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*)::bigint AS n FROM (SELECT normalized_mobile FROM leads WHERE normalized_mobile LIKE ${`+917${RUN}0005%`} GROUP BY normalized_mobile HAVING count(*) > 1) d`;
-    assert.equal(Number(dups[0]!.n), 0);
+    assert.deepEqual([pa.created, pb.created, pa.updated + pb.updated], [700, 700, 0], "each import created all of its own rows; nothing was matched or merged");
+    const dups = await prisma.$queryRaw<{ n: bigint }[]>`SELECT count(*)::bigint AS n FROM (SELECT normalized_mobile FROM leads WHERE normalized_mobile LIKE ${`+917${RUN}0005%`} GROUP BY normalized_mobile HAVING count(*) = 2) d`;
+    assert.equal(Number(dups[0]!.n), 700, "each phone is two independent leads (one per import), never merged");
   });
 });
 
