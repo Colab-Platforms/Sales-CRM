@@ -483,23 +483,7 @@ class LeadService {
     }
 
     await prisma.$transaction(async (tx) => {
-      const abandonments = await tx.abandonment.findMany({ where: { leadId: id }, select: { id: true } });
-      const abandonmentIds = abandonments.map((a) => a.id);
-
-      await tx.whatsAppMessage.deleteMany({ where: { leadId: id } });
-      await tx.whatsAppAutomationRun.deleteMany({ where: { leadId: id } });
-      await tx.whatsAppCampaignRecipient.deleteMany({ where: { leadId: id } });
-      await tx.whatsAppConversation.deleteMany({ where: { leadId: id } });
-
-      await tx.recoveryAction.deleteMany({ where: { OR: [{ leadId: id }, ...(abandonmentIds.length > 0 ? [{ abandonmentId: { in: abandonmentIds } }] : [])] } });
-      await tx.abandonment.deleteMany({ where: { leadId: id } });
-
-      await tx.activity.deleteMany({ where: { leadId: id } });
-      await tx.call.deleteMany({ where: { leadId: id } });
-      await tx.interestedLeadPeriod.deleteMany({ where: { leadId: id } });
-      await tx.leadAssignment.deleteMany({ where: { leadId: id } });
-      await tx.communicationPreference.deleteMany({ where: { leadId: id } });
-      await tx.task.deleteMany({ where: { leadId: id } });
+      await this.purgeLeadDependents(tx, [id]);
 
       // re-checked inside the transaction: an order created a moment ago still blocks the delete (and rolls the history deletes above back)
       const removed = await tx.lead.deleteMany({ where: { id, orders: { none: {} } } });
@@ -554,21 +538,36 @@ class LeadService {
     return { deleted, remaining, skippedWithOrders: matched - remaining, done: remaining === 0 };
   }
 
+  /**
+   * Removes everything that hangs off these leads, CHILDREN BEFORE PARENTS (the database refuses to delete a row that another row still points at):
+   *   call_recordings, call_transcripts -> calls          whatsapp_message_user_states -> whatsapp_messages          recovery_actions -> abandonments
+   * Orders are deliberately NOT here: callers only pass leads that have none. Must run inside the caller's transaction, so a failure part-way rolls the whole chunk back and leaves every lead in it exactly as it was.
+   */
+  private async purgeLeadDependents(tx: Prisma.TransactionClient, ids: string[]): Promise<void> {
+    const calls = { call: { leadId: { in: ids } } };
+    await tx.callRecording.deleteMany({ where: calls });
+    await tx.callTranscript.deleteMany({ where: calls });
+    const abandonmentIds = (await tx.abandonment.findMany({ where: { leadId: { in: ids } }, select: { id: true } })).map((a) => a.id);
+    await tx.recoveryAction.deleteMany({ where: { OR: [{ leadId: { in: ids } }, ...(abandonmentIds.length > 0 ? [{ abandonmentId: { in: abandonmentIds } }] : [])] } });
+    await tx.call.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.whatsAppMessageUserState.deleteMany({ where: { message: { leadId: { in: ids } } } });
+    await tx.whatsAppMessage.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.whatsAppAutomationRun.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.whatsAppCampaignRecipient.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.whatsAppConversation.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.abandonment.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.activity.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.interestedLeadPeriod.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.leadAssignment.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.communicationPreference.deleteMany({ where: { leadId: { in: ids } } });
+    await tx.task.deleteMany({ where: { leadId: { in: ids } } });
+  }
+
   /** One transaction for a chunk. The lead's own history (calls, tasks, messages, assignments, ...) goes with it, exactly as for a single delete; orders are never touched (callers pass only leads that have none). */
   private async deleteLeadsWithoutOrders(ids: string[]): Promise<number> {
     return prisma.$transaction(
       async (tx) => {
-        await tx.whatsAppMessage.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.whatsAppAutomationRun.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.whatsAppCampaignRecipient.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.whatsAppConversation.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.recoveryAction.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.activity.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.call.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.interestedLeadPeriod.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.leadAssignment.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.communicationPreference.deleteMany({ where: { leadId: { in: ids } } });
-        await tx.task.deleteMany({ where: { leadId: { in: ids } } });
+        await this.purgeLeadDependents(tx, ids);
         // re-check inside the transaction: a lead that got an order a moment ago is kept
         const r = await tx.lead.deleteMany({ where: { id: { in: ids }, orders: { none: {} } } });
         return r.count;

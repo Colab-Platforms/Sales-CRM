@@ -1,6 +1,7 @@
 import { Response } from "express";
 import { sendResponse } from "@/utils/responseUtils.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
+import { logger } from "@/utils/logger.js";
 import LeadService from "./lead.service.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import {
@@ -16,6 +17,16 @@ import {
 } from "./lead.validators.js";
 
 const leadService = new LeadService();
+
+/** Deletion errors for the user: an expected refusal (ApiError: 4xx with its own text) is shown as is; anything else (a database error) is logged in full on the server and the screen gets a plain message, never raw query text. */
+function deletionFailure(res: Response, error: any, what: string): void {
+  if (error?.statusCode && error.statusCode < 500) {
+    sendResponse(res, false, error.data ?? null, error.message, error.statusCode);
+    return;
+  }
+  logger.error(`${what} failed: ${error?.name ?? "Error"} ${error?.code ?? ""} ${String(error?.message ?? "").replace(/\s+/g, " ").slice(0, 600)}`);
+  sendResponse(res, false, null, `${what} could not be completed because of an internal error. Each batch is all-or-nothing, so no lead was left half-deleted; leads already deleted in earlier batches stay deleted. You can run it again to continue.`, STATUS_CODES.SERVER_ERROR);
+}
 
 export const listLeads = async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -85,7 +96,7 @@ export const deleteLead = async (req: AuthRequest, res: Response): Promise<void>
     const result = await leadService.deleteLead(req.user!, req.params.id as string);
     sendResponse(res, true, result, "Lead deleted successfully.", STATUS_CODES.OK);
   } catch (error: any) {
-    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    deletionFailure(res, error, "Deleting the lead");
   }
 };
 
@@ -139,7 +150,7 @@ export const previewBulkDelete = async (req: AuthRequest, res: Response): Promis
     }
     sendResponse(res, true, await leadService.previewBulkDelete(req.user!, value), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    deletionFailure(res, error, "Counting the leads");
   }
 };
 
@@ -153,7 +164,7 @@ export const bulkDeleteLeads = async (req: AuthRequest, res: Response): Promise<
     const { confirm: _confirm, confirmText: _confirmText, ...rest } = value;
     sendResponse(res, true, await leadService.bulkDeleteLeads(req.user!, rest), "OK", STATUS_CODES.OK);
   } catch (error: any) {
-    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    deletionFailure(res, error, "Deleting the leads");
   }
 };
 
