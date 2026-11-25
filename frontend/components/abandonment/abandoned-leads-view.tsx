@@ -30,7 +30,6 @@ import { FastrrRecoveryPanel } from "@/components/abandonment/fastrr-recovery-pa
 import { BucketSummary } from "@/components/leads/bucket-summary";
 import { ImportAbandonedLeadsDialog } from "@/components/abandonment/import-abandoned-leads-dialog";
 import { LeadExcelPanel } from "@/components/abandonment/lead-excel-panel";
-import { RecordingZipPanel } from "@/components/abandonment/recording-zip-panel";
 import { EXPORTS_KEY, istDay, type ExportFilters } from "@/components/abandonment/export-shared";
 import { abandonmentRecordingsApi, describeRequestError } from "@/lib/api-client/endpoints/abandonment.recordings.api";
 import { toast } from "sonner";
@@ -365,7 +364,6 @@ export function AbandonedLeadsView() {
       />
 
       {canHearRecordings ? <LeadExcelPanel filters={exportFilters} /> : null}
-      {canHearRecordings ? <RecordingZipPanel /> : null}
 
       {(isStaff) && data && data.pagination.totalItems > data.items.length && selectedIds.size < data.pagination.totalItems ? (
         <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">

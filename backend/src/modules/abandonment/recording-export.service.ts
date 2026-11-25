@@ -14,6 +14,8 @@ import { canAccessRecordings } from "./abandonment.filters.js";
 import { AbandonmentRecordingsService, fetchRecordingFile, recordingRangeBounds, type RecordingFetcher, type RecordingRange } from "./abandonment.recordings.js";
 import { DEFAULT_RUN_OPTIONS, runExport, type BlobStore, type BlobWriter, type ExportItem, type ExportJobRow, type ExportRepo, type ItemResult, type JobStatus, type RunOutcome } from "./recording-export.core.js";
 import { runExcelExport } from "./recording-export.excel.js";
+import { CallRecordingsExcelSource, RECORDINGS_LAYOUT } from "./call-recordings.excel.js";
+import { CallRecordingsService, buildCallRecordingWhere, parseCallRecordingFilters, type CallRecordingFilters } from "./call-recordings.service.js";
 import { PrismaExcelSource, describeSelection, planZipItems, sanitizeExportFilters } from "./recording-export.sources.js";
 
 export type ExportKind = "ZIP" | "EXCEL";
@@ -244,9 +246,28 @@ export interface ExportStatusDto {
   /** FAILED, or finished with some failed recordings: a retry downloads only the ones still missing. */
   canRetry: boolean;
   reused?: boolean;
+  /** Started from the Call Recordings screen (its ZIP / Excel of recordings), not from the Abandoned Leads list. */
+  callRecordings: boolean;
+}
+
+/** The Call Recordings screen's filters stored on a job, or null for any other job. */
+export function recordingFiltersOf(filters: unknown): CallRecordingFilters | null {
+  const raw = filters && typeof filters === "object" ? (filters as Record<string, unknown>).callRecordings : null;
+  if (!raw || typeof raw !== "object") return null;
+  try {
+    return parseCallRecordingFilters(raw as Record<string, unknown>);
+  } catch {
+    return null;
+  }
 }
 
 type JobRecord = NonNullable<Awaited<ReturnType<Db["recordingExportJob"]["findUnique"]>>>;
+
+function recordingSelection(filters: unknown): Partial<Pick<ExportStatusDto, "selection" | "selectedCount" | "filtered">> {
+  const f = recordingFiltersOf(filters);
+  if (!f) return {};
+  return f.callIds ? { selection: "IDS", selectedCount: f.callIds.length, filtered: false } : { selection: "MATCHING", selectedCount: null, filtered: true };
+}
 
 export function toStatusDto(job: JobRecord, now: Date = new Date()): ExportStatusDto {
   const done = job.processed + job.failed;
@@ -259,6 +280,8 @@ export function toStatusDto(job: JobRecord, now: Date = new Date()): ExportStatu
     kind: (job.kind === "EXCEL" ? "EXCEL" : "ZIP") as ExportKind,
     stalled,
     ...describeSelection(job.filters),
+    ...recordingSelection(job.filters),
+    callRecordings: recordingFiltersOf(job.filters) !== null,
     attempts: job.attempts,
     status,
     from: job.fromDay,
@@ -306,8 +329,15 @@ export class RecordingExportService {
     this.assertAllowed(user);
     const kind: ExportKind = input.kind === "EXCEL" ? "EXCEL" : "ZIP";
     const range: RecordingRange = { from: input.from, to: input.to };
+    // The Call Recordings screen sends its own filters ({ callRecordings: {...} }) for both kinds; they decide the range and the rows.
+    const rawRecordingFilters = input.filters && typeof input.filters === "object" ? (input.filters as Record<string, unknown>).callRecordings : undefined;
+    const recordingFilters = rawRecordingFilters && typeof rawRecordingFilters === "object" ? parseCallRecordingFilters(rawRecordingFilters as Record<string, unknown>) : null;
+    if (recordingFilters) {
+      range.from = recordingFilters.from;
+      range.to = recordingFilters.to;
+    }
     recordingRangeBounds(range); // validates the dates
-    const filters = kind === "EXCEL" ? sanitizeExportFilters(input.filters) : null;
+    const filters: Record<string, unknown> | null = recordingFilters ? { callRecordings: recordingFilters } : kind === "EXCEL" ? sanitizeExportFilters(input.filters) : null;
     const now = new Date();
     const active = await this.db.recordingExportJob.findMany({ where: { status: { in: ACTIVE }, expiresAt: { gt: now } }, select: { id: true, createdById: true, fromDay: true, toDay: true, kind: true, filters: true } });
     const filterKey = JSON.stringify(filters ?? null);
@@ -331,9 +361,15 @@ export class RecordingExportService {
     try {
       if (kind === "ZIP") {
         // Chunked planning: the range is read in keyset pages and the item rows are written as they are produced.
-        const plan = await planZipItems({ db: this.db, recordings: this.recordings, user, range, jobId: job.id, now, maxItems: exportConfig.maxItems() });
-        if (plan.total === 0) throw new ApiError("No recordings found for this date range", STATUS_CODES.NOT_FOUND);
+        const where = recordingFilters ? buildCallRecordingWhere(recordingFilters) : undefined;
+        const plan = await planZipItems({ db: this.db, recordings: this.recordings, user, range, jobId: job.id, now, maxItems: exportConfig.maxItems(), where: where as Record<string, unknown> | undefined });
+        if (plan.total === 0) throw new ApiError(recordingFilters ? "No recordings match these filters" : "No recordings found for this date range", STATUS_CODES.NOT_FOUND);
         await this.db.recordingExportJob.update({ where: { id: job.id }, data: { total: plan.total, failed: plan.failed, duplicates: plan.duplicates } });
+      } else if (recordingFilters) {
+        const total = await new CallRecordingsService(this.db).count(user, recordingFilters);
+        if (total === 0) throw new ApiError("No recordings match these filters", STATUS_CODES.NOT_FOUND);
+        if (total > exportConfig.maxRows()) throw new ApiError(`${total} recordings match, more than one Excel file can hold (${exportConfig.maxRows()}). Narrow the filters.`, STATUS_CODES.BAD_REQUEST);
+        await this.db.recordingExportJob.update({ where: { id: job.id }, data: { total } });
       } else {
         const total = await new PrismaExcelSource(this.db, user, range, filters).count();
         if (total === 0) throw new ApiError("No abandoned leads found for this date range", STATUS_CODES.NOT_FOUND);
@@ -439,6 +475,8 @@ export interface ExportWorkerDeps {
   store: BlobStore;
   fetchFile: RecordingFetcher;
   excelSource: (job: ExportJobRow) => PrismaExcelSource;
+  /** Excel of the Call Recordings screen (one row per recording). */
+  recordingsExcelSource?: (job: ExportJobRow) => CallRecordingsExcelSource;
   enqueue: (jobId: string, options?: { delaySeconds?: number }) => Promise<void>;
 }
 
@@ -455,12 +493,14 @@ export async function releaseRunningExports(db: Db = prisma): Promise<number> {
 
 /** One queued job: runs it by kind; a server-side interruption puts it back in the queue shortly, to resume where it stopped. */
 export async function processExportJob(deps: ExportWorkerDeps, jobId: string, options: Parameters<typeof runExport>[2] = {}): Promise<RunOutcome> {
-  const peek = await prisma.recordingExportJob.findUnique({ where: { id: jobId }, select: { kind: true } }).catch(() => null);
+  const peek = await prisma.recordingExportJob.findUnique({ where: { id: jobId }, select: { kind: true, filters: true } }).catch(() => null);
+  const recordingsSource = deps.recordingsExcelSource;
+  const forRecordings = peek?.kind === "EXCEL" && recordingsSource && recordingFiltersOf(peek.filters) !== null;
   const common = { concurrency: exportConfig.concurrency(), checkpointEvery: exportConfig.checkpointEvery(), maxZipBytes: exportConfig.maxZipBytes(), maxRows: exportConfig.maxRows(), log: (m: string) => logger.warn(`[recording-export] ${m}`), ...options };
   running.add(jobId);
   let outcome: RunOutcome;
   try {
-    outcome = peek?.kind === "EXCEL" ? await runExcelExport({ repo: deps.repo, store: deps.store, source: deps.excelSource }, jobId, common) : await runExport({ repo: deps.repo, store: deps.store, fetchFile: deps.fetchFile }, jobId, common);
+    outcome = forRecordings ? await runExcelExport({ repo: deps.repo, store: deps.store, source: recordingsSource!, layout: RECORDINGS_LAYOUT }, jobId, common) : peek?.kind === "EXCEL" ? await runExcelExport({ repo: deps.repo, store: deps.store, source: deps.excelSource }, jobId, common) : await runExport({ repo: deps.repo, store: deps.store, fetchFile: deps.fetchFile }, jobId, common);
   } finally {
     running.delete(jobId);
   }
@@ -474,6 +514,11 @@ export function defaultWorkerDeps(fetchFile: RecordingFetcher = fetchRecordingFi
     store: new PostgresBlobStore(),
     fetchFile,
     excelSource: (job) => new PrismaExcelSource(prisma, { id: job.createdById ?? "", role: (job.role ?? "ADMIN") as AuthUser["role"], username: "export" }, { from: job.fromDay, to: job.toDay }, sanitizeExportFilters(job.filters)),
+    recordingsExcelSource: (job) => {
+      const filters = recordingFiltersOf(job.filters);
+      if (!filters) throw new Error("recording export without filters");
+      return new CallRecordingsExcelSource(new CallRecordingsService(prisma), { id: job.createdById ?? "", role: (job.role ?? "ADMIN") as AuthUser["role"], username: "export" }, filters);
+    },
     enqueue: enqueueExport,
   };
 }

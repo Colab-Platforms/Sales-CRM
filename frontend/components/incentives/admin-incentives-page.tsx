@@ -110,7 +110,7 @@ const Tag = ({ s }: { s: { label: string; cls: string } }) => <span className={c
 function People() {
   const today = istToday();
   const months = recentMonths(today);
-  const [period, setPeriod] = useState<Period>("monthly");
+  const [period, setPeriod] = useState<Period>("daily");
   const [month, setMonth] = useState(months[0]!);
   const [onDay, setOnDay] = useState(today);
   const [from, setFrom] = useState(shiftDay(today, -6));

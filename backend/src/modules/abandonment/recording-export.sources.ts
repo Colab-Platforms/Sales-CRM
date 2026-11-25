@@ -222,10 +222,12 @@ export async function planZipItems(args: {
   now: Date;
   maxItems: number;
   pageRows?: number;
+  /** The Call Recordings screen's own filters (already a Prisma where); the date range alone is used when absent. */
+  where?: Record<string, unknown>;
 }): Promise<PlannedZip> {
   const { db, recordings, user, range, jobId, now, maxItems } = args;
   const take = args.pageRows ?? PAGE_ROWS;
-  const where = recordings.rangeWhere(range);
+  const where = args.where ?? recordings.rangeWhere(range);
   const seenLinks = new Set<string>();
   const names = new Set<string>(["_summary.txt"]);
   let seq = 0;

@@ -7,6 +7,7 @@ import AbandonmentService from "./abandonment.service.js";
 import AbandonmentImportService from "./abandonment.import.js";
 import { AbandonmentRecordingsService } from "./abandonment.recordings.js";
 import { RecordingExportService } from "./recording-export.service.js";
+import { CallRecordingsService, parseCallRecordingFilters } from "./call-recordings.service.js";
 import {
   validateBulkAssignManager,
   validateBulkAssignSalesperson,
@@ -300,5 +301,34 @@ export const downloadRecording = async (req: AuthRequest, res: Response): Promis
     res.status(200).end(file.data);
   } catch (error: any) {
     fail(res, error);
+  }
+};
+
+// ---- Call Recordings screen (admin / manager only): server-side filtered + paginated list, summary cards and filter choices ----
+const callRecordings = new CallRecordingsService();
+const intOr = (v: unknown, fallback: number) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Math.floor(Number(v)) : fallback);
+
+export const listCallRecordings = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const filters = parseCallRecordingFilters(req.query);
+    sendResponse(res, true, await callRecordings.list(req.user!, filters, { page: intOr(req.query.page, 1), pageSize: intOr(req.query.pageSize, 20) }), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    failExport(req, res, error);
+  }
+};
+
+export const getCallRecordingsSummary = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await callRecordings.summary(req.user!, parseCallRecordingFilters(req.query)), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    failExport(req, res, error);
+  }
+};
+
+export const getCallRecordingOptions = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    sendResponse(res, true, await callRecordings.options(req.user!), "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    failExport(req, res, error);
   }
 };
