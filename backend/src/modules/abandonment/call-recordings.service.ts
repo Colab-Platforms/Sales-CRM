@@ -188,6 +188,8 @@ const SELECT = {
       lastName: true,
       mobile: true,
       workingStatus: true,
+      importData: true,
+      interestedProduct: { select: { name: true } },
       abandonments: { orderBy: { detectedAt: "desc" as const }, take: 1, select: { id: true, cartSnapshot: true } },
     },
   },
@@ -202,6 +204,20 @@ export function productNames(snapshot: unknown): string[] {
   const lines = readSnapshotItems(s.items);
   const names = lines.length > 0 ? lines.map((i) => i.name) : Array.isArray(s.itemNames) ? s.itemNames.filter((n): n is string => typeof n === "string") : [];
   return [...new Set(names.map((n) => n.trim()).filter(Boolean))];
+}
+
+/**
+ * The product(s) a call is about. An abandoned-checkout lead: what was in its latest cart. A regular lead has no cart, so: the product it is marked as interested in, else the product
+ * its customer file carried (importData.fields.product). Empty only when the lead has none of these.
+ */
+export function leadProducts(cartSnapshot: unknown, interestedProduct: string | null | undefined, importData: unknown): string[] {
+  const cart = productNames(cartSnapshot);
+  if (cart.length > 0) return cart;
+  const interested = interestedProduct?.trim();
+  if (interested) return [interested];
+  const fields = importData && typeof importData === "object" ? (importData as { fields?: unknown }).fields : null;
+  const imported = fields && typeof fields === "object" ? (fields as { product?: unknown }).product : null;
+  return typeof imported === "string" && imported.trim() ? [imported.trim()] : [];
 }
 
 export interface CallRecordingItem {
@@ -233,7 +249,7 @@ export function toCallRecordingItem(c: CallRow, now: Date = new Date()): CallRec
     customerName: [c.lead!.firstName, c.lead!.lastName].filter(Boolean).join(" "),
     mobile: c.lead!.mobile,
     telecaller: { id: c.agent.id, name: c.agent.name },
-    products: productNames(c.lead!.abandonments[0]?.cartSnapshot),
+    products: leadProducts(c.lead!.abandonments[0]?.cartSnapshot, c.lead!.interestedProduct?.name, c.lead!.importData),
     leadStatus: c.lead!.workingStatus,
     outcome: c.outcome?.name ?? titleCase(c.status),
     durationSeconds: c.durationSeconds ?? c.recording?.durationSeconds ?? null,

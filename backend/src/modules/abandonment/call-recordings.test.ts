@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CallRecordingsService, buildCallRecordingWhere, callRecordingOrder, parseCallRecordingFilters, productNames, scopedCallRecordingWhere } from "./call-recordings.service.js";
+import { CallRecordingsService, buildCallRecordingWhere, callRecordingOrder, leadProducts, parseCallRecordingFilters, productNames, scopedCallRecordingWhere } from "./call-recordings.service.js";
 
 const TELECALLER = "11111111-1111-4111-8111-111111111111";
 const CALL = "22222222-2222-4222-8222-222222222222";
@@ -79,4 +79,13 @@ test("the list is newest-first by default, on the call's own start time, and old
   assert.deepEqual(callRecordingOrder("oldest"), [{ startedAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }]);
   // no sort in the request = newest first
   assert.equal(parseCallRecordingFilters({ from: "2026-11-01", to: "2026-11-05" }).sort, undefined);
+});
+
+test("a lead's product: its cart when abandoned, else the interested product, else the product from its customer file", () => {
+  const imported = { fields: { product: "Aayush Wellness Herbal Masala - Paan Masala" }, extra: { "All Products Bought": "x" } };
+  assert.deepEqual(leadProducts({ itemNames: ["Sleep Gummies"] }, "Other", imported), ["Sleep Gummies"]);
+  assert.deepEqual(leadProducts(null, "Interested Product", imported), ["Interested Product"]);
+  assert.deepEqual(leadProducts(null, null, imported), ["Aayush Wellness Herbal Masala - Paan Masala"]);
+  assert.deepEqual(leadProducts(null, " ", { fields: { product: "  " } }), []);
+  assert.deepEqual(leadProducts(null, null, null), []);
 });
