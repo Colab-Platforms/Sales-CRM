@@ -525,3 +525,87 @@ describe("large import (optional): LEAD_IMPORT_LOAD_ROWS", () => {
     );
   });
 });
+
+describe("lead status from the Tagging column", () => {
+  const HEADER = ["Name", "Mobile", "lead source", "City", "Tagging ", "Feedback"];
+  // [name, phone number, Tagging, Feedback (always disagrees), expected status]
+  const cases: [string, number, string, string, string][] = [
+    ["Tag Ringing", 801, "Ringing ", "Interested", "RINGING"],
+    ["Tag Interested", 802, "Intrested ", "Not interested", "INTERESTED"],
+    ["Tag Busy", 803, "Busy ", "Converted", "BUSY"],
+    ["Tag NotInterested", 804, "not intersted ", "Interested", "NOT_INTERESTED"],
+    ["Tag SwitchOff", 805, "Switch off", "Ringing", "SWITCHED_OFF"],
+    ["Tag FollowUp", 806, "follow up", "Busy", "FOLLOW_UP"],
+    ["Tag Converted", 807, "Converted ", "Busy", "CONVERTED"],
+    ["Tag CallBack", 808, "Call back ", "Busy", "CALL_BACK"],
+    ["Tag NotReachable", 809, "Not rechable ", "Busy", "NOT_REACHABLE"],
+    ["Tag Blank", 810, "", "Interested", "NEW"],
+    ["Tag Unknown", 811, "Member busy ", "Interested", "NEW"],
+  ];
+  let batchId = "";
+  const expectedSummary = {
+    column: "Tagging",
+    recognized: 9,
+    blank: 1,
+    unrecognized: 1,
+    statuses: ["BUSY", "CALL_BACK", "CONVERTED", "FOLLOW_UP", "INTERESTED", "NOT_INTERESTED", "NOT_REACHABLE", "RINGING", "SWITCHED_OFF"].map((status) => ({ status, count: 1 })),
+    unrecognizedValues: [{ value: "Member busy", count: 1 }],
+  };
+
+  it("the preview shows the Tagging column and what it will assign; rows that cannot be imported are not counted", async () => {
+    const file = await xlsx(HEADER, [
+      ...cases.map(([name, i, tagging, feedback]) => [name, phone(i), "Field visit", "Pune", tagging, feedback]),
+      ["No Contact", "", "", "", "Busy", ""],
+    ]);
+    const up = await upload("admin", file, "distributors.xlsx");
+    assert.equal(up.status, 200);
+    batchId = up.json.data.batchId;
+    assert.deepEqual(up.json.data.preview.tagging, expectedSummary);
+    assert.equal(up.json.data.preview.newLeads, 11);
+    assert.ok(!up.json.data.unrecognized.includes("Tagging"));
+    assert.equal((await api("admin", "GET", `/lead/leads/import/${batchId}/progress`)).json.data.tagging, null, "nothing is imported yet");
+  });
+
+  it("a manual column choice cannot move the status away from Tagging", async () => {
+    const r = await api("admin", "PATCH", `/lead/leads/import/${batchId}/mapping`, { mapping: { Feedback: "requirement", Tagging: "extra" } });
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.json.data.preview.tagging, expectedSummary);
+    assert.equal((await api("admin", "PATCH", `/lead/leads/import/${batchId}/mapping`, { mapping: { Feedback: "tagging" } })).status, 400, "there is no mapping field for the status");
+  });
+
+  it("creates each lead with the status of its Tagging value, whatever Feedback says, and reports the unrecognised value", async () => {
+    await api("admin", "POST", `/lead/leads/import/${batchId}/start`, {});
+    const p = await finish("admin", batchId);
+    assert.deepEqual([p.status, p.created, p.failed], ["COMMITTED", 11, 1]);
+    assert.deepEqual(p.tagging, expectedSummary);
+    const leads = await prisma.lead.findMany({ where: { importBatchId: batchId }, include: { source: true } });
+    assert.equal(leads.length, 11);
+    for (const [name, i, tagging, feedback, status] of cases) {
+      const lead = leads.find((l) => l.normalizedMobile === e164(i))!;
+      assert.equal(lead.workingStatus, status, name);
+      assert.deepEqual([lead.firstName, lead.lastName, lead.location, lead.requirement, lead.lifecycleStage], ["Tag", name.slice(4), "Pune", feedback, "LEAD"], name);
+      assert.equal(lead.source?.name, "Field visit");
+      assert.equal((lead.importData as { extra?: Record<string, string> }).extra?.Tagging, tagging.trim() || undefined, "the file's own text stays on the lead");
+    }
+    // no reminder is invented for Follow up / Call back: the file has no date
+    assert.equal(await prisma.task.count({ where: { leadId: { in: leads.map((l) => l.id) } } }), 0);
+  });
+
+  it("a later file with a blank Tagging never changes an existing lead's status", async () => {
+    const before = (await prisma.lead.findFirst({ where: { importBatchId: batchId, normalizedMobile: e164(802) } }))!;
+    const up = await upload("admin", await xlsx(HEADER, [["Tag Interested", phone(802), "", "", "", "Not interested"]]), "blank-tag.xlsx");
+    await api("admin", "POST", `/lead/leads/import/${up.json.data.batchId}/start`, {});
+    assert.equal((await finish("admin", up.json.data.batchId)).status, "COMMITTED");
+    const after = (await prisma.lead.findUnique({ where: { id: before.id } }))!;
+    assert.deepEqual([after.workingStatus, after.updatedAt.getTime()], ["INTERESTED", before.updatedAt.getTime()]);
+  });
+
+  it("a file without a Tagging column works as before", async () => {
+    const up = await upload("admin", await xlsx(["Name", "Mobile", "Feedback", "Status"], [["Plain Lead", phone(820), "Interested", "Busy"]]), "plain.xlsx");
+    assert.equal(up.json.data.preview.tagging, null);
+    await api("admin", "POST", `/lead/leads/import/${up.json.data.batchId}/start`, {});
+    const p = await finish("admin", up.json.data.batchId);
+    assert.deepEqual([p.status, p.tagging], ["COMMITTED", null]);
+    assert.equal((await prisma.lead.findFirst({ where: { importBatchId: up.json.data.batchId } }))!.workingStatus, "NEW");
+  });
+});

@@ -11,6 +11,7 @@ import { segmentService } from "../../segments/segments.service.js";
 import { detectColumns, IMPORT_FIELDS, readCustomer, rowProblem, type ColumnMapping, type ImportField } from "./import.columns.js";
 import { readRows, uniqueHeaders } from "./import.file.js";
 import { enqueueImport, isImportRunning } from "./import.runner.js";
+import { taggingColumn, taggingTally, type TaggingSummary } from "./import.tagging.js";
 
 // FILE IMPORT v2 (Excel / CSV): upload & stage -> detected columns (+ optional manual fixes) -> preview with duplicate / invalid counts -> background import with live progress -> failed-rows download.
 // The upload request only STAGES the file's rows (LeadImportRow); nothing becomes a lead until the user confirms, and the heavy work runs outside the HTTP request (import.runner.ts).
@@ -33,6 +34,8 @@ export type ImportPreview = {
   invalidOrderCount: number;
   classification: { repeat: number; loyal: number; vip: number; unclassified: number };
   problems: { row: number; reason: string }[];
+  /** Lead statuses from the Tagging column, counted over the rows that will be imported; null when the file has no such column. */
+  tagging: TaggingSummary | null;
 };
 
 class LeadImportService {
@@ -84,7 +87,7 @@ class LeadImportService {
         const remembered = await prisma.leadImportMapping.findUnique({ where: { signature: detectColumns(headers).signature } });
         const detection = detectColumns(headers, (remembered?.mapping as ColumnMapping | undefined) ?? null);
         await prisma.leadImportBatch.update({ where: { id: batch.id }, data: { totalRows: staged, signature: detection.signature, columnMapping: { v: 2, headers, mapping: detection.mapping } as unknown as Prisma.InputJsonValue } });
-        const preview = await this.computePreview(batch.id, detection.mapping);
+        const preview = await this.computePreview(batch.id, detection.mapping, headers);
         return {
           batchId: batch.id,
           fileName: file.originalname,
@@ -109,8 +112,10 @@ class LeadImportService {
   // ---------------------------------------------------------------------------------------------- 2. mapping & preview
 
   /** Counts for the preview step, from the staged rows and the CRM's current leads. Reads the rows page by page: never the whole file at once. */
-  async computePreview(batchId: string, mapping: ColumnMapping): Promise<ImportPreview> {
-    const p: ImportPreview = { totalRows: 0, eligibleRows: 0, invalidRows: 0, newLeads: 0, missingPhone: 0, missingOrderCount: 0, invalidOrderCount: 0, classification: { repeat: 0, loyal: 0, vip: 0, unclassified: 0 }, problems: [] };
+  async computePreview(batchId: string, mapping: ColumnMapping, headers: readonly string[]): Promise<ImportPreview> {
+    const column = taggingColumn(headers);
+    const tally = column ? taggingTally(column) : null;
+    const p: ImportPreview = { totalRows: 0, eligibleRows: 0, invalidRows: 0, newLeads: 0, missingPhone: 0, missingOrderCount: 0, invalidOrderCount: 0, classification: { repeat: 0, loyal: 0, vip: 0, unclassified: 0 }, problems: [], tagging: null };
     let cursor = 0;
     for (;;) {
       const rows = await prisma.leadImportRow.findMany({ where: { batchId, id: { gt: cursor } }, orderBy: { id: "asc" }, take: PREVIEW_PAGE, select: { id: true, rowNumber: true, data: true } });
@@ -130,6 +135,7 @@ class LeadImportService {
         else if (c.orderCount.state === "invalid") p.invalidOrderCount += 1;
         p.eligibleRows += 1;
         p.newLeads += 1;
+        tally?.add((r.data as Record<string, string>)[column!]);
         const cls = classifyCustomer(c.orderCount.state === "ok" ? c.orderCount.value : null);
         if (cls === "REPEAT") p.classification.repeat += 1;
         else if (cls === "LOYAL") p.classification.loyal += 1;
@@ -137,6 +143,7 @@ class LeadImportService {
         else p.classification.unclassified += 1;
       }
     }
+    p.tagging = tally?.summary() ?? null;
     return p;
   }
 
@@ -159,7 +166,7 @@ class LeadImportService {
       if (input.segmentId) await segmentService.requireUsable(input.segmentId);
       await prisma.leadImportBatch.update({ where: { id: batchId }, data: { segmentId: input.segmentId } });
     }
-    return { batchId, mapping, preview: await this.computePreview(batchId, mapping) };
+    return { batchId, mapping, preview: await this.computePreview(batchId, mapping, stored.headers) };
   }
 
   // ---------------------------------------------------------------------------------------------- 3. start & progress
@@ -185,8 +192,22 @@ class LeadImportService {
     return this.progress(user, batchId);
   }
 
+  /** The Tagging summary of the leads an import actually created, grouped in the database. */
+  private async importedTagging(batchId: string, headers: readonly string[]): Promise<TaggingSummary | null> {
+    const column = taggingColumn(headers);
+    if (!column) return null;
+    const grouped = await prisma.$queryRaw<{ value: string | null; count: number }[]>`
+      SELECT data ->> ${column}::text AS value, count(*)::int AS count FROM lead_import_rows WHERE batch_id = ${batchId}::uuid AND status = 'CREATED' GROUP BY 1`;
+    const tally = taggingTally(column);
+    for (const g of grouped) tally.add(g.value, g.count);
+    return tally.summary();
+  }
+
   async progress(user: AuthUser, batchId: string) {
-    const { batch } = await this.getBatch(user, batchId);
+    const { batch, stored } = await this.getBatch(user, batchId);
+    // only once the import has stopped: progress is polled while it runs, and the preview already shows what is coming
+    const ended = batch.status === ImportBatchStatus.COMMITTED || batch.status === ImportBatchStatus.FAILED;
+    const tagging = ended ? await this.importedTagging(batchId, stored.headers) : null;
     const pending = await prisma.leadImportRow.count({ where: { batchId, status: "PENDING" } });
     const total = batch.totalRows;
     return {
@@ -203,6 +224,7 @@ class LeadImportService {
       segmentMembershipsAdded: batch.segmentAdded,
       duplicates: batch.duplicateRows,
       failed: batch.failedRows,
+      tagging,
       startedAt: batch.startedAt,
       finishedAt: batch.finishedAt,
       error: batch.lastError,

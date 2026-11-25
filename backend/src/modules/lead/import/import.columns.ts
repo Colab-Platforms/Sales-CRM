@@ -117,7 +117,8 @@ export function detectColumns(headers: readonly string[], remembered?: ColumnMap
     columns,
     mapping,
     needsReview: columns.filter((c) => c.conflictWith !== undefined),
-    unrecognized: columns.filter((c) => c.field === "extra" && c.conflictWith === undefined && c.confidence === "none"),
+    // "Tagging" is not listed: it needs no choice (it sets the lead status, see import.tagging.ts) and stays on the lead as file data
+    unrecognized: columns.filter((c) => c.field === "extra" && c.conflictWith === undefined && c.confidence === "none" && normalizeHeader(c.header) !== "tagging"),
     signature: headerSignature(headers),
   };
 }

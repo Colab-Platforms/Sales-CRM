@@ -5,6 +5,7 @@ import { classifyCustomer } from "@/lib/customerClass.js";
 import { ActivityType, AssignmentType, ImportBatchStatus, Role } from "../../../../generated/prisma/enums.js";
 import { Prisma } from "../../../../generated/prisma/client.js";
 import { readCustomer, rowProblem, type ColumnMapping, type ParsedCustomer } from "./import.columns.js";
+import { statusFromRow } from "./import.tagging.js";
 
 // BACKGROUND PROCESSING OF A STAGED FILE IMPORT. EVERY valid row becomes its own NEW lead: a phone number or email that already exists in the CRM, or repeats in the file, is NOT a reason to update, merge or skip anything.
 // The upload request only stages the rows; this runs afterwards, in small committed chunks:
@@ -78,7 +79,7 @@ export async function processChunk(
     else importable.push({ row, c });
   }
 
-  const creates = importable.map(({ row, c }) => ({ leadId: randomUUID(), c, rowId: row.id }));
+  const creates = importable.map(({ row, c }) => ({ leadId: randomUUID(), c, rowId: row.id, status: statusFromRow(row.data as Record<string, string>) }));
   const stamp = Date.now().toString(36).toUpperCase();
 
   await sourceIds(new Set([...creates.map((x) => x.c.sourceName?.trim() || DEFAULT_SOURCE)]), sources);
@@ -87,7 +88,7 @@ export async function processChunk(
   if (creates.length) {
     const isManager = ctx.uploaderRole === Role.MANAGER;
     await tx.lead.createMany({
-      data: creates.map(({ leadId, c }, i) => {
+      data: creates.map(({ leadId, c, status }, i) => {
         const count = c.orderCount.state === "ok" ? c.orderCount.value : null;
         return {
           id: leadId,
@@ -107,6 +108,8 @@ export async function processChunk(
           totalOrdersValue: c.totalOrdersValue,
           lastOrderAt: c.lastOrderAt,
           customerClass: classifyCustomer(count),
+          // from the file's Tagging column only; blank or unrecognised leaves the database default (NEW)
+          workingStatus: status ?? undefined,
           importData: (buildImportData(c) ?? undefined) as Prisma.InputJsonValue | undefined,
         };
       }),
