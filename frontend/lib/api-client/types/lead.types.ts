@@ -252,6 +252,18 @@ export interface FileImportPreview {
   invalidOrderCount: number;
   classification: { repeat: number; loyal: number; vip: number; unclassified: number };
   problems: { row: number; reason: string }[];
+  /** Null when the file has no Tagging column. */
+  tagging?: ImportTaggingSummary | null;
+}
+
+/** Lead statuses taken from the file's Tagging column. */
+export interface ImportTaggingSummary {
+  column: string;
+  recognized: number;
+  blank: number;
+  unrecognized: number;
+  statuses: { status: string; count: number }[];
+  unrecognizedValues: { value: string; count: number }[];
 }
 
 export interface FileImportAnalysis {
@@ -291,4 +303,6 @@ export interface FileImportProgress {
   finishedAt: string | null;
   error: string | null;
   canResume: boolean;
+  /** Filled in once the import has stopped. */
+  tagging?: ImportTaggingSummary | null;
 }
