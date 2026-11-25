@@ -16,7 +16,8 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { SegmentTagPill } from "@/components/leads/lead-tags";
-import type { FileImportAnalysis, FileImportPreview, FileImportProgress, ImportField } from "@/lib/api-client/types/lead.types";
+import type { FileImportAnalysis, FileImportPreview, FileImportProgress, ImportField, ImportTaggingSummary } from "@/lib/api-client/types/lead.types";
+import { STATUS_LABELS } from "@/lib/status";
 import type { Segment } from "@/lib/api-client/types/segment.types";
 
 // Upload an Excel / CSV file -> columns are detected automatically -> choose or create the campaign segment -> preview -> import in the background with live progress -> results and a downloadable list of failed rows.
@@ -44,6 +45,49 @@ export const FIELD_LABELS: Record<ImportField, string> = {
 const FIELD_ORDER = Object.keys(FIELD_LABELS) as ImportField[];
 
 const n = (v: number) => v.toLocaleString("en-IN");
+
+const statusLabel = (status: string) => (STATUS_LABELS as Record<string, string>)[status] ?? status;
+
+/** What the Tagging column does: the statuses it assigns, and how many values were recognised, blank or not recognised. */
+export function TaggingBreakdown({ tagging, done = false }: { tagging: ImportTaggingSummary; done?: boolean }) {
+  const counts: [string, number][] = [
+    ["Recognised", tagging.recognized],
+    ["Blank", tagging.blank],
+    ["Not recognised", tagging.unrecognized],
+  ];
+  return (
+    <div className="space-y-2 text-sm" data-testid="import-tagging">
+      <p>
+        Lead status from the <span className="font-semibold">{tagging.column}</span> column
+      </p>
+      <dl className="grid grid-cols-3 gap-x-4">
+        {counts.map(([label, value]) => (
+          <div key={label} className="flex justify-between gap-2 border-b border-border/50 py-1">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="font-semibold tabular-nums">{n(value)}</dd>
+          </div>
+        ))}
+      </dl>
+      {tagging.statuses.length > 0 ? (
+        <ul className="flex flex-wrap gap-2 text-xs" aria-label={done ? "Statuses assigned" : "Statuses that will be assigned"}>
+          {tagging.statuses.map((s) => (
+            <li key={s.status} className="rounded border border-border px-2 py-0.5">
+              {statusLabel(s.status)}: <span className="font-semibold tabular-nums">{n(s.count)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {tagging.blank + tagging.unrecognized > 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Blank and unrecognised rows {done ? "got" : "get"} the default status ({statusLabel("NEW")}).
+        </p>
+      ) : null}
+      {tagging.unrecognizedValues.length > 0 ? (
+        <p className="text-xs text-amber-700">Not recognised: {tagging.unrecognizedValues.map((v) => `"${v.value}" (${n(v.count)})`).join(", ")}</p>
+      ) : null}
+    </div>
+  );
+}
 
 /** The preview numbers a user checks before confirming. */
 export function PreviewSummary({ preview, segment }: { preview: FileImportPreview; segment: Segment | null }) {
@@ -73,6 +117,7 @@ export function PreviewSummary({ preview, segment }: { preview: FileImportPrevie
       <p className="text-xs text-muted-foreground">
         Customer type from order count: {n(preview.classification.repeat)} Repeat, {n(preview.classification.loyal)} Loyal, {n(preview.classification.vip)} VIP, {n(preview.classification.unclassified)} not classified.
       </p>
+      {preview.tagging ? <TaggingBreakdown tagging={preview.tagging} /> : null}
       {preview.problems.length > 0 ? (
         <details className="text-xs text-muted-foreground">
           <summary className="cursor-pointer">First {preview.problems.length} invalid rows</summary>
@@ -199,6 +244,7 @@ function ResultView({ progress, onDone }: { progress: FileImportProgress; onDone
           </div>
         ))}
       </dl>
+      {progress.tagging ? <TaggingBreakdown tagging={progress.tagging} done /> : null}
       {progress.error ? <p className="text-sm text-destructive">{progress.error}</p> : null}
       <div className="flex flex-wrap gap-2">
         {progress.failed > 0 ? (
@@ -365,6 +411,7 @@ export function ImportLeadsDialog({
                               ) : (
                                 <span>{FIELD_LABELS[mapping[c.header] ?? "extra"]}</span>
                               )}
+                              {preview?.tagging?.column === c.header ? <span className="ml-2 text-xs font-medium text-primary">sets the lead status</span> : null}
                               {review.has(c.header) ? <span className="ml-2 text-xs text-amber-700">another column is already the {FIELD_LABELS[(mapping[c.conflictWith ?? ""] ?? "extra") as ImportField].toLowerCase()}: choose</span> : null}
                             </td>
                           </tr>
