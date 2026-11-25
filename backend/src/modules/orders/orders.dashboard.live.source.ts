@@ -48,10 +48,14 @@ export interface LiveFetch {
   orders: LiveOrder[];
   /** Telecaller-created orders found in the same Shopify range and left out. */
   telecallerExcluded: number;
+  /** Of the telecaller-created orders, those that were not cancelled, returned or refunded (same rule as the net revenue). */
+  telecallerSuccessful: number;
   /** Every order Shopify returned for the range (website + telecaller). Always website.length + telecallerExcluded. */
   shopifyOrders: number;
   /** The summed order totals of EVERY order Shopify returned for the range (website + telecaller-created, cancelled and voided included), in whole cents. Only INR orders are added; a warning names any other currency. */
   shopifyRevenueCents: number;
+  /** The same set's revenue EXCLUDING cancelled, returned and refunded orders, and net of any partial refund (INR only, whole cents). The figure the WhatsApp daily report sends. Order COUNTS are unaffected. */
+  shopifyNetRevenueCents: number;
   /** Shopify's own count for the range (null when it could not be asked). */
   shopifyCount: number | null;
   pages: number;
@@ -86,6 +90,21 @@ export function localDate(at: Date, timeZone: string): string {
 
 /** The Shopify search for the range: created at or after `start`, before `end` (exact instants, so the IST day boundaries are the ones asked for). */
 export const rangeSearch = (r: Pick<LiveRange, "start" | "end">): string => `created_at:>='${r.start.toISOString()}' created_at:<'${r.end.toISOString()}'`;
+
+/** Order statuses whose money is not revenue: the order was cancelled, returned or fully refunded. */
+const NOT_REVENUE: OrderStatus[] = [OrderStatus.CANCELLED, OrderStatus.RETURNED, OrderStatus.REFUNDED];
+
+/** Revenue of a set of Shopify orders: cancelled, returned and refunded orders add nothing and a partial refund is deducted. INR only. Whole cents, never floating point. Pure. */
+export function netRevenueCents(items: readonly NormalizedOrderListItem[], timezone = "Asia/Kolkata"): number {
+  let sum = 0;
+  for (const i of items) {
+    if ((i.currency ?? PRIMARY_CURRENCY) !== PRIMARY_CURRENCY) continue;
+    const o = toLiveOrder(i, timezone);
+    if (NOT_REVENUE.includes(o.status)) continue;
+    sum += Math.max(0, o.totalCents - o.refundedCents);
+  }
+  return sum;
+}
 
 export function toLiveOrder(o: NormalizedOrderListItem, timezone: string): LiveOrder {
   // The same status / payment derivation the Shopify sync and the live Orders list use, so a figure here can never disagree with what the order would show once synced.
@@ -202,8 +221,12 @@ export class LiveWebsiteOrders {
     const byCrm = await this.crmCreated(items.map((i) => i.externalId), warnings);
     const website: LiveOrder[] = [];
     let telecaller = 0;
+    let telecallerSuccessful = 0;
     for (const item of items) {
-      if (item.tags.some(isCreatorTag) || byCrm.has(item.externalId)) telecaller++;
+      if (item.tags.some(isCreatorTag) || byCrm.has(item.externalId)) {
+        telecaller++;
+        if (!NOT_REVENUE.includes(toLiveOrder(item, range.timezone).status)) telecallerSuccessful++;
+      }
       else website.push(toLiveOrder(item, range.timezone));
     }
     website.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.externalId < b.externalId ? 1 : -1));
@@ -220,7 +243,8 @@ export class LiveWebsiteOrders {
     const foreignAll = new Set(items.filter((i) => (i.currency ?? PRIMARY_CURRENCY) !== PRIMARY_CURRENCY).map((i) => i.currency));
     if (foreignAll.size > 0 && foreign.size === 0) warnings.push(`Some Shopify orders are not in ${PRIMARY_CURRENCY} (${[...foreignAll].join(", ")}); their amounts are left out of the total Shopify revenue.`);
 
-    return { orders: website, telecallerExcluded: telecaller, shopifyOrders: items.length, shopifyRevenueCents, shopifyCount, pages, fetchedAt: this.now(), warnings };
+    const shopifyNetRevenueCents = netRevenueCents(items, range.timezone);
+    return { orders: website, telecallerExcluded: telecaller, telecallerSuccessful, shopifyOrders: items.length, shopifyRevenueCents, shopifyNetRevenueCents, shopifyCount, pages, fetchedAt: this.now(), warnings };
   }
 
   /** READ-ONLY lookup: which of these Shopify order ids are CRM orders created by someone other than the storefront (telecaller / API). */

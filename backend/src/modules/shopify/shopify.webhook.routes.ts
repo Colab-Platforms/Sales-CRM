@@ -2,6 +2,7 @@ import { Router } from "express";
 import { prisma } from "@/lib/prisma.js";
 import { logger } from "@/utils/logger.js";
 import { ActivitySource } from "../../../generated/prisma/enums.js";
+import { startCancelSyncJob } from "./shopify.cancel-sync.js";
 import { ShopifyClient } from "./shopify.client.js";
 import { loadShopifyConfig, loadWebhookConfig } from "./shopify.config.js";
 import { checkConnection } from "./shopify.orders.js";
@@ -94,6 +95,11 @@ export function startShopifyWebhookWorker() {
  * Starts the periodic catch-up (see shopify.catchup.ts) so an order whose webhook was missed or failed still becomes a CRM order. Only when
  * SHOPIFY_SYNC_ENABLED=true and the interval is not 0; otherwise nothing runs.
  */
+/** Brings a Shopify cancellation into the CRM orders created there (see shopify.cancel-sync.ts). Independent of SHOPIFY_SYNC_ENABLED: it imports nothing. */
+export function startShopifyCancelSync() {
+  return startCancelSyncJob(prisma as never);
+}
+
 export function startShopifyCatchUp() {
   const config = loadCatchUpConfig();
   if (!config) return null;

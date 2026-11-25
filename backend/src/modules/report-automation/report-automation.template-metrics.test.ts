@@ -9,6 +9,28 @@ const full = {
   abandoned: { totalLeads: 274, ordersConverted: 29, revenue: 48000.6, codOrders: 20, prepaidOrders: 9 },
 };
 
+describe("telecaller slot: only the successful telecaller orders, as a plain number", () => {
+  const base = { website: null, abandoned: null };
+  it("shows just '66' (no total, no brackets) when the successful count is known, and the stored total for older frozen figures", () => {
+    const withOk = buildStructuredValues("22 Nov 2026", { ...base, shopify: { totalOrders: 187, websiteOrders: 117, telecallerOrders: 70, telecallerSuccessfulOrders: 66, totalRevenue: 125122 } });
+    assert.deepEqual([withOk.total_shopify_orders, withOk.website_orders, withOk.telecaller_orders, withOk.total_revenue], ["187", "117", "66", "1,25,122.00"]);
+    const old = buildStructuredValues("22 Nov 2026", { ...base, shopify: { totalOrders: 187, websiteOrders: 117, telecallerOrders: 70, totalRevenue: 125122 } });
+    assert.equal(old.telecaller_orders, "70");
+    for (const [ok, shown] of [[66, "66"], [53, "53"], [87, "87"], [0, "0"]] as const) {
+      const v = buildStructuredValues("x", { ...base, shopify: { totalOrders: 200, websiteOrders: 100, telecallerOrders: 100, telecallerSuccessfulOrders: ok, totalRevenue: 1 } });
+      assert.equal(v.telecaller_orders, shown);
+      assert.ok(!/[()]/.test(v.telecaller_orders), "no brackets");
+    }
+  });
+  it("an unreadable Shopify section stays N/A, never a made-up 0", () => {
+    assert.equal(buildStructuredValues("22 Nov 2026", { ...base, shopify: null }).telecaller_orders, "N/A");
+  });
+  it("the value is one line with no tab or newline (Meta rejects those in a parameter)", () => {
+    const v = buildStructuredValues("22 Nov 2026", { ...base, shopify: { totalOrders: 5, websiteOrders: 1, telecallerOrders: 4, telecallerSuccessfulOrders: 3, totalRevenue: 1 } });
+    assert.ok(!/[\n\t\r]/.test(v.telecaller_orders));
+  });
+});
+
 describe("structured notification template - the figures", () => {
   it("maps each of the ten variables to its dashboard figure; revenue is whole rupees with Indian grouping and no currency sign (the template text has the rupee sign)", () => {
     assert.deepEqual(buildStructuredValues("26 Oct 2026", full), {

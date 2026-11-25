@@ -8,7 +8,7 @@ import { errorHandler } from "./middlewares/errorHandler.js";
 import { requestId } from "./middlewares/requestId.js";
 import { notFoundHandler } from "./middlewares/notFoundHandler.js";
 import sanitizeMiddleware from "./middlewares/sanitize.js";
-import shopifyWebhookRoutes, { startShopifyCatchUp, startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
+import shopifyWebhookRoutes, { startShopifyCancelSync, startShopifyCatchUp, startShopifyWebhookWorker } from "./modules/shopify/shopify.webhook.routes.js";
 import whatsappWebhookRoutes, { startWhatsAppWebhookWorker } from "./modules/whatsapp/whatsapp.webhook.routes.js";
 import cashfreeWebhookRoutes, { startCashfreeReconciler, startCashfreeWebhookWorker } from "./modules/cashfree/cashfree.webhook.routes.js";
 import shiprocketWebhookRoutes, { startShiprocketWebhookWorker } from "./modules/shiprocket/shiprocket.webhook.routes.js";
@@ -99,6 +99,7 @@ const server = app.listen(PORT, () => {
   }
   startShopifyWebhookWorker();
   startShopifyCatchUp();
+  startShopifyCancelSync(); // Shopify cancellations -> CRM orders. On by default; SHOPIFY_CANCEL_SYNC_POLL_MINUTES=0 turns it off
   startWhatsAppWebhookWorker();
   startCashfreeWebhookWorker();
   startCashfreeReconciler();

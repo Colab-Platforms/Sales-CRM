@@ -13,7 +13,7 @@ import { rangeText } from "./report-automation-schedule";
 import { compareSnapshots, formatDelta, formatMetric, metricByKey, SECTION_SHORT, SNAPSHOT_METRICS } from "./report-snapshots";
 
 // The summary columns of the list: the Shopify Orders Summary figures. A snapshot taken before them shows "-" (its other figures are in the details and the comparison).
-const LIST_COLUMNS = [["sh_total", "Shopify orders"], ["sh_website", "Website"], ["sh_telecaller", "Telecaller"], ["sh_revenue", "Total revenue"]] as const;
+const LIST_COLUMNS = [["sh_total", "Shopify orders"], ["sh_website", "Website"], ["sh_telecaller", "Telecaller"], ["sh_revenue", "Revenue (excl. cancelled/refunded)"]] as const;
 
 const PAGE_SIZE = 10;
 

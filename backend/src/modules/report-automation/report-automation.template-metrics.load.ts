@@ -14,7 +14,7 @@ export const loadTemplateMetrics: TemplateMetricsLoader = async (user, period) =
       .overview(as, { ...range, scope: "WEBSITE" }, 1, 1)
       .then((r): { website: WebsiteMetrics | null; shopify: ShopifyMetrics | null } => ({
         website: { totalOrders: r.summary.totalOrders, totalRevenue: r.summary.totalValue, codOrders: r.summary.cod, prepaidOrders: r.summary.prepaid, otherOrders: r.summary.otherPayment },
-        shopify: { totalOrders: r.live.shopifyOrders, websiteOrders: r.live.websiteOrders, telecallerOrders: r.live.telecallerExcluded, totalRevenue: r.live.shopifyRevenue },
+        shopify: { totalOrders: r.live.shopifyOrders, websiteOrders: r.live.websiteOrders, telecallerOrders: r.live.telecallerExcluded, telecallerSuccessfulOrders: r.live.telecallerSuccessful, totalRevenue: r.live.shopifyNetRevenue },
       }))
       .catch((error: unknown): { website: WebsiteMetrics | null; shopify: ShopifyMetrics | null } => {
         logger.error("Report template: Shopify order figures unavailable", error instanceof Error ? error.message.split("\n")[0] : "unknown error");

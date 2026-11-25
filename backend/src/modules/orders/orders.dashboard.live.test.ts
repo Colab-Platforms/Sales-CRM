@@ -382,6 +382,52 @@ describe("the complete Shopify order set (website + telecaller-created)", () => 
     assert.equal(r.shopifyOrders, 204);
   });
 
+  it("WhatsApp revenue: cancelled, returned and refunded orders are left out of the revenue but stay in every COUNT; partial refunds are deducted", async () => {
+    const { source } = make([
+      node({ id: 1, total: "1000.00" }), // website, counted
+      node({ id: 2, total: "500.00", cancelledAt: "2026-10-25T06:00:00Z" }), // website, cancelled
+      node({ id: 3, total: "300.00", tags: ["Order Created by Asha"] }), // telecaller, counted
+      node({ id: 4, total: "700.00", tags: ["Order Created by Asha"], cancelledAt: "2026-10-25T06:00:00Z" }), // telecaller, cancelled
+      node({ id: 5, total: "400.00", financial: "REFUNDED", refunded: "400.00" }), // fully refunded
+      node({ id: 6, total: "600.00", fulfillment: "RESTOCKED" }), // returned
+      node({ id: 7, total: "800.00", financial: "PARTIALLY_REFUNDED", refunded: "150.00" }), // partial refund: 650 stays
+    ]);
+    const r = await source.fetch(range);
+    assert.deepEqual([r.shopifyOrders, r.orders.length, r.telecallerExcluded], [7, 5, 2], "every order is still counted, cancelled ones included");
+    assert.equal(r.shopifyOrders, r.orders.length + r.telecallerExcluded, "website + telecaller = total");
+    assert.equal(r.shopifyRevenueCents, 430_000, "the gross total (all 7) is unchanged for the dashboard");
+    assert.equal(r.shopifyNetRevenueCents, 1_000_00 + 300_00 + 650_00, "1,950.00 = 1000 + 300 + (800 - 150)");
+  });
+
+  it("telecaller-created orders: the total counts every one, 'successful' leaves out cancelled / returned / refunded, and website + telecaller = total", async () => {
+    const { source } = make([
+      node({ id: 1, total: "100.00" }),
+      node({ id: 2, total: "200.00", tags: ["Order Created by Asha"] }),
+      node({ id: 3, total: "300.00", tags: ["Order Created by Asha"], cancelledAt: "2026-10-25T06:00:00Z" }),
+      node({ id: 4, total: "400.00", tags: ["Order Created by Asha"], financial: "REFUNDED", refunded: "400.00" }),
+      node({ id: 5, total: "500.00", tags: ["Order Created by Asha"], fulfillment: "RESTOCKED" }),
+      node({ id: 6, total: "600.00", tags: ["Order Created by Asha"], financial: "PARTIALLY_REFUNDED", refunded: "100.00" }),
+    ]);
+    const r = await source.fetch(range);
+    assert.deepEqual([r.shopifyOrders, r.orders.length, r.telecallerExcluded, r.telecallerSuccessful], [6, 1, 5, 2]);
+    assert.equal(r.shopifyOrders, r.orders.length + r.telecallerExcluded);
+    assert.equal(r.shopifyNetRevenueCents, 100_00 + 200_00 + 500_00, "100 + 200 + (600 - 100)");
+  });
+
+  it("net revenue: a non-INR order never adds, duplicate Shopify rows count once, and an empty day is 0", async () => {
+    const dup = node({ id: 1, total: "100.00" });
+    const { source } = make([dup, dup, node({ id: 2, total: "10.00", currency: "USD" })]);
+    const r = await source.fetch(range);
+    assert.deepEqual([r.shopifyOrders, r.shopifyNetRevenueCents], [2, 10_000]);
+    assert.equal((await make([]).source.fetch(range)).shopifyNetRevenueCents, 0);
+  });
+
+  it("the overview's live block carries the net revenue in rupees to the paisa, beside the gross one", async () => {
+    const m = make([node({ id: 1, total: "649.05" }), node({ id: 2, total: "500.00", cancelledAt: "2026-10-25T06:00:00Z", tags: ["Order Created by Asha"] })]);
+    const r = await new LiveWebsiteDashboardService(m.source, () => NOW).overview(admin, { range: "yesterday" }, 1, 25);
+    assert.deepEqual([r.live.shopifyOrders, r.live.shopifyRevenue, r.live.shopifyNetRevenue], [2, 1149.05, 649.05]);
+  });
+
   it("a telecaller order the CRM holds (no tag) counts as telecaller-created and is still in the total", async () => {
     const { source } = make([node({ id: 1, total: "100.00" }), node({ id: 2, total: "200.00" }), node({ id: 3, total: "300.00", tags: ["Order Created by Asha"] })], {}, { crm: ["2"] });
     const r = await source.fetch(range);

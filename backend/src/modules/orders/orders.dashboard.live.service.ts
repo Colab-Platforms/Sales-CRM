@@ -24,9 +24,13 @@ const liveBlock = (f: LiveFetch) => ({
   shopifyOrders: f.shopifyOrders,
   /** Total of every Shopify order of the range (website + telecaller-created, cancelled included), in rupees. */
   shopifyRevenue: Math.round(f.shopifyRevenueCents) / 100,
+  /** The same orders' revenue excluding cancelled, returned and refunded orders (net of partial refunds), in rupees. */
+  shopifyNetRevenue: Math.round(f.shopifyNetRevenueCents) / 100,
   shopifyCount: f.shopifyCount,
   websiteOrders: f.orders.length,
   telecallerExcluded: f.telecallerExcluded,
+  /** Of the telecaller-created orders, those not cancelled, returned or refunded. */
+  telecallerSuccessful: f.telecallerSuccessful,
   pages: f.pages,
   warnings: f.warnings,
 });

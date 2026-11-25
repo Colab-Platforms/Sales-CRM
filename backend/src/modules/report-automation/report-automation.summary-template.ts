@@ -12,8 +12,8 @@ const MEANING: Record<ShopifySummaryVariable, string> = {
   report_date: "Report date",
   total_shopify_orders: "Total Shopify orders (website + telecaller-created)",
   website_orders: "Website orders",
-  telecaller_orders: "Telecaller-created orders",
-  total_revenue: "Total Shopify revenue (every order, with paise)",
+  telecaller_orders: "Successful telecaller-created orders (not cancelled, returned or refunded)",
+  total_revenue: "Shopify revenue, excluding cancelled, returned and refunded orders (with paise)",
 };
 
 /** {{1}}..{{5}} of the message in order, with the named variable each position is filled through. */
