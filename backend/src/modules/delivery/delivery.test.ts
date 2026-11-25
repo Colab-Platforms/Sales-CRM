@@ -1,6 +1,6 @@
 import { beforeEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { clearPincodeCache, lookupPincode, parsePincodeResponse } from "./delivery.pincode.js";
+import { clearPincodeCache, clearPincodeLogThrottle, failureReason, lookupPincode, parsePincodeResponse, type PincodeFallback } from "./delivery.pincode.js";
 import { checkServiceability, clearPickupCache } from "./delivery.serviceability.js";
 import { parseServiceabilityResponse } from "../shiprocket/shiprocket.client.js";
 import { ProviderHttpError } from "../integrations/integrations.common.js";
@@ -35,11 +35,12 @@ describe("pincode lookup", () => {
   it("a directory outage is 'unavailable' - never 'invalid' - and is not cached", async () => {
     let calls = 0;
     const down = (async () => { calls += 1; throw new Error("ECONNRESET"); }) as unknown as typeof fetch;
-    assert.equal((await lookupPincode("400001", { fetchImpl: down })).status, "unavailable");
-    assert.equal((await lookupPincode("400001", { fetchImpl: down })).status, "unavailable");
-    assert.equal(calls, 2, "retried, not served from cache");
+    const quick = { sleep: async () => {}, log: () => {} };
+    assert.equal((await lookupPincode("400001", { fetchImpl: down, ...quick })).status, "unavailable");
+    assert.equal((await lookupPincode("400001", { fetchImpl: down, ...quick })).status, "unavailable");
+    assert.equal(calls, 4, "each lookup tries twice (one retry for a transient fault) and nothing is served from cache");
     const http500 = (async () => new Response("x", { status: 500 })) as unknown as typeof fetch;
-    assert.equal((await lookupPincode("400002", { fetchImpl: http500 })).status, "unavailable");
+    assert.equal((await lookupPincode("400002", { fetchImpl: http500, sleep: async () => {}, log: () => {} })).status, "unavailable");
   });
 
   it("caches definitive answers (one upstream request per pincode)", async () => {
@@ -68,6 +69,82 @@ const client = (over: Partial<{ pickup: string | null; couriers: { rate: number 
   };
 };
 const deps = (c: ReturnType<typeof client>, env: Record<string, string | undefined> = {}) => ({ config: () => CONFIG, client: c.factory, env });
+
+describe("pincode lookup keeps working when the free directory fails (production outage)", () => {
+  beforeEach(() => { clearPincodeCache(); clearPincodeLogThrottle(); });
+  const quick = { sleep: async () => {} };
+  const GOREGAON = async () => ({ city: "Mumbai", state: "Maharashtra", areas: ["Goregaon East"] });
+  const failing = (status?: number) => (async () => (status ? new Response("x", { status }) : Promise.reject(Object.assign(new Error("timed out"), { name: "TimeoutError" })))) as unknown as typeof fetch;
+
+  it("a transient fault is retried once and the second answer is used", async () => {
+    let calls = 0;
+    const flaky = (async () => { calls += 1; return calls === 1 ? new Response("x", { status: 503 }) : new Response(JSON.stringify(MUMBAI)); }) as unknown as typeof fetch;
+    const r = await lookupPincode("400063", { fetchImpl: flaky, ...quick, log: () => {} });
+    assert.deepEqual([r.status, r.city, calls], ["valid", "Mumbai", 2]);
+  });
+
+  it("a 4xx that will not change (403 / 404) is not retried", async () => {
+    let calls = 0;
+    const blocked = (async () => { calls += 1; return new Response("x", { status: 403 }); }) as unknown as typeof fetch;
+    const r = await lookupPincode("400063", { fetchImpl: blocked, fallback: null, ...quick, log: () => {} });
+    assert.deepEqual([r.status, r.reason, calls], ["unavailable", "HTTP_403", 1]);
+  });
+
+  it("directory down (timeout / 429 / 5xx / network) -> the fallback source fills in city and state: valid, and cached", async () => {
+    for (const fetchImpl of [failing(), failing(429), failing(503), (async () => { throw new Error("ECONNRESET"); }) as unknown as typeof fetch]) {
+      clearPincodeCache();
+      let used = 0;
+      const fb: PincodeFallback = async () => { used += 1; return GOREGAON(); };
+      const r = await lookupPincode("400063", { fetchImpl, fallback: fb, ...quick, log: () => {} });
+      assert.deepEqual([r.status, r.city, r.state, r.areas, used], ["valid", "Mumbai", "Maharashtra", ["Goregaon East"], 1]);
+      await lookupPincode("400063", { fetchImpl, fallback: fb, ...quick, log: () => {} });
+      assert.equal(used, 1, "the filled-in answer is cached");
+    }
+  });
+
+  it("the fallback never turns a pincode 'invalid' or 'serviceable': unknown there + directory down = honestly unavailable", async () => {
+    const r = await lookupPincode("400063", { fetchImpl: failing(503), fallback: async () => null, ...quick, log: () => {} });
+    assert.deepEqual([r.status, r.city, r.reason], ["unavailable", null, "HTTP_503"]);
+    assert.match(r.message ?? "", /You can continue/);
+    const both = await lookupPincode("400064", { fetchImpl: failing(), fallback: async () => { throw new Error("down"); }, ...quick, log: () => {} });
+    assert.deepEqual([both.status, both.reason], ["unavailable", "TIMEOUT"]);
+  });
+
+  it("a definitive 'no such pincode' from the directory stays invalid: the fallback is not consulted", async () => {
+    let asked = 0;
+    const r = await lookupPincode("999999", { fetchImpl: ok(NONE), fallback: async () => { asked += 1; return GOREGAON(); }, ...quick, log: () => {} });
+    assert.deepEqual([r.status, asked], ["invalid", 0]);
+  });
+
+  it("an older answer for the same pincode is served when everything is down", async () => {
+    let t = 1_000;
+    await lookupPincode("400063", { fetchImpl: ok(MUMBAI), now: () => t, ...quick });
+    t += 3 * 24 * 60 * 60 * 1000; // past the 1-day freshness, well inside the 30-day safety window
+    const r = await lookupPincode("400063", { fetchImpl: failing(503), fallback: null, now: () => t, ...quick, log: () => {} });
+    assert.deepEqual([r.status, r.city], ["valid", "Mumbai"]);
+    t += 40 * 24 * 60 * 60 * 1000; // too old: not served
+    assert.equal((await lookupPincode("400063", { fetchImpl: failing(503), fallback: null, now: () => t, ...quick, log: () => {} })).status, "unavailable");
+  });
+
+  it("failures are logged with the reason, once a minute, and the log holds no pincode, customer data or credentials", async () => {
+    const lines: string[] = [];
+    let t = 5_000;
+    for (let i = 0; i < 5; i++) await lookupPincode(`40006${i}`, { fetchImpl: failing(503), fallback: null, now: () => t, ...quick, log: (m) => lines.push(m) });
+    assert.equal(lines.length, 1, "an outage logs once, not once per request");
+    assert.match(lines[0]!, /reason=HTTP_503 attempts=2 fallback=none/);
+    assert.ok(!/4000\d\d|token|password|secret|bearer/i.test(lines[0]!));
+    t += 61_000;
+    await lookupPincode("400070", { fetchImpl: failing(503), fallback: null, now: () => t, ...quick, log: (m) => lines.push(m) });
+    assert.equal(lines.length, 2, "and again after a minute");
+  });
+
+  it("failure reasons are short codes", () => {
+    assert.equal(failureReason(Object.assign(new Error("x"), { name: "TimeoutError" })), "TIMEOUT");
+    assert.equal(failureReason(new Error("HTTP 429")), "HTTP_429");
+    assert.equal(failureReason(new SyntaxError("Unexpected token <")), "BAD_RESPONSE");
+    assert.equal(failureReason(new Error("getaddrinfo ENOTFOUND api.postalpincode.in")), "NETWORK");
+  });
+});
 
 describe("Shiprocket serviceability", () => {
   beforeEach(() => clearPickupCache());

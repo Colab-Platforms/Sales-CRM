@@ -357,6 +357,22 @@ export class ShiprocketClient {
     }
   }
 
+  /** City, state and local areas of a pincode, from Shiprocket's own locality data (read-only). null when Shiprocket has no such pincode; any other failure throws. */
+  async getPostcodeDetails(pincode: string): Promise<{ city: string; state: string; areas: string[] } | null> {
+    try {
+      const body = asRecord(await this.call("GET", `/open/postcode/details?postcode=${encodeURIComponent(pincode)}`));
+      const d = asRecord(body.postcode_details);
+      const city = String(d.city ?? "").trim();
+      const state = String(d.state ?? "").trim();
+      if (!city || !state) return null;
+      return { city, state, areas: Array.isArray(d.locality) ? d.locality.map((x) => String(x).trim()).filter(Boolean).slice(0, 6) : [] };
+    } catch (error) {
+      // Shiprocket answers an unknown pincode with HTTP 500 "City/State not found for this pincode": that is "not found", not an outage
+      if (error instanceof ProviderHttpError && /not found for this pincode/i.test(error.message)) return null;
+      throw error;
+    }
+  }
+
   /** The postcode of a saved pickup location (matched by name, case-insensitively), or null if there is no such location. */
   async getPickupPostcode(pickupLocation: string): Promise<string | null> {
     const body = asRecord(await this.call("GET", "/settings/company/pickup"));
