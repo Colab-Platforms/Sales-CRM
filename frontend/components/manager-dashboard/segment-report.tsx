@@ -24,7 +24,7 @@ export function segmentTiles(m: SegmentReport["metrics"]): { label: string; valu
     // These four are the lead's current state, whatever the date range. Contacted + Pending = Total; Converted and Lost are inside Contacted.
     { label: "Contacted", value: m.contacted, hint: "every lead that is not Pending (includes Converted and Lost)" },
     { label: "Pending", value: m.pending, hint: "status New or Assigned, never called or marked contacted (any date)" },
-    { label: "Converted", value: m.converted, hint: "current status Converted" },
+    { label: "Converted", value: m.converted, hint: "current status Converted (converted customers are listed separately below)" },
     { label: "Lost", value: m.lost, hint: "current status Not Interested or DND" },
     { label: "Calls", value: m.calls, hint: `${formatNumber(m.connectedCalls)} connected, in this period` },
     { label: "Follow-ups completed", value: m.followUpsCompleted, hint: "in this period" },
@@ -109,6 +109,84 @@ export function SegmentLeadTable({ leads, onHistory }: { leads: SegmentLeadRow[]
   );
 }
 
+function Pager({ page, totalPages, onPage, name }: { page: number; totalPages: number; onPage: (p: number) => void; name: string }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div className="flex items-center justify-end gap-3 px-5 py-3 text-sm">
+      <span className="text-muted-foreground">
+        Page {page} of {formatNumber(totalPages)}
+      </span>
+      <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label={`Previous page of ${name}`}>
+        Previous
+      </Button>
+      <Button size="sm" variant="outline" disabled={page >= totalPages} onClick={() => onPage(page + 1)} aria-label={`Next page of ${name}`}>
+        Next
+      </Button>
+    </div>
+  );
+}
+
+/** Why the excluded records are not in the totals above, with their counts. */
+export function ExcludedSummary({ excluded }: { excluded: SegmentReport["excluded"] }) {
+  return (
+    <div className="space-y-1 text-sm">
+      <p>
+        <span className="font-medium">Converted to customer: {formatNumber(excluded.customers)}</span>
+        {excluded.customersFromAbandonedCart > 0 ? ` (${formatNumber(excluded.customersFromAbandonedCart)} of them also from an abandoned cart)` : ""}
+        {" · "}
+        <span className="font-medium">Abandoned cart: {formatNumber(excluded.abandonedCart)}</span>
+      </p>
+      <p className="text-xs text-muted-foreground">By current status: {excluded.byStatus.map((s) => `${label(s.status)} ${formatNumber(s.count)}`).join(" · ")}</p>
+      <p className="text-xs text-muted-foreground">
+        In this period they have {formatNumber(excluded.calls)} calls and {formatNumber(excluded.activities)} recorded activities. A record here can belong to a person who also has a lead in the list above, so do not add the two totals together.
+      </p>
+    </div>
+  );
+}
+
+/** The segment's records the Leads section leaves out, kept apart from the report: counts first, the records on request. */
+function ExcludedRecords({ query, excluded, onHistory }: { query: AnalyticsQuery; excluded: SegmentReport["excluded"]; onHistory: (id: string) => void }) {
+  const [show, setShow] = useState(false);
+  const [page, setPage] = useState(1);
+  const { data, error } = useQuery({
+    queryKey: ["manager", "analytics", "segment-excluded", query, page],
+    queryFn: ({ signal }) => managerAnalyticsApi.segmentReport(query, page, PAGE_SIZE, signal, "excluded"),
+    placeholderData: keepPreviousData,
+    enabled: show,
+  });
+  if (excluded.total === 0) return null;
+  return (
+    <Panel
+      title={`Not in the Leads list: ${formatNumber(excluded.total)} ${excluded.total === 1 ? "record" : "records"}`}
+      description="Members of this segment that the Leads section does not show. Not counted in any total above."
+      actions={
+        <Button size="sm" variant="outline" onClick={() => setShow((s) => !s)} aria-expanded={show}>
+          {show ? "Hide records" : "Show records"}
+        </Button>
+      }
+      bodyClassName="p-0 sm:p-0"
+    >
+      <div className="px-5 py-3">
+        <ExcludedSummary excluded={excluded} />
+      </div>
+      {show ? (
+        error ? (
+          <p role="alert" className="px-5 pb-3 text-sm text-destructive">
+            {getErrorMessage(error, "Failed to load these records.")}
+          </p>
+        ) : data ? (
+          <>
+            <SegmentLeadTable leads={data.leads} onHistory={onHistory} />
+            <Pager page={data.pagination.page} totalPages={data.pagination.totalPages} onPage={setPage} name="excluded records" />
+          </>
+        ) : (
+          <Skeleton className="mx-5 mb-4 h-32" />
+        )
+      ) : null}
+    </Panel>
+  );
+}
+
 /** Calls, follow-ups and recorded activities of one lead, newest first, as one list. */
 export function historyEntries(h: SegmentLeadHistory): { id: string; at: string; kind: string; title: string; detail: string; by: string | null }[] {
   return [
@@ -180,7 +258,7 @@ export function SegmentReportSection({ query }: { query: AnalyticsQuery }) {
     <section className="space-y-4" aria-label="Segment leads">
       <SectionHeading
         title={data ? `Segment: ${data.segment.name}` : "Segment"}
-        description="Lead activity for every lead in this segment (leads are not orders). Lead counts show current status; calls, activities and completed follow-ups follow the date range. Sales, team and call figures below are narrowed to this segment too; productive time is not."
+        description="Lead activity for the same leads the Leads section lists for this segment (leads are not orders). Lead counts show current status; calls, activities and completed follow-ups follow the date range. Sales, team and call figures below cover all of the segment's records, including converted customers and abandoned carts; productive time is not narrowed."
       />
       {isPending ? (
         <Skeleton className="h-64 rounded-lg" />
@@ -193,20 +271,9 @@ export function SegmentReportSection({ query }: { query: AnalyticsQuery }) {
           <SegmentMetrics metrics={data.metrics} />
           <Panel title="Segment leads" description={`${formatNumber(data.pagination.total)} matching ${data.pagination.total === 1 ? "lead" : "leads"}`} bodyClassName="p-0 sm:p-0">
             <SegmentLeadTable leads={data.leads} onHistory={setOpenLead} />
-            {data.pagination.totalPages > 1 ? (
-              <div className="flex items-center justify-end gap-3 px-5 py-3 text-sm">
-                <span className="text-muted-foreground">
-                  Page {data.pagination.page} of {formatNumber(data.pagination.totalPages)}
-                </span>
-                <Button size="sm" variant="outline" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
-                  Previous
-                </Button>
-                <Button size="sm" variant="outline" disabled={page >= data.pagination.totalPages} onClick={() => setPage((p) => p + 1)}>
-                  Next
-                </Button>
-              </div>
-            ) : null}
+            <Pager page={data.pagination.page} totalPages={data.pagination.totalPages} onPage={setPage} name="segment leads" />
           </Panel>
+          {data.excluded ? <ExcludedRecords query={query} excluded={data.excluded} onHistory={setOpenLead} /> : null}
         </div>
       )}
       {openLead ? <HistoryDialog leadId={openLead} query={query} onClose={() => setOpenLead(null)} /> : null}

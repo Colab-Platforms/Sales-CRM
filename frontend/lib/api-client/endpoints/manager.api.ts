@@ -33,8 +33,8 @@ export function analyticsParams(q: AnalyticsQuery) {
 
 export const managerAnalyticsApi = {
   /** The selected segment's leads and their activity metrics (query.segmentId is required). */
-  async segmentReport(q: AnalyticsQuery, page: number, pageSize: number, signal?: AbortSignal): Promise<SegmentReport> {
-    const res = await apiClient.get<ApiEnvelope<SegmentReport>>("/manager/analytics/segment", { params: { ...analyticsParams(q), page, pageSize }, signal });
+  async segmentReport(q: AnalyticsQuery, page: number, pageSize: number, signal?: AbortSignal, view: "listed" | "excluded" = "listed"): Promise<SegmentReport> {
+    const res = await apiClient.get<ApiEnvelope<SegmentReport>>("/manager/analytics/segment", { params: { ...analyticsParams(q), page, pageSize, ...(view === "excluded" ? { view } : {}) }, signal });
     return res.data.data;
   },
 

@@ -4,7 +4,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { renderToStaticMarkup } from "react-dom/server";
 import { SegmentSelect } from "./filters";
-import { historyEntries, SegmentLeadTable, SegmentMetrics } from "./segment-report";
+import { ExcludedSummary, historyEntries, SegmentLeadTable, SegmentMetrics } from "./segment-report";
 import { analyticsParams } from "@/lib/api-client/endpoints/manager.api";
 import { defaultFilters, filtersFromSearch, filtersToSearch, toQuery } from "@/lib/manager-analytics";
 import type { SegmentLeadHistory, SegmentReport } from "@/lib/api-client/types/segment-report.types";
@@ -57,6 +57,10 @@ describe("segment metrics and lead list", () => {
     assert.match(html, /href="\/dashboard\/leads\/l1"/);
     assert.match(html, /aria-label="Activity history of Asha K"/);
     assert.match(text(renderToStaticMarkup(<SegmentLeadTable leads={[]} onHistory={() => {}} />)), /No leads in this segment match/);
+  });
+  it("shows excluded records apart, by reason and status, and warns against adding the two totals", () => {
+    const t = text(renderToStaticMarkup(<ExcludedSummary excluded={{ total: 76, customers: 44, customersFromAbandonedCart: 22, abandonedCart: 32, byStatus: [{ status: "CONVERTED", count: 42 }, { status: "RINGING", count: 12 }], calls: 9, activities: 40 }} />));
+    for (const part of ["Converted to customer: 44", "22 of them also from an abandoned cart", "Abandoned cart: 32", "Converted 42", "Ringing 12", "9 calls", "40 recorded activities", "do not add the two totals together"]) assert.ok(t.includes(part), part);
   });
   it("merges calls, follow-ups and activities into one history, newest first", () => {
     const h: SegmentLeadHistory = {

@@ -1,3 +1,4 @@
+import { leadListEligibility, leadListScope } from "./lead.listing.js";
 import { randomUUID } from "node:crypto";
 import { parse } from "csv-parse/sync";
 import { prisma } from "@/lib/prisma.js";
@@ -129,9 +130,7 @@ class LeadService {
   }
 
   private buildScopeWhere(user: AuthUser): Prisma.LeadWhereInput {
-    if (user.role === Role.MANAGER) return { assignedManagerId: user.id };
-    if (user.role === Role.SALESPERSON) return { ownerId: user.id };
-    return {};
+    return leadListScope(user);
   }
 
   async listLeads(user: AuthUser, query: ListLeadsQuery) {
@@ -215,10 +214,8 @@ class LeadService {
       where.workingStatus =
         user.role === Role.SALESPERSON && (status === "NEW" || status === "ASSIGNED") ? { in: ["NEW", "ASSIGNED"] } : status;
     }
-    where.lifecycleStage = query.lifecycleStage ?? "LEAD";
-    // Cart-abandonment leads live only in the Abandoned Leads queue, never in the normal Leads list -
-    // even once worked/recovered, so this excludes any lead with an Abandonment row.
-    where.abandonments = { none: {} };
+    // Lead stage only, and no cart-abandonment records (they live in the Abandoned Leads queue, even once worked/recovered): see lead.listing.ts, shared with the segment report.
+    Object.assign(where, leadListEligibility(query.lifecycleStage));
 
     // AI Agent filter: leads the AI calling agency made a request about (ONLY), or the leads it did not touch (EXCLUDE). Independent of the human assignment filters above and below.
     const aiConditions = aiAgentWhere(query.aiAgent, query.aiAgentIntent);

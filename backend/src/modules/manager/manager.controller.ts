@@ -82,7 +82,7 @@ export const getSegmentReport = async (req: AuthRequest, res: Response): Promise
     const { error, value } = validateAnalyticsQuery(req.query);
     if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
     await managerAnalyticsService.assertReportRequest(req.user!, value);
-    const result = await segmentReportService.report(req.user!, value, positive(req.query.page, 1), positive(req.query.pageSize, 25));
+    const result = await segmentReportService.report(req.user!, value, positive(req.query.page, 1), positive(req.query.pageSize, 25), req.query.view === "excluded" ? "excluded" : "listed");
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);

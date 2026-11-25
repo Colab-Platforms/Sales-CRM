@@ -42,7 +42,22 @@ export interface SegmentLeadRow {
   followUpsPending: number;
 }
 
+/** Members of the segment that the Leads section does not list. Reported on their own; never part of a total or metric. */
+export interface SegmentExcluded {
+  total: number;
+  /** Converted to customer (includes customersFromAbandonedCart). */
+  customers: number;
+  customersFromAbandonedCart: number;
+  /** From an abandoned cart and not a customer. customers + abandonedCart = total. */
+  abandonedCart: number;
+  byStatus: { status: string; count: number }[];
+  calls: number;
+  activities: number;
+}
+
 export interface SegmentReport {
+  view: "listed" | "excluded";
+  excluded: SegmentExcluded;
   segment: { id: string; name: string; color: string; isSystem: boolean; isActive: boolean };
   range: { from: string; to: string };
   metrics: SegmentReportMetrics;

@@ -2,17 +2,19 @@ import ExcelJS from "exceljs";
 import { prisma } from "@/lib/prisma.js";
 import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
-import { CallStatus, LeadWorkingStatus, Role, TaskStatus, TaskType } from "../../../generated/prisma/enums.js";
+import { CallStatus, LeadWorkingStatus, LifecycleStage, Role, TaskStatus, TaskType } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
 import { safeCell } from "../report-automation/report-automation.xlsx.js";
 import { classify, type CallStatusFilter } from "./manager.metrics.js";
+import { leadListEligibility, leadListScope, NOT_IN_LEAD_LIST } from "../lead/lead.listing.js";
 import type { AnalyticsFilters, AnalyticsViewer } from "./manager.analytics.js";
 
 // SEGMENT LEAD REPORT. The members of one campaign segment (Segment + LeadSegment - the same segments the Leads section uses, built-in and custom) with their LEAD ACTIVITY. Read-only.
 // A lead is never treated as an order: nothing here counts or adds up sales (the Reports' Sales section does that, narrowed to the same segment by manager.sales.ts).
 //
-//  Who is in it   every member of the segment (leads, converted customers and abandoned-cart leads alike), except deactivated profiles.
-//                 ADMIN: all of them. MANAGER: only leads assigned to that manager (the same rule as the Leads section and the segment counts). Other roles: refused.
+//  Who is in it   EXACTLY the segment's members the Lead section lists (lead/lead.listing.ts, shared with it): lead stage, no abandoned-cart records. ADMIN: all; MANAGER: leads assigned to them; others: refused.
+//  Excluded       members the Lead section leaves out (converted to customer, or from an abandoned cart) are never in a total, metric or row above. They are reported SEPARATELY, with their own counts,
+//                 list, history and Excel sheets. They can be second records of a person who is also in the main list.
 //  Salesperson    leads currently assigned to that salesperson.
 //  Date range     applies to ACTIVITY (calls, recorded activities, completed follow-ups) and to "added in this period" - membership itself is not dated, so the lead list is not cut by date.
 //  Call status    when not "All", only leads with at least one such call in the period are listed, and only those calls are counted.
@@ -56,14 +58,17 @@ export function callsInPeriod(f: AnalyticsFilters): Prisma.CallWhereInput {
   };
 }
 
+/** "listed" = what the Lead section lists (the report itself); "excluded" = the members it leaves out; "member" = both (only to decide whether one record's history may be read). */
+export type SegmentPopulation = "listed" | "excluded" | "member";
+
 /** WHICH leads the report is about. Every number, row and export is built from this one condition, so they cannot disagree. */
-export function segmentLeadWhere(viewer: AnalyticsViewer, f: SegmentReportQuery): Prisma.LeadWhereInput {
+export function segmentLeadWhere(viewer: AnalyticsViewer, f: SegmentReportQuery, population: SegmentPopulation = "listed"): Prisma.LeadWhereInput {
   if (viewer.role !== Role.ADMIN && viewer.role !== Role.MANAGER) throw new ApiError("Forbidden", STATUS_CODES.FORBIDDEN);
   if (!f.segmentId) throw new ApiError("segmentId is required", STATUS_CODES.BAD_REQUEST);
   return {
+    ...leadListScope(viewer),
     segments: { some: { segmentId: f.segmentId } },
-    workingStatus: { not: LeadWorkingStatus.DEACTIVATED },
-    ...(viewer.role === Role.MANAGER ? { assignedManagerId: viewer.id } : {}),
+    ...(population === "listed" ? leadListEligibility() : population === "excluded" ? NOT_IN_LEAD_LIST : {}),
     ...(f.salespersonId ? { ownerId: f.salespersonId } : {}),
     ...(f.callStatus !== "ALL" ? { calls: { some: callsInPeriod(f) } } : {}),
   };
@@ -175,6 +180,30 @@ class SegmentReportService {
     };
   }
 
+  /** The members the Lead section leaves out, by reason and current status. The two reasons never overlap: a converted customer is counted as a customer even when it also came from an abandoned cart. */
+  private async excludedSummary(where: Prisma.LeadWhereInput, f: SegmentReportQuery) {
+    const { start, end } = periodOf(f);
+    const period = { gte: start, lt: end };
+    const and = (extra: Prisma.LeadWhereInput): Prisma.LeadWhereInput => ({ AND: [where, extra] });
+    const [total, customers, customersFromCart, statuses, calls, activities] = await Promise.all([
+      this.db.lead.count({ where }),
+      this.db.lead.count({ where: and({ lifecycleStage: { not: LifecycleStage.LEAD } }) }),
+      this.db.lead.count({ where: and({ lifecycleStage: { not: LifecycleStage.LEAD }, abandonments: { some: {} } }) }),
+      this.db.lead.groupBy({ by: ["workingStatus"], where, _count: { _all: true } }),
+      this.db.call.count({ where: { ...callsInPeriod(f), lead: where } }),
+      this.db.activity.count({ where: { createdAt: period, lead: where } }),
+    ]);
+    return {
+      total,
+      customers,
+      customersFromAbandonedCart: customersFromCart,
+      abandonedCart: total - customers,
+      byStatus: statuses.map((g) => ({ status: g.workingStatus, count: g._count._all })).sort((a, b) => b.count - a.count || a.status.localeCompare(b.status)),
+      calls,
+      activities,
+    };
+  }
+
   /** The listed leads with their per-lead activity counts: grouped queries for the whole batch, never one query per lead. */
   private async rows(leads: LeadRecord[], f: SegmentReportQuery): Promise<SegmentLeadRow[]> {
     if (leads.length === 0) return [];
@@ -222,27 +251,35 @@ class SegmentReportService {
     }));
   }
 
-  async report(viewer: AnalyticsViewer, f: SegmentReportQuery, page: number, pageSize: number) {
+  /** `view` picks which records are LISTED and paged; the metrics are always those of the Lead-section records, and `excluded` always describes the others. */
+  async report(viewer: AnalyticsViewer, f: SegmentReportQuery, page: number, pageSize: number, view: "listed" | "excluded" = "listed") {
     const where = segmentLeadWhere(viewer, f);
+    const excludedWhere = segmentLeadWhere(viewer, f, "excluded");
     const segment = await this.segmentOrThrow(f.segmentId);
     const size = Math.min(Math.max(1, pageSize), MAX_PAGE_SIZE);
-    const [metrics, leads] = await Promise.all([
+    const [metrics, excluded, leads] = await Promise.all([
       this.metrics(where, f),
-      this.db.lead.findMany({ where, select: LEAD_SELECT, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: (Math.max(1, page) - 1) * size, take: size }),
+      this.excludedSummary(excludedWhere, f),
+      // the same order as the Lead section (id breaks ties between rows created in one import chunk)
+      this.db.lead.findMany({ where: view === "excluded" ? excludedWhere : where, select: LEAD_SELECT, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip: (Math.max(1, page) - 1) * size, take: size }),
     ]);
+    const total = view === "excluded" ? excluded.total : metrics.totalLeads;
     return {
       segment,
       range: { from: f.from, to: f.to },
+      view,
       metrics,
+      excluded,
       leads: await this.rows(leads, f),
-      pagination: { page: Math.max(1, page), pageSize: size, total: metrics.totalLeads, totalPages: Math.max(1, Math.ceil(metrics.totalLeads / size)) },
+      pagination: { page: Math.max(1, page), pageSize: size, total, totalPages: Math.max(1, Math.ceil(total / size)) },
     };
   }
 
   /** One lead's whole history (not cut by the date range), newest first. Only for a lead that is in this viewer's view of the segment. */
   async history(viewer: AnalyticsViewer, f: SegmentReportQuery, leadId: string) {
     // the salesperson / call-status filters pick which leads are listed; they do not decide who may read a listed lead's history
-    const where = segmentLeadWhere(viewer, { ...f, salespersonId: undefined, callStatus: "ALL" });
+    // Excluded records keep their history too, so it is read from the whole membership (still only what this viewer may see).
+    const where = segmentLeadWhere(viewer, { ...f, salespersonId: undefined, callStatus: "ALL" }, "member");
     const lead = await this.db.lead.findFirst({ where: { AND: [{ id: leadId }, where] }, select: LEAD_SELECT });
     if (!lead) throw new ApiError("Lead not found", STATUS_CODES.NOT_FOUND);
     const [activities, calls, tasks] = await Promise.all([
@@ -259,16 +296,8 @@ class SegmentReportService {
     };
   }
 
-  /** The whole filtered segment as an Excel workbook. Too large -> refused with a reason; a file is never silently cut short. */
-  async exportXlsx(viewer: AnalyticsViewer, f: SegmentReportQuery, salespersonName: string | null = null): Promise<{ buffer: Buffer; filename: string }> {
-    const where = segmentLeadWhere(viewer, f);
-    const segment = await this.segmentOrThrow(f.segmentId);
-    const metrics = await this.metrics(where, f);
-    const openFollowUps = metrics.followUpsPending + metrics.followUpsCompleted;
-    if (metrics.totalLeads > MAX_EXPORT_LEADS || metrics.activities > MAX_EXPORT_ROWS || metrics.calls > MAX_EXPORT_ROWS || openFollowUps > MAX_EXPORT_ROWS) {
-      throw new ApiError(`This export is too large (limit ${MAX_EXPORT_LEADS.toLocaleString("en-IN")} leads and ${MAX_EXPORT_ROWS.toLocaleString("en-IN")} rows per sheet). Choose a salesperson or a shorter date range.`, 422);
-    }
-
+  /** Every record matching `where` with its calls, follow-ups and activities for the period. */
+  private async collect(where: Prisma.LeadWhereInput, f: SegmentReportQuery) {
     const leads: LeadRecord[] = [];
     let cursor: string | undefined;
     for (;;) {
@@ -277,10 +306,9 @@ class SegmentReportService {
       if (batch.length < CHUNK) break;
       cursor = batch[batch.length - 1]!.id;
     }
-    leads.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id));
+    leads.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || a.id.localeCompare(b.id));
     const rows: SegmentLeadRow[] = [];
     for (let i = 0; i < leads.length; i += CHUNK) rows.push(...(await this.rows(leads.slice(i, i + CHUNK), f)));
-    const who = new Map(rows.map((r) => [r.id, r]));
 
     const { start, end } = periodOf(f);
     const period = { gte: start, lt: end };
@@ -299,6 +327,21 @@ class SegmentReportService {
       calls.push(...c);
       tasks.push(...t);
     }
+    return { rows, activities, calls, tasks };
+  }
+
+  /** The whole filtered segment as an Excel workbook: the Lead-section records in Leads / Calls / Follow-ups / Activity, the excluded ones in their own "Excluded ..." sheets. Too large -> refused with a reason; a file is never silently cut short. */
+  async exportXlsx(viewer: AnalyticsViewer, f: SegmentReportQuery, salespersonName: string | null = null): Promise<{ buffer: Buffer; filename: string }> {
+    const where = segmentLeadWhere(viewer, f);
+    const excludedWhere = segmentLeadWhere(viewer, f, "excluded");
+    const segment = await this.segmentOrThrow(f.segmentId);
+    const [metrics, excluded] = await Promise.all([this.metrics(where, f), this.excludedSummary(excludedWhere, f)]);
+    const openFollowUps = metrics.followUpsPending + metrics.followUpsCompleted;
+    if (metrics.totalLeads + excluded.total > MAX_EXPORT_LEADS || metrics.activities + excluded.activities > MAX_EXPORT_ROWS || metrics.calls + excluded.calls > MAX_EXPORT_ROWS || openFollowUps > MAX_EXPORT_ROWS) {
+      throw new ApiError(`This export is too large (limit ${MAX_EXPORT_LEADS.toLocaleString("en-IN")} leads and ${MAX_EXPORT_ROWS.toLocaleString("en-IN")} rows per sheet). Choose a salesperson or a shorter date range.`, 422);
+    }
+    const main = await this.collect(where, f);
+    const others = await this.collect(excludedWhere, f);
 
     const stamp = (d: Date | null) => (d ? new Date(d.getTime() + f.tzOffsetMinutes * 60_000).toISOString().slice(0, 16).replace("T", " ") : "");
     const text = (v: string | null | undefined) => safeCell(v ?? "");
@@ -315,7 +358,7 @@ class SegmentReportService {
       ["Activity period (IST)", `${f.from} to ${f.to}`],
       ["Salesperson", f.salespersonId ? text(salespersonName ?? "Selected salesperson") : "All salespeople"],
       ["Call status filter", f.callStatus],
-      ["Total leads", metrics.totalLeads],
+      ["Total leads (as in the Leads section)", metrics.totalLeads],
       ["Contacted", metrics.contacted],
       ["Pending (not contacted)", metrics.pending],
       ["Converted", metrics.converted],
@@ -328,19 +371,28 @@ class SegmentReportService {
       ["Follow-ups overdue now", metrics.followUpsOverdue],
       ["Recorded activities in period", metrics.activities],
       ...metrics.activityByType.map((a): [string, number] => [`Activity: ${a.type}`, a.count]),
+      ["Excluded records (not in the totals above)", excluded.total],
+      ["Excluded: converted to customer", excluded.customers],
+      ["Excluded: of those customers, also from an abandoned cart", excluded.customersFromAbandonedCart],
+      ["Excluded: abandoned cart (not a customer)", excluded.abandonedCart],
+      ...excluded.byStatus.map((s): [string, number] => [`Excluded with status ${s.status}`, s.count]),
     ]);
-    sheet(
-      "Leads",
-      ["Lead number", "Name", "Phone", "Email", "Location", "Salesperson", "Manager", "Source", "Lead status", "Priority", "Stage", "Created (IST)", "Last contacted (IST)", "Last activity (IST)", "Calls in period", "Connected calls", "Activities in period", "Notes in period", "Follow-ups completed", "Follow-ups pending"],
-      rows.map((r) => [text(r.leadNumber), text(r.name), text(r.phone), text(r.email), text(r.location), text(r.salesperson), text(r.manager), text(r.source), r.status, r.priority, r.stage, stamp(r.createdAt), stamp(r.lastContactedAt), stamp(r.lastActivityAt), r.calls, r.connectedCalls, r.activities, r.notes, r.followUpsCompleted, r.followUpsPending]),
-    );
-    const idCells = (leadId: string | null) => [text(who.get(leadId ?? "")?.leadNumber), text(who.get(leadId ?? "")?.name), text(who.get(leadId ?? "")?.phone)];
-    sheet("Calls", ["Lead number", "Name", "Phone", "When (IST)", "Direction", "Call status", "Duration (s)", "Agent", "Call notes"],
-      calls.map((c) => [...idCells(c.leadId), stamp(c.startedAt ?? c.createdAt), c.direction, c.status, c.durationSeconds ?? "", text(c.agent?.name), text(c.notes)]));
-    sheet("Follow-ups", ["Lead number", "Name", "Phone", "Type", "Status", "Title", "Scheduled (IST)", "Completed (IST)", "Assigned to"],
-      tasks.map((t) => [...idCells(t.leadId), t.type, t.status, text(t.title), stamp(t.scheduledAt), stamp(t.completedAt), text(t.assignedTo?.name)]));
-    sheet("Activity", ["Lead number", "Name", "Phone", "When (IST)", "Type", "Title", "Details", "By"],
-      activities.map((a) => [...idCells(a.leadId), stamp(a.createdAt), a.type, text(a.title), text(a.description), text(a.actor?.name)]));
+    const leadHeader = ["Lead number", "Name", "Phone", "Email", "Location", "Salesperson", "Manager", "Source", "Lead status", "Priority", "Stage", "Created (IST)", "Last contacted (IST)", "Last activity (IST)", "Calls in period", "Connected calls", "Activities in period", "Notes in period", "Follow-ups completed", "Follow-ups pending"];
+    const leadCells = (r: SegmentLeadRow): (string | number)[] => [text(r.leadNumber), text(r.name), text(r.phone), text(r.email), text(r.location), text(r.salesperson), text(r.manager), text(r.source), r.status, r.priority, r.stage, stamp(r.createdAt), stamp(r.lastContactedAt), stamp(r.lastActivityAt), r.calls, r.connectedCalls, r.activities, r.notes, r.followUpsCompleted, r.followUpsPending];
+    const detail = (prefix: string, set: typeof main) => {
+      const who = new Map(set.rows.map((r) => [r.id, r]));
+      const idCells = (leadId: string | null) => [text(who.get(leadId ?? "")?.leadNumber), text(who.get(leadId ?? "")?.name), text(who.get(leadId ?? "")?.phone)];
+      sheet(`${prefix}Calls`, ["Lead number", "Name", "Phone", "When (IST)", "Direction", "Call status", "Duration (s)", "Agent", "Call notes"],
+        set.calls.map((c) => [...idCells(c.leadId), stamp(c.startedAt ?? c.createdAt), c.direction, c.status, c.durationSeconds ?? "", text(c.agent?.name), text(c.notes)]));
+      sheet(`${prefix}Follow-ups`, ["Lead number", "Name", "Phone", "Type", "Status", "Title", "Scheduled (IST)", "Completed (IST)", "Assigned to"],
+        set.tasks.map((t) => [...idCells(t.leadId), t.type, t.status, text(t.title), stamp(t.scheduledAt), stamp(t.completedAt), text(t.assignedTo?.name)]));
+      sheet(`${prefix}Activity`, ["Lead number", "Name", "Phone", "When (IST)", "Type", "Title", "Details", "By"],
+        set.activities.map((a) => [...idCells(a.leadId), stamp(a.createdAt), a.type, text(a.title), text(a.description), text(a.actor?.name)]));
+    };
+    sheet("Leads", leadHeader, main.rows.map(leadCells));
+    detail("", main);
+    sheet("Excluded records", ["Why excluded", ...leadHeader], others.rows.map((r) => [r.stage === "CUSTOMER" ? "Converted to customer" : "Abandoned cart", ...leadCells(r)]));
+    detail("Excluded ", others);
 
     const slug = segment.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "segment";
     return { buffer: Buffer.from(await book.xlsx.writeBuffer()), filename: `segment-${slug}-${f.from}_${f.to}.xlsx` };
