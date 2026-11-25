@@ -5,7 +5,7 @@ import ManagerService from "./manager.service.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import { managerAnalyticsService } from "./manager.analytics.js";
 import { validateAnalyticsQuery } from "./manager.analytics.validators.js";
-import { segmentReportService } from "./manager.segment-report.js";
+import { isDrillMetric, segmentReportService } from "./manager.segment-report.js";
 import { XLSX_MIME } from "../report-automation/report-automation.xlsx.js";
 
 const managerService = new ManagerService();
@@ -109,6 +109,38 @@ export const exportSegmentReport = async (req: AuthRequest, res: Response): Prom
     if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
     const salesperson = await managerAnalyticsService.assertReportRequest(req.user!, value);
     const { buffer, filename } = await segmentReportService.exportXlsx(req.user!, value, salesperson);
+    res.setHeader("Content-Type", XLSX_MIME);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(STATUS_CODES.OK).send(buffer);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+/** The records behind one metric card of the segment report. */
+export const getSegmentDetails = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAnalyticsQuery(req.query);
+    if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    const metric = req.query.metric;
+    if (!isDrillMetric(metric)) return sendResponse(res, false, null, "Unknown metric", STATUS_CODES.BAD_REQUEST);
+    await managerAnalyticsService.assertReportRequest(req.user!, value);
+    const result = await segmentReportService.details(req.user!, value, metric, positive(req.query.page, 1), positive(req.query.pageSize, 25));
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const exportSegmentDetails = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAnalyticsQuery(req.query);
+    if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    const metric = req.query.metric;
+    if (!isDrillMetric(metric)) return sendResponse(res, false, null, "Unknown metric", STATUS_CODES.BAD_REQUEST);
+    await managerAnalyticsService.assertReportRequest(req.user!, value);
+    const { buffer, filename } = await segmentReportService.exportDetailsXlsx(req.user!, value, metric);
     res.setHeader("Content-Type", XLSX_MIME);
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.setHeader("Cache-Control", "no-store");

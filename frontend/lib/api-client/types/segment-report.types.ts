@@ -65,6 +65,25 @@ export interface SegmentReport {
   pagination: { page: number; pageSize: number; total: number; totalPages: number };
 }
 
+/** The metric cards; each name is the metric's field in SegmentReportMetrics. */
+export type SegmentDrillMetric = "totalLeads" | "contacted" | "pending" | "converted" | "lost" | "calls" | "followUpsCompleted" | "followUpsPending" | "activities";
+
+interface DrillLeadRef {
+  id: string;
+  leadId: string;
+  leadNumber: string;
+  leadName: string;
+  phone: string | null;
+}
+export type SegmentDrillRecords =
+  | { kind: "leads"; rows: SegmentLeadRow[] }
+  | { kind: "calls"; rows: (DrillLeadRef & { agent: string | null; at: string; direction: string; status: string; outcome: string | null; durationSeconds: number | null; notes: string | null })[] }
+  | { kind: "followUps"; rows: (DrillLeadRef & { assignedTo: string | null; type: string; status: string; title: string; notes: string | null; scheduledAt: string | null; completedAt: string | null; overdue: boolean })[] }
+  | { kind: "activities"; rows: (DrillLeadRef & { type: string; title: string | null; description: string | null; by: string | null; at: string })[] };
+
+/** One page of the records behind a card (/manager/analytics/segment/details). */
+export type SegmentDetails = SegmentDrillRecords & { metric: SegmentDrillMetric; pagination: SegmentReport["pagination"] };
+
 export interface SegmentLeadHistory {
   lead: { id: string; leadNumber: string; name: string; phone: string | null; status: string; salesperson: string | null };
   activities: { id: string; type: string; title: string | null; description: string | null; createdAt: string; by: string | null }[];

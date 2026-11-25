@@ -80,6 +80,44 @@ const PENDING_CONDITION: Prisma.LeadWhereInput = {
   calls: { none: {} },
 };
 
+/** The cards of the report, by the name of the metric each one shows. */
+export const DRILL_METRICS = ["totalLeads", "contacted", "pending", "converted", "lost", "calls", "followUpsCompleted", "followUpsPending", "activities"] as const;
+export type DrillMetric = (typeof DRILL_METRICS)[number];
+export const isDrillMetric = (v: unknown): v is DrillMetric => (DRILL_METRICS as readonly string[]).includes(v as string);
+export type LeadMetric = "totalLeads" | "contacted" | "pending" | "converted" | "lost";
+
+// ONE DEFINITION PER CARD. The number on a card and the records behind it are built from the SAME condition, so they cannot disagree. `where` is always segmentLeadWhere() (the report's own leads).
+
+/** Contacted = every lead that is not Pending: written as the negation of each part of PENDING_CONDITION. */
+const CONTACTED_CONDITION: Prisma.LeadWhereInput = {
+  OR: [{ workingStatus: { notIn: [LeadWorkingStatus.NEW, LeadWorkingStatus.ASSIGNED] } }, { lastContactedAt: { not: null } }, { calls: { some: {} } }],
+};
+
+export function leadMetricWhere(metric: LeadMetric, where: Prisma.LeadWhereInput): Prisma.LeadWhereInput {
+  if (metric === "totalLeads") return where;
+  const extra: Record<Exclude<LeadMetric, "totalLeads">, Prisma.LeadWhereInput> = {
+    contacted: CONTACTED_CONDITION,
+    pending: PENDING_CONDITION,
+    converted: { workingStatus: LeadWorkingStatus.CONVERTED },
+    lost: { workingStatus: { in: LOST_STATUSES } },
+  };
+  return { AND: [where, extra[metric]] };
+}
+
+export const callMetricWhere = (where: Prisma.LeadWhereInput, f: AnalyticsFilters): Prisma.CallWhereInput => ({ ...callsInPeriod(f), lead: where });
+
+export function activityMetricWhere(where: Prisma.LeadWhereInput, f: AnalyticsFilters): Prisma.ActivityWhereInput {
+  const { start, end } = periodOf(f);
+  return { createdAt: { gte: start, lt: end }, lead: where };
+}
+
+/** Completed = completed inside the period. Pending = open now, whatever the period. */
+export function followUpMetricWhere(metric: "followUpsCompleted" | "followUpsPending", where: Prisma.LeadWhereInput, f: AnalyticsFilters): Prisma.TaskWhereInput {
+  const { start, end } = periodOf(f);
+  const base = { type: { in: FOLLOW_UP_TYPES }, lead: where };
+  return metric === "followUpsCompleted" ? { ...base, status: TaskStatus.COMPLETED, completedAt: { gte: start, lt: end } } : { ...base, status: { in: OPEN_TASKS } };
+}
+
 const LEAD_SELECT = {
   id: true,
   leadNumber: true,
@@ -127,6 +165,18 @@ export interface SegmentLeadRow {
   followUpsPending: number;
 }
 
+interface DrillLeadRef {
+  leadId: string;
+  leadNumber: string;
+  leadName: string;
+  phone: string | null;
+}
+export type DrillRecords =
+  | { kind: "leads"; rows: SegmentLeadRow[] }
+  | { kind: "calls"; rows: (DrillLeadRef & { id: string; agent: string | null; at: Date; direction: string; status: CallStatus; outcome: string | null; durationSeconds: number | null; notes: string | null })[] }
+  | { kind: "followUps"; rows: (DrillLeadRef & { id: string; assignedTo: string | null; type: TaskType; status: TaskStatus; title: string; notes: string | null; scheduledAt: Date | null; completedAt: Date | null; overdue: boolean })[] }
+  | { kind: "activities"; rows: (DrillLeadRef & { id: string; type: string; title: string | null; description: string | null; by: string | null; at: Date })[] };
+
 class SegmentReportService {
   constructor(
     private readonly db: Db = prisma,
@@ -143,18 +193,17 @@ class SegmentReportService {
     const { start, end } = periodOf(f);
     const period = { gte: start, lt: end };
     const and = (extra: Prisma.LeadWhereInput): Prisma.LeadWhereInput => ({ AND: [where, extra] });
-    const followUp = { type: { in: FOLLOW_UP_TYPES }, lead: where };
     const [total, pending, converted, lost, addedInPeriod, callGroups, activityGroups, done, open, overdue] = await Promise.all([
-      this.db.lead.count({ where }),
-      this.db.lead.count({ where: and(PENDING_CONDITION) }),
-      this.db.lead.count({ where: and({ workingStatus: LeadWorkingStatus.CONVERTED }) }),
-      this.db.lead.count({ where: and({ workingStatus: { in: LOST_STATUSES } }) }),
+      this.db.lead.count({ where: leadMetricWhere("totalLeads", where) }),
+      this.db.lead.count({ where: leadMetricWhere("pending", where) }),
+      this.db.lead.count({ where: leadMetricWhere("converted", where) }),
+      this.db.lead.count({ where: leadMetricWhere("lost", where) }),
       this.db.lead.count({ where: and({ createdAt: period }) }),
-      this.db.call.groupBy({ by: ["status"], where: { ...callsInPeriod(f), lead: where }, _count: { _all: true } }),
-      this.db.activity.groupBy({ by: ["type"], where: { createdAt: period, lead: where }, _count: { _all: true } }),
-      this.db.task.count({ where: { ...followUp, status: TaskStatus.COMPLETED, completedAt: period } }),
-      this.db.task.count({ where: { ...followUp, status: { in: OPEN_TASKS } } }),
-      this.db.task.count({ where: { ...followUp, status: { in: OPEN_TASKS }, scheduledAt: { lt: this.now() } } }),
+      this.db.call.groupBy({ by: ["status"], where: callMetricWhere(where, f), _count: { _all: true } }),
+      this.db.activity.groupBy({ by: ["type"], where: activityMetricWhere(where, f), _count: { _all: true } }),
+      this.db.task.count({ where: followUpMetricWhere("followUpsCompleted", where, f) }),
+      this.db.task.count({ where: followUpMetricWhere("followUpsPending", where, f) }),
+      this.db.task.count({ where: { ...followUpMetricWhere("followUpsPending", where, f), scheduledAt: { lt: this.now() } } }),
     ]);
     const calls = callGroups.reduce((n, g) => n + g._count._all, 0);
     const connectedCalls = callGroups.reduce((n, g) => n + (classify(g.status) === "connected" ? g._count._all : 0), 0);
@@ -294,6 +343,112 @@ class SegmentReportService {
       tasks: tasks.map(({ assignedTo, ...t }) => ({ ...t, assignedTo: assignedTo?.name ?? null })),
       limit: HISTORY_LIMIT,
     };
+  }
+
+  private countFor(metric: DrillMetric, where: Prisma.LeadWhereInput, f: SegmentReportQuery): Promise<number> {
+    if (metric === "calls") return this.db.call.count({ where: callMetricWhere(where, f) });
+    if (metric === "activities") return this.db.activity.count({ where: activityMetricWhere(where, f) });
+    if (metric === "followUpsCompleted" || metric === "followUpsPending") return this.db.task.count({ where: followUpMetricWhere(metric, where, f) });
+    return this.db.lead.count({ where: leadMetricWhere(metric, where) });
+  }
+
+  /** The records behind a card, one page (skip / take) in a stable order. */
+  private async recordsFor(metric: DrillMetric, where: Prisma.LeadWhereInput, f: SegmentReportQuery, skip: number, take: number): Promise<DrillRecords> {
+    const leadRef = { select: { id: true, leadNumber: true, firstName: true, lastName: true, mobile: true } } as const;
+    const who = (l: { id: string; leadNumber: string; firstName: string; lastName: string | null; mobile: string | null } | null) => ({
+      leadId: l?.id ?? "",
+      leadNumber: l?.leadNumber ?? "",
+      leadName: [l?.firstName, l?.lastName].filter(Boolean).join(" "),
+      phone: l?.mobile ?? null,
+    });
+    if (metric === "calls") {
+      const found = await this.db.call.findMany({
+        where: callMetricWhere(where, f),
+        select: { id: true, status: true, direction: true, durationSeconds: true, notes: true, startedAt: true, createdAt: true, agent: { select: { name: true } }, outcome: { select: { name: true } }, lead: leadRef },
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        skip,
+        take,
+      });
+      return { kind: "calls", rows: found.map((c) => ({ id: c.id, ...who(c.lead), agent: c.agent?.name ?? null, at: c.startedAt ?? c.createdAt, direction: c.direction, status: c.status, outcome: c.outcome?.name ?? null, durationSeconds: c.durationSeconds, notes: c.notes })) };
+    }
+    if (metric === "activities") {
+      const found = await this.db.activity.findMany({
+        where: activityMetricWhere(where, f),
+        select: { id: true, type: true, title: true, description: true, createdAt: true, actor: { select: { name: true } }, lead: leadRef },
+        orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+        skip,
+        take,
+      });
+      return { kind: "activities", rows: found.map((a) => ({ id: a.id, ...who(a.lead), type: a.type, title: a.title, description: a.description, by: a.actor?.name ?? null, at: a.createdAt })) };
+    }
+    if (metric === "followUpsCompleted" || metric === "followUpsPending") {
+      const found = await this.db.task.findMany({
+        where: followUpMetricWhere(metric, where, f),
+        select: { id: true, type: true, status: true, title: true, description: true, scheduledAt: true, completedAt: true, assignedTo: { select: { name: true } }, lead: leadRef },
+        // completed: latest first; pending: the longest overdue first
+        orderBy: metric === "followUpsCompleted" ? [{ completedAt: "desc" }, { id: "asc" }] : [{ scheduledAt: { sort: "asc", nulls: "last" } }, { id: "asc" }],
+        skip,
+        take,
+      });
+      const now = this.now();
+      return {
+        kind: "followUps",
+        rows: found.map((t) => ({ id: t.id, ...who(t.lead), assignedTo: t.assignedTo?.name ?? null, type: t.type, status: t.status, title: t.title, notes: t.description, scheduledAt: t.scheduledAt, completedAt: t.completedAt, overdue: t.status !== TaskStatus.COMPLETED && t.scheduledAt !== null && t.scheduledAt < now })),
+      };
+    }
+    const leads = await this.db.lead.findMany({ where: leadMetricWhere(metric, where), select: LEAD_SELECT, orderBy: [{ createdAt: "desc" }, { id: "asc" }], skip, take });
+    return { kind: "leads", rows: await this.rows(leads, f) };
+  }
+
+  /** The records behind one card, for exactly the report's filters and the viewer's permissions. */
+  async details(viewer: AnalyticsViewer, f: SegmentReportQuery, metric: DrillMetric, page: number, pageSize: number) {
+    const where = segmentLeadWhere(viewer, f);
+    await this.segmentOrThrow(f.segmentId);
+    const size = Math.min(Math.max(1, pageSize), MAX_PAGE_SIZE);
+    const at = Math.max(1, page);
+    const [total, records] = await Promise.all([this.countFor(metric, where, f), this.recordsFor(metric, where, f, (at - 1) * size, size)]);
+    return { metric, ...records, pagination: { page: at, pageSize: size, total, totalPages: Math.max(1, Math.ceil(total / size)) } };
+  }
+
+  /** Every record behind one card as an Excel sheet. Too large -> refused; never cut short. */
+  async exportDetailsXlsx(viewer: AnalyticsViewer, f: SegmentReportQuery, metric: DrillMetric): Promise<{ buffer: Buffer; filename: string }> {
+    const where = segmentLeadWhere(viewer, f);
+    const segment = await this.segmentOrThrow(f.segmentId);
+    const total = await this.countFor(metric, where, f);
+    const isLeads = !["calls", "activities", "followUpsCompleted", "followUpsPending"].includes(metric);
+    const limit = isLeads ? MAX_EXPORT_LEADS : MAX_EXPORT_ROWS;
+    if (total > limit) throw new ApiError(`This export is too large (${total.toLocaleString("en-IN")} records; limit ${limit.toLocaleString("en-IN")}). Choose a salesperson or a shorter date range.`, 422);
+
+    const stamp = (d: Date | null) => (d ? new Date(d.getTime() + f.tzOffsetMinutes * 60_000).toISOString().slice(0, 16).replace("T", " ") : "");
+    const text = (v: string | null | undefined) => safeCell(v ?? "");
+    let header: string[] = [];
+    const data: (string | number)[][] = [];
+    for (let skip = 0; skip === 0 || skip < total; skip += CHUNK) {
+      const batch = await this.recordsFor(metric, where, f, skip, CHUNK);
+      if (batch.kind === "leads") {
+        header = ["Lead number", "Name", "Phone", "Salesperson", "Lead status", "Source", "Last activity (IST)", "Last contacted (IST)", "Calls in period", "Connected calls", "Activities in period", "Notes in period", "Follow-ups completed", "Follow-ups pending"];
+        data.push(...batch.rows.map((r) => [text(r.leadNumber), text(r.name), text(r.phone), text(r.salesperson), r.status, text(r.source), stamp(r.lastActivityAt), stamp(r.lastContactedAt), r.calls, r.connectedCalls, r.activities, r.notes, r.followUpsCompleted, r.followUpsPending]));
+      } else if (batch.kind === "calls") {
+        header = ["Lead number", "Lead name", "Phone", "Telecaller / salesperson", "Date and time (IST)", "Direction", "Call status", "Outcome", "Duration (s)", "Call notes"];
+        data.push(...batch.rows.map((c) => [text(c.leadNumber), text(c.leadName), text(c.phone), text(c.agent), stamp(c.at), c.direction, c.status, text(c.outcome), c.durationSeconds ?? "", text(c.notes)]));
+      } else if (batch.kind === "followUps") {
+        header = ["Lead number", "Lead name", "Phone", "Assigned salesperson", "Type", "Title", "Follow-up date and time (IST)", "Completed (IST)", "Status", "Overdue", "Notes"];
+        data.push(...batch.rows.map((t) => [text(t.leadNumber), text(t.leadName), text(t.phone), text(t.assignedTo), t.type, text(t.title), stamp(t.scheduledAt), stamp(t.completedAt), t.status, t.overdue ? "Yes" : "", text(t.notes)]));
+      } else {
+        header = ["Lead number", "Lead name", "Phone", "Activity type", "Title", "Description", "Performed by", "Date and time (IST)"];
+        data.push(...batch.rows.map((a) => [text(a.leadNumber), text(a.leadName), text(a.phone), a.type, text(a.title), text(a.description), text(a.by), stamp(a.at)]));
+      }
+      if (batch.rows.length < CHUNK) break;
+    }
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet("Records");
+    sheet.addRow(header).font = { bold: true };
+    for (const row of data) sheet.addRow(row);
+    sheet.views = [{ state: "frozen", ySplit: 1 }];
+    sheet.columns.forEach((col, i) => (col.width = Math.min(60, Math.max(14, header[i]!.length + 2))));
+
+    const slug = (v: string) => v.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    return { buffer: Buffer.from(await book.xlsx.writeBuffer()), filename: `segment-${slug(segment.name) || "segment"}-${slug(metric)}-${f.from}_${f.to}.xlsx` };
   }
 
   /** Every record matching `where` with its calls, follow-ups and activities for the period. */

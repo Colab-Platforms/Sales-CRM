@@ -393,3 +393,145 @@ describe("the same segment shows the same leads in the Leads section and in Repo
     assert.deepEqual([r.json.data.calls.length, r.json.data.tasks.length, r.json.data.activities.length], [1, 1, 1]);
   });
 });
+
+describe("card drill-down: the records behind every metric card", () => {
+  const METRICS = ["totalLeads", "contacted", "pending", "converted", "lost", "calls", "followUpsCompleted", "followUpsPending", "activities"] as const;
+  const details = async (who: string, seg: string, metric: string, extra = "") => {
+    const r = await get(who, `/analytics/segment/details?segmentId=${segment[seg]}&metric=${metric}&${RANGE}&${extra}`);
+    assert.equal(r.status, 200, JSON.stringify(r.json));
+    return r.json.data;
+  };
+  /** Every record behind a card, walking the pages. */
+  const all = async (who: string, seg: string, metric: string, extra = "", pageSize = 2) => {
+    const rows: any[] = [];
+    for (let page = 1; ; page++) {
+      const d = await details(who, seg, metric, `page=${page}&pageSize=${pageSize}&${extra}`);
+      assert.ok(d.rows.length <= pageSize);
+      rows.push(...d.rows);
+      if (page >= d.pagination.totalPages) return { rows, total: d.pagination.total as number, kind: d.kind as string };
+    }
+  };
+  const keyOf = (id: string) => Object.keys(lead).find((k) => lead[k] === id)!;
+  const leadsOf = (rows: any[]) => rows.map((r) => keyOf(r.leadId ?? r.id)).sort();
+
+  it("RECONCILES: for every card, segment, viewer and filter, the paged records are exactly as many as the card says, with none repeated", async () => {
+    let checked = 0;
+    for (const seg of ["vip", "custom", "matrix", "empty"]) {
+      for (const [who, extra] of [["admin", ""], ["admin", `salespersonId=${ids.s1}`], ["admin", "callStatus=CONNECTED"], ["admin", "callStatus=NOT_CONNECTED"], ["m1", ""], ["m2", ""]] as const) {
+        const card = (await report(who, seg, extra)).metrics;
+        for (const metric of METRICS) {
+          const d = await all(who, seg, metric, extra, seg === "matrix" ? 5 : 2);
+          const label = `${seg} ${who} ${extra} ${metric}`;
+          assert.equal(d.total, card[metric], label);
+          assert.equal(d.rows.length, card[metric], label);
+          assert.equal(new Set(d.rows.map((r) => r.id)).size, d.rows.length, label);
+          checked++;
+        }
+      }
+    }
+    assert.equal(checked, 4 * 6 * METRICS.length);
+  });
+
+  it("lead cards list the leads of their definition", async () => {
+    const who = async (metric: string) => leadsOf((await all("admin", "vip", metric)).rows);
+    assert.deepEqual(await who("totalLeads"), ["called", "fresh", "gone", "lost", "unassigned"]);
+    assert.deepEqual(await who("contacted"), ["called", "gone", "lost"]);
+    assert.deepEqual(await who("pending"), ["fresh", "unassigned"]);
+    assert.deepEqual(await who("lost"), ["lost"]);
+    assert.deepEqual(await who("converted"), [], "the converted VIP records are excluded from the main report");
+    for (const r of (await all("admin", "matrix", "pending", "", 50)).rows) assert.ok(["NEW", "ASSIGNED"].includes(r.status));
+    assert.deepEqual((await all("admin", "matrix", "converted")).rows.map((r) => r.status), ["CONVERTED"]);
+    assert.deepEqual((await all("admin", "matrix", "lost")).rows.map((r) => r.status).sort(), ["DND", "NOT_INTERESTED"]);
+    const row = (await all("admin", "vip", "totalLeads")).rows.find((r) => r.id === lead.called);
+    assert.deepEqual([row.salesperson, row.status, row.calls, row.notes, row.activities], [`SG s1 ${tag}`, "RINGING", 2, 1, 2]);
+    assert.ok(row.phone);
+  });
+
+  it("Calls: one row per call of the period, with caller, time, status, duration and lead; none from outside the period or from excluded records", async () => {
+    const d = await all("admin", "vip", "calls");
+    assert.equal(d.kind, "calls");
+    assert.deepEqual(d.rows.map((c) => `${keyOf(c.leadId)}:${c.status}`).sort(), ["called:COMPLETED", "called:NO_ANSWER", "lost:FAILED"]);
+    const c = d.rows.find((x) => x.status === "COMPLETED");
+    assert.deepEqual([c.agent, c.leadName, c.notes, c.direction], [`SG s1 ${tag}`, "SG called", "asked for price", "OUTBOUND"]);
+    assert.ok(c.phone && c.at && "durationSeconds" in c && "outcome" in c);
+  });
+
+  it("Follow-ups: completed in the period and open now are listed separately, with assignee, time, status and notes; other task types never appear", async () => {
+    const done = await all("admin", "vip", "followUpsCompleted");
+    assert.deepEqual(done.rows.map((t) => [keyOf(t.leadId), t.type, t.status, t.overdue]), [["called", "FOLLOW_UP", "COMPLETED", false]]);
+    const open = await all("admin", "vip", "followUpsPending");
+    assert.deepEqual(open.rows.map((t) => [keyOf(t.leadId), t.status, t.overdue]), [["lost", "PENDING", true]]);
+    assert.equal(open.rows[0].assignedTo, `SG s1 ${tag}`);
+    assert.ok(open.rows[0].scheduledAt && "notes" in open.rows[0]);
+  });
+
+  it("Recorded activities: one row per activity of the period, with type, text, performer and time", async () => {
+    const d = await all("admin", "vip", "activities");
+    assert.deepEqual(d.rows.map((a) => `${keyOf(a.leadId)}:${a.type}`).sort(), ["called:NOTE", "called:STATUS_CHANGE", "lost:REASSIGNMENT"]);
+    assert.ok(d.rows.every((a) => a.title && a.by && a.at));
+    assert.ok(!JSON.stringify(d.rows).includes("Old note") && !JSON.stringify(d.rows).includes("Cart note"));
+  });
+
+  it("respects the date range: another period shows that period's calls and activities", async () => {
+    const r = await get("admin", `/analytics/segment/details?segmentId=${segment.vip}&metric=calls&from=2026-10-01&to=2026-10-01`);
+    assert.deepEqual([r.json.data.pagination.total, r.json.data.rows.map((c: any) => c.status)], [1, ["COMPLETED"]]);
+    const a = await get("admin", `/analytics/segment/details?segmentId=${segment.vip}&metric=activities&from=2026-10-01&to=2026-10-01`);
+    assert.deepEqual(a.json.data.rows.map((x: any) => x.title), ["Old note"]);
+  });
+
+  it("respects salesperson and call-status filters", async () => {
+    assert.deepEqual(leadsOf((await all("admin", "vip", "totalLeads", `salespersonId=${ids.s2}`)).rows), ["lost"]);
+    assert.deepEqual((await all("admin", "vip", "calls", `salespersonId=${ids.s2}`)).rows.map((c) => c.status), ["FAILED"]);
+    assert.deepEqual((await all("admin", "vip", "calls", "callStatus=CONNECTED")).rows.map((c) => c.status), ["COMPLETED"]);
+  });
+
+  it("pagination: stable pages, a capped page size, and a page past the end is empty but keeps the true total", async () => {
+    const a = await details("admin", "matrix", "totalLeads", "page=1&pageSize=5");
+    const again = await details("admin", "matrix", "totalLeads", "page=1&pageSize=5");
+    assert.deepEqual(a.rows.map((r: any) => r.id), again.rows.map((r: any) => r.id));
+    assert.equal((await details("admin", "matrix", "totalLeads", "pageSize=100000")).pagination.pageSize, 100);
+    const past = await details("admin", "vip", "calls", "page=9&pageSize=2");
+    assert.deepEqual([past.rows.length, past.pagination.total, past.pagination.totalPages], [0, 3, 2]);
+  });
+
+  it("permissions: a manager sees only their own leads' records; others are refused on both addresses", async () => {
+    assert.deepEqual((await all("m1", "vip", "calls")).rows.map((c) => keyOf(c.leadId)), ["called", "called"]);
+    assert.deepEqual((await all("m2", "vip", "calls")).rows.map((c) => keyOf(c.leadId)), ["lost"]);
+    for (const path of ["/analytics/segment/details?metric=calls", "/analytics/segment/details/export.xlsx?metric=calls"]) {
+      const url = `${path}&segmentId=${segment.vip}&${RANGE}`;
+      assert.equal((await raw("s1", url)).status, 403);
+      assert.equal((await raw("hr", url)).status, 403);
+      assert.equal((await raw(null, url)).status, 401);
+      assert.equal((await raw("m1", `${url}&salespersonId=${ids.s2}`)).status, 404);
+    }
+  });
+
+  it("rejects an unknown or missing metric, a missing segment and an unknown segment", async () => {
+    for (const path of ["/analytics/segment/details", "/analytics/segment/details/export.xlsx"]) {
+      assert.equal((await raw("admin", `${path}?segmentId=${segment.vip}&metric=revenue`)).status, 400);
+      assert.equal((await raw("admin", `${path}?segmentId=${segment.vip}`)).status, 400);
+      assert.equal((await raw("admin", `${path}?metric=calls`)).status, 400);
+      assert.equal((await raw("admin", `${path}?metric=calls&segmentId=${randomUUID()}`)).status, 404);
+    }
+  });
+
+  it("export: every card downloads exactly its records, for the same filters and permissions, with formulas neutralised", async () => {
+    const download = async (who: string, metric: string, extra = "") => {
+      const res = await raw(who, `/analytics/segment/details/export.xlsx?segmentId=${segment.vip}&metric=${metric}&${RANGE}&${extra}`);
+      assert.equal(res.status, 200, `${who} ${metric}`);
+      assert.match(res.headers.get("content-disposition")!, /segment-vip-test-.*\.xlsx/);
+      const book = new ExcelJS.Workbook();
+      await book.xlsx.load(Buffer.from(await res.arrayBuffer()) as never);
+      const rows: string[][] = [];
+      book.worksheets[0]!.eachRow((r) => void rows.push((r.values as unknown[]).slice(1).map((v) => String(v ?? ""))));
+      return { header: rows[0]!, rows: rows.slice(1) };
+    };
+    for (const [who, extra] of [["admin", ""], ["m2", ""], ["admin", `salespersonId=${ids.s1}`], ["admin", "callStatus=CONNECTED"]] as const) {
+      const card = (await report(who, "vip", extra)).metrics;
+      for (const metric of METRICS) assert.equal((await download(who, metric, extra)).rows.length, card[metric], `${who} ${extra} ${metric}`);
+    }
+    assert.ok((await download("admin", "calls")).header.includes("Telecaller / salesperson"));
+    const names = (await download("admin", "totalLeads")).rows.map((r) => r[1]!);
+    assert.ok(names.some((n) => n.includes("HYPERLINK")) && names.every((n) => !n.startsWith("=")));
+  });
+});

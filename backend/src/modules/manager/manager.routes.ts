@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listMyGroups, getGroup, listMySalespersons, getAnalyticsOverview, getSalespersonAnalytics, exportSalesOrdersCsv, getSegmentReport, getSegmentLeadHistory, exportSegmentReport } from "./manager.controller.js";
+import { listMyGroups, getGroup, listMySalespersons, getAnalyticsOverview, getSalespersonAnalytics, exportSalesOrdersCsv, getSegmentReport, getSegmentLeadHistory, exportSegmentReport, getSegmentDetails, exportSegmentDetails } from "./manager.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 
@@ -21,6 +21,8 @@ router.get("/analytics/orders.csv", reportViewers, exportSalesOrdersCsv);
 router.get("/analytics/segment", reportViewers, getSegmentReport);
 router.get("/analytics/segment/export.xlsx", reportViewers, exportSegmentReport);
 router.get("/analytics/segment/leads/:leadId/history", reportViewers, getSegmentLeadHistory);
+router.get("/analytics/segment/details", reportViewers, getSegmentDetails);
+router.get("/analytics/segment/details/export.xlsx", reportViewers, exportSegmentDetails);
 router.get("/analytics/salespersons/:salespersonId", reportViewers, getSalespersonAnalytics);
 
 export default router;

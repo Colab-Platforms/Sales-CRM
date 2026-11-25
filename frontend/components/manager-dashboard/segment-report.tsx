@@ -5,7 +5,9 @@ import Link from "next/link";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { managerAnalyticsApi } from "@/lib/api-client/endpoints/manager.api";
 import type { AnalyticsQuery } from "@/lib/api-client/types/manager-analytics.types";
-import type { SegmentLeadHistory, SegmentLeadRow, SegmentReport } from "@/lib/api-client/types/segment-report.types";
+import type { SegmentDrillMetric, SegmentLeadHistory, SegmentLeadRow, SegmentReport } from "@/lib/api-client/types/segment-report.types";
+import { ChevronDown, ChevronUp } from "lucide-react";
+import { SegmentDrillDown } from "./segment-drilldown";
 import { getErrorMessage } from "@/lib/api-client/client";
 import { formatNumber } from "@/lib/manager-analytics";
 import { Button } from "@/components/ui/button";
@@ -18,8 +20,8 @@ const PAGE_SIZE = 25;
 export const label = (v: string) => v.toLowerCase().replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }) : "—");
 
-export function segmentTiles(m: SegmentReport["metrics"]): { label: string; value: number; hint: string }[] {
-  return [
+export function segmentTiles(m: SegmentReport["metrics"]): { key: SegmentDrillMetric; label: string; value: number; hint: string }[] {
+  const tiles: { label: string; value: number; hint: string }[] = [
     { label: "Total leads", value: m.totalLeads, hint: `${formatNumber(m.addedInPeriod)} added in this period` },
     // These four are the lead's current state, whatever the date range. Contacted + Pending = Total; Converted and Lost are inside Contacted.
     { label: "Contacted", value: m.contacted, hint: "every lead that is not Pending (includes Converted and Lost)" },
@@ -31,19 +33,37 @@ export function segmentTiles(m: SegmentReport["metrics"]): { label: string; valu
     { label: "Follow-ups pending", value: m.followUpsPending, hint: `open now · ${formatNumber(m.followUpsOverdue)} overdue` },
     { label: "Recorded activities", value: m.activities, hint: `${formatNumber(m.notes)} notes · ${formatNumber(m.statusChanges)} status changes · ${formatNumber(m.assignments)} assignments` },
   ];
+  // the same order as the tiles above
+  const keys: SegmentDrillMetric[] = ["totalLeads", "contacted", "pending", "converted", "lost", "calls", "followUpsCompleted", "followUpsPending", "activities"];
+  return tiles.map((t, i) => ({ key: keys[i]!, ...t }));
 }
 
-export function SegmentMetrics({ metrics }: { metrics: SegmentReport["metrics"] }) {
+/** The metric cards. Each is a button: pressing one shows its records below, pressing the selected one again closes them. */
+export function SegmentMetrics({ metrics, selected = null, onSelect }: { metrics: SegmentReport["metrics"]; selected?: SegmentDrillMetric | null; onSelect?: (metric: SegmentDrillMetric | null) => void }) {
   return (
     <div className="space-y-2">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
-        {segmentTiles(metrics).map((t) => (
-          <div key={t.label} className="rounded-lg border border-border bg-card p-3 shadow-sm">
-            <p className="text-xs text-muted-foreground">{t.label}</p>
-            <p className="mt-1 text-xl font-semibold tabular-nums">{formatNumber(t.value)}</p>
-            <p className="mt-0.5 text-xs text-muted-foreground">{t.hint}</p>
-          </div>
-        ))}
+        {segmentTiles(metrics).map((t) => {
+          const open = selected === t.key;
+          return (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => onSelect?.(open ? null : t.key)}
+              aria-pressed={open}
+              aria-controls={open ? "segment-drilldown" : undefined}
+              className={`group flex cursor-pointer flex-col items-start rounded-lg border p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${open ? "border-primary bg-primary/5 ring-2 ring-primary" : "border-border bg-card"}`}
+            >
+              <span className="text-xs text-muted-foreground">{t.label}</span>
+              <span className="mt-1 text-xl font-semibold tabular-nums">{formatNumber(t.value)}</span>
+              <span className="mt-0.5 text-xs text-muted-foreground">{t.hint}</span>
+              <span className={`mt-auto flex items-center gap-1 pt-2 text-xs font-medium ${open ? "text-primary" : "text-muted-foreground group-hover:text-primary"}`}>
+                {open ? "Hide details" : "View details"}
+                {open ? <ChevronUp className="size-3.5" aria-hidden="true" /> : <ChevronDown className="size-3.5" aria-hidden="true" />}
+              </span>
+            </button>
+          );
+        })}
       </div>
       {metrics.activityByType.length > 0 ? (
         <p className="text-xs text-muted-foreground">Activity in this period: {metrics.activityByType.map((a) => `${label(a.type)} ${formatNumber(a.count)}`).join(" · ")}</p>
@@ -247,6 +267,8 @@ function HistoryDialog({ leadId, query, onClose }: { leadId: string; query: Anal
 export function SegmentReportSection({ query }: { query: AnalyticsQuery }) {
   const [page, setPage] = useState(1);
   const [openLead, setOpenLead] = useState<string | null>(null);
+  // the selected card. This section is rebuilt whenever a filter changes (and removed by Reset), so the selection never outlives its filters.
+  const [selected, setSelected] = useState<SegmentDrillMetric | null>(null);
   const { data, isPending, error, isPlaceholderData } = useQuery({
     queryKey: ["manager", "analytics", "segment", query, page],
     queryFn: ({ signal }) => managerAnalyticsApi.segmentReport(query, page, PAGE_SIZE, signal),
@@ -268,7 +290,8 @@ export function SegmentReportSection({ query }: { query: AnalyticsQuery }) {
         </div>
       ) : (
         <div className={isPlaceholderData ? "space-y-4 opacity-60" : "space-y-4"} aria-busy={isPlaceholderData}>
-          <SegmentMetrics metrics={data.metrics} />
+          <SegmentMetrics metrics={data.metrics} selected={selected} onSelect={setSelected} />
+          {selected ? <SegmentDrillDown key={selected} query={query} metric={selected} cardCount={data.metrics[selected]} onClose={() => setSelected(null)} /> : null}
           <Panel title="Segment leads" description={`${formatNumber(data.pagination.total)} matching ${data.pagination.total === 1 ? "lead" : "leads"}`} bodyClassName="p-0 sm:p-0">
             <SegmentLeadTable leads={data.leads} onHistory={setOpenLead} />
             <Pager page={data.pagination.page} totalPages={data.pagination.totalPages} onPage={setPage} name="segment leads" />

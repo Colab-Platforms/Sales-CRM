@@ -2,7 +2,7 @@ import { apiClient } from "../client";
 import type { ApiEnvelope } from "../types/common.types";
 import type { Group, MySalesperson } from "../types/manager.types";
 import type { AnalyticsQuery, ManagerAnalytics, SalespersonAnalytics } from "../types/manager-analytics.types";
-import type { SegmentLeadHistory, SegmentReport } from "../types/segment-report.types";
+import type { SegmentDetails, SegmentDrillMetric, SegmentLeadHistory, SegmentReport } from "../types/segment-report.types";
 
 export const managerApi = {
   async listGroups(): Promise<Group[]> {
@@ -41,6 +41,18 @@ export const managerAnalyticsApi = {
   async segmentLeadHistory(leadId: string, q: AnalyticsQuery, signal?: AbortSignal): Promise<SegmentLeadHistory> {
     const res = await apiClient.get<ApiEnvelope<SegmentLeadHistory>>(`/manager/analytics/segment/leads/${leadId}/history`, { params: analyticsParams(q), signal });
     return res.data.data;
+  },
+
+  /** One page of the records behind a metric card, for the report's filters. */
+  async segmentDetails(q: AnalyticsQuery, metric: SegmentDrillMetric, page: number, pageSize: number, signal?: AbortSignal): Promise<SegmentDetails> {
+    const res = await apiClient.get<ApiEnvelope<SegmentDetails>>("/manager/analytics/segment/details", { params: { ...analyticsParams(q), metric, page, pageSize }, signal });
+    return res.data.data;
+  },
+
+  /** Every record behind a metric card as the server-built Excel file. */
+  async segmentDetailsXlsx(q: AnalyticsQuery, metric: SegmentDrillMetric): Promise<Blob> {
+    const res = await apiClient.get<Blob>("/manager/analytics/segment/details/export.xlsx", { params: { ...analyticsParams(q), metric }, responseType: "blob" });
+    return res.data;
   },
 
   /** The filtered segment's leads and activity as the server-built Excel file. */
