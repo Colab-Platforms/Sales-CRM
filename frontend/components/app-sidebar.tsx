@@ -33,6 +33,7 @@ import {
   CalendarDays,
   Grid3x3,
   BadgeIndianRupee,
+  Headphones,
 } from "lucide-react";
 import {
   Sidebar,
@@ -247,6 +248,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Overview",
       items: [
         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
       ],
     },
     {
@@ -300,7 +302,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/abandoned-leads",
           icon: AlertTriangle,
         },
-        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
+        { title: "Call Recordings", href: "/dashboard/abandoned-leads/call-recordings", icon: Headphones },
         { title: "Performance Matrix", href: "/dashboard/performance-matrix", icon: Grid3x3 },
       ],
     },
@@ -346,6 +348,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
       label: "Overview",
       items: [
         { title: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
+        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
       ],
     },
     {
@@ -394,7 +397,7 @@ export const NAV_BY_ROLE: Record<CurrentUser["role"], NavSection[]> = {
           href: "/dashboard/abandoned-leads",
           icon: AlertTriangle,
         },
-        { title: "Reports", href: "/dashboard/reports", icon: BarChart3 },
+        { title: "Call Recordings", href: "/dashboard/abandoned-leads/call-recordings", icon: Headphones },
         { title: "Performance Matrix", href: "/dashboard/performance-matrix", icon: Grid3x3 },
         { title: "Sales Incentives", href: "/admin/sales-incentives", icon: BadgeIndianRupee },
       ],

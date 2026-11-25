@@ -47,6 +47,8 @@ export interface RecordingExport {
   attempts: number;
   canRetry: boolean;
   reused?: boolean;
+  /** Started from the Call Recordings screen (its own ZIP / Excel of recordings). Optional so older servers still type-check. */
+  callRecordings?: boolean;
 }
 
 export interface RecordingFile {

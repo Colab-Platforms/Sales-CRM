@@ -37,10 +37,24 @@ export interface ExcelRow {
 }
 
 /** Where the rows come from. The production source reads Postgres; tests supply a generator. */
-export interface ExcelSource {
+export interface ExcelSource<R = ExcelRow> {
   count(): Promise<number>;
-  pages(): AsyncIterable<ExcelRow[]>;
+  pages(): AsyncIterable<R[]>;
 }
+
+/** What a workbook looks like: the sheet, its columns and how a row becomes cells. The abandoned-lead layout is the default; the Call Recordings screen supplies its own. */
+export interface ExcelLayout<R> {
+  sheetName: string;
+  title: string;
+  columns: { header: string; key: string; width: number }[];
+  cell: (row: R, key: string) => string | number | null;
+  fileName: (job: ExportJobRow) => string;
+  /** A column shown as a number with thousands separators. */
+  moneyColumn?: string;
+}
+
+/** An IST "2026-11-05 14:17" text for a date, so the sheet reads the same in every viewer's time zone. */
+export const istText = (d: Date): string => recordingStamp(d).replace("_", " ").replace(/(\d{2})(\d{2})$/, "$1:$2");
 
 export const EXCEL_COLUMNS: { header: string; key: keyof ExcelRow; width: number }[] = [
   { header: "Lead ID", key: "leadNumber", width: 18 },
@@ -74,14 +88,24 @@ export const EXCEL_COLUMNS: { header: string; key: keyof ExcelRow; width: number
 /** The cell value for one column. Dates are written as IST text so the sheet reads the same in every viewer's time zone. */
 export function excelCell(row: ExcelRow, key: keyof ExcelRow): string | number | null {
   const v = row[key];
-  if (v instanceof Date) return recordingStamp(v).replace("_", " ").replace(/(\d{2})(\d{2})$/, "$1:$2");
+  if (v instanceof Date) return istText(v);
   if (typeof v === "boolean") return v ? "Yes" : "No";
   return v as string | number | null;
 }
 
-export type ExcelSourceFactory = (job: ExportJobRow) => ExcelSource;
+export type ExcelSourceFactory<R = ExcelRow> = (job: ExportJobRow) => ExcelSource<R>;
 
-export async function runExcelExport(deps: { repo: ExportRepo; store: BlobStore; source: ExcelSourceFactory }, jobId: string, partial: Partial<RunOptions> = {}): Promise<RunOutcome> {
+export const LEAD_LAYOUT: ExcelLayout<ExcelRow> = {
+  sheetName: "Abandoned leads",
+  title: "Abandoned leads export",
+  columns: EXCEL_COLUMNS,
+  cell: (row, key) => excelCell(row, key as keyof ExcelRow),
+  fileName: (job) => `abandoned-leads_${job.fromDay}_to_${job.toDay}.xlsx`,
+  moneyColumn: "orderValue",
+};
+
+export async function runExcelExport<R = ExcelRow>(deps: { repo: ExportRepo; store: BlobStore; source: ExcelSourceFactory<R>; layout?: ExcelLayout<R> }, jobId: string, partial: Partial<RunOptions> = {}): Promise<RunOutcome> {
+  const layout = (deps.layout ?? LEAD_LAYOUT) as unknown as ExcelLayout<R>;
   const opts = resolveOptions(partial);
   const { repo, store } = deps;
   const job = await repo.claim(jobId, opts.staleMs);
@@ -107,21 +131,21 @@ export async function runExcelExport(deps: { repo: ExportRepo; store: BlobStore;
     sink.on("error", () => undefined); // surfaced through sinkError / the awaited finish below
 
     const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: sink, useStyles: true, useSharedStrings: false });
-    const sheet = workbook.addWorksheet("Abandoned leads", { views: [{ state: "frozen", ySplit: 1 }] });
-    sheet.columns = EXCEL_COLUMNS.map((c) => ({ header: c.header, key: c.key, width: c.width }));
-    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: EXCEL_COLUMNS.length } };
+    const sheet = workbook.addWorksheet(layout.sheetName, { views: [{ state: "frozen", ySplit: 1 }] });
+    sheet.columns = layout.columns.map((c) => ({ header: c.header, key: c.key, width: c.width }));
+    sheet.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: layout.columns.length } };
     const headerRow = sheet.getRow(1);
     headerRow.font = { bold: true };
     headerRow.commit();
-    const valueColumn = EXCEL_COLUMNS.findIndex((c) => c.key === "orderValue") + 1;
-    sheet.getColumn(valueColumn).numFmt = "#,##0.00";
+    const valueColumn = layout.moneyColumn ? layout.columns.findIndex((c) => c.key === layout.moneyColumn) + 1 : 0;
+    if (valueColumn > 0) sheet.getColumn(valueColumn).numFmt = "#,##0.00";
 
     let written = 0;
     for await (const page of source.pages()) {
       if (sinkError) throw sinkError;
       if (written + page.length > opts.maxRows) throw new FatalExportError(`More than ${opts.maxRows} rows match. Choose a shorter date range.`);
       for (const row of page) {
-        sheet.addRow(EXCEL_COLUMNS.map((c) => excelCell(row, c.key))).commit();
+        sheet.addRow(layout.columns.map((c) => layout.cell(row, c.key))).commit();
         written++;
       }
       const alive = await retryTransient(() => repo.progress(jobId, { processed: written }), opts, "progress");
@@ -131,9 +155,9 @@ export async function runExcelExport(deps: { repo: ExportRepo; store: BlobStore;
     }
 
     const summary = workbook.addWorksheet("Summary");
-    summary.addRow(["Abandoned leads export"]).font = { bold: true };
+    summary.addRow([layout.title]).font = { bold: true };
     summary.addRow(["Date range (IST)", job.fromDay === job.toDay ? job.fromDay : `${job.fromDay} to ${job.toDay}`]);
-    summary.addRow(["Generated (IST)", recordingStamp(opts.now()).replace("_", " ").replace(/(\d{2})(\d{2})$/, "$1:$2")]);
+    summary.addRow(["Generated (IST)", istText(opts.now())]);
     summary.addRow(["Rows", written]);
     summary.getColumn(1).width = 22;
     summary.getColumn(2).width = 30;
@@ -149,7 +173,7 @@ export async function runExcelExport(deps: { repo: ExportRepo; store: BlobStore;
     if (sinkError) throw sinkError;
     await retryTransient(() => writer.flush(), opts, "flush storage");
     await retryTransient(() => repo.progress(jobId, { total: Math.max(total, written), processed: written, failed: 0, dataEnd: writer.offset }), opts, "progress");
-    const fileName = `abandoned-leads_${job.fromDay}_to_${job.toDay}.xlsx`;
+    const fileName = layout.fileName(job);
     await retryTransient(() => repo.finish(jobId, { status: "COMPLETED", sizeBytes: writer.offset, dataEnd: writer.offset, fileName, errorMessage: null }), opts, "finish");
     return "completed";
   });

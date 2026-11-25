@@ -12,12 +12,15 @@ export interface PlaybackState {
   current: number;
   duration: number;
   volume: number;
+  /** Playback speed (1 = normal); like the volume, it is kept when another recording starts. */
+  rate: number;
   error: string | null;
 }
 
-const IDLE: PlaybackState = { activeId: null, playing: false, current: 0, duration: 0, volume: 1, error: null };
+const IDLE: PlaybackState = { activeId: null, playing: false, current: 0, duration: 0, volume: 1, rate: 1, error: null };
 let state: PlaybackState = IDLE;
 let volume = 1;
+let rate = 1;
 let audio: HTMLAudioElement | null = null;
 const listeners = new Set<() => void>();
 
@@ -27,7 +30,7 @@ function set(patch: Partial<PlaybackState>) {
 }
 
 function reset() {
-  state = { ...IDLE, volume };
+  state = { ...IDLE, volume, rate };
   listeners.forEach((l) => l());
 }
 
@@ -54,10 +57,11 @@ export function playRecording(id: string, url: string): void {
   if (state.activeId !== id) {
     el.pause(); // whatever was playing stops before the new one starts
     el.src = url;
-    state = { ...IDLE, volume, activeId: id };
+    state = { ...IDLE, volume, rate, activeId: id };
     listeners.forEach((l) => l());
   }
   el.volume = volume;
+  el.playbackRate = rate;
   void el.play().catch(() => set({ playing: false, error: "This recording could not be played." }));
 }
 
@@ -76,6 +80,12 @@ export function setPlaybackVolume(value: number): void {
   volume = Math.max(0, Math.min(1, value));
   if (audio) audio.volume = volume;
   set({ volume });
+}
+
+export function setPlaybackRate(value: number): void {
+  rate = Math.max(0.25, Math.min(4, value));
+  if (audio) audio.playbackRate = rate;
+  set({ rate });
 }
 
 /** Stops and releases the audio (collapses the active player). Safe to call when nothing is playing. */
@@ -101,18 +111,20 @@ function subscribe(listener: () => void) {
 export function usePlayback(id: string): PlaybackState {
   return useSyncExternalStore(
     subscribe,
-    () => (state.activeId === id ? state : idleCache(state.volume)),
+    () => (state.activeId === id ? state : idleCache(state.volume, state.rate)),
     () => IDLE,
   );
 }
 
 // A stable idle object per volume value (useSyncExternalStore needs the same reference while nothing changed).
 let idleVolume = -1;
+let idleRate = -1;
 let idleObject: PlaybackState = IDLE;
-function idleCache(v: number): PlaybackState {
-  if (v !== idleVolume) {
+function idleCache(v: number, r: number): PlaybackState {
+  if (v !== idleVolume || r !== idleRate) {
     idleVolume = v;
-    idleObject = { ...IDLE, volume: v };
+    idleRate = r;
+    idleObject = { ...IDLE, volume: v, rate: r };
   }
   return idleObject;
 }
@@ -121,6 +133,7 @@ function idleCache(v: number): PlaybackState {
 export function resetPlaybackForTests(): void {
   audio = null;
   volume = 1;
+  rate = 1;
   state = IDLE;
   listeners.clear();
 }

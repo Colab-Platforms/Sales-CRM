@@ -26,6 +26,10 @@ const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : "-"
 
 /** What an export covers, in words: the ticked leads, every lead the list matched, or the date range. */
 export function exportScope(job: RecordingExport): string {
+  if (job.callRecordings) {
+    if (job.selection === "IDS") return `Selected recordings (${job.selectedCount ?? 0})`;
+    return job.from === job.to ? `All matching recordings · ${job.from}` : `All matching recordings · ${job.from} → ${job.to}`;
+  }
   if (job.selection === "IDS") return `Selected leads (${job.selectedCount ?? 0})`;
   if (job.selection === "MATCHING") return "All matching leads";
   const range = job.from === job.to ? job.from : `${job.from} → ${job.to}`;
@@ -33,7 +37,10 @@ export function exportScope(job: RecordingExport): string {
 }
 
 /** The user's exports (one request, polled every 2 s while one is running and every 5 s while the server cannot be reached), filtered to one kind. */
-export function useExports(kind: RecordingExportKind) {
+/** "leads" = the Abandoned Leads list's own exports (the default), "recordings" = the Call Recordings screen's. Each screen lists only its own. */
+export type ExportScope = "leads" | "recordings";
+
+export function useExports(kind: RecordingExportKind, scope: ExportScope = "leads") {
   const query = useQuery({
     queryKey: EXPORTS_KEY,
     queryFn: () => abandonmentRecordingsApi.listExports(),
@@ -41,7 +48,7 @@ export function useExports(kind: RecordingExportKind) {
     staleTime: 0,
     retry: 2,
   });
-  return { query, exports: (query.data ?? []).filter((e) => e.kind === kind) };
+  return { query, exports: (query.data ?? []).filter((e) => e.kind === kind && Boolean(e.callRecordings) === (scope === "recordings")) };
 }
 
 /** Start / retry / download for one panel, with its own error line. */
@@ -78,7 +85,7 @@ export function useExportActions(kind: RecordingExportKind) {
 /** One export in the history: type, scope, status, progress and counts, with Download / Retry. Everything comes from the server, so it is identical after a refresh. */
 export function ExportCard({ job, onRetry, onDownload, retrying, downloading }: { job: RecordingExport; onRetry: () => void; onDownload: () => void; retrying: boolean; downloading: boolean }) {
   const done = job.processed + job.failed;
-  const noun = job.kind === "EXCEL" ? "leads" : "recordings";
+  const noun = job.kind === "EXCEL" && !job.callRecordings ? "leads" : "recordings";
   const Icon = job.kind === "EXCEL" ? FileSpreadsheet : FileArchive;
   return (
     <div className="w-full space-y-2 rounded-md border bg-background/60 p-3" data-testid="export-card" data-kind={job.kind} aria-live="polite">
@@ -131,8 +138,8 @@ export function ExportCard({ job, onRetry, onDownload, retrying, downloading }: 
 }
 
 /** The history list of one panel, with the connection-problem line and Try again. */
-export function ExportHistory({ kind, title }: { kind: RecordingExportKind; title: string }) {
-  const { query, exports } = useExports(kind);
+export function ExportHistory({ kind, title, scope = "leads" }: { kind: RecordingExportKind; title: string; scope?: ExportScope }) {
+  const { query, exports } = useExports(kind, scope);
   const actions = useExportActions(kind);
   return (
     <div className="space-y-2" data-testid={`export-history-${kind.toLowerCase()}`}>

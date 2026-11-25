@@ -15,13 +15,13 @@ import type { AbandonmentListItem } from "@/lib/api-client/types/abandonment.typ
 import type { Role } from "@/lib/api-client/types/auth.types";
 import { cartLines, lineLabel, type ItemOption } from "@/lib/abandonment-items";
 import { ItemsFilter } from "./items-filter";
-import { RecordingCell } from "./recording-cell";
+import { ViewRecordingsLink } from "./view-recordings-link";
 import { AbandonmentColumnFilter, type AbandonmentFilterState } from "./abandonment-column-filters";
 
 const COLUMN_COUNT = 9;
 // Call recordings are for admins and managers only (the server enforces it too; a telecaller's list never carries the recording links).
 const canSeeRecordings = (role: Role) => role === "ADMIN" || role === "MANAGER";
-const RECORDING_HEADER = { label: "Recording", className: "w-[260px] min-w-[240px]" };
+const RECORDING_HEADER = { label: "Recording", className: "w-[170px] min-w-[150px]" };
 const HEADERS = [
   { label: "Lead", className: "w-[180px] min-w-[150px]" },
   { label: "Contact", className: "w-[180px] min-w-[160px]" },
@@ -271,8 +271,8 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
               </TableCell>
 
               {withRecording ? (
-                <TableCell className="w-[260px] min-w-[240px]" onClick={(e) => e.stopPropagation()}>
-                  <RecordingCell calls={item.lead.calls} />
+                <TableCell className="w-[170px] min-w-[150px]" onClick={(e) => e.stopPropagation()}>
+                  <ViewRecordingsLink leadId={item.lead.id} calls={item.lead.calls} />
                 </TableCell>
               ) : null}
 

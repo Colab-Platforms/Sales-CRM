@@ -25,6 +25,9 @@ import {
   listRecordingExports,
   retryRecordingExport,
   getRecordingsSummary,
+  listCallRecordings,
+  getCallRecordingsSummary,
+  getCallRecordingOptions,
   listAbandonmentIds,
   listAbandonmentItems,
   listAbandonments,
@@ -78,6 +81,10 @@ router.post("/import/:batchId/confirm", requireAuth, requireRole(Role.ADMIN, Rol
 
 // Call recordings of abandoned leads: ADMIN / MANAGER only, enforced here and again in the service. Registered ahead of "/:id".
 const recordingRoles = requireRole(Role.ADMIN, Role.MANAGER);
+// The Call Recordings screen: filtered, paginated list + summary cards + filter choices. Its ZIP / Excel exports go through the /recordings/exports routes below.
+router.get("/call-recordings", requireAuth, recordingRoles, listCallRecordings);
+router.get("/call-recordings/summary", requireAuth, recordingRoles, getCallRecordingsSummary);
+router.get("/call-recordings/options", requireAuth, recordingRoles, getCallRecordingOptions);
 router.get("/recordings/summary", requireAuth, recordingRoles, getRecordingsSummary);
 router.post("/recordings/exports", requireAuth, recordingRoles, createRecordingExport);
 router.get("/recordings/exports", requireAuth, recordingRoles, listRecordingExports);
