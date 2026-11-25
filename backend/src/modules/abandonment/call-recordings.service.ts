@@ -7,13 +7,14 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { todayString } from "../attendance/attendance.calc.js";
 import { REPORT_TZ_OFFSET_MINUTES } from "../attendance/attendance.constants.js";
-import { abandonmentLeadScope, canAccessRecordings } from "./abandonment.filters.js";
+import { canAccessRecordings } from "./abandonment.filters.js";
 import { abandonmentItemsWhere, parseItemKeys, readSnapshotItems } from "./abandonment.items.js";
 import { isUsableRecording, recordingRangeBounds } from "./abandonment.recordings.js";
 
-// The centralised "Call Recordings" screen of the Abandoned Leads module (admin / manager only). It reads the CallRecording rows the calling integration already writes
-// (one per call, `call_id` is unique, so a recording can never be listed twice) for calls made to leads that have an abandoned checkout, and shows the telecaller who
-// ACTUALLY made the call (calls.agent_id) - never the person the lead is assigned to today. Nothing is stored or duplicated here.
+// The centralised "Call Recordings" screen (admin / manager only). It reads the CallRecording rows the calling integration already writes (one per call, `call_id` is unique, so a
+// recording can never be listed twice) for EVERY call made to a lead - abandoned-checkout leads and regular leads alike - and shows the telecaller who ACTUALLY made the call
+// (calls.agent_id), never the person the lead is assigned to today. The screen is for management: every admin and manager sees the recordings of every lead (the role gate is the only
+// restriction - there is no per-manager lead scope here). Nothing is stored or duplicated here.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -37,6 +38,8 @@ export interface CallRecordingFilters {
   minDuration?: number;
   maxDuration?: number;
   leadId?: string;
+  /** Only calls to leads that have an abandoned checkout, or only to regular leads; absent = both. */
+  leadType?: "abandoned" | "regular";
   /** Exactly these calls (ticked rows). Replaces every other filter. */
   callIds?: string[];
   sort?: "latest" | "oldest";
@@ -85,6 +88,8 @@ export function parseCallRecordingFilters(raw: Record<string, unknown>): CallRec
   out.minDuration = asSeconds(raw.minDuration, "minDuration");
   out.maxDuration = asSeconds(raw.maxDuration, "maxDuration");
   if (out.minDuration !== undefined && out.maxDuration !== undefined && out.minDuration > out.maxDuration) throw new ApiError("minDuration must not be above maxDuration", STATUS_CODES.BAD_REQUEST);
+  if (raw.leadType === "abandoned" || raw.leadType === "regular") out.leadType = raw.leadType;
+  else if (raw.leadType !== undefined && raw.leadType !== "" && raw.leadType !== "all") throw new ApiError("Invalid lead type", STATUS_CODES.BAD_REQUEST);
   if (raw.leadId !== undefined && raw.leadId !== "") {
     if (typeof raw.leadId !== "string" || !UUID.test(raw.leadId)) throw new ApiError("Invalid lead", STATUS_CODES.BAD_REQUEST);
     out.leadId = raw.leadId;
@@ -119,6 +124,8 @@ export function buildCallRecordingWhere(f: CallRecordingFilters, options: { rang
   if (!options.ignoreDate) and.push(dateWhere(options.range ?? { from: f.from, to: f.to }));
   if (f.telecallerIds?.length) and.push({ agentId: { in: f.telecallerIds } });
   if (f.leadId) and.push({ leadId: f.leadId });
+  if (f.leadType === "abandoned") and.push({ lead: { abandonments: { some: {} } } });
+  else if (f.leadType === "regular") and.push({ lead: { abandonments: { none: {} } } });
   if (f.customer) {
     for (const term of f.customer.split(/\s+/).filter(Boolean).slice(0, 5)) {
       const contains = { contains: term, mode: "insensitive" as const };
@@ -148,15 +155,21 @@ export function buildCallRecordingWhere(f: CallRecordingFilters, options: { rang
   return { AND: and };
 }
 
-/** Filters + who may see what: a recording with a link, of a call to a lead with an abandoned checkout inside the viewer's lead scope. */
-export function scopedCallRecordingWhere(user: AuthUser, filterWhere: Prisma.CallWhereInput): Prisma.CallWhereInput {
-  return { AND: [filterWhere, { recording: { isNot: null } }, { lead: { AND: [abandonmentLeadScope(user), { abandonments: { some: {} } }] } }] };
+/** Filters + who may see what: a recording of a call to a lead (any lead), further narrowed by `leadScope` when one is given (the screen itself passes none). */
+export function scopedCallRecordingWhere(leadScope: Prisma.LeadWhereInput, filterWhere: Prisma.CallWhereInput): Prisma.CallWhereInput {
+  return { AND: [filterWhere, { recording: { isNot: null } }, { leadId: { not: null } }, ...(Object.keys(leadScope).length > 0 ? [{ lead: leadScope }] : [])] };
 }
 
-const LIST_ORDER = (sort: "latest" | "oldest" | undefined): Prisma.CallOrderByWithRelationInput[] => {
+/**
+ * The order of the list and of both exports, applied by the database BEFORE pagination (so it holds across every page, filter and search). Newest first unless "oldest" is asked for.
+ * It sorts on the call's own start timestamp (never a formatted date, the lead's date or the recording's upload date); createdAt only breaks a tie / stands in for a call that never got a
+ * start time, and id keeps the order stable between two calls in the same instant.
+ */
+export const callRecordingOrder = (sort: "latest" | "oldest" | undefined): Prisma.CallOrderByWithRelationInput[] => {
   const dir = sort === "oldest" ? "asc" : "desc";
   return [{ startedAt: { sort: dir, nulls: "last" } }, { createdAt: dir }, { id: "asc" }];
 };
+const LIST_ORDER = callRecordingOrder;
 
 const SELECT = {
   id: true,
@@ -250,14 +263,19 @@ export class CallRecordingsService {
     if (!canAccessRecordings(user.role)) throw new ApiError("Only admins and managers can access call recordings", STATUS_CODES.FORBIDDEN);
   }
 
-  /** The full where (filters + scope) a user's request resolves to. */
-  whereFor(user: AuthUser, f: CallRecordingFilters, options?: Parameters<typeof buildCallRecordingWhere>[1]): Prisma.CallWhereInput {
+  /** The leads this viewer may hear recordings of: every lead (admins and managers alike); anyone else is refused. An empty scope restricts nothing. */
+  async leadScopeFor(user: AuthUser): Promise<Prisma.LeadWhereInput> {
     this.assertAllowed(user);
-    return scopedCallRecordingWhere(user, buildCallRecordingWhere(f, options));
+    return {};
+  }
+
+  /** The full where (filters + scope) a user's request resolves to. */
+  async whereFor(user: AuthUser, f: CallRecordingFilters, options?: Parameters<typeof buildCallRecordingWhere>[1]): Promise<Prisma.CallWhereInput> {
+    return scopedCallRecordingWhere(await this.leadScopeFor(user), buildCallRecordingWhere(f, options));
   }
 
   async list(user: AuthUser, f: CallRecordingFilters, paging: { page: number; pageSize: number }) {
-    const where = this.whereFor(user, f);
+    const where = await this.whereFor(user, f);
     const pageSize = Math.min(Math.max(Math.floor(paging.pageSize) || 20, 1), MAX_PAGE_SIZE);
     const page = Math.max(Math.floor(paging.page) || 1, 1);
     const [rows, totalItems] = await Promise.all([
@@ -270,21 +288,22 @@ export class CallRecordingsService {
 
   /** Every row of a filter, in keyset-free offset pages (used by the Excel export): oldest/newest per the filter's sort. */
   async page(user: AuthUser, f: CallRecordingFilters, skip: number, take: number) {
-    const where = this.whereFor(user, f);
+    const where = await this.whereFor(user, f);
     const rows = await this.db.call.findMany({ where, select: SELECT, orderBy: LIST_ORDER(f.sort), skip, take });
     const now = new Date();
     return rows.map((r) => toCallRecordingItem(r, now));
   }
 
   async count(user: AuthUser, f: CallRecordingFilters): Promise<number> {
-    return this.db.call.count({ where: this.whereFor(user, f) });
+    return this.db.call.count({ where: await this.whereFor(user, f) });
   }
 
   /** The cards: counted by the database for the CURRENT filters (today's card ignores the date filter and counts today, IST, under all the others). */
   async summary(user: AuthUser, f: CallRecordingFilters, now: Date = new Date()): Promise<CallRecordingSummary> {
-    const where = this.whereFor(user, f);
+    const leadScope = await this.leadScopeFor(user);
+    const where = scopedCallRecordingWhere(leadScope, buildCallRecordingWhere(f));
     const today = todayString(now, REPORT_TZ_OFFSET_MINUTES);
-    const todayWhere = this.whereFor(user, f, { range: { from: today, to: today } });
+    const todayWhere = scopedCallRecordingWhere(leadScope, buildCallRecordingWhere(f, { range: { from: today, to: today } }));
     const [total, ownDuration, recordingDuration, agents, todayCount] = await Promise.all([
       this.db.call.count({ where }),
       this.db.call.aggregate({ where, _sum: { durationSeconds: true } }),
@@ -299,8 +318,7 @@ export class CallRecordingsService {
 
   /** The choices of the filter drop-downs, from real data: telecallers who made recorded calls, the outcomes in use and the lead statuses. */
   async options(user: AuthUser): Promise<CallRecordingOptions> {
-    this.assertAllowed(user);
-    const scope = scopedCallRecordingWhere(user, {});
+    const scope = scopedCallRecordingWhere(await this.leadScopeFor(user), {});
     const [agents, outcomes] = await Promise.all([this.db.call.groupBy({ by: ["agentId"], where: scope }), this.db.callOutcome.findMany({ where: { isActive: true }, orderBy: { name: "asc" }, select: { id: true, name: true } })]);
     const users = agents.length === 0 ? [] : await this.db.user.findMany({ where: { id: { in: agents.map((a) => a.agentId) } }, select: { id: true, name: true }, orderBy: { name: "asc" } });
     return {

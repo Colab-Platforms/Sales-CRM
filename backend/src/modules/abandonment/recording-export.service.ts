@@ -362,7 +362,8 @@ export class RecordingExportService {
       if (kind === "ZIP") {
         // Chunked planning: the range is read in keyset pages and the item rows are written as they are produced.
         const where = recordingFilters ? buildCallRecordingWhere(recordingFilters) : undefined;
-        const plan = await planZipItems({ db: this.db, recordings: this.recordings, user, range, jobId: job.id, now, maxItems: exportConfig.maxItems(), where: where as Record<string, unknown> | undefined });
+        const leadWhere = recordingFilters ? await new CallRecordingsService(this.db).leadScopeFor(user) : undefined;
+        const plan = await planZipItems({ db: this.db, recordings: this.recordings, user, range, jobId: job.id, now, maxItems: exportConfig.maxItems(), where: where as Record<string, unknown> | undefined, leadWhere: leadWhere as Record<string, unknown> | undefined });
         if (plan.total === 0) throw new ApiError(recordingFilters ? "No recordings match these filters" : "No recordings found for this date range", STATUS_CODES.NOT_FOUND);
         await this.db.recordingExportJob.update({ where: { id: job.id }, data: { total: plan.total, failed: plan.failed, duplicates: plan.duplicates } });
       } else if (recordingFilters) {

@@ -4,7 +4,7 @@ import type { Pagination } from "../types/orders.types";
 import type { LeadWorkingStatus } from "../types/dashboard.types";
 import { abandonmentRecordingsApi, type RecordingExport, type RecordingExportKind } from "./abandonment.recordings.api";
 
-// The Call Recordings screen of the Abandoned Leads module. Admin / manager only - the server enforces it; the UI merely does not offer the page to anyone else.
+// The Call Recordings screen: every recorded call to a lead (abandoned or regular). Admin / manager only - the server enforces it; the UI merely does not offer the page to anyone else.
 
 /** What the screen's filters have chosen. Days are IST calendar days (YYYY-MM-DD); the server filters and paginates everything. */
 export interface CallRecordingFilterState {
@@ -21,6 +21,8 @@ export interface CallRecordingFilterState {
   minDuration?: number;
   maxDuration?: number;
   leadId?: string;
+  /** Calls to leads with an abandoned checkout, to regular leads, or both. */
+  leadType: "all" | "abandoned" | "regular";
   sort: "latest" | "oldest";
 }
 
@@ -73,6 +75,7 @@ export function toFilterParams(f: CallRecordingFilterState): Record<string, stri
   if (f.minDuration !== undefined) out.minDuration = String(f.minDuration);
   if (f.maxDuration !== undefined) out.maxDuration = String(f.maxDuration);
   if (f.leadId) out.leadId = f.leadId;
+  if (f.leadType !== "all") out.leadType = f.leadType;
   return out;
 }
 

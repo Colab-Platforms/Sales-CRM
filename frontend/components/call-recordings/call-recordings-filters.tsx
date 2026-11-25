@@ -12,7 +12,7 @@ import type { ItemOption } from "@/lib/abandonment-items";
 import { MultiSelect } from "./multi-select";
 
 export function defaultFilters(): CallRecordingFilterState {
-  return { from: istDay(-29), to: istDay(), telecallerIds: [], customer: "", mobile: "", items: [], statuses: [], outcomes: [], sort: "latest" };
+  return { from: istDay(-29), to: istDay(), telecallerIds: [], customer: "", mobile: "", items: [], statuses: [], outcomes: [], leadType: "all", sort: "latest" };
 }
 
 /** Call-length choices; each is a [min, max] in seconds, from the same duration the table shows. */
@@ -27,7 +27,7 @@ const durationId = (f: CallRecordingFilterState) => DURATIONS.find((d) => d.min 
 
 /** How many filters (besides the date range and the sort order) narrow the list. */
 export function activeFilterCount(f: CallRecordingFilterState): number {
-  return [f.telecallerIds.length > 0, f.customer.trim() !== "", f.mobile.trim() !== "", f.items.length > 0, f.statuses.length > 0, f.outcomes.length > 0, f.minDuration !== undefined || f.maxDuration !== undefined, Boolean(f.leadId)].filter(Boolean).length;
+  return [f.telecallerIds.length > 0, f.customer.trim() !== "", f.mobile.trim() !== "", f.items.length > 0, f.statuses.length > 0, f.outcomes.length > 0, f.minDuration !== undefined || f.maxDuration !== undefined, Boolean(f.leadId), f.leadType !== "all"].filter(Boolean).length;
 }
 
 export function CallRecordingsFilters({ value, onChange, onApply, onReset, options, optionsLoading, products, productsLoading, dirty, matching, fetching, leadLabel, onClearLead }: {
@@ -88,7 +88,15 @@ export function CallRecordingsFilters({ value, onChange, onApply, onReset, optio
               <span className="text-xs font-medium text-muted-foreground">Mobile number</span>
               <Input value={value.mobile} onChange={(e) => set({ mobile: e.target.value })} placeholder="e.g. 98765 43210" inputMode="tel" maxLength={30} />
             </label>
-            <MultiSelect label="Product" options={products.map((p) => ({ value: p.key, label: `${p.name}${p.sku ? ` · ${p.sku}` : ""}` }))} selected={value.items} onChange={(items) => set({ items })} loading={productsLoading} emptyText="No products in abandoned checkouts yet" />
+            <label className="grid gap-1">
+              <span className="text-xs font-medium text-muted-foreground">Lead type</span>
+              <NativeSelect value={value.leadType} onChange={(e) => set({ leadType: e.target.value === "abandoned" ? "abandoned" : e.target.value === "regular" ? "regular" : "all" })} aria-label="Lead type">
+                <option value="all">All leads</option>
+                <option value="abandoned">Abandoned checkout leads</option>
+                <option value="regular">Regular leads</option>
+              </NativeSelect>
+            </label>
+            <MultiSelect label="Product (abandoned carts)" options={products.map((p) => ({ value: p.key, label: `${p.name}${p.sku ? ` · ${p.sku}` : ""}` }))} selected={value.items} onChange={(items) => set({ items })} loading={productsLoading} emptyText="No products in abandoned checkouts yet" />
             <MultiSelect label="Lead status" options={(options?.leadStatuses ?? []).map((s) => ({ value: s.value, label: s.label }))} selected={value.statuses} onChange={(statuses) => set({ statuses: statuses as LeadWorkingStatus[] })} loading={optionsLoading} searchable={false} />
             <MultiSelect label="Call outcome" options={options?.outcomes ?? []} selected={value.outcomes} onChange={(outcomes) => set({ outcomes })} loading={optionsLoading} />
             <label className="grid gap-1">
@@ -106,13 +114,6 @@ export function CallRecordingsFilters({ value, onChange, onApply, onReset, optio
                     {d.label}
                   </option>
                 ))}
-              </NativeSelect>
-            </label>
-            <label className="grid gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Sort by</span>
-              <NativeSelect value={value.sort} onChange={(e) => set({ sort: e.target.value === "oldest" ? "oldest" : "latest" })} aria-label="Sort recordings">
-                <option value="latest">Latest recordings first</option>
-                <option value="oldest">Oldest recordings first</option>
               </NativeSelect>
             </label>
           </div>

@@ -372,10 +372,12 @@ export class AbandonmentRecordingsService {
    * Calls (with a recording entry) to leads the user may see that have an abandoned checkout. Without `page` everything matching is returned (single lookups); with it, one keyset page
    * (ordered by id, `take` rows after `afterId`) so a year of data is read in bounded chunks and never as one result.
    */
-  async rowsFor(user: AuthUser, where: Record<string, unknown>, page?: { afterId?: string; take: number }): Promise<RecordingRow[]> {
+  async rowsFor(user: AuthUser, where: Record<string, unknown>, page?: { afterId?: string; take: number }, leadWhere?: Record<string, unknown>): Promise<RecordingRow[]> {
+    // Default: leads with an abandoned checkout inside the abandoned-leads scope. The Call Recordings screen passes its own lead scope (every lead the viewer may hear).
     const leadScope = abandonmentLeadScope(user);
+    const leadFilter = leadWhere ? (Object.keys(leadWhere).length > 0 ? { lead: leadWhere } : { leadId: { not: null } }) : { lead: { AND: [leadScope, { abandonments: { some: {} } }] } };
     const calls = await this.db.call.findMany({
-      where: { ...where, ...(page?.afterId ? { id: { gt: page.afterId } } : {}), recording: { isNot: null }, lead: { AND: [leadScope, { abandonments: { some: {} } }] } },
+      where: { ...where, ...(page?.afterId ? { id: { gt: page.afterId } } : {}), recording: { isNot: null }, ...leadFilter },
       select: {
         id: true,
         startedAt: true,
@@ -439,7 +441,8 @@ export class AbandonmentRecordingsService {
   /** One recording, for download. The same permission and lead-scope rules as the list. */
   async single(user: AuthUser, callId: string): Promise<{ data: Buffer; contentType: string; fileName: string }> {
     this.assertAllowed(user);
-    const [row] = await this.rowsFor(user, { id: callId });
+    // One recording by call id: the call of ANY lead (the Call Recordings screen lists every lead's calls to every admin / manager), not only abandoned ones.
+    const [row] = await this.rowsFor(user, { id: callId }, undefined, {});
     if (!row) throw new ApiError("Recording not found", STATUS_CODES.NOT_FOUND);
     if (!isUsableRecording(row)) throw new ApiError("This recording is not available", STATUS_CODES.NOT_FOUND);
     let file;
