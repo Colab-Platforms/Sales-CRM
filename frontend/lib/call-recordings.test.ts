@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { toFilterParams, type CallRecordingFilterState } from "./api-client/endpoints/call-recordings.api";
 import { callRecordingsHref } from "./call-recordings-href";
 
-const base: CallRecordingFilterState = { from: "2026-11-01", to: "2026-11-25", telecallerIds: [], customer: "", mobile: "", items: [], statuses: [], outcomes: [], sort: "latest" };
+const base: CallRecordingFilterState = { from: "2026-11-01", to: "2026-11-25", telecallerIds: [], customer: "", mobile: "", items: [], statuses: [], outcomes: [], leadType: "all", sort: "latest" };
 
 describe("call recordings filters -> API params", () => {
   it("sends only what is set (the date range and sort order always)", () => {
@@ -12,7 +12,7 @@ describe("call recordings filters -> API params", () => {
   });
 
   it("sends every filter so they all apply together", () => {
-    const p = toFilterParams({ ...base, telecallerIds: ["a", "b"], customer: " Rahul ", mobile: "98765", items: ["s:SKU1|Sleep Gummies"], statuses: ["INTERESTED"], outcomes: ["status:NO_ANSWER"], minDuration: 60, maxDuration: 180, leadId: "L", sort: "oldest" });
+    const p = toFilterParams({ ...base, telecallerIds: ["a", "b"], customer: " Rahul ", mobile: "98765", items: ["s:SKU1|Sleep Gummies"], statuses: ["INTERESTED"], outcomes: ["status:NO_ANSWER"], minDuration: 60, maxDuration: 180, leadId: "L", leadType: "regular", sort: "oldest" });
     assert.equal(p.telecallerIds, "a,b");
     assert.equal(p.customer, "Rahul");
     assert.equal(p.items, encodeURIComponent("s:SKU1|Sleep Gummies"));
@@ -21,6 +21,7 @@ describe("call recordings filters -> API params", () => {
     assert.equal(p.minDuration, "60");
     assert.equal(p.maxDuration, "180");
     assert.equal(p.leadId, "L");
+    assert.equal(p.leadType, "regular");
     assert.equal(p.sort, "oldest");
   });
 });

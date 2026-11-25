@@ -1,16 +1,42 @@
 "use client";
 
-import { useEffect } from "react";
-import { Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Download, Loader2, Pause, Play, Volume2, VolumeX } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { abandonmentRecordingsApi, saveBlob } from "@/lib/api-client/endpoints/abandonment.recordings.api";
 import { cn } from "@/lib/utils";
 import { formatClock } from "@/components/abandonment/recording-cell";
 import { seekPlayback, setPlaybackRate, setPlaybackVolume, stopPlaybackIf, togglePlayback, usePlayback } from "@/components/abandonment/recording-playback";
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
 
+/** The download icon that sits beside Play: saves this one recording (the same endpoint and permission rules as every other download). */
+function DownloadButton({ callId }: { callId: string }) {
+  const [busy, setBusy] = useState(false);
+  async function download() {
+    setBusy(true);
+    try {
+      saveBlob(await abandonmentRecordingsApi.downloadOne(callId));
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not download this recording.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<Button type="button" variant="ghost" size="icon-sm" aria-label="Download Recording" data-testid="download-recording" disabled={busy} onClick={() => void download()} />}>
+        {busy ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+      </TooltipTrigger>
+      <TooltipContent>Download Recording</TooltipContent>
+    </Tooltip>
+  );
+}
+
 /**
- * Plays one recording right in the table (no download). Every row is a view onto ONE shared audio element, so only one recording ever plays at a time; the row that plays
+ * Plays one recording right in the table, with its download button beside Play. Every row is a view onto ONE shared audio element, so only one recording ever plays at a time; the row that plays
  * expands into progress bar, time, speed and volume. A row that leaves the screen (page / filter change) stops its own playback.
  */
 export function RecordingPlayer({ callId, url, durationSeconds, unavailableReason }: { callId: string; url: string | null; durationSeconds: number | null; unavailableReason: string | null }) {
@@ -35,6 +61,7 @@ export function RecordingPlayer({ callId, url, durationSeconds, unavailableReaso
           Play
         </Button>
         {duration > 0 ? <span className="text-xs tabular-nums text-muted-foreground">{formatClock(duration)}</span> : null}
+        <DownloadButton callId={callId} />
       </div>
     );
   }
@@ -55,6 +82,7 @@ export function RecordingPlayer({ callId, url, durationSeconds, unavailableReaso
           onChange={(e) => seekPlayback(Number(e.target.value))}
           aria-label="Seek recording"
         />
+        <DownloadButton callId={callId} />
       </div>
       <div className="flex items-center justify-between gap-2 text-xs tabular-nums text-muted-foreground">
         <span data-testid="recording-time">

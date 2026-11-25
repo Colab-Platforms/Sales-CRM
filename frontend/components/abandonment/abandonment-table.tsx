@@ -21,7 +21,7 @@ import { AbandonmentColumnFilter, type AbandonmentFilterState } from "./abandonm
 const COLUMN_COUNT = 9;
 // Call recordings are for admins and managers only (the server enforces it too; a telecaller's list never carries the recording links).
 const canSeeRecordings = (role: Role) => role === "ADMIN" || role === "MANAGER";
-const RECORDING_HEADER = { label: "Recording", className: "w-[170px] min-w-[150px]" };
+const RECORDING_HEADER = { label: "Recording", className: "w-[230px] min-w-[210px]" };
 const HEADERS = [
   { label: "Lead", className: "w-[180px] min-w-[150px]" },
   { label: "Contact", className: "w-[180px] min-w-[160px]" },
@@ -271,7 +271,7 @@ export function AbandonmentTable({ items, itemsFilter, columnFilters, isFetching
               </TableCell>
 
               {withRecording ? (
-                <TableCell className="w-[170px] min-w-[150px]" onClick={(e) => e.stopPropagation()}>
+                <TableCell className="w-[230px] min-w-[210px]" onClick={(e) => e.stopPropagation()}>
                   <ViewRecordingsLink leadId={item.lead.id} calls={item.lead.calls} />
                 </TableCell>
               ) : null}

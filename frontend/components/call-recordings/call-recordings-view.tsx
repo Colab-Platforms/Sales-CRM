@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Eye, FileArchive, FileSpreadsheet, Headphones, Loader2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Eye, FileArchive, FileSpreadsheet, Headphones, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import { PageHeader } from "@/components/page-header";
@@ -16,14 +16,16 @@ import { OrdersPagination } from "@/components/orders/orders-pagination";
 import { leadDetailHref } from "@/components/leads/lead-table";
 import { ExportHistory, EXPORTS_KEY } from "@/components/abandonment/export-shared";
 import { getErrorMessage } from "@/lib/api-client/client";
-import { abandonmentRecordingsApi, describeRequestError, saveBlob } from "@/lib/api-client/endpoints/abandonment.recordings.api";
-import { callRecordingsApi, type CallRecordingFilterState, type CallRecordingItem } from "@/lib/api-client/endpoints/call-recordings.api";
+import { describeRequestError } from "@/lib/api-client/endpoints/abandonment.recordings.api";
+import { callRecordingsApi, type CallRecordingFilterState } from "@/lib/api-client/endpoints/call-recordings.api";
 import { abandonmentItemOptionsQueryOptions } from "@/lib/api-client/queries/abandonment.queries";
 import { stopPlayback } from "@/components/abandonment/recording-playback";
 import { CallRecordingsFilters, activeFilterCount, defaultFilters } from "./call-recordings-filters";
 import { RecordingPlayer } from "./recording-player";
 
 const PAGE_SIZES = [20, 50, 100] as const;
+/** The list and the cards re-read this often (only while the tab is open), so a call that has just ended shows up at the top by itself. */
+const LIVE_REFRESH_MS = 30_000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const IST_DATE_TIME = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit", hour12: true });
@@ -80,7 +82,6 @@ export function CallRecordingsView() {
   // Ticked recordings (across pages), or "every recording the filters match".
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [allMatching, setAllMatching] = useState(false);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   // A non-admin who opens the URL is sent away (the server refuses them anyway).
   useEffect(() => {
@@ -89,8 +90,8 @@ export function CallRecordingsView() {
   // Leaving the page stops whatever is playing.
   useEffect(() => () => stopPlayback(), []);
 
-  const list = useQuery({ queryKey: ["call-recordings", "list", applied, page, pageSize], queryFn: () => callRecordingsApi.list(applied, page, pageSize), enabled: allowed, staleTime: 15_000, placeholderData: (previous, previousQuery) => (previousQuery && JSON.stringify(previousQuery.queryKey[2]) === JSON.stringify(applied) ? previous : undefined) });
-  const summary = useQuery({ queryKey: ["call-recordings", "summary", applied], queryFn: () => callRecordingsApi.summary(applied), enabled: allowed, staleTime: 15_000 });
+  const list = useQuery({ queryKey: ["call-recordings", "list", applied, page, pageSize], queryFn: () => callRecordingsApi.list(applied, page, pageSize), enabled: allowed, staleTime: 15_000, refetchInterval: LIVE_REFRESH_MS, placeholderData: (previous, previousQuery) => (previousQuery && JSON.stringify(previousQuery.queryKey[2]) === JSON.stringify(applied) ? previous : undefined) });
+  const summary = useQuery({ queryKey: ["call-recordings", "summary", applied], queryFn: () => callRecordingsApi.summary(applied), enabled: allowed, staleTime: 15_000, refetchInterval: LIVE_REFRESH_MS });
   const options = useQuery({ queryKey: ["call-recordings", "options"], queryFn: () => callRecordingsApi.options(), enabled: allowed, staleTime: 60_000 });
   const products = useQuery({ ...abandonmentItemOptionsQueryOptions(), enabled: allowed });
 
@@ -124,6 +125,14 @@ export function CallRecordingsView() {
     setPage(1);
     clearSelection();
   }
+  // Newest first is the default; the Call date & time header flips it. The sort applies at once (it is not one of the filters waiting for "Apply Filters") and starts from page 1.
+  function changeSort(sort: "latest" | "oldest") {
+    if (sort === applied.sort) return;
+    stopPlayback();
+    setApplied({ ...applied, sort });
+    setDraft((d) => ({ ...d, sort }));
+    setPage(1);
+  }
   function goToPage(next: number) {
     stopPlayback();
     setPage(next);
@@ -155,21 +164,10 @@ export function CallRecordingsView() {
   const selectedIds = allMatching ? undefined : [...selected];
   const busy = exportMutation.isPending;
 
-  async function downloadOne(item: CallRecordingItem) {
-    setDownloadingId(item.callId);
-    try {
-      saveBlob(await abandonmentRecordingsApi.downloadOne(item.callId));
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not download this recording.");
-    } finally {
-      setDownloadingId(null);
-    }
-  }
-
   const s = summary.data;
   return (
     <div className="space-y-6">
-      <PageHeader title="Call Recordings" description="Every recorded call to an abandoned lead, with the telecaller who actually made the call. Listen here, filter, and download recordings for monitoring and quality checks." />
+      <PageHeader title="Call Recordings" description="Every recorded call, with the telecaller who actually made it. Listen here, filter by telecaller, date, customer, product and more, and download recordings for monitoring and quality checks." />
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5" aria-live="polite" data-testid="recording-summary">
         {summary.isPending ? (
@@ -271,16 +269,22 @@ export function CallRecordingsView() {
                       <TableHead className="w-[40px]">
                         <input type="checkbox" className="size-4 accent-primary" checked={allOnPage} onChange={(e) => toggleAllOnPage(e.target.checked)} aria-label="Select all recordings on this page" />
                       </TableHead>
-                      <TableHead className="min-w-[150px]">Call date &amp; time</TableHead>
+                      <TableHead className="min-w-[170px]" aria-sort={applied.sort === "latest" ? "descending" : "ascending"}>
+                        <button type="button" onClick={() => changeSort(applied.sort === "latest" ? "oldest" : "latest")} className="inline-flex items-center gap-1 font-medium hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none" title={applied.sort === "latest" ? "Newest first - click for oldest first" : "Oldest first - click for newest first"} data-testid="sort-call-time">
+                          Call date &amp; time (IST)
+                          {applied.sort === "latest" ? <ArrowDown className="size-3.5" aria-hidden /> : <ArrowUp className="size-3.5" aria-hidden />}
+                        </button>
+                        <span className="block text-[0.65rem] font-normal text-muted-foreground" data-testid="sort-label">{applied.sort === "latest" ? "Newest first" : "Oldest first"}</span>
+                      </TableHead>
                       <TableHead className="min-w-[150px]">Customer</TableHead>
                       <TableHead className="min-w-[120px]">Mobile</TableHead>
                       <TableHead className="min-w-[130px]">Telecaller</TableHead>
-                      <TableHead className="min-w-[260px]">Recording</TableHead>
+                      <TableHead className="min-w-[200px]">Recording</TableHead>
                       <TableHead className="min-w-[180px]">Product</TableHead>
                       <TableHead className="min-w-[120px]">Lead status</TableHead>
                       <TableHead className="min-w-[130px]">Call outcome</TableHead>
                       <TableHead className="min-w-[90px]">Duration</TableHead>
-                      <TableHead className="w-[90px] text-right">Actions</TableHead>
+                      <TableHead className="w-[60px] text-right">Lead</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody className={list.isFetching ? "opacity-70" : undefined}>
@@ -308,10 +312,7 @@ export function CallRecordingsView() {
                         <TableCell className="text-sm">{r.outcome}</TableCell>
                         <TableCell className="whitespace-nowrap text-sm tabular-nums">{formatDuration(r.durationSeconds)}</TableCell>
                         <TableCell className="text-right whitespace-nowrap">
-                          <Button type="button" variant="ghost" size="icon-sm" aria-label="Download recording" title="Download recording" disabled={!r.playUrl || downloadingId === r.callId} onClick={() => void downloadOne(r)}>
-                            {downloadingId === r.callId ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                          </Button>
-                          <Button type="button" variant="ghost" size="icon-sm" aria-label="View lead" title="View lead" onClick={() => router.push(leadDetailHref(r.leadId, { from: "abandoned-leads", ...(r.abandonmentId ? { abandonmentId: r.abandonmentId } : {}) }))}>
+                          <Button type="button" variant="ghost" size="icon-sm" aria-label="View lead" title="View lead" onClick={() => router.push(leadDetailHref(r.leadId, r.abandonmentId ? { from: "abandoned-leads", abandonmentId: r.abandonmentId } : undefined))}>
                             <Eye className="size-4" />
                           </Button>
                         </TableCell>

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Role } from "../../../generated/prisma/enums.js";
-import { buildCallRecordingWhere, parseCallRecordingFilters, productNames, scopedCallRecordingWhere } from "./call-recordings.service.js";
+import { CallRecordingsService, buildCallRecordingWhere, callRecordingOrder, parseCallRecordingFilters, productNames, scopedCallRecordingWhere } from "./call-recordings.service.js";
 
 const TELECALLER = "11111111-1111-4111-8111-111111111111";
 const CALL = "22222222-2222-4222-8222-222222222222";
@@ -40,16 +39,44 @@ test("every filter is ANDed; the ticked recordings replace all of them", () => {
   assert.deepEqual(buildCallRecordingWhere(picked), { AND: [{ id: { in: [CALL] } }] });
 });
 
-test("permission scope: a manager only sees leads assigned to them, always with a recording on a lead that has an abandoned checkout", () => {
-  const where = scopedCallRecordingWhere({ id: "m1", role: Role.MANAGER, username: "m" }, {});
-  const text = JSON.stringify(where);
-  assert.match(text, /"assignedManagerId":"m1"/);
-  assert.match(text, /"recording":\{"isNot":null\}/);
-  assert.match(text, /"abandonments":\{"some":\{\}\}/);
+test("permission scope: always a recording on a lead inside the viewer's lead scope - abandoned or regular, no abandonment required", () => {
+  const manager = JSON.stringify(scopedCallRecordingWhere({ assignedManagerId: "m1" }, {}));
+  assert.match(manager, /"assignedManagerId":"m1"/);
+  assert.match(manager, /"recording":\{"isNot":null\}/);
+  assert.doesNotMatch(manager, /abandonments/);
+  // admin: an empty scope restricts nothing but still needs a lead
+  assert.deepEqual(scopedCallRecordingWhere({}, {}), { AND: [{}, { recording: { isNot: null } }, { leadId: { not: null } }] });
+});
+
+test("admins and managers alike hear every lead's recordings; nobody else may", async () => {
+  const service = new CallRecordingsService({} as never);
+  assert.deepEqual(await service.leadScopeFor({ id: "m1", role: "MANAGER", username: "m" }), {});
+  assert.deepEqual(await service.leadScopeFor({ id: "a1", role: "ADMIN", username: "a" }), {});
+  await assert.rejects(() => service.leadScopeFor({ id: "s1", role: "SALESPERSON", username: "s" }), /Only admins and managers/);
+  await assert.rejects(() => service.leadScopeFor({ id: "h1", role: "HR", username: "h" }), /Only admins and managers/);
+});
+
+test("the lead type filter separates abandoned from regular leads; absent means both", () => {
+  const base = { from: "2026-11-01", to: "2026-11-05" };
+  const text = (f: object) => JSON.stringify(buildCallRecordingWhere(parseCallRecordingFilters({ ...base, ...f }), { ignoreDate: true }));
+  assert.match(text({ leadType: "abandoned" }), /"abandonments":\{"some":\{\}\}/);
+  assert.match(text({ leadType: "regular" }), /"abandonments":\{"none":\{\}\}/);
+  assert.doesNotMatch(text({}), /abandonments/);
+  assert.doesNotMatch(text({ leadType: "all" }), /abandonments/);
+  assert.throws(() => parseCallRecordingFilters({ ...base, leadType: "bogus" }), /lead type/);
 });
 
 test("product names come from the cart snapshot, falling back to the older name-only carts", () => {
   assert.deepEqual(productNames({ items: [{ name: "Paan Masala", quantity: 2 }, { name: "Paan Masala" }] }), ["Paan Masala"]);
   assert.deepEqual(productNames({ itemNames: ["Sleep Gummies"] }), ["Sleep Gummies"]);
   assert.deepEqual(productNames(null), []);
+});
+
+test("the list is newest-first by default, on the call's own start time, and oldest-first only when asked", () => {
+  const newest = [{ startedAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }, { id: "asc" }];
+  assert.deepEqual(callRecordingOrder(undefined), newest);
+  assert.deepEqual(callRecordingOrder("latest"), newest);
+  assert.deepEqual(callRecordingOrder("oldest"), [{ startedAt: { sort: "asc", nulls: "last" } }, { createdAt: "asc" }, { id: "asc" }]);
+  // no sort in the request = newest first
+  assert.equal(parseCallRecordingFilters({ from: "2026-11-01", to: "2026-11-05" }).sort, undefined);
 });

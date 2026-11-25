@@ -224,6 +224,8 @@ export async function planZipItems(args: {
   pageRows?: number;
   /** The Call Recordings screen's own filters (already a Prisma where); the date range alone is used when absent. */
   where?: Record<string, unknown>;
+  /** With `where`: the leads the viewer may hear (the Call Recordings screen covers every lead, not only abandoned ones). */
+  leadWhere?: Record<string, unknown>;
 }): Promise<PlannedZip> {
   const { db, recordings, user, range, jobId, now, maxItems } = args;
   const take = args.pageRows ?? PAGE_ROWS;
@@ -235,7 +237,7 @@ export async function planZipItems(args: {
   let duplicates = 0;
   let afterId: string | undefined;
   for (;;) {
-    const rows = await recordings.rowsFor(user, where, { afterId, take });
+    const rows = await recordings.rowsFor(user, where, { afterId, take }, args.leadWhere);
     if (rows.length === 0) break;
     afterId = rows[rows.length - 1]!.callId;
     const batch: { jobId: string; seq: number; callId: string; fileName: string; status: string; reason: string | null }[] = [];
