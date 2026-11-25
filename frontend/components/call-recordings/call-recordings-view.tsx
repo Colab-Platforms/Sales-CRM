@@ -22,6 +22,7 @@ import { abandonmentItemOptionsQueryOptions } from "@/lib/api-client/queries/aba
 import { stopPlayback } from "@/components/abandonment/recording-playback";
 import { CallRecordingsFilters, activeFilterCount, defaultFilters } from "./call-recordings-filters";
 import { RecordingPlayer } from "./recording-player";
+import { SyncedScroll } from "./synced-scroll";
 
 const PAGE_SIZES = [20, 50, 100] as const;
 /** The list and the cards re-read this often (only while the tab is open), so a call that has just ended shows up at the top by itself. */
@@ -244,7 +245,7 @@ export function CallRecordingsView() {
           <Button type="button" size="sm" variant="outline" className="ml-3" onClick={() => void list.refetch()}>Try again</Button>
         </div>
       ) : (
-        <Card>
+        <Card className="overflow-visible">
           <CardContent>
             {list.isPending ? (
               <div className="space-y-2">{Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
@@ -263,6 +264,7 @@ export function CallRecordingsView() {
               </div>
             ) : (
               <>
+                <SyncedScroll>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -320,6 +322,7 @@ export function CallRecordingsView() {
                     ))}
                   </TableBody>
                 </Table>
+                </SyncedScroll>
                 {list.data ? (
                   <>
                     <div className="flex items-center justify-end gap-2 pt-4 text-sm text-muted-foreground">
