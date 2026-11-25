@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { listMyGroups, getGroup, listMySalespersons, getAnalyticsOverview, getSalespersonAnalytics, exportSalesOrdersCsv } from "./manager.controller.js";
+import { listMyGroups, getGroup, listMySalespersons, getAnalyticsOverview, getSalespersonAnalytics, exportSalesOrdersCsv, getSegmentReport, getSegmentLeadHistory, exportSegmentReport } from "./manager.controller.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { Role } from "../../../generated/prisma/enums.js";
 
@@ -18,6 +18,9 @@ router.get("/salespersons/mine", managerOnly, listMySalespersons);
 const reportViewers = requireRole(Role.MANAGER, Role.ADMIN);
 router.get("/analytics", reportViewers, getAnalyticsOverview);
 router.get("/analytics/orders.csv", reportViewers, exportSalesOrdersCsv);
+router.get("/analytics/segment", reportViewers, getSegmentReport);
+router.get("/analytics/segment/export.xlsx", reportViewers, exportSegmentReport);
+router.get("/analytics/segment/leads/:leadId/history", reportViewers, getSegmentLeadHistory);
 router.get("/analytics/salespersons/:salespersonId", reportViewers, getSalespersonAnalytics);
 
 export default router;

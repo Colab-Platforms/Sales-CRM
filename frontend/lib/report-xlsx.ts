@@ -46,7 +46,7 @@ function performanceTotals(data: ManagerAnalytics): Cell[] {
   ];
 }
 
-function sheets(data: ManagerAnalytics, filters?: DashboardFilters): SheetSpec[] {
+function sheets(data: ManagerAnalytics, filters?: DashboardFilters, segmentName?: string): SheetSpec[] {
   const k = data.kpis;
   const person = filters?.salespersonId ? (data.team.find((p) => p.id === filters.salespersonId)?.name ?? "") : "All salespeople";
 
@@ -97,6 +97,7 @@ function sheets(data: ManagerAnalytics, filters?: DashboardFilters): SheetSpec[]
         ["Report", "Sales Report"],
         ["Period", `${data.range.from} to ${data.range.to} (${data.range.days} days)`],
         ["Salesperson", person],
+        ["Segment", filters?.segmentId ? (segmentName ?? "Selected segment") : "All Segments"],
         ...(filters
           ? [
               ["Payment Method", PAYMENT_MODE_LABELS[filters.paymentMode]],
@@ -116,8 +117,8 @@ const THIN = { style: "thin" as const, color: { argb: "FF000000" } };
 const BORDER = { top: THIN, left: THIN, bottom: THIN, right: THIN };
 
 /** Builds the team report as a formatted .xlsx and downloads it. */
-export async function exportReportXlsx(filename: string, data: ManagerAnalytics, filters?: DashboardFilters) {
-  await downloadXlsx(filename, sheets(data, filters));
+export async function exportReportXlsx(filename: string, data: ManagerAnalytics, filters?: DashboardFilters, segmentName?: string) {
+  await downloadXlsx(filename, sheets(data, filters, segmentName));
 }
 
 /** Writes sheets as a formatted .xlsx (bold yellow header, bordered cells, fitted columns) and downloads it. */

@@ -7,6 +7,8 @@ import { ArrowRight, Ban, ChartColumnIncreasing, CircleCheck, Clock, Phone, Phon
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { managerAnalyticsQueryOptions } from "@/lib/api-client/queries/manager.queries";
+import { segmentsQueryOptions } from "@/lib/api-client/queries/segment.queries";
+import { SegmentReportSection } from "./segment-report";
 import { managerAnalyticsApi } from "@/lib/api-client/endpoints/manager.api";
 import type { ManagerAnalytics } from "@/lib/api-client/types/manager-analytics.types";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -70,6 +72,9 @@ export function ManagerSalesDashboard({
   const query = toQuery(filters);
   const { data, isPending, error, isPlaceholderData, dataUpdatedAt } = useQuery(managerAnalyticsQueryOptions(query));
 
+  const segments = useQuery({ ...segmentsQueryOptions(), enabled: view === "report" }).data;
+  const segmentName = segments?.find((s) => s.id === filters.segmentId)?.name;
+
   const [exporting, setExporting] = useState(false);
   const runExport = async (make: () => Promise<void>) => {
     setExporting(true);
@@ -84,10 +89,27 @@ export function ManagerSalesDashboard({
   const exportOptions =
     data && view === "report"
       ? [
+          ...(query.segmentId
+            ? [
+                {
+                  label: "Segment leads & activity (.xlsx)",
+                  hint: "Only this segment's leads, calls, follow-ups and activity",
+                  onSelect: () =>
+                    void runExport(async () => {
+                      const url = URL.createObjectURL(await managerAnalyticsApi.segmentXlsx(query));
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `segment-leads-${data.range.from}_${data.range.to}.xlsx`;
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    }),
+                },
+              ]
+            : []),
           {
             label: "Report workbook (.xlsx)",
             hint: "Summary, salespeople, products and daily sheets",
-            onSelect: () => void runExport(() => exportReportXlsx(`sales-report-${data.range.from}_${data.range.to}.xlsx`, data, filters)),
+            onSelect: () => void runExport(() => exportReportXlsx(`sales-report-${data.range.from}_${data.range.to}.xlsx`, data, filters, segmentName)),
           },
           {
             label: "All orders (.csv)",
@@ -116,6 +138,7 @@ export function ManagerSalesDashboard({
           onChange={patch}
           people={data?.team ?? []}
           sources={view === "report" ? undefined : (data?.sources ?? [])}
+          segments={view === "report" ? (segments ?? []) : undefined}
           variant={view === "report" ? "report" : "activity"}
           exportOptions={exportOptions}
           exporting={exporting}
@@ -171,6 +194,7 @@ export function ManagerSalesDashboard({
             </>
           ) : (
             <>
+              {query.segmentId ? <SegmentReportSection key={JSON.stringify(query)} query={query} /> : null}
               <section className="space-y-4" aria-label="Sales">
                 <SectionHeading
                   title="Sales"

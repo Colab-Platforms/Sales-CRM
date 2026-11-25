@@ -55,11 +55,12 @@ import {
 import { cn } from "@/lib/utils";
 import { DayBarChart } from "./charts";
 import { DailyCallsChart } from "./daily-calls";
-import { CallStatusSelect, DateRangeFilter } from "./filters";
+import { CallStatusSelect, SegmentSelect, DateRangeFilter } from "./filters";
 import { Avatar, KpiCard, WorkStatusDot } from "./kpi-card";
 import { LeadFunnel } from "./lead-funnel";
 import { CallOutcomesDonut, EfficiencyTrend, LeadActivityTrend } from "./trends";
 import { DashboardHeader } from "./manager-sales-dashboard";
+import { segmentsQueryOptions } from "@/lib/api-client/queries/segment.queries";
 import { EmptyState, Panel, Segmented } from "./panel";
 
 const METRICS: CallMetric[] = ["calls", "connected", "talkTimeSec"];
@@ -70,6 +71,8 @@ export function SalespersonReport({ salespersonId }: { salespersonId: string }) 
   const [filters, setFilters] = useState<DashboardFilters>(() => filtersFromSearch(searchParams));
   const patch = (p: Partial<DashboardFilters>) => setFilters((f) => ({ ...f, ...p }));
   const { data, isPending, error, isPlaceholderData } = useQuery(salespersonAnalyticsQueryOptions(salespersonId, toQuery(filters)));
+  // A segment chosen on the Reports page comes along in the link: it is shown here too, so this page is never filtered invisibly.
+  const segments = useQuery(segmentsQueryOptions()).data ?? [];
 
   const back = (
     <Link
@@ -113,6 +116,7 @@ export function SalespersonReport({ salespersonId }: { salespersonId: string }) 
       <DashboardHeader title={sp.name} subtitle="Sales Executive">
         <div className="flex flex-wrap items-center gap-2">
           <DateRangeFilter filters={filters} onChange={patch} />
+          <SegmentSelect value={filters.segmentId} segments={segments} onChange={(segmentId) => patch({ segmentId })} />
           <CallStatusSelect value={filters.callStatus} onChange={(callStatus) => patch({ callStatus })} />
           <Button
             variant="outline"

@@ -52,6 +52,8 @@ export interface SalesFilters {
   orderStatus: OrderStatusFilter;
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
+  /** Campaign segment: only orders of leads that belong to it. Absent = All Segments. */
+  segmentId?: string;
 }
 
 export interface SoldItem {
@@ -126,6 +128,7 @@ export async function soldOrders(userIds: string[], start: Date, end: Date, f: S
   const orders = await prisma.order.findMany({
     where: {
       status: f.orderStatus === "ALL" ? { in: SOLD_STATUSES } : f.orderStatus,
+      ...(f.segmentId ? { lead: { segments: { some: { segmentId: f.segmentId } } } } : {}),
       AND: [
         // When the sale happened.
         { OR: [{ confirmedAt: inRange }, { confirmedAt: null, placedAt: inRange }, { confirmedAt: null, placedAt: null, createdAt: inRange }] },

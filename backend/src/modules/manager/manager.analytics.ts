@@ -90,6 +90,9 @@ function listDays(f: AnalyticsFilters): string[] {
   return days;
 }
 
+/** Narrows a Lead condition to one campaign segment; nothing when All Segments is selected. */
+const inSegment = (segmentId?: string) => (segmentId ? { segments: { some: { segmentId } } } : {});
+
 interface LeadRow extends LeadStageInput {
   id: string;
   ownerId: string | null;
@@ -112,7 +115,7 @@ class ManagerAnalyticsService {
     });
   }
 
-  private async leadCohort(ownerIds: string[], start: Date, end: Date, sourceId?: string): Promise<LeadRow[]> {
+  private async leadCohort(ownerIds: string[], start: Date, end: Date, sourceId?: string, segmentId?: string): Promise<LeadRow[]> {
     if (ownerIds.length === 0) return [];
     const leads = await prisma.lead.findMany({
       where: {
@@ -120,6 +123,7 @@ class ManagerAnalyticsService {
         workingStatus: { not: LeadWorkingStatus.DEACTIVATED },
         createdAt: { gte: start, lt: end },
         ...(sourceId ? { sourceId } : {}),
+        ...inSegment(segmentId),
       },
       select: {
         id: true,
@@ -159,13 +163,14 @@ class ManagerAnalyticsService {
    * a lead that arrives after hours waits with its manager). A manager counts those given to them; an admin every one.
    * Deactivated leads are left out.
    */
-  private unassignedLeads(viewer: AnalyticsViewer, start: Date, end: Date, sourceId?: string) {
+  private unassignedLeads(viewer: AnalyticsViewer, start: Date, end: Date, sourceId?: string, segmentId?: string) {
     return prisma.lead.count({
       where: {
         OR: [{ ownerId: null }, { owner: { role: { not: Role.SALESPERSON } } }],
         createdAt: { gte: start, lt: end },
         workingStatus: { not: LeadWorkingStatus.DEACTIVATED },
         ...(sourceId ? { sourceId } : {}),
+        ...inSegment(segmentId),
         ...(viewer.role === Role.MANAGER ? { assignedManagerId: viewer.id } : {}),
       },
     });
@@ -233,6 +238,16 @@ class ManagerAnalyticsService {
     return { team: allTeam.map((p) => ({ id: p.id, name: p.name })), orders: await soldOrders(team.map((p) => p.id), start, end, f) };
   }
 
+  /** The checks every report request shares: the date range is within the limit, and a chosen salesperson is one this viewer may report on. Returns that salesperson's name. */
+  async assertReportRequest(viewer: AnalyticsViewer, f: AnalyticsFilters): Promise<string | null> {
+    const team = await this.getTeam(viewer);
+    const person = f.salespersonId ? team.find((p) => p.id === f.salespersonId) : undefined;
+    if (f.salespersonId && !person) throw new ApiError("Salesperson not found", STATUS_CODES.NOT_FOUND);
+    const days = listDays(f);
+    if (days.length === 0 || days.length > MAX_RANGE_DAYS) throw new ApiError(`Date range must be between 1 and ${MAX_RANGE_DAYS} days`, STATUS_CODES.BAD_REQUEST);
+    return person?.name ?? null;
+  }
+
   /** Every eligible order behind the Sales & Revenue figures for this viewer and these filters, as CSV. */
   async ordersExport(viewer: AnalyticsViewer, f: AnalyticsFilters) {
     const allTeam = await this.getTeam(viewer);
@@ -280,6 +295,7 @@ class ManagerAnalyticsService {
         where: {
           agentId: { in: ids },
           leadId: { not: null },
+          ...(f.segmentId ? { lead: inSegment(f.segmentId) } : {}),
           OR: [
             { startedAt: { gte: start, lt: end } },
             { startedAt: null, createdAt: { gte: start, lt: end } },
@@ -287,12 +303,12 @@ class ManagerAnalyticsService {
         },
         select: { agentId: true, leadId: true, status: true, startedAt: true, createdAt: true, durationSeconds: true },
       }),
-      this.leadCohort(leadOwnerIds, start, end, f.sourceId),
-      this.leadCohort(leadOwnerIds, prevStart, start, f.sourceId),
+      this.leadCohort(leadOwnerIds, start, end, f.sourceId, f.segmentId),
+      this.leadCohort(leadOwnerIds, prevStart, start, f.sourceId, f.segmentId),
       this.productivityByDay(ids, start, end, tz),
       this.currentStatuses(ids),
       prisma.interestedLeadPeriod.findMany({
-        where: { qualifiedById: { in: ids }, startedAt: { gte: start, lt: end } },
+        where: { qualifiedById: { in: ids }, startedAt: { gte: start, lt: end }, ...(f.segmentId ? { lead: inSegment(f.segmentId) } : {}) },
         select: { qualifiedById: true, startedAt: true },
       }),
       prisma.activity.findMany({
@@ -301,13 +317,14 @@ class ManagerAnalyticsService {
           type: ActivityType.STATUS_CHANGE,
           title: "Status changed to CONVERTED",
           createdAt: { gte: start, lt: end },
+          ...(f.segmentId ? { lead: inSegment(f.segmentId) } : {}),
         },
         select: { actorId: true, createdAt: true },
       }),
       soldOrders(ids, start, end, f),
       soldOrders(ids, prevStart, start, f),
       // Unassigned leads belong to the team, not to one salesperson.
-      f.salespersonId ? [0, 0] : Promise.all([this.unassignedLeads(viewer, start, end, f.sourceId), this.unassignedLeads(viewer, prevStart, start, f.sourceId)]),
+      f.salespersonId ? [0, 0] : Promise.all([this.unassignedLeads(viewer, start, end, f.sourceId, f.segmentId), this.unassignedLeads(viewer, prevStart, start, f.sourceId, f.segmentId)]),
       prisma.source.findMany({ select: { id: true, name: true }, orderBy: { name: "asc" } }),
     ]);
 
@@ -518,7 +535,7 @@ class ManagerAnalyticsService {
 
     return {
       range: { from: f.from, to: f.to, days: days.length, tzOffsetMinutes: tz },
-      filters: { callStatus: f.callStatus, leadStatus: f.leadStatus, salespersonId: f.salespersonId ?? null, sourceId: f.sourceId ?? null },
+      filters: { callStatus: f.callStatus, leadStatus: f.leadStatus, salespersonId: f.salespersonId ?? null, sourceId: f.sourceId ?? null, segmentId: f.segmentId ?? null },
       sources,
       targets: { conversionRatePercent: TEAM_CONVERSION_TARGET_PERCENT, productiveMsPerDay: PRODUCTIVE_TARGET_MS },
       team: allTeam.map((p) => ({ id: p.id, name: p.name, username: p.username })),

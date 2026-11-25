@@ -139,6 +139,20 @@ export function SourceSelect({ value, sources, onChange }: { value: string; sour
   );
 }
 
+/** Campaign segments (built-in and custom), as the Lead section lists them. */
+export function SegmentSelect({ value, segments, onChange }: { value: string; segments: { id: string; name: string }[]; onChange: (v: string) => void }) {
+  return (
+    <NativeSelect aria-label="Segment" value={value} onChange={(e) => onChange(e.target.value)} wrapperClassName="sm:w-48">
+      <option value="">All Segments</option>
+      {segments.map((s) => (
+        <option key={s.id} value={s.id}>
+          {s.name}
+        </option>
+      ))}
+    </NativeSelect>
+  );
+}
+
 export function PaymentModeSelect({ value, onChange }: { value: PaymentModeFilter; onChange: (v: PaymentModeFilter) => void }) {
   return (
     <NativeSelect aria-label="Payment method" value={value} onChange={(e) => onChange(e.target.value as PaymentModeFilter)} wrapperClassName="sm:w-36">
@@ -172,6 +186,7 @@ export function FilterBar({
   onChange,
   people,
   sources,
+  segments,
   showSalesperson = true,
   showLeadStatus = true,
   variant = "activity",
@@ -183,6 +198,8 @@ export function FilterBar({
   people: { id: string; name: string }[];
   /** Lead sources; the Source filter shows only when given. */
   sources?: { id: string; name: string }[];
+  /** Campaign segments; the Segment filter shows only when given. */
+  segments?: { id: string; name: string }[];
   showSalesperson?: boolean;
   showLeadStatus?: boolean;
   /** "report" adds the payment-method and order-status filters (for the sales section) and drops the lead-status one. */
@@ -232,6 +249,7 @@ export function FilterBar({
       {showSalesperson ? (
         <SalespersonFilter value={draft.salespersonId} people={people} onChange={(id) => edit({ salespersonId: id })} />
       ) : null}
+      {segments ? <SegmentSelect value={draft.segmentId} segments={segments} onChange={(segmentId) => edit({ segmentId })} /> : null}
       {variant === "report" ? (
         <>
           <PaymentModeSelect value={draft.paymentMode} onChange={(paymentMode) => edit({ paymentMode })} />

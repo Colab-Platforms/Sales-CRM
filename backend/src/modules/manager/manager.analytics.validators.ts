@@ -12,6 +12,8 @@ const schema = z
     to: day.optional(),
     salespersonId: z.string().uuid().optional(),
     sourceId: z.string().uuid().optional(),
+    // Campaign segment (Segment.id): narrows every report figure to the segment's leads. Absent = All Segments.
+    segmentId: z.string().guid().optional(),
     callStatus: z.enum(["ALL", "CONNECTED", "NOT_CONNECTED", "FAILED"]).default("ALL"),
     leadStatus: z.enum(["ALL", "NOT_CONTACTED", "CONTACTED", "INTERESTED", "CONVERTED"]).default("ALL"),
     paymentMode: z.enum(["ALL", "COD", "PREPAID"]).default("ALL"),

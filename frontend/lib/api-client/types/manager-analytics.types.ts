@@ -10,6 +10,8 @@ export interface AnalyticsQuery {
   salespersonId?: string;
   /** Lead source (Source.id); narrows the lead figures only. */
   sourceId?: string;
+  /** Campaign segment (Segment.id); narrows every report figure to its leads. Absent = All Segments. */
+  segmentId?: string;
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
   paymentMode: PaymentModeFilter;

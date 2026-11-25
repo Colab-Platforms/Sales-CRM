@@ -5,6 +5,8 @@ import ManagerService from "./manager.service.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import { managerAnalyticsService } from "./manager.analytics.js";
 import { validateAnalyticsQuery } from "./manager.analytics.validators.js";
+import { segmentReportService } from "./manager.segment-report.js";
+import { XLSX_MIME } from "../report-automation/report-automation.xlsx.js";
 
 const managerService = new ManagerService();
 
@@ -67,6 +69,50 @@ export const getSalespersonAnalytics = async (req: AuthRequest, res: Response): 
     if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
     const result = await managerAnalyticsService.salesperson(req.user!, value);
     sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const positive = (v: unknown, fallback: number) => (Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : fallback);
+
+export const getSegmentReport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAnalyticsQuery(req.query);
+    if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    await managerAnalyticsService.assertReportRequest(req.user!, value);
+    const result = await segmentReportService.report(req.user!, value, positive(req.query.page, 1), positive(req.query.pageSize, 25));
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+export const getSegmentLeadHistory = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAnalyticsQuery(req.query);
+    if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    const leadId = String(req.params.leadId);
+    if (!GUID.test(leadId)) return sendResponse(res, false, null, "Invalid lead id", STATUS_CODES.BAD_REQUEST);
+    const result = await segmentReportService.history(req.user!, value, leadId);
+    sendResponse(res, true, result, "OK", STATUS_CODES.OK);
+  } catch (error: any) {
+    sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+  }
+};
+
+/** The currently filtered segment (leads + their activity) as an Excel workbook. */
+export const exportSegmentReport = async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { error, value } = validateAnalyticsQuery(req.query);
+    if (error) return sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+    const salesperson = await managerAnalyticsService.assertReportRequest(req.user!, value);
+    const { buffer, filename } = await segmentReportService.exportXlsx(req.user!, value, salesperson);
+    res.setHeader("Content-Type", XLSX_MIME);
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    res.setHeader("Cache-Control", "no-store");
+    res.status(STATUS_CODES.OK).send(buffer);
   } catch (error: any) {
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }

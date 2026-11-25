@@ -94,6 +94,7 @@ export interface DashboardFilters {
   singleDate: string;
   salespersonId: string; // "" = all
   sourceId: string; // "" = all lead sources
+  segmentId: string; // "" = all segments
   callStatus: CallStatusFilter;
   leadStatus: LeadStatusFilter;
   paymentMode: PaymentModeFilter;
@@ -120,7 +121,7 @@ export function presetRange(preset: RangePreset, customFrom: string, customTo: s
 
 export function defaultFilters(): DashboardFilters {
   const today = toYmd(new Date());
-  return { preset: "today", customFrom: today, customTo: today, singleDate: today, salespersonId: "", sourceId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
+  return { preset: "today", customFrom: today, customTo: today, singleDate: today, salespersonId: "", sourceId: "", segmentId: "", callStatus: "ALL", leadStatus: "ALL", paymentMode: "ALL", orderStatus: "ALL" };
 }
 
 export function toQuery(f: DashboardFilters): AnalyticsQuery {
@@ -134,6 +135,7 @@ export function toQuery(f: DashboardFilters): AnalyticsQuery {
     orderStatus: f.orderStatus,
     salespersonId: f.salespersonId || undefined,
     sourceId: f.sourceId || undefined,
+    segmentId: f.segmentId || undefined,
     tzOffsetMinutes: REPORT_TZ_OFFSET_MINUTES,
   };
 }
@@ -315,6 +317,7 @@ export function filtersToSearch(f: DashboardFilters): string {
   if (f.paymentMode !== "ALL") p.set("payment", f.paymentMode);
   if (f.orderStatus !== "ALL") p.set("orderStatus", f.orderStatus);
   if (f.sourceId) p.set("source", f.sourceId);
+  if (f.segmentId) p.set("segment", f.segmentId);
   if (f.preset === "custom") {
     p.set("from", f.customFrom);
     p.set("to", f.customTo);
@@ -341,5 +344,6 @@ export function filtersFromSearch(sp: { get(name: string): string | null }): Das
     paymentMode: paymentMode && paymentMode in PAYMENT_MODE_LABELS ? paymentMode : "ALL",
     orderStatus: orderStatus && orderStatus in ORDER_STATUS_LABELS ? orderStatus : "ALL",
     sourceId: sp.get("source") ?? "",
+    segmentId: sp.get("segment") ?? "",
   };
 }
