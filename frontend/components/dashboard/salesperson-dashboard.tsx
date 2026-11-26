@@ -7,8 +7,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { SalespersonDashboard } from "@/lib/api-client/types/dashboard.types";
 import { MyIncentivePlan } from "@/components/incentives/my-incentive-plan";
+import { useAuthStore } from "@/stores/auth-store";
+import { isDemoUser } from "@/lib/demo";
 
 export function SalespersonDashboardView({ data }: { data: SalespersonDashboard }) {
+  const demo = isDemoUser(useAuthStore((s) => s.user));
   const conversionRate =
     data.totalLeads === 0
       ? 0
@@ -34,7 +37,8 @@ export function SalespersonDashboardView({ data }: { data: SalespersonDashboard 
         />
       </div>
 
-      <MyIncentivePlan />
+      {/* the incentive plan reads live payroll-style data: not part of the demo */}
+      {demo ? null : <MyIncentivePlan />}
 
       <Card>
         <CardHeader>

@@ -1,8 +1,9 @@
 import axios, { type InternalAxiosRequestConfig } from "axios";
 import { useAuthStore } from "@/stores/auth-store";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
+import { demoUrl, isDemoUser } from "@/lib/demo";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000/api";
+export const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:5000/api";
 
 // withCredentials: the httpOnly refresh cookie is set by /auth/login and used by /auth/refresh and /auth/logout (cross-origin in production).
 export const apiClient = axios.create({
@@ -69,6 +70,14 @@ apiClient.interceptors.request.use((config) => {
 });
 
 apiClient.interceptors.request.use(async (config) => {
+  // A DEMO session never talks to the normal API: every call goes to the isolated demo service with the demo token, and is never refreshed through the real session.
+  const demoUser = useAuthStore.getState().user;
+  if (isDemoUser(demoUser)) {
+    if (config.url) config.url = demoUrl(config.url);
+    const demoToken = useAuthStore.getState().token;
+    if (demoToken) config.headers.Authorization = `Bearer ${demoToken}`;
+    return config;
+  }
   if (!isAuthCall(config.url)) {
     const current = useAuthStore.getState().token;
     const timing = current ? tokenTiming(current) : null;
@@ -89,6 +98,11 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (axios.isAxiosError(error) && error.response?.status === 401) {
+      // An expired or unknown demo session ends the demo; it is never refreshed through the real session.
+      if (isDemoUser(useAuthStore.getState().user)) {
+        useAuthStore.getState().logout();
+        return Promise.reject(error);
+      }
       const config = error.config as RetriableConfig | undefined;
       if (isAuthCall(config?.url)) return Promise.reject(error); // a wrong password is a 401 too
       // A request that carried a session gets one refresh-and-retry before the user is logged out.
@@ -112,7 +126,7 @@ if (typeof window !== "undefined") {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const schedule = (token: string | null) => {
     clearTimeout(timer);
-    const timing = token ? tokenTiming(token) : null;
+    const timing = token && !isDemoUser(useAuthStore.getState().user) ? tokenTiming(token) : null;
     if (!timing) return;
     timer = setTimeout(() => void restoreSession().catch(() => {}), Math.max(timing.expiry - Date.now() - timing.margin, 2_000));
   };

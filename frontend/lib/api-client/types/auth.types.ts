@@ -6,6 +6,8 @@ export interface CurrentUser {
   username: string;
   role: Role;
   status: string;
+  /** true only for a DEMO session (issued by the isolated demo service, never by /auth/login). */
+  demo?: boolean;
 }
 
 export interface LoginPayload {

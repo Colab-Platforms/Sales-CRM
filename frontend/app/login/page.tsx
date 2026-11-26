@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { useAuthStore } from "@/stores/auth-store";
@@ -99,6 +100,12 @@ export default function LoginPage() {
             </form>
           </CardContent>
         </Card>
+        <p className="text-center text-sm text-muted-foreground">
+          Just looking around?{" "}
+          <Link href="/demo" className="font-medium text-foreground underline-offset-4 hover:underline">
+            Try the demo
+          </Link>
+        </p>
       </div>
     </div>
   );
