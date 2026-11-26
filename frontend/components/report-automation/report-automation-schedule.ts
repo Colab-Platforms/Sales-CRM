@@ -89,13 +89,13 @@ export function explainNext(n: { sendAt: Date; sendDate: string; data: DataRange
 export type RunPhase = "CANCELLED" | "SCHEDULED" | "PROCESSING" | "WAITING_FOR_REPLY" | "PARTIALLY_SENT" | "SENT" | "FAILED";
 export const PHASE_LABEL: Record<RunPhase, string> = { SCHEDULED: "Scheduled", PROCESSING: "Sending", WAITING_FOR_REPLY: "Waiting for reply", PARTIALLY_SENT: "Partially sent", SENT: "Sent", FAILED: "Failed", CANCELLED: "Cancelled" };
 export const PHASE_TONE: Record<RunPhase, string> = {
-  SCHEDULED: "bg-blue-100 text-blue-800",
-  PROCESSING: "bg-amber-100 text-amber-800",
-  WAITING_FOR_REPLY: "bg-amber-100 text-amber-800",
-  PARTIALLY_SENT: "bg-orange-100 text-orange-800",
-  SENT: "bg-green-100 text-green-800",
-  FAILED: "bg-red-100 text-red-800",
-  CANCELLED: "bg-gray-200 text-gray-700",
+  SCHEDULED: "bg-blue-100 text-blue-800 dark:bg-blue-500/20 dark:text-blue-300",
+  PROCESSING: "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300",
+  WAITING_FOR_REPLY: "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300",
+  PARTIALLY_SENT: "bg-orange-100 text-orange-800 dark:bg-orange-500/20 dark:text-orange-300",
+  SENT: "bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300",
+  FAILED: "bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-300",
+  CANCELLED: "bg-gray-200 text-gray-700 dark:bg-gray-500/25 dark:text-gray-300",
 };
 const SENT_SET = new Set(["SENT", "DELIVERED", "READ"]);
 const BAD_SET = new Set(["FAILED", "UNCERTAIN"]);

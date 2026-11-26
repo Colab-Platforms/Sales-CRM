@@ -40,7 +40,7 @@ export function DateRangeBar({ value, onChange }: { value: RangeState; onChange:
               type="button"
               size="sm"
               variant={on ? "default" : "outline"}
-              className={on ? "bg-emerald-600 text-white hover:bg-emerald-700" : "hover:border-emerald-300 hover:bg-emerald-50"}
+              className={on ? "bg-emerald-600 text-white hover:bg-emerald-700" : "hover:border-emerald-300 hover:bg-emerald-50 dark:hover:border-emerald-700 dark:hover:bg-emerald-950/40"}
               onClick={() => pick(k)}
               data-testid={`range-${k}`}
               aria-pressed={on}

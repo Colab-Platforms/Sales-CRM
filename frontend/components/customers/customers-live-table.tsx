@@ -74,7 +74,7 @@ export function CustomersLiveTable({ items, isFetching }: CustomersLiveTableProp
               {customer.linkedInCrm ? (
                 <span className="text-xs text-muted-foreground">Linked</span>
               ) : (
-                <span className="text-xs font-medium text-amber-600">Not synced to CRM</span>
+                <span className="text-xs font-medium text-amber-600 dark:text-amber-400">Not synced to CRM</span>
               )}
             </TableCell>
           </TableRow>

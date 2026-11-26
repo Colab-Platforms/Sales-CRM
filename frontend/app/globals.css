@@ -107,47 +107,55 @@
   --sidebar-ring: oklch(0.18 0 0 / 0.35);
 }
 
+/*
+  Dark mode. Surfaces and text are the CRM's dark palette; everything reads these tokens, so a component never hard-codes a dark colour:
+    main background #121212 · sidebar #181818 · cards, tables, inputs #1E1E1E · borders #333333 · text #F5F5F5 · secondary text #A3A3A3
+  The semantic colours (success / warning / error and the lead-status hues) are NOT tokens: they keep their own colours and carry their own dark: variants where they need contrast.
+*/
 .dark {
-  --stone: oklch(0.16 0.003 85);
-  --ink: oklch(0.96 0.003 85);
+  /* Native controls (date picker, select menus, scrollbars, number spinners) draw dark instead of as white patches. */
+  color-scheme: dark;
+
+  --stone: #121212;
+  --ink: #f5f5f5;
 
   --background: var(--stone);
   --foreground: var(--ink);
-  --card: oklch(0.21 0.003 85);
+  --card: #1e1e1e;
   --card-foreground: var(--ink);
-  --popover: oklch(0.23 0.003 85);
+  --popover: #232323;
   --popover-foreground: var(--ink);
-  --primary: oklch(0.96 0.003 85);
-  --primary-foreground: oklch(0.18 0 0);
-  --secondary: oklch(0.27 0.004 85);
+  --primary: #f5f5f5;
+  --primary-foreground: #121212;
+  --secondary: #262626;
   --secondary-foreground: var(--ink);
-  --muted: oklch(0.26 0.004 85);
-  --muted-foreground: oklch(0.7 0.006 85);
-  --accent: oklch(0.28 0.004 85);
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --accent: #2a2a2a;
   --accent-foreground: var(--ink);
   --highlight: oklch(0.9 0.16 108);
   --highlight-foreground: oklch(0.18 0 0);
-  --destructive: oklch(0.68 0.17 30);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(1 0 0 / 14%);
+  --destructive: oklch(0.75 0.15 30);
+  --border: #333333;
+  --input: #333333;
   --ring: oklch(0.96 0 0 / 0.35);
-  --chart-1: oklch(0.96 0.003 85);
+  --chart-1: #f5f5f5;
   --chart-2: oklch(0.88 0.16 108);
   --chart-3: oklch(0.7 0.07 140);
   --chart-4: oklch(0.7 0.12 45);
-  --chart-5: oklch(0.55 0.01 85);
+  --chart-5: #737373;
 
   --ink-line: oklch(1 0 0 / 0.12);
   --ink-line-soft: oklch(1 0 0 / 0.08);
   --sketch-shadow: transparent;
 
-  --sidebar: oklch(0.21 0.003 85);
+  --sidebar: #181818;
   --sidebar-foreground: var(--ink);
-  --sidebar-primary: oklch(0.96 0.003 85);
-  --sidebar-primary-foreground: oklch(0.18 0 0);
-  --sidebar-accent: oklch(0.27 0.004 85);
+  --sidebar-primary: #f5f5f5;
+  --sidebar-primary-foreground: #121212;
+  --sidebar-accent: #262626;
   --sidebar-accent-foreground: var(--ink);
-  --sidebar-border: oklch(1 0 0 / 8%);
+  --sidebar-border: #333333;
   --sidebar-ring: oklch(0.96 0 0 / 0.35);
 }
 

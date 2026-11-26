@@ -50,8 +50,8 @@ export function TelecallerPanel({ range }: { range: RangeState }) {
       </div>
 
       {rangeInvalid ? <p className="text-sm text-muted-foreground">Choose a valid date range above.</p> : null}
-      {data.isError ? <p role="alert" className="text-sm text-red-700" data-testid="telecaller-error">Could not load Telecaller Performance: {getErrorMessage(data.error, "please retry")}</p> : null}
-      {r && r.invalidAmounts > 0 ? <p role="alert" className="text-sm text-amber-700" data-testid="telecaller-incomplete">{r.invalidAmounts} order{r.invalidAmounts === 1 ? "" : "s"} had a missing or invalid amount and {r.invalidAmounts === 1 ? "is" : "are"} left out - these figures are incomplete.</p> : null}
+      {data.isError ? <p role="alert" className="text-sm text-red-700 dark:text-red-400" data-testid="telecaller-error">Could not load Telecaller Performance: {getErrorMessage(data.error, "please retry")}</p> : null}
+      {r && r.invalidAmounts > 0 ? <p role="alert" className="text-sm text-amber-700 dark:text-amber-400" data-testid="telecaller-incomplete">{r.invalidAmounts} order{r.invalidAmounts === 1 ? "" : "s"} had a missing or invalid amount and {r.invalidAmounts === 1 ? "is" : "are"} left out - these figures are incomplete.</p> : null}
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5" data-testid="telecaller-cards">
         {!r && data.isLoading ? <p className="col-span-full text-sm text-muted-foreground">Loading...</p> : null}

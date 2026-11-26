@@ -82,8 +82,8 @@ export function ReportLiveTracking({ timezone }: { timezone: string }) {
             <Card testId="card-total" label="Recipients" value={counts.total} icon={null} />
             <Card testId="card-sent" label="Sent" value={counts.sent} of={counts.total} icon={<Check className="size-3.5" />} />
             <Card testId="card-delivered" label="Delivered" value={counts.delivered} of={counts.total} icon={<CheckCheck className="size-3.5" />} />
-            <Card testId="card-read" label="Read" value={counts.read} of={counts.total} icon={<CheckCheck className="size-3.5 text-sky-500" />} tone={counts.read > 0 ? "text-sky-600" : undefined} />
-            <Card testId="card-replied" label="Replied" value={counts.replied} of={counts.total} icon={<MessageSquareReply className="size-3.5 text-emerald-600" />} tone={counts.replied > 0 ? "text-emerald-600" : undefined} />
+            <Card testId="card-read" label="Read" value={counts.read} of={counts.total} icon={<CheckCheck className="size-3.5 text-sky-500" />} tone={counts.read > 0 ? "text-sky-600 dark:text-sky-400" : undefined} />
+            <Card testId="card-replied" label="Replied" value={counts.replied} of={counts.total} icon={<MessageSquareReply className="size-3.5 text-emerald-600 dark:text-emerald-400" />} tone={counts.replied > 0 ? "text-emerald-600 dark:text-emerald-400" : undefined} />
             <Card testId="card-failed" label="Failed" value={counts.failed} icon={<CircleX className="size-3.5 text-destructive" />} tone={counts.failed > 0 ? "text-destructive" : undefined} />
           </div>
 
@@ -110,14 +110,14 @@ export function ReportLiveTracking({ timezone }: { timezone: string }) {
                           <TableCell className="font-medium">{r.name || "Unnamed"}<span className="block font-mono text-[11px] font-normal text-muted-foreground sm:hidden">{r.phone}</span></TableCell>
                           <TableCell className="hidden whitespace-nowrap font-mono text-xs text-muted-foreground sm:table-cell">{r.phone}</TableCell>
                           <TableCell>
-                            <span className={cn("inline-flex items-center gap-1.5 text-sm", s.tick === "READ" && "text-sky-600", s.tick === "FAILED" && "text-destructive")} data-testid="message-status" data-tick={s.tick}>
+                            <span className={cn("inline-flex items-center gap-1.5 text-sm", s.tick === "READ" && "text-sky-600 dark:text-sky-400", s.tick === "FAILED" && "text-destructive")} data-testid="message-status" data-tick={s.tick}>
                               <TickIcon tick={s.tick} />{s.label}
                               {s.partialFailure ? <span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">1+ failed</span> : null}
                             </span>
                           </TableCell>
                           <TableCell>
                             {r.repliedAt
-                              ? <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600" data-testid="reply-status" data-replied="true"><span className="size-1.5 rounded-full bg-emerald-500" />Replied</span>
+                              ? <span className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400" data-testid="reply-status" data-replied="true"><span className="size-1.5 rounded-full bg-emerald-500" />Replied</span>
                               : <span className="inline-flex items-center gap-1.5 text-sm text-muted-foreground" data-testid="reply-status" data-replied="false"><span className="size-1.5 rounded-full bg-muted-foreground/40" />Not replied</span>}
                           </TableCell>
                           <TableCell className="hidden whitespace-nowrap text-muted-foreground sm:table-cell">{shortTime(s.updatedAt, timezone, now)}</TableCell>
@@ -137,7 +137,7 @@ export function ReportLiveTracking({ timezone }: { timezone: string }) {
                                     </li>
                                   );
                                 })}
-                                {r.repliedAt ? <li className="text-emerald-700">Replied {shortTime(r.repliedAt, timezone, now)}</li> : <li className="text-muted-foreground">No reply received yet.</li>}
+                                {r.repliedAt ? <li className="text-emerald-700 dark:text-emerald-400">Replied {shortTime(r.repliedAt, timezone, now)}</li> : <li className="text-muted-foreground">No reply received yet.</li>}
                               </ul>
                             </TableCell>
                           </TableRow>
