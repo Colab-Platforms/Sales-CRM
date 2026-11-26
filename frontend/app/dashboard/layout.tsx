@@ -9,6 +9,9 @@ import { FollowUpReminders } from "@/components/follow-ups/follow-up-reminders";
 import { AttendanceProvider } from "@/components/attendance/attendance-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { useAuthStore } from "@/stores/auth-store";
+import { DemoBanner } from "@/components/demo/demo-bar";
+import { DemoUnavailable } from "@/components/demo/demo-unavailable";
+import { isDemoPathAvailable, isDemoUser, type DemoRole } from "@/lib/demo";
 import { isPathBlocked } from "@/lib/module-access";
 
 function DashboardShell({ children }: { children: ReactNode }) {
@@ -21,6 +24,8 @@ function DashboardShell({ children }: { children: ReactNode }) {
     if (blocked) router.replace("/dashboard");
   }, [blocked, router]);
   if (!user || blocked) return null;
+  // A DEMO session: banner on every page, the demo role switcher in the header, and none of the real-time pieces (reminder pop-ups, shift stream) that talk to live services.
+  const demo = isDemoUser(user);
 
   return (
     <SidebarProvider>
@@ -31,14 +36,15 @@ function DashboardShell({ children }: { children: ReactNode }) {
       {/* min-w-0: a flex child otherwise grows to its widest content, so one wide table would stretch the whole
           page and slide it sideways under the sidebar. With it, wide tables scroll inside their own container. */}
       <SidebarInset className="min-w-0 bg-transparent">
-        <SiteHeader showFollowUps={user.role !== "HR" && user.role !== "RECRUITER"} />
+        {demo ? <DemoBanner /> : null}
+        <SiteHeader showFollowUps={user.role !== "HR" && user.role !== "RECRUITER"} demoRole={demo ? user.role : undefined} />
         {/* Global: call back / follow-up reminders fire on any dashboard page -
             except HR, who has no leads and isn't allowed to hit this endpoint. */}
-        {user.role !== "HR" && user.role !== "RECRUITER" ? <FollowUpReminders /> : null}
+        {!demo && user.role !== "HR" && user.role !== "RECRUITER" ? <FollowUpReminders /> : null}
         {/* Global: starts the salesperson's shift and holds their presence stream open on any page. */}
-        <AttendanceProvider />
+        {demo ? null : <AttendanceProvider />}
         <div className="mx-auto flex w-full max-w-[1600px] min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
-          {children}
+          {demo && !isDemoPathAvailable(pathname, user.role as DemoRole) ? <DemoUnavailable /> : children}
         </div>
       </SidebarInset>
     </SidebarProvider>

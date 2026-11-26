@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Upload } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
+import { isDemoUser } from "@/lib/demo";
 import { leadListQueryOptions, leadKeys } from "@/lib/api-client/queries/lead.queries";
 import { leadApi } from "@/lib/api-client/endpoints/lead.api";
 import { getErrorMessage } from "@/lib/api-client/client";
@@ -48,7 +49,7 @@ function LeadsPageContent() {
   const [allMatching, setAllMatching] = useState(false);
 
   // The real total from the database (not the filtered list): what "Delete All Leads" would act on. Admin only.
-  const allCount = useQuery({ queryKey: [...leadKeys.all, "delete-all-count"], queryFn: () => leadApi.previewBulkDelete({ all: true }), enabled: user?.role === "ADMIN" });
+  const allCount = useQuery({ queryKey: [...leadKeys.all, "delete-all-count"], queryFn: () => leadApi.previewBulkDelete({ all: true }), enabled: user?.role === "ADMIN" && !isDemoUser(user) });
   const params = useMemo(() => ({ page, limit: pageSize, ...filters }), [page, pageSize, filters]);
   const { data, isPending, error } = useQuery(leadListQueryOptions(params));
 
@@ -103,7 +104,7 @@ function LeadsPageContent() {
         }
         actions={
           <>
-            {isAdmin || isManager ? (
+            {(isAdmin || isManager) && !isDemoUser(user) ? (
               <Button variant="outline" onClick={() => setImportOpen(true)}>
                 <Upload />
                 Import Excel / CSV
@@ -159,7 +160,7 @@ function LeadsPageContent() {
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        {isAdmin ? (
+        {isAdmin && !isDemoUser(user) ? (
           <Button type="button" variant="destructive" size="sm" onClick={() => setDeleteMode("ALL")} disabled={!allCount.data || allCount.data.matched === 0} data-testid="delete-all-leads">
             Delete All Leads ({allCount.data ? allCount.data.matched.toLocaleString("en-IN") : "…"})
           </Button>

@@ -9,6 +9,7 @@ import { getErrorMessage } from "@/lib/api-client/client";
 import { authApi } from "@/lib/api-client/endpoints/auth.api";
 import { attendanceApi } from "@/lib/api-client/endpoints/attendance.api";
 import type { LoginPayload } from "@/lib/api-client/types/auth.types";
+import { clearDemoToken } from "@/lib/demo";
 
 export function useAuth() {
   const router = useRouter();
@@ -37,6 +38,14 @@ export function useAuth() {
   );
 
   const logout = useCallback(async () => {
+    // Leaving a DEMO session ends only the demo: nothing real is called, and the demo landing page is where you land.
+    if (useAuthStore.getState().user?.demo) {
+      clearDemoToken();
+      queryClient.clear();
+      clearSession();
+      router.push("/demo");
+      return;
+    }
     // Close the salesperson's shift while the token still works. Best effort: a failure must never
     // trap someone in a logged-in state (the server also closes abandoned shifts on its own).
     if (useAuthStore.getState().user?.role === "SALESPERSON") {

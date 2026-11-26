@@ -6,6 +6,8 @@ export interface CurrentUser {
   username: string;
   role: Role;
   status: string;
+  /** true only for a DEMO session (issued by the isolated demo service, never by /auth/login). */
+  demo?: boolean;
   /** Modules this user may not use (per-user restriction set on the server; absent / empty for nearly everyone). */
   blockedModules?: string[];
 }

@@ -36,6 +36,7 @@ import { createCachedDatabaseCheck } from "@/lib/dbHealth.js";
 import { requireAuth, requireRole } from "@/middlewares/auth.js";
 import { publicQrRoutes } from "@modules/whatsapp/whatsapp.payment-qr.routes.js";
 import { Role } from "../generated/prisma/enums.js";
+import demoRoutes from "@modules/demo/demo.routes.js";
 
 const router = Router();
 
@@ -55,6 +56,8 @@ router.get("/health/db", requireAuth, requireRole(Role.ADMIN), async (_req, res)
 
 // Public (no login): the signed QR image of an open payment link, fetched by WhatsApp's servers. See whatsapp.payment-qr.ts.
 router.use("/public/payment-qr", publicQrRoutes);
+// The isolated DEMO API (404 unless DEMO_MODE_ENABLED=true). Self-contained: it never touches the database or an integration - see modules/demo.
+router.use("/demo", demoRoutes);
 router.use("/auth", authRoutes);
 // Per-user module restrictions (see userModuleAccess.ts): refuses a restricted user's calls to the modules they may not use. Runs before every module router below.
 router.use(moduleAccessGuard);
