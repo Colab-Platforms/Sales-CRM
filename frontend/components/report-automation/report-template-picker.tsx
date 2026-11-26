@@ -31,7 +31,7 @@ export function ReportTemplatePicker({ onClose }: { onClose: () => void }) {
           <h2 className="text-base font-semibold">Add template - approved in Meta</h2>
           <Button type="button" size="sm" variant="outline" onClick={onClose} data-testid="picker-close">Close</Button>
         </div>
-        {message ? <p role={message.ok ? "status" : "alert"} className={`text-sm ${message.ok ? "text-emerald-600" : "text-destructive"}`} data-testid="picker-message">{message.text}</p> : null}
+        {message ? <p role={message.ok ? "status" : "alert"} className={`text-sm ${message.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`} data-testid="picker-message">{message.text}</p> : null}
         {approved.isFetching && !approved.data ? <p className="text-sm text-muted-foreground" data-testid="picker-loading">Loading approved templates from Meta…</p> : null}
         {approved.error ? (
           <div className="space-y-2" data-testid="picker-error">
@@ -49,11 +49,11 @@ export function ReportTemplatePicker({ onClose }: { onClose: () => void }) {
                   const s = pickerRowState(t);
                   return (
                     <TableRow key={pickerKey(t)} data-testid={`picker-row-${t.name}-${t.language}`}>
-                      <TableCell className="font-medium">{t.name}{s.note ? <p className="text-xs font-normal text-amber-600">{s.note}</p> : null}</TableCell>
+                      <TableCell className="font-medium">{t.name}{s.note ? <p className="text-xs font-normal text-amber-600 dark:text-amber-400">{s.note}</p> : null}</TableCell>
                       <TableCell>{t.language}</TableCell>
                       <TableCell>{t.category ?? "-"}</TableCell>
                       <TableCell className="text-right">
-                        {s.kind === "added" ? <span className="text-sm text-emerald-600" data-testid="already-added">Already added</span> : <Button type="button" size="sm" disabled={s.kind === "blocked" || add.isPending} onClick={() => add.mutate({ name: t.name, language: t.language })} data-testid={`add-${t.name}-${t.language}`}>{add.isPending && add.variables?.name === t.name && add.variables.language === t.language ? "Adding…" : "Add"}</Button>}
+                        {s.kind === "added" ? <span className="text-sm text-emerald-600 dark:text-emerald-400" data-testid="already-added">Already added</span> : <Button type="button" size="sm" disabled={s.kind === "blocked" || add.isPending} onClick={() => add.mutate({ name: t.name, language: t.language })} data-testid={`add-${t.name}-${t.language}`}>{add.isPending && add.variables?.name === t.name && add.variables.language === t.language ? "Adding…" : "Add"}</Button>}
                       </TableCell>
                     </TableRow>
                   );

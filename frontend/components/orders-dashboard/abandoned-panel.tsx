@@ -79,7 +79,7 @@ export function AbandonedPanel({ range }: { range: RangeState }) {
       ) : null}
 
       {r && r.coverage !== "FULL" ? (
-        <p role="status" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-700" data-testid="coverage-warning">
+        <p role="status" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-700 dark:text-amber-400" data-testid="coverage-warning">
           {r.coverage === "NONE" ? "The CRM holds no abandoned checkouts for this period (they are recorded only from the first one it received), so these cards show no data rather than zero." : "The CRM holds abandoned checkouts for only part of this period, so these numbers are incomplete."}
         </p>
       ) : null}
@@ -185,7 +185,7 @@ export function AbandonedPanel({ range }: { range: RangeState }) {
                           <TableCell className="max-w-[14rem] whitespace-normal text-xs">{o.items.length > 0 ? o.items.join(", ") : "-"}{o.itemCount && o.itemCount > o.items.length ? ` +${o.itemCount - o.items.length}` : ""}</TableCell>
                           <TableCell>{o.checkoutLink ? <a className="inline-flex items-center gap-1 text-primary underline" href={o.checkoutLink} target="_blank" rel="noreferrer noopener">Open<ExternalLink className="size-3" /></a> : "-"}</TableCell>
                           <TableCell className="text-xs">
-                            <span className={o.followUp === "PENDING" ? "text-amber-600" : o.followUp === "DONE" ? "text-emerald-600" : ""}>{FOLLOW_UP_LABEL[o.followUp]}</span>
+                            <span className={o.followUp === "PENDING" ? "text-amber-600 dark:text-amber-400" : o.followUp === "DONE" ? "text-emerald-600 dark:text-emerald-400" : ""}>{FOLLOW_UP_LABEL[o.followUp]}</span>
                             {o.lastAction ? <><br />{o.lastAction.type.toLowerCase()} - {o.lastAction.status.toLowerCase()}</> : null}
                           </TableCell>
                           <TableCell>{o.assignedTo ?? "-"}</TableCell>

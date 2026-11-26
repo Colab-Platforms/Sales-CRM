@@ -81,11 +81,11 @@ export function WebsiteOrdersPanel({ range }: { range: RangeState }) {
             Live from Shopify, read {fmtDate(r.live.fetchedAt)} - {r.live.websiteOrders.toLocaleString("en-IN")} website orders{r.live.telecallerExcluded > 0 ? ` (${r.live.telecallerExcluded.toLocaleString("en-IN")} telecaller-created orders left out)` : ""}. Nothing is stored in the CRM.
           </p>
           {r.live.warnings.map((w) => (
-            <p key={w} role="status" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-700" data-testid="live-warning">{w}</p>
+            <p key={w} role="status" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-700 dark:text-amber-400" data-testid="live-warning">{w}</p>
           ))}
         </div>
       ) : null}
-      {feedWarning ? <p role="status" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-700" data-testid="freshness-warning">{feedWarning}</p> : null}
+      {feedWarning ? <p role="status" className="rounded-md border border-amber-500/40 p-3 text-xs text-amber-700 dark:text-amber-400" data-testid="freshness-warning">{feedWarning}</p> : null}
 
       {data.error ? (
         <div role="alert" className="flex items-center gap-3 rounded-md border border-destructive/40 p-3 text-sm text-destructive" data-testid="dashboard-error">

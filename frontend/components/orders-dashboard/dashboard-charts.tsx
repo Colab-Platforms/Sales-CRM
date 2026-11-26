@@ -27,7 +27,7 @@ function IntervalSelector({ value, onChange }: { value: ChartInterval; onChange:
 function CoverageNote({ coverage, what }: { coverage: Coverage; what: string }) {
   if (coverage === "FULL") return null;
   return (
-    <p role="status" className="text-xs text-amber-700" data-testid="chart-coverage-note">
+    <p role="status" className="text-xs text-amber-700 dark:text-amber-400" data-testid="chart-coverage-note">
       {coverage === "NONE" ? `The CRM holds no ${what} for this period, so there is nothing to chart - the hatched marks are missing data, not zero.` : `The CRM holds ${what} for only part of this period: the hatched marks are periods with no data (not zero) and faded bars are incomplete.`}
     </p>
   );

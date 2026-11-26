@@ -48,7 +48,7 @@ export function ReportSummaryTemplateCard({ status, selected, form, isAdmin, onU
 
       <div className="flex flex-wrap items-center gap-2">
         {canUseTemplate(status, form) ? <Button type="button" size="sm" onClick={() => onUse(status.name, status.language!)} data-testid="use-summary-template">Use this template</Button> : null}
-        {ready && status.selected ? <span className="text-xs font-medium text-emerald-600" data-testid="summary-template-selected">In use</span> : null}
+        {ready && status.selected ? <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400" data-testid="summary-template-selected">In use</span> : null}
         {!ready && isAdmin ? <Button type="button" size="sm" variant="outline" onClick={onSync} disabled={syncing} data-testid="summary-template-sync">{syncing ? "Syncing…" : "Check Meta (Sync templates)"}</Button> : null}
       </div>
 

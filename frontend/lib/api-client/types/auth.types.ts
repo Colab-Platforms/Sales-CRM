@@ -6,6 +6,8 @@ export interface CurrentUser {
   username: string;
   role: Role;
   status: string;
+  /** Modules this user may not use (per-user restriction set on the server; absent / empty for nearly everyone). */
+  blockedModules?: string[];
 }
 
 export interface LoginPayload {

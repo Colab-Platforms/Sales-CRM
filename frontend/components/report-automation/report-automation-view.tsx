@@ -199,18 +199,18 @@ export function ReportAutomationView() {
       {/* A. Overview */}
       <section className="space-y-2" aria-label="Overview">
         <div className="grid grid-cols-2 gap-2 lg:grid-cols-5" data-testid="overview">
-          <Stat testId="stat-automation" label="Automation" value={!c.id ? "Not set up" : c.enabled ? "Active" : "Paused"} tone={c.enabled ? "text-emerald-600" : "text-amber-600"} sub={c.enabled ? "Sends every day" : c.id ? "Nothing is scheduled" : undefined} />
+          <Stat testId="stat-automation" label="Automation" value={!c.id ? "Not set up" : c.enabled ? "Active" : "Paused"} tone={c.enabled ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"} sub={c.enabled ? "Sends every day" : c.id ? "Nothing is scheduled" : undefined} />
           <Stat testId="stat-next" label="Next send" value={nextSaved && c.enabled ? `${formatInZone(nextSaved.sendAt.toISOString(), savedTz).replace(/ IST$/, "")}` : "—"} sub={nextSaved && c.enabled ? savedTz : undefined} />
           <Stat testId="stat-covers" label="Report covers" value={nextSaved && c.enabled ? rangeText(nextSaved.data) : "—"} sub={nextSaved && c.enabled ? "Data date" : undefined} />
           <Stat testId="stat-recipients" label="Recipients" value={String(activeRecipients.length)} sub={c.recipients.length !== activeRecipients.length ? `${c.recipients.length - activeRecipients.length} disabled` : "active"} />
-          <Stat testId="stat-last" label="Last delivery" value={lastPhase ? PHASE_LABEL[lastPhase] : "None yet"} tone={lastPhase === "SENT" ? "text-emerald-600" : lastPhase === "FAILED" ? "text-destructive" : undefined} sub={last ? `Data ${rangeText({ from: last.reportFrom, to: last.reportDate })}` : undefined} />
+          <Stat testId="stat-last" label="Last delivery" value={lastPhase ? PHASE_LABEL[lastPhase] : "None yet"} tone={lastPhase === "SENT" ? "text-emerald-600 dark:text-emerald-400" : lastPhase === "FAILED" ? "text-destructive" : undefined} sub={last ? `Data ${rangeText({ from: last.reportFrom, to: last.reportDate })}` : undefined} />
         </div>
         {health.length > 0 ? (
           <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200" data-testid="health">
             {health.map((h) => <p key={h}>{h}</p>)}
           </div>
         ) : null}
-        {dirty ? <p role="alert" className="text-xs font-medium text-amber-600" data-testid="unsaved-warning">You have unsaved changes. The cards above show what is saved; the Next report section previews your edits. Nothing changes until you click Save settings.</p> : null}
+        {dirty ? <p role="alert" className="text-xs font-medium text-amber-600 dark:text-amber-400" data-testid="unsaved-warning">You have unsaved changes. The cards above show what is saved; the Next report section previews your edits. Nothing changes until you click Save settings.</p> : null}
       </section>
 
       {/* Live delivery tracking of one report run */}
@@ -219,7 +219,7 @@ export function ReportAutomationView() {
       {/* C. Next report */}
       <Card data-testid="next-report">
         <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-          <CardTitle>Next report{showDraftNext ? <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase text-amber-800">Preview of unsaved changes</span> : null}</CardTitle>
+          <CardTitle>Next report{showDraftNext ? <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 align-middle text-[10px] font-medium uppercase text-amber-800 dark:bg-amber-500/20 dark:text-amber-300">Preview of unsaved changes</span> : null}</CardTitle>
           {!showDraftNext && shown && c.enabled && role === "ADMIN" && shown.sendDate ? (
             <Button type="button" size="sm" variant="outline" disabled={cancelRun.isPending || scheduled.isFetching} data-testid="cancel-occurrence" onClick={() => {
               const row = nextRows[0];
@@ -241,7 +241,7 @@ export function ReportAutomationView() {
                 <div><dt className="text-xs text-muted-foreground">Delivery</dt><dd className="font-medium">{(showDraftNext ? draftFormats : savedFormats) || "-"}</dd></div>
               </dl>
               <p className="rounded-md bg-muted/50 px-3 py-2 text-sm" data-testid="next-explanation">{explainNext(shown, shownTz, now)}</p>
-              <p className="text-xs text-muted-foreground">Status: <span className={cn("rounded-full px-2 py-0.5 font-medium", showDraftNext ? "bg-amber-100 text-amber-800" : PHASE_TONE.SCHEDULED)}>{showDraftNext ? "Not saved yet" : PHASE_LABEL.SCHEDULED}</span>{shownRecipients.length > 0 ? ` · ${shownRecipients.join(", ")}` : ""}</p>
+              <p className="text-xs text-muted-foreground">Status: <span className={cn("rounded-full px-2 py-0.5 font-medium", showDraftNext ? "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300" : PHASE_TONE.SCHEDULED)}>{showDraftNext ? "Not saved yet" : PHASE_LABEL.SCHEDULED}</span>{shownRecipients.length > 0 ? ` · ${shownRecipients.join(", ")}` : ""}</p>
             </>
           ) : null}
           {scheduled.data && scheduled.data.cancelledUpcoming.length > 0 ? (
@@ -285,7 +285,7 @@ export function ReportAutomationView() {
               </NativeSelect>
             </div>
           </div>
-          {c.reportFor === "DATE" ? <p className="text-xs text-amber-600" data-testid="legacy-date-note">A fixed report date was saved earlier. A daily report should follow the send date, so it is shown here as Previous day - click Save settings to apply that.</p> : null}
+          {c.reportFor === "DATE" ? <p className="text-xs text-amber-600 dark:text-amber-400" data-testid="legacy-date-note">A fixed report date was saved earlier. A daily report should follow the send date, so it is shown here as Previous day - click Save settings to apply that.</p> : null}
 
           <ReportSummaryTemplateCard
             status={status.data?.summaryTemplate}
@@ -313,10 +313,10 @@ export function ReportAutomationView() {
               ) : null}
             </div>
             <p className="text-xs text-muted-foreground">Must be the approved {REPORT_TEMPLATE_NAME} template.{role !== "ADMIN" ? " Only an Admin can sync or add templates." : ""}</p>
-            {syncResult ? <p role={syncResult.ok ? "status" : "alert"} className={`text-xs ${syncResult.ok ? "text-emerald-600" : "text-destructive"}`} data-testid="sync-result">{syncResult.text}</p> : null}
+            {syncResult ? <p role={syncResult.ok ? "status" : "alert"} className={`text-xs ${syncResult.ok ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`} data-testid="sync-result">{syncResult.text}</p> : null}
             {errors.templateName ? <p role="alert" className="text-xs text-destructive">{errors.templateName}</p> : null}
             {(status.data?.whatsapp.unusableTemplates ?? []).length > 0 ? (
-              <details className="text-xs text-amber-700">
+              <details className="text-xs text-amber-700 dark:text-amber-400">
                 <summary className="cursor-pointer">{status.data!.whatsapp.unusableTemplates.length} template(s) cannot be used</summary>
                 <ul className="mt-1 space-y-0.5" data-testid="unusable-templates">{status.data!.whatsapp.unusableTemplates.map((t) => <li key={`${t.provider}:${t.name}:${t.language}`}>{t.name} ({t.language}, {t.status}): {t.reason}.</li>)}</ul>
               </details>
@@ -396,7 +396,7 @@ export function ReportAutomationView() {
             )}
             {dirty ? <span className="text-xs text-muted-foreground">Unsaved changes</span> : null}
           </div>
-          {testResult ? <p role="status" data-testid="test-result" className={testResult.ok ? "text-sm text-emerald-600" : "text-sm text-destructive"}>{testResult.ok ? "Success: " : "Not sent: "}{testResult.text}</p> : null}
+          {testResult ? <p role="status" data-testid="test-result" className={testResult.ok ? "text-sm text-emerald-600 dark:text-emerald-400" : "text-sm text-destructive"}>{testResult.ok ? "Success: " : "Not sent: "}{testResult.text}</p> : null}
         </CardContent>
       </Card>
 

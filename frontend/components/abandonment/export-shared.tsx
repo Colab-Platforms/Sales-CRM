@@ -94,7 +94,7 @@ export function ExportCard({ job, onRetry, onDownload, retrying, downloading }: 
           <Icon className="size-4 text-muted-foreground" aria-hidden />
           <span data-testid="export-kind">{KIND_LABEL[job.kind]}</span>
           <span className="text-muted-foreground" data-testid="export-scope">{exportScope(job)}</span>
-          <span data-testid="export-status" className={job.status === "FAILED" ? "text-destructive" : job.status === "COMPLETED" ? "text-emerald-600" : "text-foreground"}>
+          <span data-testid="export-status" className={job.status === "FAILED" ? "text-destructive" : job.status === "COMPLETED" ? "text-emerald-600 dark:text-emerald-400" : "text-foreground"}>
             {STATUS_LABEL[job.status]}
           </span>
         </span>
@@ -115,9 +115,9 @@ export function ExportCard({ job, onRetry, onDownload, retrying, downloading }: 
       </p>
       {job.status === "QUEUED" && !job.stalled ? <p className="text-xs text-muted-foreground">Waiting for a worker. You can leave this page - the export keeps running and will be listed here when you come back.</p> : null}
       {job.status === "PROCESSING" && !job.stalled ? <p className="text-xs text-muted-foreground">{done} of {job.total} {noun} checked. You can leave this page - the export keeps running.</p> : null}
-      {job.stalled && isActive(job) ? <p className="text-xs text-amber-600" role="status">No progress for a while (the server was restarted). It is being picked up again automatically - nothing is lost.</p> : null}
-      {job.errorMessage && (job.status === "FAILED" || isActive(job)) ? <p role={job.status === "FAILED" ? "alert" : "status"} className={job.status === "FAILED" ? "text-sm text-destructive" : "text-xs text-amber-600"} data-testid="export-error">{job.errorMessage}</p> : null}
-      {job.status === "COMPLETED" && job.failed > 0 && job.kind === "ZIP" ? <p className="text-xs text-amber-600">{job.failed} recording{job.failed === 1 ? " was" : "s were"} unavailable and skipped; they are listed in the ZIP&apos;s summary file.</p> : null}
+      {job.stalled && isActive(job) ? <p className="text-xs text-amber-600 dark:text-amber-400" role="status">No progress for a while (the server was restarted). It is being picked up again automatically - nothing is lost.</p> : null}
+      {job.errorMessage && (job.status === "FAILED" || isActive(job)) ? <p role={job.status === "FAILED" ? "alert" : "status"} className={job.status === "FAILED" ? "text-sm text-destructive" : "text-xs text-amber-600 dark:text-amber-400"} data-testid="export-error">{job.errorMessage}</p> : null}
+      {job.status === "COMPLETED" && job.failed > 0 && job.kind === "ZIP" ? <p className="text-xs text-amber-600 dark:text-amber-400">{job.failed} recording{job.failed === 1 ? " was" : "s were"} unavailable and skipped; they are listed in the ZIP&apos;s summary file.</p> : null}
       <div className="flex flex-wrap items-center gap-2">
         {job.canDownload ? (
           <Button type="button" size="sm" onClick={onDownload} disabled={downloading} data-testid="export-download">

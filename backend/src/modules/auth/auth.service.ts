@@ -5,6 +5,7 @@ import { ApiError } from "@/utils/apiError.js";
 import STATUS_CODES from "@/utils/statusCodes.js";
 import { Role, UserStatus } from "../../../generated/prisma/enums.js";
 import type { LoginBody } from "./auth.types.js";
+import { blockedModulesFor } from "@/lib/userModuleAccess.js";
 import { generateRefreshToken, hashRefreshToken, refreshTtlMs, ROTATION_GRACE_MS } from "@/lib/refreshToken.js";
 import { randomUUID } from "node:crypto";
 
@@ -16,7 +17,8 @@ export interface IssuedSession {
 }
 
 function toPublicUser(user: { id: string; name: string; username: string; role: string; status: string }) {
-  return { id: user.id, name: user.name, username: user.username, role: user.role, status: user.status };
+  // blockedModules: the modules THIS user may not use (empty for nearly everyone), so the app can hide them; the API refuses them too (userModuleAccess.ts).
+  return { id: user.id, name: user.name, username: user.username, role: user.role, status: user.status, blockedModules: blockedModulesFor(user) };
 }
 
 class AuthService {

@@ -30,7 +30,7 @@ export function advice(sync: ShopifySyncRecord, canResync: boolean): string | nu
 }
 
 export function ShopifySyncBody({ sync, canResync, onResync, pending, error }: { sync: ShopifySyncRecord; canResync: boolean; onResync: () => void; pending: boolean; error: string | null }) {
-  const tone = sync.status === "complete" ? "text-emerald-600" : sync.status === "partial" ? "text-amber-600" : "text-destructive";
+  const tone = sync.status === "complete" ? "text-emerald-600 dark:text-emerald-400" : sync.status === "partial" ? "text-amber-600 dark:text-amber-400" : "text-destructive";
   const next = advice(sync, canResync);
   return (
     <div className="space-y-2 text-sm" data-testid="shopify-sync" data-state={sync.status}>
