@@ -18,6 +18,10 @@ import type {
   LiveOrderHistoryResult,
   LiveOrderListResult,
   LiveOrdersListParams,
+  LiveOrderCount,
+  LiveOrderPending,
+  LiveExportInput,
+  LiveExportReply,
   OrderDetail,
   LiveOrderTagOptions,
   OrderFilterOptions,
@@ -103,6 +107,36 @@ export const ordersApi = {
     const query = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, Array.isArray(v) ? (v.length ? v.join(",") : undefined) : v]));
     const res = await apiClient.get<ApiEnvelope<LiveOrderListResult>>("/orders/live", { params: query });
     return res.data.data;
+  },
+
+  /** How many orders match the list's filters, across all pages (Admin / Manager). */
+  async liveCount(params: Record<string, string>): Promise<LiveOrderCount> {
+    const res = await apiClient.get<ApiEnvelope<LiveOrderCount>>("/orders/live/count", { params });
+    return res.data.data;
+  },
+
+  /** The Orders list as an Excel file (Admin / Manager). A failure carries the server's own explanation, which arrives as a blob on a file request. */
+  async exportLive(input: LiveExportInput): Promise<LiveExportReply> {
+    let res;
+    try {
+      res = await apiClient.post<Blob>("/orders/live/export", input, { responseType: "blob" });
+    } catch (error) {
+      const body = (error as { response?: { data?: unknown } }).response?.data;
+      if (body instanceof Blob) {
+        const message = await body.text().then((text) => (JSON.parse(text) as { message?: string }).message).catch(() => undefined);
+        if (message) throw new Error(message);
+      }
+      throw error;
+    }
+    if (res.status === 202) return (JSON.parse(await res.data.text()) as ApiEnvelope<LiveOrderPending>).data;
+    const disposition = String(res.headers?.["content-disposition"] ?? "");
+    return {
+      status: "ready",
+      blob: res.data,
+      filename: /filename="?([^";]+)"?/.exec(disposition)?.[1] ?? "Orders.xlsx",
+      rows: Number(res.headers?.["x-export-rows"] ?? 0),
+      missing: Number(res.headers?.["x-export-missing"] ?? 0),
+    };
   },
 
   async get(id: string): Promise<OrderDetail> {

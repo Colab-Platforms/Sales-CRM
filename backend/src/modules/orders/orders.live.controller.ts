@@ -4,7 +4,8 @@ import STATUS_CODES from "@/utils/statusCodes.js";
 import { respondIfDatabaseUnavailable } from "@/utils/databaseErrors.js";
 import type { AuthRequest } from "@/middlewares/auth.js";
 import OrdersLiveService from "./orders.live.service.js";
-import { validateLiveOrderHistoryQuery, validateLiveOrdersQuery } from "./orders.live.validators.js";
+import { validateLiveOrderHistoryQuery, validateLiveOrdersExport, validateLiveOrdersQuery } from "./orders.live.validators.js";
+import { ordersLiveBulkService, type OrdersLiveBulkService } from "./orders.live.bulk.js";
 
 const ordersLiveService = new OrdersLiveService();
 
@@ -26,6 +27,45 @@ export const listLiveOrders = async (req: AuthRequest, res: Response): Promise<v
     sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
   }
 };
+
+/** How many orders match the list's filters, across all pages (Admin / Manager). Answers "pending" with the progress while a large read is still running. */
+export const makeCountLiveOrders =
+  (service: Pick<OrdersLiveBulkService, "count">) =>
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const { error, value } = validateLiveOrdersQuery(req.query);
+      if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      const { after: _after, first: _first, ...filters } = value;
+      sendResponse(res, true, await service.count(req.user!, filters), "OK", STATUS_CODES.OK);
+    } catch (error: any) {
+      if (respondIfDatabaseUnavailable(res, error)) return;
+      sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    }
+  };
+
+/** The Excel download (Admin / Manager): {filters} = every matching order, {ids} = only the ticked ones. 202 + progress while a large read is still running. */
+export const makeExportLiveOrders =
+  (service: Pick<OrdersLiveBulkService, "exportFiltered" | "exportSelected">) =>
+  async (req: AuthRequest, res: Response): Promise<void> => {
+    try {
+      const { error, value } = validateLiveOrdersExport(req.body);
+      if (error) return void sendResponse(res, false, null, error.message, STATUS_CODES.BAD_REQUEST);
+      const result = "ids" in value ? await service.exportSelected(req.user!, value.ids) : await service.exportFiltered(req.user!, value.filters);
+      if (result.status === "pending") return void sendResponse(res, true, result, "Preparing the download", 202);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="${result.filename}"`);
+      res.setHeader("X-Export-Rows", String(result.rows));
+      res.setHeader("X-Export-Missing", String(result.missing));
+      res.setHeader("Access-Control-Expose-Headers", "Content-Disposition, X-Export-Rows, X-Export-Missing");
+      res.status(STATUS_CODES.OK).send(result.buffer);
+    } catch (error: any) {
+      if (respondIfDatabaseUnavailable(res, error)) return;
+      sendResponse(res, false, null, error.message, error.statusCode ?? STATUS_CODES.SERVER_ERROR);
+    }
+  };
+
+export const countLiveOrders = makeCountLiveOrders(ordersLiveBulkService);
+export const exportLiveOrders = makeExportLiveOrders(ordersLiveBulkService);
 
 // Cancels a Shopify order the CRM has not synced yet - the only destructive action Shopify actually
 // supports (no delete). ADMIN-only, same visibility as the detail page itself.

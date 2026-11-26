@@ -51,11 +51,36 @@ export function customerDetailHref(leadId: string) {
   return `/dashboard/customers/${leadId}`;
 }
 
+/** Row checkboxes, shown only when the list offers "Download selected orders". */
+export interface OrdersSelection {
+  selected: ReadonlySet<string>;
+  onToggle: (ids: string[], checked: boolean) => void;
+  /** While rows are being replaced, so a row about to disappear cannot be ticked. */
+  disabled?: boolean;
+}
+
+function SelectBox({ label, checked, partly = false, disabled, onChange }: { label: string; checked: boolean; partly?: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
+  return (
+    <input
+      type="checkbox"
+      aria-label={label}
+      className="size-3.5 cursor-pointer align-middle accent-primary disabled:cursor-default"
+      checked={checked}
+      disabled={disabled}
+      ref={(el) => {
+        if (el) el.indeterminate = partly;
+      }}
+      onChange={(e) => onChange(e.target.checked)}
+    />
+  );
+}
+
 // `filters` maps a header title to its column-filter funnel (see orders-header-filters.tsx); headers without one stay plain.
-function OrdersTableHeader({ filters }: { filters?: Record<string, ReactNode> }) {
+function OrdersTableHeader({ filters, selectAll }: { filters?: Record<string, ReactNode>; selectAll?: ReactNode }) {
   return (
     <TableHeader>
       <TableRow>
+        {selectAll ? <TableHead className="w-8">{selectAll}</TableHead> : null}
         {HEADERS.map((header) => (
           <TableHead key={header} className={header === "Total" || header === "Actions" ? "text-right" : undefined}>
             <span className="inline-flex items-center whitespace-nowrap">
@@ -94,15 +119,35 @@ interface OrdersTableProps {
   onOpen: (id: string) => void;
   /** Column-filter funnels by header title. */
   headerFilters?: Record<string, ReactNode>;
+  selection?: OrdersSelection;
 }
 
-export function OrdersTable({ items, isFetching, onOpen, headerFilters }: OrdersTableProps) {
+export function OrdersTable({ items, isFetching, onOpen, headerFilters, selection }: OrdersTableProps) {
+  const pageSelected = selection ? items.filter((o) => selection.selected.has(o.id)).length : 0;
   return (
     <Table className={cn("transition-opacity", isFetching && "opacity-60")}>
-      <OrdersTableHeader filters={headerFilters} />
+      <OrdersTableHeader
+        filters={headerFilters}
+        selectAll={
+          selection ? (
+            <SelectBox
+              label="Select all orders on this page"
+              checked={items.length > 0 && pageSelected === items.length}
+              partly={pageSelected > 0 && pageSelected < items.length}
+              disabled={selection.disabled || items.length === 0}
+              onChange={(checked) => selection.onToggle(items.map((o) => o.id), checked)}
+            />
+          ) : undefined
+        }
+      />
       <TableBody>
         {items.map((order) => (
           <TableRow key={order.id} className="cursor-pointer" onClick={() => onOpen(order.id)}>
+            {selection ? (
+              <TableCell onClick={(e) => e.stopPropagation()}>
+                <SelectBox label={`Select order ${order.orderNumber}`} checked={selection.selected.has(order.id)} disabled={selection.disabled} onChange={(checked) => selection.onToggle([order.id], checked)} />
+              </TableCell>
+            ) : null}
             <TableCell>
               <Link
                 href={orderDetailHref(order.id)}

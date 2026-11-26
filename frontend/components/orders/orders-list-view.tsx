@@ -5,7 +5,10 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useLiveOrders, useOrderTagOptions } from "@/hooks/useOrders";
+import { useLiveOrderCount, useLiveOrders, useOrderTagOptions } from "@/hooks/useOrders";
+import { useAuthStore } from "@/stores/auth-store";
+import { OrdersBulkBar, useOrdersDownload } from "./orders-bulk-bar";
+import { exportFilters, selectedFor, toggleSelected, type Selection } from "./orders-bulk";
 import type { LiveOrdersListParams } from "@/lib/api-client/types/orders.types";
 import { OrdersFiltersBar } from "./orders-filters";
 import { OrdersCursorPagination, ORDER_PAGE_SIZES } from "./orders-cursor-pagination";
@@ -83,15 +86,29 @@ export function OrdersListView() {
   const activeFilterCount = FILTER_COLUMNS.filter((c) => isColumnActive(filters, c)).length;
   const hasActiveFilters = Boolean(search || searchText.trim() || hasActiveColumnFilters(filters));
 
-  const params: LiveOrdersListParams = {
-    after: currentAfter,
-    first: pageSize,
+  // One set of filter values for the list, the count and the filtered download, so all three describe the same orders.
+  const filterParams: Omit<LiveOrdersListParams, "after" | "first"> = {
     search: search || undefined,
     ...(filtersToApi(filters) as Partial<LiveOrdersListParams>),
     dateFrom: dayBoundary(filters.dateFrom, "00:00:00"),
     dateTo: dayBoundary(filters.dateTo, "23:59:59.999"),
   };
+  const params: LiveOrdersListParams = { after: currentAfter, first: pageSize, ...filterParams };
   const { data, isLoading, isFetching, error, refetch } = useLiveOrders(params, { enabled: !dateRangeInvalid });
+
+  // Count and downloads: Admin / Manager (the server enforces the same).
+  const role = useAuthStore((s) => s.user?.role);
+  const canDownload = role === "ADMIN" || role === "MANAGER";
+  const countParams = exportFilters(filterParams);
+  const filterKey = JSON.stringify(countParams);
+  const searchPending = searchText.trim() !== search;
+  const count = useLiveOrderCount(countParams, { enabled: canDownload && !dateRangeInvalid });
+  const [selection, setSelection] = useState<Selection | null>(null);
+  const selected = selectedFor(selection, filterKey);
+  const rowSelection = canDownload
+    ? { selected, onToggle: (ids: string[], checked: boolean) => setSelection({ filterKey, ids: toggleSelected(selected, ids, checked) }), disabled: isFetching || searchPending }
+    : undefined;
+  const { downloading, download } = useOrdersDownload();
 
   const handleNext = () => {
     if (data?.pageInfo.endCursor) setAfterStack((stack) => [...stack, data.pageInfo.endCursor!]);
@@ -152,7 +169,7 @@ export function OrdersListView() {
             {data.partialError}
           </p>
         ) : null}
-        <OrdersTable items={data.items} isFetching={isFetching} onOpen={(id) => router.push(orderDetailHref(id))} headerFilters={headerFilters} />
+        <OrdersTable items={data.items} isFetching={isFetching} onOpen={(id) => router.push(orderDetailHref(id))} headerFilters={headerFilters} selection={rowSelection} />
         <OrdersCursorPagination
           hasNextPage={data.pageInfo.hasNextPage}
           hasPreviousPage={afterStack.length > 0}
@@ -181,6 +198,17 @@ export function OrdersListView() {
         activeFilterCount={activeFilterCount}
         dateRangeInvalid={dateRangeInvalid}
       />
+
+      {canDownload && !dateRangeInvalid ? (
+        <OrdersBulkBar
+          count={{ data: count.data, error: count.error, onRetry: () => void count.refetch() }}
+          waiting={searchPending}
+          selectedCount={selected.size}
+          onClearSelection={() => setSelection(null)}
+          downloading={downloading}
+          onDownload={(kind) => void download(kind, kind === "selected" ? { ids: [...selected] } : { filters: countParams })}
+        />
+      ) : null}
 
       <Card>
         <CardContent>{content}</CardContent>

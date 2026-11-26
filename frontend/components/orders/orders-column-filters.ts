@@ -7,9 +7,9 @@ import type { OrderSource, OrderStatus, PaymentStatusFilter } from "@/lib/api-cl
 
 export type PaymentModeFilter = "COD" | "PREPAID";
 export const FULFILLMENT_VALUES = ["UNFULFILLED", "PARTIALLY_FULFILLED", "FULFILLED"] as const;
-export const DATE_PRESETS = ["today", "yesterday", "7d", "30d", "month"] as const;
+export const DATE_PRESETS = ["today", "yesterday", "week", "month", "7d", "30d"] as const;
 export type DatePreset = (typeof DATE_PRESETS)[number];
-export const DATE_PRESET_LABELS: Record<DatePreset, string> = { today: "Today", yesterday: "Yesterday", "7d": "Last 7 days", "30d": "Last 30 days", month: "This month" };
+export const DATE_PRESET_LABELS: Record<DatePreset, string> = { today: "Today", yesterday: "Yesterday", week: "This week", month: "This month", "7d": "Last 7 days", "30d": "Last 30 days" };
 
 export const TOTAL_PRESETS = [
   { key: "0-500", label: "₹0–₹500", min: 0, max: 500 },
@@ -59,6 +59,8 @@ export function presetRange(preset: DatePreset, now: Date = new Date()): { dateF
       return { dateFrom: day(0), dateTo: day(0) };
     case "yesterday":
       return { dateFrom: day(-1), dateTo: day(-1) };
+    case "week": // Monday through today, the same week as the reports and the Orders Dashboard
+      return { dateFrom: day(-((now.getDay() + 6) % 7)), dateTo: day(0) };
     case "7d":
       return { dateFrom: day(-6), dateTo: day(0) };
     case "30d":

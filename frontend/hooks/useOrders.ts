@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   orderDetailQueryOptions,
+  orderLiveCountQueryOptions,
   orderFilterOptionsQueryOptions,
   orderTagOptionsQueryOptions,
   orderLiveDetailQueryOptions,
@@ -68,6 +69,22 @@ export function useLiveOrders(params: LiveOrdersListParams, options: { enabled?:
     isLoading: query.isPending && query.fetchStatus !== "idle",
     isFetching: query.isFetching,
     error: query.error ? getErrorMessage(query.error, "Failed to load orders.") : null,
+    refetch: query.refetch,
+  };
+}
+
+/** How many orders match the filters, across every page (Admin / Manager only: `enabled` is false for everyone else). */
+export function useLiveOrderCount(params: Record<string, string>, options: { enabled: boolean }) {
+  const token = useAuthStore((s) => s.token);
+
+  const query = useQuery({
+    ...orderLiveCountQueryOptions(params),
+    enabled: Boolean(token) && options.enabled,
+  });
+
+  return {
+    data: query.data ?? null,
+    error: query.error ? getErrorMessage(query.error, "Failed to count orders.") : null,
     refetch: query.refetch,
   };
 }
