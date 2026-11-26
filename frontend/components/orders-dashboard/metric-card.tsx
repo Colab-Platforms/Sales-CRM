@@ -39,14 +39,14 @@ export function MetricCard({ label, value, icon: Icon, hint, selected, onClick, 
         <span className="text-2xl font-semibold tracking-tight" data-testid={`card-value-${testId}`}>{value}</span>
       )}
       {none ? (
-        <span className="text-[11px] text-amber-700">Not received for this period</span>
+        <span className="text-[11px] text-amber-700 dark:text-amber-400">Not received for this period</span>
       ) : comparison ? (
-        <span className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${comparison.changePct === null ? "text-muted-foreground" : comparison.changePct >= 0 ? "text-emerald-700" : "text-rose-600"}`} data-testid={`card-compare-${testId}`}>
+        <span className={`inline-flex items-center gap-0.5 text-[11px] font-medium ${comparison.changePct === null ? "text-muted-foreground" : comparison.changePct >= 0 ? "text-emerald-700 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`} data-testid={`card-compare-${testId}`}>
           {comparison.changePct === null ? null : comparison.changePct >= 0 ? <ArrowUpRight className="size-3" /> : <ArrowDownRight className="size-3" />}
           {comparison.changePct === null ? `was ${comparison.previous} ${comparisonLabel ?? ""}` : `${Math.abs(comparison.changePct)}% ${comparisonLabel ?? ""}`}
         </span>
       ) : coverage === "PARTIAL" ? (
-        <span className="text-[11px] text-amber-700">Partial - data incomplete</span>
+        <span className="text-[11px] text-amber-700 dark:text-amber-400">Partial - data incomplete</span>
       ) : hint ? (
         <span className="text-[11px] text-muted-foreground">{hint}</span>
       ) : null}

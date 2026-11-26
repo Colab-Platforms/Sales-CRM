@@ -16,7 +16,7 @@ export function AbandonedCheckoutPrefill({ prefill, loading, failed }: { prefill
   }
   if (failed || !prefill) {
     return (
-      <div data-testid="abandoned-prefill-failed" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+      <div data-testid="abandoned-prefill-failed" className="rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
         The abandoned checkout details could not be loaded. You can still fill the order in manually.
       </div>
     );
@@ -24,11 +24,11 @@ export function AbandonedCheckoutPrefill({ prefill, loading, failed }: { prefill
   const updated = prefill.capturedAt ? new Date(prefill.capturedAt).toLocaleString() : null;
   const hasAnything = prefill.lines.length > 0 || prefill.address !== null;
   return (
-    <section data-testid="abandoned-prefill" className="grid gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950">
+    <section data-testid="abandoned-prefill" className="grid gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-950 dark:border-sky-500/40 dark:bg-sky-500/10 dark:text-sky-100">
       <p className="font-semibold">
         {hasAnything ? "Prefilled from the abandoned checkout" : "Abandoned checkout"}
         {updated ? <span className="font-normal"> · saved cart last updated {updated}</span> : null}
-        {prefill.stale ? <span data-testid="abandoned-prefill-stale" className="ml-1 rounded bg-amber-200 px-1.5 py-0.5 font-medium text-amber-950">may be out of date</span> : null}
+        {prefill.stale ? <span data-testid="abandoned-prefill-stale" className="ml-1 rounded bg-amber-200 px-1.5 py-0.5 font-medium text-amber-950 dark:bg-amber-500/30 dark:text-amber-100">may be out of date</span> : null}
       </p>
       {prefill.notes.length > 0 ? (
         <ul data-testid="abandoned-prefill-notes" className="list-disc pl-4">
@@ -47,12 +47,12 @@ export function AbandonedCheckoutPrefill({ prefill, loading, failed }: { prefill
               </span>
               <span>× {line.quantity}</span>
               {line.websiteUnitPrice ? <span>website price {formatMoney(line.websiteUnitPrice)}</span> : null}
-              {!line.matched ? <span className="font-semibold text-amber-800">choose the matching product</span> : null}
+              {!line.matched ? <span className="font-semibold text-amber-800 dark:text-amber-300">choose the matching product</span> : null}
             </li>
           ))}
         </ul>
       ) : null}
-      <p className="text-[11px] text-sky-900/80">Prices are taken from the CRM catalogue, as for every order. Review and edit anything before creating the order.</p>
+      <p className="text-[11px] text-sky-900/80 dark:text-sky-200/80">Prices are taken from the CRM catalogue, as for every order. Review and edit anything before creating the order.</p>
     </section>
   );
 }

@@ -45,7 +45,7 @@ export function RecipientManager({ rows, onChange, listError }: { rows: Recipien
                 <span className="min-w-0 flex-1 truncate font-medium">{r.name?.trim() || "Unnamed"}</span>
                 <span className="shrink-0 font-mono text-xs text-muted-foreground">{maskPhone(normalizeRecipient(r.phone))}</span>
               </label>
-              <span className={`shrink-0 text-xs ${r.enabled === false ? "text-muted-foreground" : "text-emerald-600"}`}>{r.enabled === false ? "Disabled" : "Active"}</span>
+              <span className={`shrink-0 text-xs ${r.enabled === false ? "text-muted-foreground" : "text-emerald-600 dark:text-emerald-400"}`}>{r.enabled === false ? "Disabled" : "Active"}</span>
               <Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${r.name || "recipient"}`} onClick={() => onChange(rows.filter((_, j) => j !== i))}><Trash2 /></Button>
             </li>
           ))}

@@ -79,7 +79,7 @@ export function ReportPreviewPanel({ preview, onOpenChange, date, onDateChange, 
                   </Table>
                 </div>
                 <pre className="whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-xs" data-testid="preview-text">{d.text}</pre>
-                {d.truncated ? <p className="text-xs text-amber-600">The WhatsApp message is shortened: not every telecaller fits in one message. The Excel file has everyone.</p> : null}
+                {d.truncated ? <p className="text-xs text-amber-600 dark:text-amber-400">The WhatsApp message is shortened: not every telecaller fits in one message. The Excel file has everyone.</p> : null}
                 <p className="text-xs text-muted-foreground">Conversion = converted ÷ leads handed over that day. Orders follow the Sales &amp; Revenue rules (each order credited once).</p>
               </div>
             ) : null}

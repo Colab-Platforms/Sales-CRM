@@ -17,7 +17,7 @@ function Stat({ label, value, tone, testId }: { label: string; value: number; to
   return (
     <div className={`rounded-md border bg-card/60 p-2 ${tone === "alert" ? "border-destructive/50" : ""}`} data-testid={testId}>
       <div className="text-xs text-muted-foreground">{label}</div>
-      <div className={`text-xl font-bold tabular-nums ${tone === "ok" ? "text-emerald-600" : ""}`}>{value}</div>
+      <div className={`text-xl font-bold tabular-nums ${tone === "ok" ? "text-emerald-600 dark:text-emerald-400" : ""}`}>{value}</div>
     </div>
   );
 }
@@ -32,7 +32,7 @@ function RunCard({ run, onRetry, retrying }: { run: RecoveryRun; onRetry: () => 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-medium">
           {run.fromDay === run.toDay ? run.fromDay : `${run.fromDay} → ${run.toDay}`}{" "}
-          <span className={run.status === "FAILED" || run.status === "PARTIAL" ? "text-destructive" : run.status === "COMPLETED" ? "text-emerald-600" : ""} data-testid="recovery-run-status">{STATUS_TEXT[run.status]}</span>
+          <span className={run.status === "FAILED" || run.status === "PARTIAL" ? "text-destructive" : run.status === "COMPLETED" ? "text-emerald-600 dark:text-emerald-400" : ""} data-testid="recovery-run-status">{STATUS_TEXT[run.status]}</span>
         </span>
         <span className="text-xs text-muted-foreground">{new Date(run.startedAt).toLocaleString()}</span>
       </div>

@@ -43,7 +43,7 @@ export function RecordingZipPanel() {
           ) : (
             <p className="text-muted-foreground" data-testid="recordings-summary">
               {summary.available} recording{summary.available === 1 ? "" : "s"} available
-              {summary.unavailable > 0 ? <span className="text-amber-600"> · {summary.unavailable} unavailable (will be skipped)</span> : null}
+              {summary.unavailable > 0 ? <span className="text-amber-600 dark:text-amber-400"> · {summary.unavailable} unavailable (will be skipped)</span> : null}
               {summary.duplicates > 0 ? ` · ${summary.duplicates} duplicate${summary.duplicates === 1 ? "" : "s"} left out` : ""}
             </p>
           )

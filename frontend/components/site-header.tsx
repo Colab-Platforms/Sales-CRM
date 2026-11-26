@@ -2,6 +2,7 @@
 
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { FollowUpBell } from "@/components/follow-ups/follow-up-bell";
+import { ThemeToggle } from "@/components/theme-toggle";
 import {
   ShiftTimer,
   WorkStatusMenu,
@@ -39,6 +40,8 @@ export function SiteHeader({
           </div>
         )}
         {/* <FollowUpBell /> */}
+        {/* Every role gets the theme switch, right beside the notification bell. */}
+        <ThemeToggle />
         {showFollowUps ? <FollowUpBell /> : null}
       </div>
     </header>

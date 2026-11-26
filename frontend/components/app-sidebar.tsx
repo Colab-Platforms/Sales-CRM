@@ -58,6 +58,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 import { DEMO_NAV_HREFS, isDemoUser, type DemoRole } from "@/lib/demo";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
+import { filterNavSections } from "@/lib/module-access";
 
 interface NavItem {
   title: string;
@@ -554,11 +555,11 @@ function CollapsibleNavItem({
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
+  // A user restricted from some modules (user.blockedModules) simply does not get those entries; headings that end up empty go too.
+  const allowed = filterNavSections(NAV_BY_ROLE[user.role], user.blockedModules);
   // A demo session only lists screens the demo service implements (see lib/demo.ts).
   const demoHrefs = isDemoUser(user) ? new Set(DEMO_NAV_HREFS[user.role as DemoRole] ?? []) : null;
-  const sections = demoHrefs
-    ? NAV_BY_ROLE[user.role].map((s) => ({ ...s, items: s.items.filter((i) => i.href && demoHrefs.has(i.href)) })).filter((s) => s.items.length > 0)
-    : NAV_BY_ROLE[user.role];
+  const sections = demoHrefs ? allowed.map((s) => ({ ...s, items: s.items.filter((i) => i.href && demoHrefs.has(i.href)) })).filter((s) => s.items.length > 0) : allowed;
   const homeHref = HOME_BY_ROLE[user.role] ?? "/dashboard";
 
   return (

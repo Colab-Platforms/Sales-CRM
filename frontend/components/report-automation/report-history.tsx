@@ -16,7 +16,7 @@ import { PHASE_LABEL, PHASE_TONE, rangeText, runPhase } from "./report-automatio
 
 type StatusFilter = "" | "SENT" | "FAILED" | "PENDING" | "CANCELLED";
 const PAGE_SIZE = 10;
-const partTone = (s: string) => (s === "FAILED" ? "text-destructive" : s === "UNCERTAIN" || s === "WAITING_FOR_REPLY" ? "text-amber-600" : s === "DELIVERED" || s === "READ" || s === "SENT" ? "text-emerald-600" : "text-muted-foreground");
+const partTone = (s: string) => (s === "FAILED" ? "text-destructive" : s === "UNCERTAIN" || s === "WAITING_FOR_REPLY" ? "text-amber-600 dark:text-amber-400" : s === "DELIVERED" || s === "READ" || s === "SENT" ? "text-emerald-600 dark:text-emerald-400" : "text-muted-foreground");
 
 /** One WhatsApp message of one recipient: its status, attempts, last attempt, the failure reason and (when it applies) Retry. */
 function PartStatus({ part, timezone, retryLabel, onRetry, busy, testId }: { part: ReportMessagePart & { nextAttemptAt?: string | null }; timezone: string; retryLabel: string; onRetry: () => void; busy: boolean; testId: string }) {

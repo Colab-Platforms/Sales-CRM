@@ -55,7 +55,7 @@ export function ChangeFlavourButton({ order }: { order: Pick<OrderDetail, "id" |
           </DialogHeader>
           {listing.isLoading ? <p className="text-sm text-muted-foreground">Loading flavours…</p> : null}
           {listing.error ? <p role="alert" className="text-sm text-destructive">{getErrorMessage(listing.error, "Could not load the flavours.")}</p> : null}
-          {listing.data && !listing.data.editable ? <p role="alert" className="rounded-md border border-amber-500/40 p-3 text-sm text-amber-700" data-testid="flavour-blocked">{listing.data.reason}</p> : null}
+          {listing.data && !listing.data.editable ? <p role="alert" className="rounded-md border border-amber-500/40 p-3 text-sm text-amber-700 dark:text-amber-400" data-testid="flavour-blocked">{listing.data.reason}</p> : null}
           {listing.data && listing.data.lines.length === 0 ? <p className="text-sm text-muted-foreground">This order has no catalogue product with flavours.</p> : null}
           {listing.data?.lines.map((line) => (
             <div key={line.itemId} className="space-y-2 rounded-md border p-3">

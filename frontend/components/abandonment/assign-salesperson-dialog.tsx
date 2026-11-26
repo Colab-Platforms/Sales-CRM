@@ -210,7 +210,7 @@ export function AssignAbandonmentSalespersonDialog({
                       </div>
                     ))}
                   </div>
-                  {unassignedManual > 0 ? <p className="text-xs text-amber-600">{unassignedManual} lead(s) have no salesperson chosen and will not be assigned.</p> : null}
+                  {unassignedManual > 0 ? <p className="text-xs text-amber-600 dark:text-amber-400">{unassignedManual} lead(s) have no salesperson chosen and will not be assigned.</p> : null}
                 </div>
               ) : null}
 

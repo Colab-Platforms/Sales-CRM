@@ -87,7 +87,7 @@ export function ReviewAmountButton({ order }: { order: Pick<OrderDetail, "id" | 
           {preview.isPending && !data ? <p className="text-sm text-muted-foreground" data-testid="amount-loading">Reading the CRM, Shopify and Shiprocket…</p> : null}
           {error ? <p role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive" data-testid="amount-error">{error} {error.includes("changed since") ? <Button type="button" size="sm" variant="outline" onClick={() => void load()}>Refresh</Button> : null}</p> : null}
           {result ? (
-            <div role="status" className={`rounded-md border p-3 text-sm ${result.outcome === "corrected" ? "border-emerald-500/40 text-emerald-700" : "border-destructive/40 text-destructive"}`} data-testid={`amount-result-${result.outcome}`}>
+            <div role="status" className={`rounded-md border p-3 text-sm ${result.outcome === "corrected" ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400" : "border-destructive/40 text-destructive"}`} data-testid={`amount-result-${result.outcome}`}>
               <div className="font-medium">{result.message}</div>
               {result.after ? <div className="text-xs">Before: total {result.before.total}, outstanding {result.before.outstanding}. After (re-read from Shopify): total {result.after.total}, outstanding {result.after.outstanding}.</div> : null}
             </div>
@@ -116,15 +116,15 @@ export function ReviewAmountButton({ order }: { order: Pick<OrderDetail, "id" | 
                   <h3 className="text-sm font-semibold">Proposed correction: add the {data.proposal.amount} shipping line</h3>
                   <p className="text-sm">{changeSentence(data)}</p>
                   <p className="text-xs text-muted-foreground">{data.proposal.reason}</p>
-                  <p className="text-xs text-amber-700">Risk: {data.proposal.risk}</p>
+                  <p className="text-xs text-amber-700 dark:text-amber-400">Risk: {data.proposal.risk}</p>
                 </section>
               ) : data.manualReason ? (
-                <p className="rounded-md border border-amber-500/40 p-3 text-sm text-amber-700" data-testid="amount-manual">Manual review: {data.manualReason}</p>
-              ) : <p className="text-sm text-emerald-700" data-testid="amount-all-good">The amounts agree.</p>}
+                <p className="rounded-md border border-amber-500/40 p-3 text-sm text-amber-700 dark:text-amber-400" data-testid="amount-manual">Manual review: {data.manualReason}</p>
+              ) : <p className="text-sm text-emerald-700 dark:text-emerald-400" data-testid="amount-all-good">The amounts agree.</p>}
 
               {data.proposal ? (
                 <ul className="space-y-1 text-xs" aria-label="Checks" data-testid="amount-gates">
-                  {data.gates.map((g) => <li key={g.key} className={g.ok ? "text-emerald-700" : "text-destructive"}>{g.ok ? "✓" : "✕"} {g.label} - {g.detail}</li>)}
+                  {data.gates.map((g) => <li key={g.key} className={g.ok ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"}>{g.ok ? "✓" : "✕"} {g.label} - {g.detail}</li>)}
                 </ul>
               ) : null}
               {data.proposal && gates.length > 0 ? <p role="alert" className="rounded-md border border-destructive/40 p-3 text-sm text-destructive" data-testid="amount-blocked">Blocked: {data.blockedReason}</p> : null}

@@ -17,7 +17,7 @@ import { canApply, defaultSelection, lastSyncText, manualItems, OUTCOME_TONE, sy
 
 const EDIT_ROLES = ["ADMIN", "MANAGER", "SALESPERSON"];
 const fmt = (iso: string) => new Date(iso).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
-const TONE = { success: "border-emerald-500/40 text-emerald-700", warning: "border-amber-500/40 text-amber-700", error: "border-destructive/40 text-destructive" } as const;
+const TONE = { success: "border-emerald-500/40 text-emerald-700 dark:text-emerald-400", warning: "border-amber-500/40 text-amber-700 dark:text-amber-400", error: "border-destructive/40 text-destructive" } as const;
 
 function ItemRow({ item, checked, onToggle, disabled }: { item: SyncItem; checked?: boolean; onToggle?: () => void; disabled?: boolean }) {
   return (
@@ -30,7 +30,7 @@ function ItemRow({ item, checked, onToggle, disabled }: { item: SyncItem; checke
             <div><span className="text-muted-foreground">CRM: </span>{item.crm ?? "-"}</div>
             <div><span className="text-muted-foreground">Shopify: </span>{item.shopify ?? "-"}</div>
           </div>
-          {item.blocked ? <p className="text-xs text-amber-700" data-testid="sync-blocked">{item.blocked}</p> : null}
+          {item.blocked ? <p className="text-xs text-amber-700 dark:text-amber-400" data-testid="sync-blocked">{item.blocked}</p> : null}
         </div>
       </div>
     </div>
@@ -134,7 +134,7 @@ export function OrderSyncButton({ order }: { order: Pick<OrderDetail, "id" | "or
                   {manual.map((i) => <ItemRow key={i.key} item={i} />)}
                 </section>
               ) : null}
-              {syncable.length === 0 && manual.length === 0 ? <p className="text-sm text-emerald-700" data-testid="sync-all-good">Everything compared is in sync.</p> : null}
+              {syncable.length === 0 && manual.length === 0 ? <p className="text-sm text-emerald-700 dark:text-emerald-400" data-testid="sync-all-good">Everything compared is in sync.</p> : null}
               <details className="text-xs">
                 <summary className="cursor-pointer text-muted-foreground">{inSync.length} item{inSync.length === 1 ? "" : "s"} in sync / for information</summary>
                 <div className="mt-2 space-y-2">{inSync.map((i) => <ItemRow key={i.key} item={i} />)}</div>

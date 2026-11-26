@@ -83,7 +83,7 @@ export function TaggingBreakdown({ tagging, done = false }: { tagging: ImportTag
         </p>
       ) : null}
       {tagging.unrecognizedValues.length > 0 ? (
-        <p className="text-xs text-amber-700">Not recognised: {tagging.unrecognizedValues.map((v) => `"${v.value}" (${n(v.count)})`).join(", ")}</p>
+        <p className="text-xs text-amber-700 dark:text-amber-400">Not recognised: {tagging.unrecognizedValues.map((v) => `"${v.value}" (${n(v.count)})`).join(", ")}</p>
       ) : null}
     </div>
   );
@@ -412,7 +412,7 @@ export function ImportLeadsDialog({
                                 <span>{FIELD_LABELS[mapping[c.header] ?? "extra"]}</span>
                               )}
                               {preview?.tagging?.column === c.header ? <span className="ml-2 text-xs font-medium text-primary">sets the lead status</span> : null}
-                              {review.has(c.header) ? <span className="ml-2 text-xs text-amber-700">another column is already the {FIELD_LABELS[(mapping[c.conflictWith ?? ""] ?? "extra") as ImportField].toLowerCase()}: choose</span> : null}
+                              {review.has(c.header) ? <span className="ml-2 text-xs text-amber-700 dark:text-amber-400">another column is already the {FIELD_LABELS[(mapping[c.conflictWith ?? ""] ?? "extra") as ImportField].toLowerCase()}: choose</span> : null}
                             </td>
                           </tr>
                         );

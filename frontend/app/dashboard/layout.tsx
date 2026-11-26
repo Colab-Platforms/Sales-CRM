@@ -1,6 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
@@ -10,10 +11,18 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { useAuthStore } from "@/stores/auth-store";
 import { DemoBanner } from "@/components/demo/demo-bar";
 import { isDemoUser } from "@/lib/demo";
+import { isPathBlocked } from "@/lib/module-access";
 
 function DashboardShell({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
-  if (!user) return null;
+  const pathname = usePathname();
+  const router = useRouter();
+  // A module this user is restricted from: its URL (typed, bookmarked or linked) sends them to the dashboard. The server refuses the module's API as well.
+  const blocked = isPathBlocked(pathname, user?.blockedModules);
+  useEffect(() => {
+    if (blocked) router.replace("/dashboard");
+  }, [blocked, router]);
+  if (!user || blocked) return null;
   // A DEMO session: banner on every page, the demo role switcher in the header, and none of the real-time pieces (reminder pop-ups, shift stream) that talk to live services.
   const demo = isDemoUser(user);
 

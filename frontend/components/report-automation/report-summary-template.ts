@@ -11,10 +11,10 @@ export const STATE_LABEL: Record<SummaryTemplateState, string> = {
 
 /** Badge colours: green = usable, amber = waiting, red = needs a fix in Meta. */
 export const STATE_TONE: Record<SummaryTemplateState, string> = {
-  READY: "bg-green-100 text-green-800",
-  NOT_APPROVED: "bg-amber-100 text-amber-800",
-  NOT_ADDED: "bg-gray-200 text-gray-700",
-  VARIABLES_MISMATCH: "bg-red-100 text-red-800",
+  READY: "bg-green-100 text-green-800 dark:bg-green-500/20 dark:text-green-300",
+  NOT_APPROVED: "bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300",
+  NOT_ADDED: "bg-gray-200 text-gray-700 dark:bg-gray-500/25 dark:text-gray-300",
+  VARIABLES_MISMATCH: "bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-300",
 };
 
 /** Rejected / disabled templates need a fix in Meta, not just waiting: show them as a problem. */

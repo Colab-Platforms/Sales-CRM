@@ -112,7 +112,7 @@ export function IngestionHealthPanel({ canReconcile }: { canReconcile: boolean }
         <span className="flex items-center gap-2 text-sm font-medium">
           <Activity className="size-4" aria-hidden /> Fastrr ingestion health
           {data ? (
-            <span className={cn("rounded-full px-2 py-0.5 text-xs", alert ? "bg-destructive/10 text-destructive" : "bg-emerald-100 text-emerald-900")} data-testid="ingestion-badge">
+            <span className={cn("rounded-full px-2 py-0.5 text-xs", alert ? "bg-destructive/10 text-destructive" : "bg-emerald-100 text-emerald-900 dark:bg-emerald-500/20 dark:text-emerald-300")} data-testid="ingestion-badge">
               {alert ? `${data.carts.notSaved} not saved` : "healthy"} · last event {ago(data.secondsSinceLastReceived)}
             </span>
           ) : null}

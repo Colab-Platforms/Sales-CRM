@@ -10,6 +10,7 @@ import { AuditSourceBadge } from "@/components/audit/audit-source-badge";
 import { AccentCard, SectionTitle, TimelineList } from "./order-detail-parts";
 import { OrdersPagination } from "./orders-pagination";
 import { useOrderAudit } from "@/hooks/useAudit";
+import { useCanOpenPath } from "@/hooks/useModuleAccess";
 import { formatDateTime } from "@/lib/order-status";
 
 const PAGE_SIZE = 10;
@@ -19,6 +20,7 @@ const PAGE_SIZE = 10;
 // business-friendly view of the same order. This section is the raw, auditor-facing trail: every
 // event, its actor (or system/integration source), and the exact old/new values recorded.
 export function OrderAuditHistory({ orderId }: { orderId: string }) {
+  const canOpen = useCanOpenPath();
   const [page, setPage] = useState(1);
   const { data, isLoading, isFetching, error } = useOrderAudit(orderId, { page, pageSize: PAGE_SIZE });
 
@@ -57,11 +59,13 @@ export function OrderAuditHistory({ orderId }: { orderId: string }) {
         )}
         {data ? <OrdersPagination pagination={data.pagination} onPageChange={setPage} disabled={isFetching} /> : null}
       </CardContent>
-      <CardFooter>
-        <Link href={`/dashboard/audit?orderId=${orderId}`} className="text-sm text-primary hover:underline">
-          View in Audit Trail
-        </Link>
-      </CardFooter>
+      {canOpen("/dashboard/audit") ? (
+        <CardFooter>
+          <Link href={`/dashboard/audit?orderId=${orderId}`} className="text-sm text-primary hover:underline">
+            View in Audit Trail
+          </Link>
+        </CardFooter>
+      ) : null}
     </AccentCard>
   );
 }
