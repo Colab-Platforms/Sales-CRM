@@ -5,7 +5,8 @@ import { getOrderAudit } from "../audit/audit.controller.js";
 import { getReconciliation } from "../reconciliation/reconciliation.controller.js";
 import { previewOrderAmount, correctOrderAmount, applyOrderSync, getOrderSyncReport, previewOrderSync, changeOrderFlavour, getOrderFlavours, updateOrderShippingAddress, cancelOrder, revertCancellation, createOrder, listMyOrders, resyncShopifyOrder, getLastShippingAddress, getWhatsAppPaymentOptions, getOrder, getOrderFilterOptions, getOrderStatusHistory, listOrders, pushOrderToShopify, retryShiprocketSync, retryShiprocketCancellation, retryConfirmationTagSync, retryShopifyPaymentSync } from "./orders.controller.js";
 import { LIVE_ORDER_SYNC_ROLES } from "./orders.filters.js";
-import { cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
+import { ORDER_BULK_ROLES } from "./orders.live.bulk.js";
+import { countLiveOrders, exportLiveOrders, cancelLiveOrder, syncLiveOrder, getLiveOrderDetail, getLiveOrderHistory, getLiveTagOptions, listLiveOrders } from "./orders.live.controller.js";
 import { createLivePrepaidUpgrade, getLivePrepaidUpgrade, createPrepaidUpgrade, declinePrepaidUpgrade, generatePrepaidUpgradeLink, getPrepaidUpgrade } from "./orders.prepaid-upgrade.controller.js";
 import { createPaymentLink } from "../cashfree/cashfree.controller.js";
 import { sendPaymentLinkQr, viewPaymentLinkQr } from "../whatsapp/whatsapp.payment-qr.routes.js";
@@ -35,6 +36,9 @@ router.get("/reconciliation", requireAuth, requireRole(Role.ADMIN, Role.MANAGER)
 router.get("/live", requireAuth, listLiveOrders);
 // Tag options for the Orders Tags filter - a literal path, registered before "/live/:externalId" so it is never read as an order id.
 router.get("/live/tag-options", requireAuth, getLiveTagOptions);
+// Matching-order count and Excel download for the Orders list: Admin / Manager only. "count" is registered ahead of "/live/:externalId" so it is never read as an order id.
+router.get("/live/count", requireAuth, requireRole(...ORDER_BULK_ROLES), countLiveOrders);
+router.post("/live/export", requireAuth, requireRole(...ORDER_BULK_ROLES), exportLiveOrders);
 // Order Detail for a Shopify order not yet synced into the CRM (see orders.live.controller.ts) -
 // registered before "/:id" for the same reason as the routes above.
 router.get("/live/:externalId", requireAuth, getLiveOrderDetail);

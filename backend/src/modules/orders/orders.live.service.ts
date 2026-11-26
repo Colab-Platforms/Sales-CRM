@@ -10,6 +10,8 @@
 import { prisma } from "@/lib/prisma.js";
 import { getLeadScope, type DbClient } from "@/lib/leadScope.js";
 import type { AuthUser } from "@/middlewares/auth.js";
+import { ApiError } from "@/utils/apiError.js";
+import STATUS_CODES from "@/utils/statusCodes.js";
 import { normalizeMobile } from "@/lib/leadIdentity.js";
 import { Role } from "../../../generated/prisma/enums.js";
 import type { Prisma } from "../../../generated/prisma/client.js";
@@ -61,11 +63,16 @@ interface HistoryCacheEntry {
 }
 const historyCache = new Map<string, HistoryCacheEntry>();
 
+// Other caches built from the same live data (the bulk count / export reads, orders.live.bulk.ts) register here so one call drops them all.
+const cacheClearHooks: (() => void)[] = [];
+export const onClearLiveOrderCaches = (hook: () => void): void => void cacheClearHooks.push(hook);
+
 /** Drops the cached live list/history pages. They embed the CRM overlay (status, payment...), so a CRM-side change such
  *  as cancel/revert must call this or the Orders list keeps showing the old status for up to CACHE_TTL_MS. */
 export function clearLiveOrderCaches(): void {
   listCache.clear();
   historyCache.clear();
+  for (const hook of cacheClearHooks) hook();
 }
 
 // The shop's own timezone rarely changes - cached much longer, and shared across all callers/roles
@@ -197,19 +204,7 @@ class OrdersLiveService {
 
     let page;
     try {
-      const timeZone = await resolveShopTimeZone(client);
-      const spec: WindowSpec = {
-        from: query.dateFrom ? { kind: "instant", at: query.dateFrom } : null,
-        to: query.dateTo ? { kind: "instant", at: query.dateTo } : null,
-        updatedSince: null,
-      };
-      const window = resolveWindow(spec, DEFAULT_START_DATE, timeZone, new Date());
-      // Shopify ANDs space-separated terms by default, and its own default (unprefixed) search
-      // already covers order name/customer name/email/phone - so the free-text term is simply
-      // appended to the date-window terms rather than the CRM's own 5-field search being reimplemented
-      // against a system that has no idea what a "lead number" is.
-      // Tags are matched by Shopify itself (exact tag, OR across the chosen tags), so pagination follows the filtered set.
-      const search = [windowSearch(window), tagSearchClause(toList(query.tags)), query.search?.trim()].filter(Boolean).join(" ");
+      const search = await this.shopifySearch(client, query);
       page = await listOrdersForDisplay(client, { first: query.first, after: query.after ?? null, search });
 
       // Column filters are applied to rows AFTER the CRM overlay, so a sparse filter could leave a Shopify page nearly empty.
@@ -255,6 +250,38 @@ class OrdersLiveService {
     const { sourceIndexes: _unused, ...result } = await this.attachCrmOverlay(user, page.items, page.hasNextPage, page.hasPreviousPage, page.endCursor, overlayFilters);
     listCache.set(cacheKey, { value: result, expiresAt: Date.now() + CACHE_TTL_MS });
     return result;
+  }
+
+  /** The Shopify search for the date range, tags and search text. The list, the order count and the export all use this one, so they ask Shopify for the same set. */
+  async shopifySearch(client: ShopifyClient, query: Pick<LiveOrdersQuery, "dateFrom" | "dateTo" | "search" | "tags">): Promise<string> {
+    const timeZone = await resolveShopTimeZone(client);
+    const spec: WindowSpec = {
+      from: query.dateFrom ? { kind: "instant", at: query.dateFrom } : null,
+      to: query.dateTo ? { kind: "instant", at: query.dateTo } : null,
+      updatedSince: null,
+    };
+    const window = resolveWindow(spec, DEFAULT_START_DATE, timeZone, new Date());
+    // Shopify ANDs space-separated terms by default, and its own default (unprefixed) search
+    // already covers order name/customer name/email/phone - so the free-text term is simply
+    // appended to the date-window terms rather than the CRM's own 5-field search being reimplemented
+    // against a system that has no idea what a "lead number" is.
+    // Tags are matched by Shopify itself (exact tag, OR across the chosen tags), so pagination follows the filtered set.
+    return [windowSearch(window), tagSearchClause(toList(query.tags)), query.search?.trim()].filter(Boolean).join(" ");
+  }
+
+  /** The list rows for any number of Shopify orders, UNfiltered, each with the Shopify phone (for the export). Throws rather than returning rows without their CRM details: a count or export built on those would be wrong. */
+  async overlayRows(user: AuthUser, shopifyItems: NormalizedOrderListItem[], chunk = 500): Promise<{ externalId: string; phone: string | null; item: LiveOrderListItem }[]> {
+    const rows: { externalId: string; phone: string | null; item: LiveOrderListItem }[] = [];
+    for (let start = 0; start < shopifyItems.length; start += chunk) {
+      const part = shopifyItems.slice(start, start + chunk);
+      const overlaid = await this.attachCrmOverlay(user, part, false, false, null, {});
+      if (overlaid.partialError) throw new ApiError("Order details could not be loaded from the CRM, so the result would be incomplete. Please try again.", STATUS_CODES.SERVICE_UNAVAILABLE);
+      overlaid.items.forEach((item, i) => {
+        const source = part[overlaid.sourceIndexes![i]!]!;
+        rows.push({ externalId: normalizeShopifyOrderId(source.externalId), phone: source.customerPhone, item });
+      });
+    }
+    return rows;
   }
 
   // Joins the CRM's own Order/Lead rows (already synced via the existing Shopify webhook/backfill -
@@ -637,8 +664,7 @@ class OrdersLiveService {
       const outcome = await this.syncOrder({ client, runner: this.runner, afterCommit: this.makeAfterCommit(client, this.runner) }, `gid://shopify/Order/${externalId}`, { source: ActivitySource.SHOPIFY_SYNC, automation: false });
       if (outcome.notFound || !outcome.result?.orderId) return { synced: false, reason: "Shopify no longer has this order." };
       // The list/detail caches still describe this order as live-only.
-      listCache.clear();
-      historyCache.clear();
+      clearLiveOrderCaches();
       return { synced: true, orderId: outcome.result.orderId, action: outcome.result.action };
     } catch (error) {
       return { synced: false, reason: error instanceof ShopifyApiError ? error.message : "Could not sync the order - nothing was changed. Please try again." };
@@ -666,8 +692,7 @@ class OrdersLiveService {
       await cancelShopifyOrder(client, externalId); // normalised to the GID inside cancelShopifyOrder
       // Any cached list/detail page may now show a stale (pre-cancellation) status - cheaper to drop
       // the whole small in-process cache than to track which keys this order could appear under.
-      listCache.clear();
-      historyCache.clear();
+      clearLiveOrderCaches();
       return { cancelled: true };
     } catch (error) {
       return { cancelled: false, reason: error instanceof ShopifyOrderCancelError ? error.message : "Could not reach Shopify - please try again." };

@@ -12,6 +12,7 @@ export const ordersKeys = {
   liveLists: () => [...ordersKeys.all, "live-list"] as const,
   liveList: (params: LiveOrdersListParams) => [...ordersKeys.liveLists(), params] as const,
   detail: (id: string) => [...ordersKeys.all, "detail", id] as const,
+  liveCount: (params: Record<string, string>) => [...ordersKeys.all, "live-count", params] as const,
   liveDetail: (externalId: string) => [...ordersKeys.all, "live-detail", externalId] as const,
   liveHistory: (shopifyCustomerId: string, params: LiveOrderHistoryParams) => [...ordersKeys.all, "live-history", shopifyCustomerId, params] as const,
   statusHistory: (id: string) => [...ordersKeys.all, "status-history", id] as const,
@@ -64,6 +65,23 @@ export function ordersLiveListQueryOptions(params: LiveOrdersListParams) {
     staleTime: LIVE_LIST_STALE_TIME_MS,
     placeholderData: keepPreviousData,
     retry: retryUnlessClientError,
+  });
+}
+
+/**
+ * The matching-order count. Keyed by the filters only (not page or page size), so paging never re-counts, and a changed filter never shows the previous
+ * filter's number (no placeholder data). While the server is still reading it is asked again; a large read is not restarted by a retry or a window focus.
+ */
+export function orderLiveCountQueryOptions(params: Record<string, string>) {
+  return queryOptions({
+    queryKey: ordersKeys.liveCount(params),
+    queryFn: () => ordersApi.liveCount(params),
+    staleTime: 60 * 1000,
+    refetchInterval: (query) => (query.state.data?.status === "pending" && !query.state.error ? 1500 : false),
+    // Keep asking while the tab is hidden: the server keeps a finished read only briefly, so a paused poll would make a long count start all over.
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
 }
 

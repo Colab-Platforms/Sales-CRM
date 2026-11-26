@@ -46,6 +46,29 @@ const liveOrdersQuerySchema = z
 
 export const validateLiveOrdersQuery = (query: unknown) => validateSchema<LiveOrdersQuery>(liveOrdersQuerySchema, query);
 
+export type LiveOrdersExportRequest = { ids: string[] } | { filters: Omit<LiveOrdersQuery, "after" | "first"> };
+
+// A CRM order id, or "shopify:<id>" for an order the CRM has not synced: the two forms the list's rows carry.
+const selectedOrderId = z.union([z.uuid(), z.string().regex(/^shopify:\d{1,20}$/)], { error: "Invalid order id" });
+const selectionSchema = z.array(selectedOrderId, { error: "ids must be a list" }).min(1, "Select at least one order to download").max(1000, "Select at most 1000 orders");
+
+/** Exactly one of {ids} (the ticked orders) or {filters} (the list's own query values, as strings). Pagination values are ignored. */
+export function validateLiveOrdersExport(body: unknown): { error: { message: string }; value?: undefined } | { error: null; value: LiveOrdersExportRequest } {
+  const { ids, filters, ...rest } = (body ?? {}) as { ids?: unknown; filters?: unknown };
+  if (Object.keys(rest).length || (ids === undefined) === (filters === undefined)) return { error: { message: "Send either the selected order ids or the filters" } };
+  if (ids !== undefined) {
+    const parsed = selectionSchema.safeParse(ids);
+    return parsed.success ? { error: null, value: { ids: parsed.data } } : { error: { message: parsed.error.issues[0]!.message } };
+  }
+  // an unknown name must not be dropped silently: that would download more than the screen shows
+  const known = new Set(Object.keys(liveOrdersQuerySchema.shape));
+  if (typeof filters !== "object" || filters === null || Array.isArray(filters) || Object.keys(filters).some((k) => !known.has(k))) return { error: { message: "Invalid filters" } };
+  const checked = validateLiveOrdersQuery(filters);
+  if (checked.error) return { error: { message: checked.error.message } };
+  const { after: _after, first: _first, ...value } = checked.value!;
+  return { error: null, value: { filters: value } };
+}
+
 const liveOrderHistoryQuerySchema = z.object({
   after: optional(z.string().trim().max(500, "after must be a valid cursor")),
   first: z.coerce.number({ error: "first must be a number" }).int().min(1).max(25).default(10),

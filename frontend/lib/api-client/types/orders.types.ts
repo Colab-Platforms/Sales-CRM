@@ -358,6 +358,14 @@ export interface LiveOrdersListParams {
   tags?: string[];
 }
 
+/** GET /orders/live/count (Admin / Manager). "pending" = the server is still reading a large set; ask again. */
+export type LiveOrderPending = { status: "pending"; checked: number; expected: number | null };
+export type LiveOrderCount = LiveOrderPending | { status: "ready"; total: number };
+
+/** POST /orders/live/export: only the ticked rows, or every order matching the list's filters. */
+export type LiveExportInput = { ids: string[] } | { filters: Record<string, string> };
+export type LiveExportReply = LiveOrderPending | { status: "ready"; blob: Blob; filename: string; rows: number; missing: number };
+
 export interface LiveOrderTagOptions {
   tags: { name: string; source: "SHOPIFY" | "CRM" }[];
   /** Set when Shopify's tag list could not be loaded (the CRM tags are still returned). */
