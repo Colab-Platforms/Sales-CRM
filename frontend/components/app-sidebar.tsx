@@ -57,6 +57,7 @@ import { OpenTicketBadge } from "@/components/tickets/open-ticket-badge";
 import { BrandMark } from "@/components/brand-mark";
 import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/api-client/types/auth.types";
+import { filterNavSections } from "@/lib/module-access";
 
 interface NavItem {
   title: string;
@@ -553,7 +554,8 @@ function CollapsibleNavItem({
 
 export function AppSidebar({ user }: { user: CurrentUser }) {
   const pathname = usePathname();
-  const sections = NAV_BY_ROLE[user.role];
+  // A user restricted from some modules (user.blockedModules) simply does not get those entries; headings that end up empty go too.
+  const sections = filterNavSections(NAV_BY_ROLE[user.role], user.blockedModules);
   const homeHref = HOME_BY_ROLE[user.role] ?? "/dashboard";
 
   return (

@@ -1,6 +1,7 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, type ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AuthGuard } from "@/components/auth-guard";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
@@ -8,10 +9,18 @@ import { FollowUpReminders } from "@/components/follow-ups/follow-up-reminders";
 import { AttendanceProvider } from "@/components/attendance/attendance-provider";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { useAuthStore } from "@/stores/auth-store";
+import { isPathBlocked } from "@/lib/module-access";
 
 function DashboardShell({ children }: { children: ReactNode }) {
   const user = useAuthStore((s) => s.user);
-  if (!user) return null;
+  const pathname = usePathname();
+  const router = useRouter();
+  // A module this user is restricted from: its URL (typed, bookmarked or linked) sends them to the dashboard. The server refuses the module's API as well.
+  const blocked = isPathBlocked(pathname, user?.blockedModules);
+  useEffect(() => {
+    if (blocked) router.replace("/dashboard");
+  }, [blocked, router]);
+  if (!user || blocked) return null;
 
   return (
     <SidebarProvider>

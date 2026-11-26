@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { moduleAccessGuard } from "@/lib/userModuleAccess.js";
 import authRoutes from "@modules/auth/auth.routes.js";
 import dashboardRoutes from "@modules/dashboard/dashboard.routes.js";
 import adminRoutes from "@modules/admin/admin.routes.js";
@@ -55,6 +56,8 @@ router.get("/health/db", requireAuth, requireRole(Role.ADMIN), async (_req, res)
 // Public (no login): the signed QR image of an open payment link, fetched by WhatsApp's servers. See whatsapp.payment-qr.ts.
 router.use("/public/payment-qr", publicQrRoutes);
 router.use("/auth", authRoutes);
+// Per-user module restrictions (see userModuleAccess.ts): refuses a restricted user's calls to the modules they may not use. Runs before every module router below.
+router.use(moduleAccessGuard);
 router.use("/dashboard", dashboardRoutes);
 router.use("/admin", adminRoutes);
 router.use("/manager", managerRoutes);

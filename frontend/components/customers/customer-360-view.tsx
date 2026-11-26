@@ -19,6 +19,7 @@ import { CustomerPaymentSummaryCard } from "./customer-payment-summary-card";
 import { CustomerOrdersList } from "./customer-orders-list";
 import { CustomerTimeline } from "./customer-timeline";
 import { customer360Sections, READ_ONLY_NOTICE } from "./customer-360-access";
+import { useCanOpenPath } from "@/hooks/useModuleAccess";
 
 const ORDERS_HREF = "/dashboard/orders";
 
@@ -43,6 +44,7 @@ function Customer360Skeleton() {
 }
 
 export function Customer360View({ leadId }: { leadId: string }) {
+  const canOpen = useCanOpenPath();
   const router = useRouter();
   const role = useAuthStore((s) => s.user?.role);
   const { data, isLoading, error, refetch } = useCustomer360(leadId);
@@ -113,9 +115,11 @@ export function Customer360View({ leadId }: { leadId: string }) {
         <Link href={`/dashboard/leads/${leadId}`} className="text-sm text-primary hover:underline">
           View lead & assignment history
         </Link>
-        <Link href={`/dashboard/audit?leadId=${leadId}`} className="text-sm text-primary hover:underline">
-          View full audit trail for this customer
-        </Link>
+        {canOpen("/dashboard/audit") ? (
+          <Link href={`/dashboard/audit?leadId=${leadId}`} className="text-sm text-primary hover:underline">
+            View full audit trail for this customer
+          </Link>
+        ) : null}
       </div>
       ) : null}
       <SendWhatsAppDialog open={sendOpen} onOpenChange={setSendOpen} leadId={leadId} customerName={data.profile.name} orders={data.orders} />
