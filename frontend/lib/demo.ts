@@ -51,3 +51,12 @@ export const DEMO_NAV_HREFS: Record<DemoRole, string[]> = {
   MANAGER: ["/dashboard", "/dashboard/reports", "/dashboard/team", "/dashboard/salespersons", "/dashboard/leads", "/dashboard/orders", "/dashboard/offers", "/dashboard/products"],
   SALESPERSON: ["/dashboard", "/dashboard/leads", "/dashboard/orders", "/dashboard/offers"],
 };
+
+/** The one message shown wherever the demo has no data for a screen (the demo API answers the same words for an unimplemented endpoint). */
+export const DEMO_UNAVAILABLE_MESSAGE = "This screen or feature is not available in the demo.";
+
+/** Whether a dashboard URL is a screen the demo covers: the role's menu pages and their detail pages (a lead, an order, a salesperson). */
+export function isDemoPathAvailable(pathname: string, role: DemoRole): boolean {
+  const path = pathname.replace(/\/+$/, "") || "/dashboard";
+  return DEMO_NAV_HREFS[role].some((href) => path === href || (href !== "/dashboard" && path.startsWith(`${href}/`)));
+}

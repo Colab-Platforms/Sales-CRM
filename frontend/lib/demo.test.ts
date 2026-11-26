@@ -22,3 +22,16 @@ describe("demo routing helpers", () => {
     }
   });
 });
+
+import { isDemoPathAvailable } from "./demo";
+describe("which URLs the demo covers", () => {
+  it("menu pages and their detail pages yes; everything else no", () => {
+    assert.equal(isDemoPathAvailable("/dashboard", "ADMIN"), true);
+    assert.equal(isDemoPathAvailable("/dashboard/leads/abc", "SALESPERSON"), true);
+    assert.equal(isDemoPathAvailable("/dashboard/orders/abc", "MANAGER"), true);
+    assert.equal(isDemoPathAvailable("/dashboard/reports", "SALESPERSON"), false);
+    assert.equal(isDemoPathAvailable("/dashboard/customers/abc", "ADMIN"), false);
+    assert.equal(isDemoPathAvailable("/dashboard/whatsapp", "ADMIN"), false);
+    assert.equal(isDemoPathAvailable("/dashboard/dashboardx", "ADMIN"), false);
+  });
+});

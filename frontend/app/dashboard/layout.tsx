@@ -10,7 +10,8 @@ import { AttendanceProvider } from "@/components/attendance/attendance-provider"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { useAuthStore } from "@/stores/auth-store";
 import { DemoBanner } from "@/components/demo/demo-bar";
-import { isDemoUser } from "@/lib/demo";
+import { DemoUnavailable } from "@/components/demo/demo-unavailable";
+import { isDemoPathAvailable, isDemoUser, type DemoRole } from "@/lib/demo";
 import { isPathBlocked } from "@/lib/module-access";
 
 function DashboardShell({ children }: { children: ReactNode }) {
@@ -43,7 +44,7 @@ function DashboardShell({ children }: { children: ReactNode }) {
         {/* Global: starts the salesperson's shift and holds their presence stream open on any page. */}
         {demo ? null : <AttendanceProvider />}
         <div className="mx-auto flex w-full max-w-[1600px] min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8">
-          {children}
+          {demo && !isDemoPathAvailable(pathname, user.role as DemoRole) ? <DemoUnavailable /> : children}
         </div>
       </SidebarInset>
     </SidebarProvider>

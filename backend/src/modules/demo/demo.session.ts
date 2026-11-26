@@ -3,6 +3,9 @@
 //     requireAuth/verifyToken therefore cannot validate a demo token, and the demo guard cannot validate a real one: neither kind of session can reach the other
 //     API, whatever the browser sends. No secret is stored in source; the key exists only in memory.
 //   - A session owns its own in-memory copy of the fictional world, so even the few demo writes that are allowed change nothing outside that session.
+//   - SINGLE-INSTANCE REQUIREMENT: sessions, their data copies and the start-rate brake live in this process's memory only. Run the demo on ONE backend instance: with several
+//     instances (or after a restart/deploy) a request can land where the session is unknown, which then starts a fresh copy of the world, so edits made earlier in the
+//     session are lost (reads stay valid, because the signed token carries the session id and role). Nothing is persisted and nothing real is involved either way.
 //   - Entry is OFF unless DEMO_MODE_ENABLED=true, and can be protected with an access code (DEMO_ACCESS_CODE) that lives only in the environment.
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import jwt from "jsonwebtoken";
